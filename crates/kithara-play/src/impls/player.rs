@@ -129,6 +129,18 @@ impl PlayerImpl {
         self.items.lock_sync().len()
     }
 
+    /// Replace a consumed (or existing) resource at the given index.
+    ///
+    /// Use this to re-load a track that was previously played and consumed
+    /// by [`load_current_item`]. Does nothing if `index` is out of bounds.
+    pub fn replace_item(&self, index: usize, resource: Resource) {
+        let mut items = self.items.lock_sync();
+        if index < items.len() {
+            items[index] = Some(resource);
+            debug!(index, "item replaced");
+        }
+    }
+
     /// Append a resource at the end of the queue (or after a specific index).
     pub fn insert(&self, resource: Resource, after_index: Option<usize>) {
         let mut items = self.items.lock_sync();

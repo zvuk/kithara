@@ -4,13 +4,11 @@ use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     crossterm::terminal::{disable_raw_mode, enable_raw_mode, size},
-    layout::{Constraint, Layout, Position},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Clear, Paragraph, Widget},
 };
-
-pub(crate) const DASHBOARD_HEIGHT: u16 = 1;
 
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
@@ -22,30 +20,32 @@ type ExampleResult<T = ()> = Result<T, ExampleError>;
 pub(crate) struct Dashboard {
     crossfade_progress: Option<f32>,
     current_index: usize,
-    file_track: String,
-    hls_track: String,
     item_count: usize,
     last_note: Option<String>,
     playing: bool,
     position_ms: u64,
     total_ms: Option<u64>,
+    tracks: Vec<String>,
     volume: f32,
 }
 
 impl Dashboard {
-    pub(crate) fn new(file_track: String, hls_track: String) -> Self {
+    pub(crate) fn new(tracks: Vec<String>) -> Self {
         Self {
             crossfade_progress: None,
             current_index: 0,
-            file_track,
-            hls_track,
             item_count: 0,
             last_note: None,
             playing: false,
             position_ms: 0,
             total_ms: None,
+            tracks,
             volume: 1.0,
         }
+    }
+
+    pub(crate) fn height(&self) -> u16 {
+        self.tracks.len() as u16 + 1
     }
 
     pub(crate) fn set_crossfade_progress(&mut self, progress: Option<f32>) {
@@ -79,6 +79,38 @@ impl Dashboard {
     }
 
     pub(crate) fn render(&self, frame: &mut Frame) {
+        let area = frame.area();
+        frame.render_widget(Clear, area);
+
+        let playlist_lines = self.tracks.len() as u16;
+        let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
+            .split(area);
+
+        self.render_playlist(frame, chunks[0]);
+        self.render_bar(frame, chunks[1]);
+    }
+
+    fn render_playlist(&self, frame: &mut Frame, area: Rect) {
+        let bg = Color::Rgb(20, 24, 30);
+        let active_bg = Color::Rgb(40, 44, 55);
+
+        for (i, track) in self.tracks.iter().enumerate() {
+            let is_active = i == self.current_index;
+            let number = i + 1;
+            let marker = if is_active { "▶" } else { " " };
+            let text = format!(" {marker} {number}  {track}");
+            let style = if is_active {
+                Style::default().fg(Color::White).bg(active_bg)
+            } else {
+                Style::default().fg(Color::DarkGray).bg(bg)
+            };
+            let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
+            let padded = fit_cell(&text, usize::from(row.width));
+            frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
+        }
+    }
+
+    fn render_bar(&self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::horizontal([
             Constraint::Percentage(25),
             Constraint::Percentage(25),
@@ -87,29 +119,20 @@ impl Dashboard {
             Constraint::Percentage(8),
             Constraint::Percentage(20),
         ])
-        .split(frame.area());
+        .split(area);
 
         let progress_bar_width = usize::from(chunks[1].width)
             .saturating_sub(14)
             .max(MIN_PROGRESS_BAR_WIDTH);
         let icon = if self.playing { '▶' } else { '⏸' };
-        let active_track = if self.current_index == 0 {
-            &self.file_track
-        } else {
-            &self.hls_track
-        };
+        let active_track = self
+            .tracks
+            .get(self.current_index)
+            .map_or("-", |s| s.as_str());
         let queue_current = self.current_index.saturating_add(1).max(1);
         let queue_total = self.item_count.max(1);
         let segments = [
-            format!(
-                "▌ xf {} ♫{}",
-                if self.current_index == 0 {
-                    "file"
-                } else {
-                    "hls"
-                },
-                active_track
-            ),
+            format!("▌ #{} ♫{}", queue_current, active_track),
             format!(
                 "{icon}{}/{} {}",
                 format_ms(self.position_ms),
@@ -131,7 +154,6 @@ impl Dashboard {
         ];
 
         let style = Style::default().fg(Color::White).bg(Color::Rgb(20, 24, 30));
-        frame.render_widget(Clear, frame.area());
         for (index, chunk) in chunks.iter().enumerate() {
             let text = fit_cell(&segments[index], usize::from(chunk.width));
             let widget = Paragraph::new(Line::raw(text)).style(style);
@@ -186,7 +208,7 @@ impl UiSession {
         let raw = RawModeGuard::new()?;
         let (_, terminal_height) = size()?;
         let max_height = terminal_height.saturating_sub(2).max(6);
-        let viewport_height = DASHBOARD_HEIGHT.min(max_height);
+        let viewport_height = dashboard.height().min(max_height);
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::with_options(
             backend,
@@ -228,9 +250,13 @@ impl UiSession {
         Ok(())
     }
 
+    fn dashboard_height(&self) -> u16 {
+        self.dashboard.height()
+    }
+
     fn stick_to_bottom(&mut self) -> ExampleResult {
         let terminal_height = self.terminal.size()?.height.max(1);
-        let viewport_height = DASHBOARD_HEIGHT.min(terminal_height);
+        let viewport_height = self.dashboard_height().min(terminal_height);
         let cursor_y = self.terminal.get_cursor_position()?.y;
         let target_top = terminal_height.saturating_sub(viewport_height);
         let pad = target_top.saturating_sub(cursor_y);
@@ -245,8 +271,8 @@ impl UiSession {
 
     fn park_cursor_above_dashboard(&mut self) -> ExampleResult {
         let terminal_height = self.terminal.size()?.height.max(1);
-        let dashboard_height = DASHBOARD_HEIGHT.min(terminal_height);
-        let y = terminal_height.saturating_sub(dashboard_height.saturating_add(CURSOR_GUARD_LINES));
+        let height = self.dashboard_height().min(terminal_height);
+        let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
         self.terminal.set_cursor_position(Position { x: 0, y })?;
         Ok(())
     }

@@ -1,13 +1,16 @@
-//! Play with `kithara-play`: start with a file URL, then crossfade to HLS after 30 seconds.
+//! Play with `kithara-play`: load multiple tracks and crossfade between them.
 //!
 //! ```
-//! cargo run -p kithara --example player [FILE_URL] [HLS_URL]
+//! cargo run -p kithara --example player [URL1] [URL2] [URL3] ...
 //! ```
 //!
 //! Controls:
+//! - 1-9: switch to track by number (with crossfade)
 //! - Left/Right arrows: seek ±5 seconds
 //! - Up/Down arrows: volume ±5%
-//! - Ctrl+C: stop playback
+//! - Ctrl+C or q: stop playback
+//!
+//! Auto-advances to the next track when remaining time ≤ crossfade duration.
 
 // ratatui + tokio::signal are unavailable on wasm32; this example is native-only.
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,7 +42,6 @@ mod app {
     use tokio::sync::{broadcast, broadcast::error::RecvError};
     use tracing::warn;
 
-    const SWITCH_AFTER: Duration = Duration::from_secs(30);
     const CROSSFADE_SECONDS: f32 = 5.0;
     const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
     const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -53,11 +55,10 @@ mod app {
     pub(crate) type ExampleResult<T = ()> = Result<T, ExampleError>;
 
     enum UiMsg {
-        CrossfadeStarted(Instant),
         Engine(EngineEvent),
         Note(String),
         Player(PlayerEvent),
-        Source { event: Event, source: &'static str },
+        Source { event: Event, source: String },
     }
 
     struct CrossfadeClock {
@@ -66,10 +67,10 @@ mod app {
     }
 
     impl CrossfadeClock {
-        fn new(started_at: Instant) -> Self {
+        fn new(duration_secs: f32) -> Self {
             Self {
-                duration: Duration::from_secs_f32(CROSSFADE_SECONDS.max(0.0)),
-                started_at,
+                duration: Duration::from_secs_f32(duration_secs.max(0.0)),
+                started_at: Instant::now(),
             }
         }
 
@@ -105,6 +106,7 @@ mod app {
 
     enum ControlOutcome {
         Continue(Option<String>),
+        SwitchTrack(usize),
         Quit,
     }
 
@@ -174,6 +176,10 @@ mod app {
                 ControlOutcome::Continue(None)
             }
             KeyCode::Char('q') => ControlOutcome::Quit,
+            KeyCode::Char(c @ '1'..='9') => {
+                let index = (c as usize) - ('1' as usize);
+                ControlOutcome::SwitchTrack(index)
+            }
             _ => ControlOutcome::Continue(None),
         }
     }
@@ -209,6 +215,10 @@ mod app {
             }
             _ => None,
         }
+    }
+
+    fn track_name(url: &str) -> String {
+        url.rsplit('/').next().unwrap_or(url).to_string()
     }
 
     fn refresh_dashboard(dashboard: &mut super::player_tui::Dashboard, player: &PlayerImpl) {
@@ -286,14 +296,20 @@ mod app {
 
     fn forward_source_events(
         mut rx: broadcast::Receiver<Event>,
-        source: &'static str,
+        source: String,
         tx: mpsc::Sender<UiMsg>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if tx.send(UiMsg::Source { event, source }).is_err() {
+                        if tx
+                            .send(UiMsg::Source {
+                                event,
+                                source: source.clone(),
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -311,25 +327,94 @@ mod app {
         })
     }
 
+    fn switch_track(
+        player: &PlayerImpl,
+        index: usize,
+        urls: &[String],
+        ui_tx: &mpsc::Sender<UiMsg>,
+        ui: &mut super::player_tui::UiSession,
+        crossfade_clock: &mut Option<CrossfadeClock>,
+        auto_advanced_index: &mut Option<usize>,
+    ) -> ExampleResult {
+        // Resource is consumed on first load (.take()), so recreate it for replay.
+        let handle = tokio::runtime::Handle::current();
+        let url = &urls[index];
+        let resource = handle.block_on(async {
+            let config = ResourceConfig::new(url)?;
+            Resource::new(config).await
+        })?;
+        let events = resource.subscribe();
+        player.replace_item(index, resource);
+
+        // Forward events from the fresh resource.
+        let label = format!("src{}", index + 1);
+        let tx = ui_tx.clone();
+        handle.spawn(async move {
+            let mut rx = events;
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if tx
+                            .send(UiMsg::Source {
+                                event,
+                                source: label.clone(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+
+        match player.select_item(index, true) {
+            Ok(()) => {
+                *crossfade_clock = Some(CrossfadeClock::new(player.crossfade_duration()));
+                ui.dashboard.set_crossfade_progress(Some(0.0));
+                *auto_advanced_index = None;
+                let note = format!(
+                    "crossfade to #{} ({:.1}s)",
+                    index + 1,
+                    player.crossfade_duration()
+                );
+                ui.dashboard.set_note(&note);
+                ui.log_line(&note)?;
+            }
+            Err(e) => {
+                let note = format!("switch failed: {e}");
+                ui.dashboard.set_note(&note);
+                ui.log_line(&note)?;
+            }
+        }
+        Ok(())
+    }
+
     fn run_ui_loop(
         player: &PlayerImpl,
-        file_url: String,
-        hls_url: String,
+        urls: Vec<String>,
+        track_names: Vec<String>,
+        ui_tx: mpsc::Sender<UiMsg>,
         ui_rx: &mpsc::Receiver<UiMsg>,
         stop_rx: &mpsc::Receiver<()>,
     ) -> ExampleResult {
-        let dashboard = super::player_tui::Dashboard::new(file_url, hls_url);
+        let track_count = track_names.len();
+        let dashboard = super::player_tui::Dashboard::new(track_names);
         let mut ui = super::player_tui::UiSession::new(dashboard)?;
         ui.log_line(&format!(
-            "controls: Left/Right seek {}s, Up/Down volume {:+.0}%",
+            "controls: 1-{} select track, Left/Right seek {}s, Up/Down vol {:+.0}%",
+            track_count.min(9),
             SEEK_STEP_SECONDS,
             VOLUME_STEP * 100.0
         ))?;
-        ui.log_line("logs are appended above dashboard and remain scrollable")?;
+        ui.log_line("auto-advances to next track with crossfade near end of each track")?;
         ui.draw()?;
 
         let mut progress_log = ProgressLog::new();
         let mut crossfade_clock: Option<CrossfadeClock> = None;
+        let mut auto_advanced_index: Option<usize> = None;
         let mut tick_error_logged = false;
 
         'ui: loop {
@@ -341,12 +426,6 @@ mod app {
             loop {
                 match ui_rx.try_recv() {
                     Ok(msg) => match msg {
-                        UiMsg::CrossfadeStarted(started_at) => {
-                            crossfade_clock = Some(CrossfadeClock::new(started_at));
-                            ui.dashboard.set_crossfade_progress(Some(0.0));
-                            ui.dashboard
-                                .set_note(format!("crossfade {:.1}s", CROSSFADE_SECONDS));
-                        }
                         UiMsg::Engine(event) => {
                             if let EngineEvent::MasterVolumeChanged { volume } = event {
                                 ui.dashboard.set_volume(volume);
@@ -360,7 +439,7 @@ mod app {
                         UiMsg::Player(event) => {
                             match event {
                                 PlayerEvent::CurrentItemChanged => {
-                                    ui.dashboard.set_note("queue advanced");
+                                    ui.dashboard.set_note("track changed");
                                 }
                                 PlayerEvent::RateChanged { rate } => {
                                     ui.dashboard.set_playing(rate > 0.0);
@@ -379,7 +458,7 @@ mod app {
                             ui.log_line(&format!("player {event:?}"))?;
                         }
                         UiMsg::Source { event, source } => {
-                            if let Some(note) = source_note(source, &event) {
+                            if let Some(note) = source_note(&source, &event) {
                                 ui.dashboard.set_note(note);
                             }
                             if is_progress_event(&event) {
@@ -410,6 +489,8 @@ mod app {
             }
 
             refresh_dashboard(&mut ui.dashboard, player);
+
+            // Crossfade progress
             if let Some(clock) = crossfade_clock.as_ref() {
                 let progress = clock.progress();
                 ui.dashboard.set_crossfade_progress(Some(progress));
@@ -420,6 +501,30 @@ mod app {
                 ui.dashboard.set_crossfade_progress(None);
             }
 
+            // Auto-advance: crossfade to next track when remaining time ≤ crossfade duration
+            let crossfade_secs = f64::from(player.crossfade_duration());
+            if let (Some(pos), Some(dur)) = (player.position_seconds(), player.duration_seconds()) {
+                if dur > crossfade_secs && pos >= dur - crossfade_secs {
+                    let current = player.current_index();
+                    let not_yet_advanced = auto_advanced_index != Some(current);
+                    if not_yet_advanced && current + 1 < player.item_count() {
+                        auto_advanced_index = Some(current);
+                        let next = current + 1;
+                        switch_track(
+                            player,
+                            next,
+                            &urls,
+                            &ui_tx,
+                            &mut ui,
+                            &mut crossfade_clock,
+                            &mut auto_advanced_index,
+                        )?;
+                        // Restore guard (switch_track resets it for manual switches)
+                        auto_advanced_index = Some(current);
+                    }
+                }
+            }
+
             if event::poll(Duration::from_millis(CONTROL_POLL_MS))? {
                 match event::read()? {
                     TermEvent::Key(key)
@@ -428,6 +533,19 @@ mod app {
                         match handle_key(key.code, key.modifiers, player, &mut ui.dashboard) {
                             ControlOutcome::Continue(Some(line)) => ui.log_line(&line)?,
                             ControlOutcome::Continue(None) => {}
+                            ControlOutcome::SwitchTrack(index) => {
+                                if index < player.item_count() {
+                                    switch_track(
+                                        player,
+                                        index,
+                                        &urls,
+                                        &ui_tx,
+                                        &mut ui,
+                                        &mut crossfade_clock,
+                                        &mut auto_advanced_index,
+                                    )?;
+                                }
+                            }
                             ControlOutcome::Quit => break,
                         }
                     }
@@ -449,24 +567,18 @@ mod app {
     pub(crate) async fn main() -> ExampleResult {
         super::tracing_support::init_tracing(&["off"], true)?;
 
-        let mut cli_args = args().skip(1);
-        let file_url = cli_args
-            .next()
-            .unwrap_or_else(|| FILE_URL_DEFAULT.to_string());
-        let hls_url = cli_args
-            .next()
-            .unwrap_or_else(|| HLS_URL_DEFAULT.to_string());
-        if cli_args.next().is_some() {
-            warn!("Ignoring extra CLI args beyond [FILE_URL] [HLS_URL]");
-        }
+        let urls: Vec<String> = {
+            let cli: Vec<String> = args().skip(1).collect();
+            if cli.is_empty() {
+                vec![FILE_URL_DEFAULT.to_string(), HLS_URL_DEFAULT.to_string()]
+            } else {
+                cli
+            }
+        };
 
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS),
         ));
-        let file = Resource::new(ResourceConfig::new(&file_url)?).await?;
-        let file_events = file.subscribe();
-        player.insert(file, None);
-        player.play();
 
         let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -474,55 +586,52 @@ mod app {
         let mut forwarders = vec![
             forward_player_events(player.subscribe(), ui_tx.clone()),
             forward_engine_events(player.engine().subscribe(), ui_tx.clone()),
-            forward_source_events(file_events, "file", ui_tx.clone()),
         ];
 
-        let _ = ui_tx.send(UiMsg::Note(format!(
-            "playing file, switching to hls in {}s",
-            SWITCH_AFTER.as_secs()
-        )));
+        let mut track_names: Vec<String> = Vec::new();
+        for (i, url) in urls.iter().enumerate() {
+            let name = track_name(url);
+            let config = match ResourceConfig::new(url) {
+                Ok(c) => c,
+                Err(err) => {
+                    warn!(?err, url, "invalid URL, skipping");
+                    continue;
+                }
+            };
+            match Resource::new(config).await {
+                Ok(resource) => {
+                    let events = resource.subscribe();
+                    player.insert(resource, None);
+                    let label = format!("src{}", i + 1);
+                    forwarders.push(forward_source_events(events, label, ui_tx.clone()));
+                    track_names.push(name);
+                    let _ = ui_tx.send(UiMsg::Note(format!("loaded #{}: {url}", i + 1)));
+                }
+                Err(err) => {
+                    warn!(?err, url, "failed to load resource, skipping");
+                    let _ = ui_tx.send(UiMsg::Note(format!("skip #{}: {err}", i + 1)));
+                }
+            }
+        }
+
+        if track_names.is_empty() {
+            return Err("no tracks loaded".into());
+        }
+
+        player.play();
 
         let player_for_ui = Arc::clone(&player);
-        let file_for_ui = file_url.clone();
-        let hls_for_ui = hls_url.clone();
+        let ui_tx_for_loop = ui_tx.clone();
+        let urls_for_loop = urls.clone();
         let mut ui_handle = tokio::task::spawn_blocking(move || {
-            run_ui_loop(&player_for_ui, file_for_ui, hls_for_ui, &ui_rx, &stop_rx)
-        });
-
-        let switch_player = Arc::clone(&player);
-        let switch_hls_url = hls_url.clone();
-        let switch_ui_tx = ui_tx.clone();
-        let switch_task = tokio::spawn(async move {
-            tokio::time::sleep(SWITCH_AFTER).await;
-            let _ = switch_ui_tx.send(UiMsg::Note(format!("loading hls: {switch_hls_url}")));
-
-            let config = match ResourceConfig::new(&switch_hls_url) {
-                Ok(config) => config,
-                Err(err) => {
-                    let _ = switch_ui_tx.send(UiMsg::Note(format!("invalid hls url: {err}")));
-                    return None;
-                }
-            };
-
-            let hls = match Resource::new(config).await {
-                Ok(hls) => hls,
-                Err(err) => {
-                    let _ = switch_ui_tx.send(UiMsg::Note(format!("failed to load hls: {err}")));
-                    return None;
-                }
-            };
-
-            let hls_events = hls.subscribe();
-            switch_player.insert(hls, None);
-            switch_player.advance_to_next_item();
-            switch_player.play();
-
-            let _ = switch_ui_tx.send(UiMsg::CrossfadeStarted(Instant::now()));
-            let _ = switch_ui_tx.send(UiMsg::Note(format!(
-                "crossfade started ({CROSSFADE_SECONDS:.1}s)"
-            )));
-
-            Some(forward_source_events(hls_events, "hls", switch_ui_tx))
+            run_ui_loop(
+                &player_for_ui,
+                urls_for_loop,
+                track_names,
+                ui_tx_for_loop,
+                &ui_rx,
+                &stop_rx,
+            )
         });
 
         let ui_finished = tokio::select! {
@@ -544,16 +653,6 @@ mod app {
         }
 
         player.pause();
-
-        if !switch_task.is_finished() {
-            switch_task.abort();
-        }
-        match switch_task.await {
-            Ok(Some(forwarder)) => forwarders.push(forwarder),
-            Ok(None) => {}
-            Err(err) if err.is_cancelled() => {}
-            Err(err) => warn!(?err, "switch task failed"),
-        }
 
         for forwarder in forwarders {
             forwarder.abort();
