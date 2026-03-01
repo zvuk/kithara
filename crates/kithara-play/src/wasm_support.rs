@@ -10,7 +10,7 @@ use crate::impls::session_engine;
 /// Must be called on the main thread **before** [`init_worker_session`]
 /// so that the main thread gets a `Local` session and Workers get `Remote`.
 pub fn ensure_main_session() {
-    session_engine::session_client(None);
+    session_engine::session_client();
 }
 
 /// Initialise the Worker ↔ main-thread session channel.

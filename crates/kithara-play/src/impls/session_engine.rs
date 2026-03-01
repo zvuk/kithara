@@ -1,6 +1,8 @@
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::LazyLock;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::OnceLock, time::Duration};
 
@@ -430,11 +432,13 @@ thread_local! {
 ///
 /// Stored in a global so that Workers can clone it from `session_client()`.
 #[cfg(target_arch = "wasm32")]
-static WORKER_CMD_TX: Mutex<Option<mpsc::Sender<CmdMsg>>> = Mutex::new(None);
+static WORKER_CMD_TX: LazyLock<Mutex<Option<mpsc::Sender<CmdMsg>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Receiver half (polled on main thread in `tick_and_poll_remote`).
 #[cfg(target_arch = "wasm32")]
-static WORKER_CMD_RX: Mutex<Option<mpsc::Receiver<CmdMsg>>> = Mutex::new(None);
+static WORKER_CMD_RX: LazyLock<Mutex<Option<mpsc::Receiver<CmdMsg>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Initialise the Worker ↔ main-thread session channel.
 ///

@@ -114,5 +114,5 @@ pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
 #[inline]
 #[must_use]
 pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
-    wasm_safe_thread::available_parallelism()
+    wasm_safe_thread::available_parallelism().ok()
 }
