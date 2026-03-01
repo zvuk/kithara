@@ -132,18 +132,11 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
             dead_seeks,
         );
 
-        // Assert: not too many dead seeks (some failures OK, but not all)
-        let dead_ratio = if seek_count > 0 {
-            dead_seeks as f64 / seek_count as f64
-        } else {
-            1.0
-        };
-        assert!(
-            dead_ratio < 0.9,
-            "Too many dead seeks: {}/{} ({:.0}%). Audio is mostly dead after ABR switch.",
-            dead_seeks,
-            seek_count,
-            dead_ratio * 100.0,
+        // Assert: zero dead seeks — with seek_pending retry, all seeks must produce audio.
+        assert_eq!(
+            dead_seeks, 0,
+            "Dead seeks: {dead_seeks}/{seek_count}. \
+             All seeks must produce audio with seek_pending retry.",
         );
     })
     .await;

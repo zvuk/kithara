@@ -25,6 +25,9 @@ use crate::{
     traits::AudioEffect,
 };
 
+/// Maximum number of times `apply_pending_seek()` will retry before abandoning.
+const MAX_SEEK_RETRY: u8 = 3;
+
 /// Shared stream wrapper for format change detection.
 ///
 /// Wraps Stream in `Arc<Mutex>` to allow:
@@ -205,6 +208,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) pending_seek_recover_attempts: u8,
     /// Cached timeline for lock-free flushing checks.
     pub(crate) timeline: Timeline,
+    /// Retry counter for failed seeks. Reset on success or superseding seek.
+    seek_retry_count: u8,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -235,6 +240,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             pending_seek_recover_target: None,
             pending_seek_recover_attempts: 0,
             timeline,
+            seek_retry_count: 0,
         }
     }
 
@@ -1114,12 +1120,13 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         &self.timeline
     }
 
-    fn apply_pending_seek(&mut self) {
+    fn apply_pending_seek(&mut self) -> bool {
         let epoch = self.timeline.seek_epoch();
         let Some(position) = self.timeline.seek_target() else {
             // No target set — another thread already cleared it. Complete anyway.
             self.timeline.complete_seek(epoch);
-            return;
+            self.timeline.clear_seek_pending(epoch);
+            return true;
         };
 
         let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -1130,7 +1137,8 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 "apply_pending_seek: dropping stale seek"
             );
             self.timeline.complete_seek(epoch);
-            return;
+            self.timeline.clear_seek_pending(epoch);
+            return true;
         }
 
         let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
@@ -1144,8 +1152,11 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             byte_range_end,
         );
 
+        // Set seek epoch on the stream source (HLS needs this for variant fence).
+        // NOTE: self.epoch is NOT updated here — it moves after successful seek
+        // so that chunks decoded before the seek completes carry the old epoch
+        // and are filtered out by the consumer's EpochValidator.
         self.shared_stream.set_seek_epoch(epoch);
-        self.epoch.store(epoch, Ordering::Release);
 
         // Clear any variant fence so seek can move to any timeline
         // position, including positions in previous variants.
@@ -1154,6 +1165,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
         // Decoder alignment may read from the stream (decoder recreate path).
         // Complete flush first so wait_range can block and request data.
+        // seek_pending stays true until the seek is fully applied.
         self.timeline.complete_seek(epoch);
 
         let applied = match self.shared_stream.seek_time_anchor(position) {
@@ -1168,8 +1180,38 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             }
         };
 
-        if !applied {
-            warn!(epoch, ?position, "failed to apply pending seek");
+        if applied {
+            // Seek succeeded: stamp new epoch so chunks carry correct epoch,
+            // and clear seek_pending so worker stops retrying.
+            self.epoch.store(epoch, Ordering::Release);
+            self.timeline.clear_seek_pending(epoch);
+            self.seek_retry_count = 0;
+            true
+        } else {
+            self.seek_retry_count += 1;
+            if self.seek_retry_count >= MAX_SEEK_RETRY {
+                warn!(
+                    epoch,
+                    ?position,
+                    attempts = self.seek_retry_count,
+                    "seek abandoned after max retries, continuing from current position"
+                );
+                // Unstick the pipeline: accept new epoch so consumer stops
+                // rejecting chunks, and clear seek_pending to stop retries.
+                self.epoch.store(epoch, Ordering::Release);
+                self.timeline.clear_seek_pending(epoch);
+                self.seek_retry_count = 0;
+                true
+            } else {
+                warn!(
+                    epoch,
+                    ?position,
+                    attempt = self.seek_retry_count,
+                    "seek not applied, will retry"
+                );
+                // seek_pending stays true → worker loop will retry
+                false
+            }
         }
     }
 }
