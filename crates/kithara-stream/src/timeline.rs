@@ -25,6 +25,12 @@ pub struct Timeline {
     seek_epoch: Arc<AtomicU64>,
     flushing: Arc<AtomicBool>,
     seek_target_ns: Arc<AtomicU64>,
+
+    /// Seek not yet applied by decoder. Set by `initiate_seek()`, cleared by
+    /// `clear_seek_pending()` after the decoder successfully repositions.
+    /// Separate from `flushing`: flushing gates I/O (`wait_range`), while
+    /// `seek_pending` gates worker retry and consumer output.
+    seek_pending: Arc<AtomicBool>,
 }
 
 impl Timeline {
@@ -46,6 +52,7 @@ impl Timeline {
             seek_epoch: Arc::new(AtomicU64::new(0)),
             flushing: Arc::new(AtomicBool::new(false)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
+            seek_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -186,6 +193,7 @@ impl Timeline {
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
         self.set_committed_position(target);
+        self.seek_pending.store(true, Ordering::Release);
         // flushing must be set LAST so readers see target before flushing flag
         self.flushing.store(true, Ordering::Release);
         epoch
@@ -237,6 +245,26 @@ impl Timeline {
     #[must_use]
     pub fn seek_epoch(&self) -> u64 {
         self.seek_epoch.load(Ordering::Acquire)
+    }
+
+    /// Check if a seek has been initiated but not yet applied by the decoder.
+    ///
+    /// Unlike `is_flushing()` (which gates I/O via `wait_range`), this flag
+    /// stays set until the decoder successfully repositions. Used by the worker
+    /// loop to trigger seek retry.
+    #[must_use]
+    pub fn is_seek_pending(&self) -> bool {
+        self.seek_pending.load(Ordering::Acquire)
+    }
+
+    /// Clear seek-pending flag after the decoder successfully applied the seek.
+    ///
+    /// Only clears if `epoch` matches the current seek epoch, preventing a
+    /// stale completion from clearing a newer seek.
+    pub fn clear_seek_pending(&self, epoch: u64) {
+        if self.seek_epoch.load(Ordering::Acquire) == epoch {
+            self.seek_pending.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -337,5 +365,55 @@ mod tests {
         let _ = tl.initiate_seek(Duration::from_secs(7));
         assert!(clone.is_flushing());
         assert_eq!(clone.seek_target(), Some(Duration::from_secs(7)));
+    }
+
+    #[kithara::test]
+    fn initiate_seek_sets_seek_pending() {
+        let tl = Timeline::new();
+        assert!(!tl.is_seek_pending());
+        let _epoch = tl.initiate_seek(Duration::from_secs(5));
+        assert!(tl.is_seek_pending());
+    }
+
+    #[kithara::test]
+    fn clear_seek_pending_only_clears_matching_epoch() {
+        let tl = Timeline::new();
+        let epoch1 = tl.initiate_seek(Duration::from_secs(5));
+        let epoch2 = tl.initiate_seek(Duration::from_secs(10));
+        // Stale epoch should not clear seek_pending
+        tl.clear_seek_pending(epoch1);
+        assert!(tl.is_seek_pending());
+        // Current epoch clears it
+        tl.clear_seek_pending(epoch2);
+        assert!(!tl.is_seek_pending());
+    }
+
+    #[kithara::test]
+    fn new_initiate_seek_resets_seek_pending() {
+        let tl = Timeline::new();
+        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        tl.clear_seek_pending(epoch);
+        assert!(!tl.is_seek_pending());
+        // New seek re-sets seek_pending
+        let _epoch2 = tl.initiate_seek(Duration::from_secs(10));
+        assert!(tl.is_seek_pending());
+    }
+
+    #[kithara::test]
+    fn complete_seek_does_not_clear_seek_pending() {
+        let tl = Timeline::new();
+        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        // complete_seek clears flushing but NOT seek_pending
+        tl.complete_seek(epoch);
+        assert!(!tl.is_flushing());
+        assert!(tl.is_seek_pending());
+    }
+
+    #[kithara::test]
+    fn is_seek_pending_visible_across_clones() {
+        let tl = Timeline::new();
+        let clone = tl.clone();
+        let _epoch = tl.initiate_seek(Duration::from_secs(5));
+        assert!(clone.is_seek_pending());
     }
 }

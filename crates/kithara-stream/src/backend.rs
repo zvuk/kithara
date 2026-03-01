@@ -91,7 +91,6 @@ impl Backend {
         let mut steps_since_yield: usize = 0;
         kithara_platform::hang_watchdog! {
             thread: "stream.downloader";
-            timeout: kithara_platform::time::Duration::from_secs(30);
             loop {
                 if cancel.is_cancelled() {
                     debug!("Downloader cancelled");

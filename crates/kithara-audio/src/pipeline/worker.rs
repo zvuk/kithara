@@ -35,10 +35,14 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
 
     /// Apply a pending seek read from the Timeline.
     ///
-    /// Called by the worker loop when `timeline().is_flushing()` is true.
-    /// Reads target/epoch from Timeline, performs the seek on the decoder,
-    /// then calls `timeline().complete_seek(epoch)`.
-    fn apply_pending_seek(&mut self);
+    /// Called by the worker loop when `timeline().is_flushing()` or
+    /// `timeline().is_seek_pending()` is true. Reads target/epoch from
+    /// Timeline, performs the seek on the decoder, then calls
+    /// `timeline().clear_seek_pending(epoch)` on success.
+    ///
+    /// Returns `true` if the seek was applied (or abandoned after max retries),
+    /// `false` if it will be retried on the next iteration.
+    fn apply_pending_seek(&mut self) -> bool;
 }
 
 const BACKOFF_BUSY: Duration = Duration::from_micros(100);
@@ -112,8 +116,8 @@ fn send_with_backpressure<S: AudioWorkerSource>(
     }
 }
 
-fn apply_pending_seek_if_flushing<S: AudioWorkerSource>(source: &mut S, at_eof: &mut bool) -> bool {
-    if !source.timeline().is_flushing() {
+fn apply_pending_seek_if_needed<S: AudioWorkerSource>(source: &mut S, at_eof: &mut bool) -> bool {
+    if !source.timeline().is_flushing() && !source.timeline().is_seek_pending() {
         return false;
     }
     source.apply_pending_seek();
@@ -127,7 +131,7 @@ fn handle_eof_idle<S: AudioWorkerSource>(
     cancel: &CancellationToken,
     at_eof: &mut bool,
 ) -> WorkerControl {
-    if apply_pending_seek_if_flushing(source, at_eof) {
+    if apply_pending_seek_if_needed(source, at_eof) {
         return WorkerControl::Continue;
     }
 
@@ -177,7 +181,7 @@ fn mark_eof(preloaded: &mut bool, preload_notify: &Notify, at_eof: &mut bool) {
 /// `cancel` token signals graceful shutdown when Audio is dropped.
 #[expect(
     clippy::cognitive_complexity,
-    reason = "diagnostic debug!() temporarily raises complexity"
+    reason = "main worker loop with multiple control paths"
 )]
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
@@ -193,14 +197,13 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut chunks_sent = 0usize;
     kithara_platform::hang_watchdog! {
         thread: "audio.worker";
-        timeout: Duration::from_secs(10);
         loop {
             if cancel.is_cancelled() {
                 trace!("audio worker cancelled");
                 return;
             }
 
-            if apply_pending_seek_if_flushing(&mut source, &mut at_eof) {
+            if apply_pending_seek_if_needed(&mut source, &mut at_eof) {
                 hang_reset!();
                 continue;
             }
