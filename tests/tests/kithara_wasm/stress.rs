@@ -29,7 +29,7 @@ mod kithara {
 /// Number of rayon worker threads for the thread pool.
 const THREAD_COUNT: usize = 2;
 const EVENT_BUS_CAPACITY: usize = 4096;
-const REAL_HLS_STREAM_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
+const REAL_HLS_STREAM_URL: &str = "http://127.0.0.1:3333/hls/master.m3u8";
 
 /// Guard: `init_thread_pool` panics if called twice in the same page.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -835,11 +835,7 @@ async fn fill_buffer_position_must_not_drift() {
     );
 }
 
-#[kithara::test(
-    wasm,
-    timeout(Duration::from_secs(90)),
-    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top")
-)]
+#[kithara::test(wasm, timeout(Duration::from_secs(90)))]
 async fn wasm_player_real_hls_repro_freeze_probe() {
     init().await;
     info!("Starting wasm_player_real_hls_repro_freeze_probe");

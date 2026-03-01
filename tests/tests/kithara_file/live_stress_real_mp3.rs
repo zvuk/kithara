@@ -14,10 +14,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
+use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
-
-const MP3_URL: &str = "https://stream.silvercomet.top/track.mp3";
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 8;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 20;
@@ -106,13 +104,7 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(60)),
-    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
-    soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(60)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
@@ -124,7 +116,8 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         ))
         .try_init();
 
-    let url: url::Url = MP3_URL.parse().expect("valid URL");
+    let server = serve_assets().await;
+    let url = server.url("/track.mp3");
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.ephemeral = true;

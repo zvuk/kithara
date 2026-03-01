@@ -15,10 +15,8 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
+use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
-
-const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 16;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 24;
@@ -143,19 +141,7 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     timeout(Duration::from_secs(180)),
-    env(
-        NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top",
-        KITHARA_HANG_TIMEOUT_SECS = "30"
-    ),
-    soft_fail(
-        "connection",
-        "timeout",
-        "timed out",
-        "refused",
-        "resolve",
-        "dns",
-        "network"
-    )
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
@@ -168,7 +154,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         ))
         .try_init();
 
-    let url: url::Url = HLS_URL.parse().expect("valid URL");
+    let server = serve_assets().await;
+    let url = server.url("/hls/master.m3u8");
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.ephemeral = true;
@@ -461,19 +448,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     tokio,
     browser,
     timeout(Duration::from_secs(90)),
-    env(
-        NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top",
-        KITHARA_HANG_TIMEOUT_SECS = "30"
-    ),
-    soft_fail(
-        "connection",
-        "timeout",
-        "timed out",
-        "refused",
-        "resolve",
-        "dns",
-        "network"
-    )
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
 async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
@@ -484,7 +459,8 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
         ))
         .try_init();
 
-    let url: url::Url = HLS_URL.parse().expect("valid URL");
+    let server = serve_assets().await;
+    let url = server.url("/hls/master.m3u8");
     let store = StoreOptions::new(temp_dir.path())
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
@@ -535,19 +511,7 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     tokio,
     browser,
     timeout(Duration::from_secs(90)),
-    env(
-        NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top",
-        KITHARA_HANG_TIMEOUT_SECS = "30"
-    ),
-    soft_fail(
-        "connection",
-        "timeout",
-        "timed out",
-        "refused",
-        "resolve",
-        "dns",
-        "network"
-    )
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
 async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
@@ -558,7 +522,8 @@ async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
         ))
         .try_init();
 
-    let url: url::Url = HLS_URL.parse().expect("valid URL");
+    let server = serve_assets().await;
+    let url = server.url("/hls/master.m3u8");
     let store = StoreOptions::new(temp_dir.path())
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
