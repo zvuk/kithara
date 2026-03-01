@@ -18,7 +18,7 @@ use tracing::info;
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
 async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
@@ -158,7 +158,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
 async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");

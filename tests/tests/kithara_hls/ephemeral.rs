@@ -98,7 +98,7 @@ fn count_files(dir: &std::path::Path) -> usize {
     count
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, serial, timeout(Duration::from_secs(60)))]
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

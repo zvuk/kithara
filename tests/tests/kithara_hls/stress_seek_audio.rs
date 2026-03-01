@@ -73,7 +73,7 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 2: continuity (consecutive frames follow pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]

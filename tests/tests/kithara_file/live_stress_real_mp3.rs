@@ -104,7 +104,7 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {

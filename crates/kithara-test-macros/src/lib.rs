@@ -24,6 +24,7 @@ struct TestArgs {
     is_wasm_only: bool,
     is_native_only: bool,
     is_browser: bool,
+    is_serial: bool,
     timeout: Option<Expr>,
     env_vars: Vec<(String, String)>,
     /// Substring patterns for soft-fail: if a panic message contains any of
@@ -38,6 +39,7 @@ impl Parse for TestArgs {
             is_wasm_only: false,
             is_native_only: false,
             is_browser: false,
+            is_serial: false,
             timeout: None,
             env_vars: Vec::new(),
             soft_fail_patterns: Vec::new(),
@@ -50,6 +52,7 @@ impl Parse for TestArgs {
                 "wasm" => args.is_wasm_only = true,
                 "native" => args.is_native_only = true,
                 "browser" => args.is_browser = true,
+                "serial" => args.is_serial = true,
                 "timeout" => {
                     let content;
                     syn::parenthesized!(content in input);
@@ -250,6 +253,14 @@ fn make_preamble(params: &[ParamInfo], case_values: Option<&[Expr]>) -> TokenStr
     quote! { #(#stmts)* }
 }
 
+fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
+    if args.is_serial {
+        quote! { #[serial_test::serial] }
+    } else {
+        quote! {}
+    }
+}
+
 fn make_test_attrs(args: &TestArgs, is_async: bool) -> TokenStream2 {
     let native = if is_async || args.is_tokio {
         quote! { #[cfg_attr(not(target_arch = "wasm32"), tokio::test)] }
@@ -365,6 +376,7 @@ fn emit_async_timeout_test(
     remaining_attrs: &[&Attribute],
     body: &TokenStream2,
     args: &TestArgs,
+    serial_attr: &TokenStream2,
 ) -> TokenStream2 {
     let dur = args.timeout.as_ref().expect("caller verified timeout");
     let fn_name_str = fn_name.to_string();
@@ -413,6 +425,7 @@ fn emit_async_timeout_test(
 
     quote! {
         #(#remaining_attrs)*
+        #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         #vis fn #fn_name() #ret_type {
@@ -669,13 +682,21 @@ fn emit_one_test(
     args: &TestArgs,
 ) -> TokenStream2 {
     let full = quote! { #preamble #(#body_stmts)* };
+    let serial_attr = make_serial_attr(args);
 
     // Async + timeout on native: use manual runtime for clean shutdown.
     // This avoids #[tokio::test]'s Runtime::drop hanging on zombie
     // spawn_blocking threads after a timeout fires.
     if is_async && args.timeout.is_some() {
-        let mut output =
-            emit_async_timeout_test(fn_name, vis, ret_type, remaining_attrs, &full, args);
+        let mut output = emit_async_timeout_test(
+            fn_name,
+            vis,
+            ret_type,
+            remaining_attrs,
+            &full,
+            args,
+            &serial_attr,
+        );
         // WASM side: async function with cooperative timeout
         let wasm_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
@@ -694,6 +715,7 @@ fn emit_one_test(
 
     quote! {
         #(#remaining_attrs)*
+        #serial_attr
         #test_attrs
         #vis #asyncness fn #fn_name() #ret_type #wrapped
     }
@@ -718,6 +740,7 @@ fn emit_browser_test(
     browser_only: bool,
 ) -> TokenStream2 {
     let mut output = TokenStream2::new();
+    let serial_attr = make_serial_attr(args);
 
     output.extend(make_dedicated_worker_config());
 
@@ -750,6 +773,7 @@ fn emit_browser_test(
                 remaining_attrs,
                 &native_body,
                 args,
+                &serial_attr,
             ));
         } else {
             let native_attr = if native_is_async {
@@ -764,6 +788,7 @@ fn emit_browser_test(
                 finalize_body(&native_with_timeout, args, fn_name, native_is_async);
             output.extend(quote! {
                 #(#remaining_attrs)*
+                #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #native_attr
                 #vis #native_asyncness fn #fn_name() #ret_type #native_wrapped
@@ -793,6 +818,7 @@ fn emit_browser_test(
 /// #[kithara::test(tokio, timeout(Duration::from_secs(5)))]  // async + timeout
 /// #[kithara::test(env(NO_PROXY = "host.example.com"))] // set env vars
 /// #[kithara::test(soft_fail("connection", "refused"))] // soft-fail on matching panics
+/// #[kithara::test(tokio, serial)]                      // serial execution (no parallel)
 /// ```
 ///
 /// ## `env`
@@ -806,6 +832,14 @@ fn emit_browser_test(
 /// as `[SOFT FAIL]` warnings; non-matching panics propagate normally.
 ///
 /// Requires `futures` crate at the call site for async tests.
+///
+/// ## `serial`
+///
+/// `serial` emits `#[serial_test::serial]` on each generated test function,
+/// preventing parallel execution with other `serial` tests. Use for
+/// resource-intensive tests that are sensitive to CPU/IO contention.
+///
+/// Requires `serial_test` crate at the call site.
 ///
 /// ## `browser`
 ///
@@ -876,6 +910,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     // native-only (without browser): cfg(not(wasm32)) + #[test] or #[tokio::test]
     if args.is_native_only && !args.is_browser {
         let native_is_async = is_async || args.is_tokio;
+        let serial_attr = make_serial_attr(&args);
 
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
@@ -890,6 +925,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                     &remaining_attrs,
                     &full,
                     &args,
+                    &serial_attr,
                 ));
             }
 
@@ -903,6 +939,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             let wrapped = finalize_body(&with_timeout, &args, fn_name, native_is_async);
             return Ok(quote! {
                 #(#remaining_attrs)*
+                #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #test_attr
                 #vis #asyncness fn #fn_name() #ret_type #wrapped
@@ -927,6 +964,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                     &remaining_attrs,
                     &full,
                     &args,
+                    &serial_attr,
                 ));
                 continue;
             }
@@ -941,6 +979,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             let wrapped = finalize_body(&with_timeout, &args, &case_name, native_is_async);
             tests.extend(quote! {
                 #(#remaining_attrs)*
+                #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #test_attr
                 #vis #asyncness fn #case_name() #ret_type #wrapped

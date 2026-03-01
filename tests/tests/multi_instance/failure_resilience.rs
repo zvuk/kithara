@@ -99,7 +99,7 @@ async fn create_hls_audio(
 /// The cancelled instances have their `CancellationToken` fired after a
 /// short delay (simulating a network failure / user abort). The test verifies
 /// that the healthy instances still read to EOF, unaffected by the cancelled ones.
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
 async fn healthy_instances_survive_cancelled_peers() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -204,7 +204,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 }
 
 /// 4 healthy + 4 cancelled HLS instances (8 total). Healthy ones must complete.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
 async fn eight_instances_half_cancelled() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

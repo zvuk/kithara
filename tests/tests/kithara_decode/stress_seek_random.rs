@@ -33,7 +33,7 @@ const SEEK_ITERATIONS: usize = 1000;
 /// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
 /// 6. For each: seek → read → verify data (valid range, L==R channels)
 /// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
-#[kithara::test(timeout(Duration::from_secs(120)))]
+#[kithara::test(serial, timeout(Duration::from_secs(120)))]
 async fn stress_random_seek_read_synthetic_wav() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

@@ -68,7 +68,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + audio_loop),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
 async fn two_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -105,7 +105,7 @@ async fn two_file_instances() {
 }
 
 /// 4 concurrent File instances on a shared pool.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
 async fn four_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -142,7 +142,7 @@ async fn four_file_instances() {
 }
 
 /// 8 concurrent File instances on a shared pool.
-#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(180)))]
 async fn eight_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

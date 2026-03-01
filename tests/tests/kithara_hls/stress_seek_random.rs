@@ -34,7 +34,7 @@ use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
 #[case::small(50_000, 20, 200, false, false)]
 #[case::medium(100_000, 50, 500, false, false)]
 #[case::large(200_000, 100, 1000, false, false)]

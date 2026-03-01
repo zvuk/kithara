@@ -136,7 +136,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 // Tests
 
 /// 2 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
 async fn two_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -174,7 +174,7 @@ async fn two_hls_instances() {
 }
 
 /// 4 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
 async fn four_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -210,7 +210,7 @@ async fn four_hls_instances() {
 }
 
 /// 8 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
 async fn eight_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -246,7 +246,7 @@ async fn eight_hls_instances() {
 }
 
 /// 4 concurrent HLS instances with auto ABR (2 variants).
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
 async fn four_hls_instances_with_abr() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
