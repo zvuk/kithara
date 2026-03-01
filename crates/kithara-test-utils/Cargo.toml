@@ -31,4 +31,5 @@ tracing-wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { workspace = true }
+tower-http = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt"] }

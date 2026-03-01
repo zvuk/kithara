@@ -70,7 +70,7 @@ mod server {
         create_wav_init_header, eval_delay, generate_segment,
     };
     use tokio::{net::TcpListener, sync::RwLock};
-    use tower_http::cors::CorsLayer;
+    use tower_http::{cors::CorsLayer, services::ServeDir};
 
     // ── Session Types ──────────────────────────────────────────────
 
@@ -158,6 +158,13 @@ mod server {
 
     const SILENCE_WAV: &[u8] = include_bytes!("../../assets/silence_1s.wav");
     const TEST_MP3: &[u8] = include_bytes!("../../assets/test.mp3");
+
+    fn assets_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repo root")
+            .join("assets")
+    }
 
     fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
         kithara_test_utils::create_saw_wav(total_bytes)
@@ -1417,6 +1424,10 @@ seg/v{}_2.bin
                 "/seg/{filename}",
                 get(static_segment_get).head(static_segment_head),
             )
+            // Real asset routes (served from repository assets/ directory)
+            .nest_service("/hls", ServeDir::new(assets_dir().join("hls")))
+            .nest_service("/drm", ServeDir::new(assets_dir().join("drm")))
+            .nest_service("/track.mp3", ServeDir::new(assets_dir().join("track.mp3")))
             .with_state(state)
             .layer(CorsLayer::permissive());
 
