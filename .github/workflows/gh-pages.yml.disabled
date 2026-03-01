@@ -1,0 +1,84 @@
+name: Deploy WASM Player to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+
+      - name: Install Trunk
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall trunk --no-confirm
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build WASM
+        working-directory: crates/kithara-wasm
+        run: RUSTUP_TOOLCHAIN=nightly trunk build --release --config Trunk.toml
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: crates/kithara-wasm/dist
+          force_orphan: true
+
+  wasm-size:
+    name: WASM size budget (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-slim
+        run: cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
+
+      - name: Run wasm-slim check
+        run: WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+
+      - name: Upload wasm-slim report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-slim-report
+          path: target/wasm-slim-result.json
