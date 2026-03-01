@@ -16,8 +16,6 @@ use url::Url;
 
 use crate::error::SourceError;
 
-const ON_DEMAND_CHUNK_BYTES: u64 = 512 * 1024;
-
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
     pub(crate) url: Url,
@@ -147,15 +145,9 @@ impl Default for Progress {
 /// when the downloader writes data via `write_at`, the resource notifies waiters,
 /// so `FileSource::wait_range()` unblocks automatically.
 #[derive(Debug)]
-pub(crate) struct FileRangeRequest {
-    pub(crate) range: Range<u64>,
-    pub(crate) seek_epoch: u64,
-}
-
-#[derive(Debug)]
 pub(crate) struct SharedFileState {
     /// Queue of on-demand range requests from Source to Downloader.
-    range_requests: SegQueue<FileRangeRequest>,
+    range_requests: SegQueue<Range<u64>>,
     /// Notify from Source → Downloader when reader needs data.
     pub(crate) reader_needs_data: Notify,
 }
@@ -169,14 +161,13 @@ impl SharedFileState {
     }
 
     /// Request on-demand download of a range.
-    pub(crate) fn request_range(&self, range: Range<u64>, seek_epoch: u64) {
-        self.range_requests
-            .push(FileRangeRequest { range, seek_epoch });
+    pub(crate) fn request_range(&self, range: Range<u64>) {
+        self.range_requests.push(range);
         self.reader_needs_data.notify_one();
     }
 
     /// Pop next on-demand range request (for Downloader).
-    pub(crate) fn pop_range_request(&self) -> Option<FileRangeRequest> {
+    pub(crate) fn pop_range_request(&self) -> Option<Range<u64>> {
         self.range_requests.pop()
     }
 }
@@ -249,20 +240,17 @@ impl kithara_stream::Source for FileSource {
         // BEFORE calling res.wait_range() — the resource blocks indefinitely
         // for Active resources when data is not available.
         if let Some(ref shared) = self.shared {
-            let is_committed = matches!(self.res.status(), ResourceStatus::Committed { .. });
-            if !is_committed && !self.res.contains_range(range.clone()) {
-                let seek_epoch = self.progress.timeline().seek_epoch();
-                let request_range =
-                    build_on_demand_range(range.clone(), self.progress.timeline().total_bytes());
+            let download_pos = self.progress.download_pos();
+            if range.start >= download_pos
+                && !matches!(self.res.status(), ResourceStatus::Committed { .. })
+            {
                 debug!(
                     range_start = range.start,
                     range_end = range.end,
-                    request_start = request_range.start,
-                    request_end = request_range.end,
-                    seek_epoch,
-                    "requesting on-demand download for uncovered range"
+                    download_pos,
+                    "requesting on-demand download for range beyond download_pos"
                 );
-                shared.request_range(request_range, seek_epoch);
+                shared.request_range(range.clone());
             }
         }
 
@@ -314,18 +302,6 @@ impl kithara_stream::Source for FileSource {
     fn timeline(&self) -> Timeline {
         self.progress.timeline()
     }
-}
-
-fn build_on_demand_range(range: Range<u64>, total_bytes: Option<u64>) -> Range<u64> {
-    let start = range.start;
-    let mut end = range.start.saturating_add(ON_DEMAND_CHUNK_BYTES);
-    if end < range.end {
-        end = range.end;
-    }
-    if let Some(total) = total_bytes {
-        end = end.min(total);
-    }
-    start..end
 }
 
 #[cfg(test)]
@@ -395,38 +371,24 @@ mod tests {
     ) {
         let state = SharedFileState::new();
         for range in requests {
-            state.request_range(range, 0);
+            state.request_range(range);
         }
 
         for range in expected {
-            let req = state.pop_range_request();
-            assert_eq!(req.as_ref().map(|r| r.range.clone()), Some(range));
+            assert_eq!(state.pop_range_request(), Some(range));
         }
-        assert!(state.pop_range_request().is_none());
+        assert_eq!(state.pop_range_request(), None);
     }
 
     #[kithara::test]
     fn test_shared_file_state_multiple_pops() {
         let state = SharedFileState::new();
-        state.request_range(0..50, 1);
-        state.request_range(50..100, 2);
+        state.request_range(0..50);
+        state.request_range(50..100);
 
         assert!(state.pop_range_request().is_some());
         assert!(state.pop_range_request().is_some());
         assert!(state.pop_range_request().is_none());
-    }
-
-    #[kithara::test]
-    fn build_on_demand_range_behaves_without_total() {
-        let range = build_on_demand_range(1024..2048, None);
-        assert_eq!(range.start, 1024);
-        assert_eq!(range.end, 1024 + ON_DEMAND_CHUNK_BYTES);
-    }
-
-    #[kithara::test]
-    fn build_on_demand_range_clamps_to_total() {
-        let range = build_on_demand_range(4096..8192, Some(5000));
-        assert_eq!(range, 4096..5000);
     }
 
     // FileSource

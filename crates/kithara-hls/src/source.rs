@@ -334,6 +334,7 @@ impl Source for HlsSource {
 
         kithara_platform::hang_watchdog! {
             thread: "hls.wait_range";
+            timeout: Duration::from_secs(10);
             loop {
                 let mut segments = self.shared.segments.lock_sync();
                 let context = self.build_wait_range_context(&segments, &range);

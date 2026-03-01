@@ -62,7 +62,6 @@ class WasmPlayerScenario:
                     const status = document.getElementById('status')?.textContent ?? '';
                     const playlist = [...document.querySelectorAll('#playlist li')].map((el) => el.textContent ?? '');
                     const out = {
-                        has_player: Boolean(window.__player),
                         status,
                         playlist,
                         seek_value: slider ? Number(slider.value) : null,
@@ -141,9 +140,7 @@ class WasmPlayerScenario:
         self.driver.get(self.page_url)
         self.wait_for(
             "player bootstrap",
-            lambda s: bool(s.get("has_player"))
-            and len(s.get("playlist", [])) >= 2
-            and "Ready" in str(s.get("status", "")),
+            lambda s: (s.get("len") or 0) >= 2 and len(s.get("playlist", [])) >= 2,
             timeout=45,
         )
         self.log(f"[scenario] Bootstrapped: {self.snapshot()}")

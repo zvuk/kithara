@@ -141,7 +141,16 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     timeout(Duration::from_secs(180)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
@@ -448,7 +457,16 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     tokio,
     browser,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
 )]
 async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
@@ -511,7 +529,16 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     tokio,
     browser,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
 )]
 async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()

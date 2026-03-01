@@ -277,7 +277,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 if evict_end > 0 {
                     state.available.remove(0..evict_end);
                 }
-                state.available.remove(window.end..u64::MAX);
             }
         }
         self.inner.condvar.notify_all();
@@ -301,6 +300,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         let mut prev_available_len: u64 = 0;
         kithara_platform::hang_watchdog! {
             thread: "storage.wait_range";
+            timeout: kithara_platform::time::Duration::from_secs(10);
             loop {
                 // Fast path: let the driver check without holding state lock.
                 if self.inner.driver.try_fast_check(&range) {

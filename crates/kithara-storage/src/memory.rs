@@ -159,49 +159,24 @@ impl DriverIo for MemDriver {
 
         let mut ring = self.state.lock_sync();
         let mask = ring.capacity - 1;
-        let mut write_offset = offset;
-        let mut write_data = data;
-
-        // Keep only the tail if write is larger than ring capacity.
-        if write_data.len() > ring.capacity {
-            let drop_prefix = write_data.len() - ring.capacity;
-            write_offset =
-                write_offset
-                    .checked_add(drop_prefix as u64)
-                    .ok_or(StorageError::InvalidRange {
-                        start: offset,
-                        end: u64::MAX,
-                    })?;
-            write_data = &write_data[drop_prefix..];
-        }
-
-        // Re-anchor the valid window when writing older offset during back-seek.
-        if write_offset < ring.window_start {
-            ring.window_start = write_offset;
-        }
 
         #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
-        let start_idx = (write_offset as usize) & mask;
+        let start_idx = (offset as usize) & mask;
 
         // Copy with wrap-around.
         let first_part = ring.capacity - start_idx;
-        if write_data.len() <= first_part {
+        if data.len() <= first_part {
             // No wrap: single copy.
-            ring.buf[start_idx..start_idx + write_data.len()].copy_from_slice(write_data);
+            ring.buf[start_idx..start_idx + data.len()].copy_from_slice(data);
         } else {
             // Wrap: two copies.
-            ring.buf[start_idx..].copy_from_slice(&write_data[..first_part]);
-            let second_part = write_data.len() - first_part;
-            ring.buf[..second_part].copy_from_slice(&write_data[first_part..]);
+            ring.buf[start_idx..].copy_from_slice(&data[..first_part]);
+            let second_part = data.len() - first_part;
+            ring.buf[..second_part].copy_from_slice(&data[first_part..]);
         }
 
         // Advance window_start if write extends past current window end.
-        let write_end = write_offset.checked_add(write_data.len() as u64).ok_or(
-            StorageError::InvalidRange {
-                start: write_offset,
-                end: u64::MAX,
-            },
-        )?;
+        let write_end = offset + data.len() as u64;
         let window_end = ring.window_start + ring.capacity as u64;
         if write_end > window_end {
             ring.window_start = write_end - ring.capacity as u64;
@@ -563,51 +538,6 @@ mod tests {
         let mut buf = [0u8; 1];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 0, "evicted offset should return 0 bytes");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_backfill_after_eviction_restores_old_range() {
-        let res = MemResource::open(
-            CancellationToken::new(),
-            MemOptions {
-                capacity: 256,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        res.write_at(0, &[0xAA; 200]).unwrap();
-        res.write_at(200, &[0xBB; 200]).unwrap();
-
-        let mut buf = [0u8; 8];
-        assert_eq!(res.read_at(0, &mut buf).unwrap(), 0);
-
-        // Back-seek demand rewrites an old segment; it should become readable again.
-        res.write_at(0, &[0xCC; 64]).unwrap();
-        assert_eq!(res.wait_range(0..64).unwrap(), WaitOutcome::Ready);
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 8);
-        assert_eq!(&buf, &[0xCC; 8]);
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_write_larger_than_capacity_keeps_tail() {
-        let res = MemResource::open(
-            CancellationToken::new(),
-            MemOptions {
-                capacity: 128,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let data = vec![0x5Au8; 512];
-        res.write_at(0, &data).unwrap();
-
-        let mut buf = [0u8; 16];
-        let n = res.read_at(384, &mut buf).unwrap();
-        assert_eq!(n, 16);
-        assert_eq!(&buf, &[0x5A; 16]);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

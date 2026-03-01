@@ -193,6 +193,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut chunks_sent = 0usize;
     kithara_platform::hang_watchdog! {
         thread: "audio.worker";
+        timeout: Duration::from_secs(10);
         loop {
             if cancel.is_cancelled() {
                 trace!("audio worker cancelled");
