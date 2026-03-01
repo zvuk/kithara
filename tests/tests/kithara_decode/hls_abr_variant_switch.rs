@@ -38,7 +38,12 @@ use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 /// - All bytes should be readable sequentially
 /// - Variant switch should be seamless from reader's perspective
 /// - No gaps or duplicates in byte stream
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
 async fn test_abr_variant_switch_no_byte_glitches(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
