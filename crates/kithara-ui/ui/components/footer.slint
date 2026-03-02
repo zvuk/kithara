@@ -1,0 +1,16 @@
+import { HorizontalBox } from "std-widgets.slint";
+import { AudioQuality, Utils } from "utils.slint";
+
+export component Footer inherits HorizontalLayout {
+    in property <AudioQuality> selected-quality;
+    in property <float> crossfade;
+
+    HorizontalBox {
+        padding: 0px;
+        Rectangle {
+            Text {
+                text: @tr("Quality: {0} • Crossfade: {1}", Utils.quality-to-string(selected-quality), crossfade.to-fixed(2));
+            }
+        }
+    }
+}

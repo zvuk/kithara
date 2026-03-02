@@ -1,0 +1,24 @@
+export component Button inherits Rectangle {
+    in property <image> icon;
+    in property <length> icon-size: self.height * 0.5;
+    in property <color> icon-color: #eee;
+    in property <color> icon-color-pressed: #fff;
+
+    callback clicked <=> touch.clicked;
+
+    border-radius: root.height / 2;
+    border-width: 1px;
+    border-color: root.background.darker(25%);
+    background: touch.pressed || touch.has-hover ? purple : darkmagenta;
+
+    img := Image {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + (touch.pressed ? 1px : 0);
+        colorize: touch.pressed ? root.icon-color-pressed : root.icon-color;
+    }
+
+    touch := TouchArea { }
+}

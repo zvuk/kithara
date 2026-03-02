@@ -1,23 +1,21 @@
-use std::{error::Error, io, time::Duration};
+use std::time::Duration;
 
 use ratatui::{
-    Frame, Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
-    crossterm::terminal::{disable_raw_mode, enable_raw_mode, size},
-    layout::{Constraint, Layout, Position, Rect},
+    Frame,
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Clear, Paragraph, Widget},
+    widgets::{Clear, Paragraph},
 };
 
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
-const CURSOR_GUARD_LINES: u16 = 2;
 
-type ExampleError = Box<dyn Error + Send + Sync>;
-type ExampleResult<T = ()> = Result<T, ExampleError>;
-
-pub(crate) struct Dashboard {
+/// TUI dashboard widget for the Kithara player.
+///
+/// Renders playlist, progress bar, volume, and status information
+/// using ratatui inline viewport.
+pub struct Dashboard {
     crossfade_progress: Option<f32>,
     current_index: usize,
     item_count: usize,
@@ -30,7 +28,8 @@ pub(crate) struct Dashboard {
 }
 
 impl Dashboard {
-    pub(crate) fn new(tracks: Vec<String>) -> Self {
+    #[must_use]
+    pub fn new(tracks: Vec<String>) -> Self {
         Self {
             crossfade_progress: None,
             current_index: 0,
@@ -44,44 +43,47 @@ impl Dashboard {
         }
     }
 
-    pub(crate) fn height(&self) -> u16 {
+    #[must_use]
+    #[expect(clippy::cast_possible_truncation)]
+    pub fn height(&self) -> u16 {
         self.tracks.len() as u16 + 1
     }
 
-    pub(crate) fn set_crossfade_progress(&mut self, progress: Option<f32>) {
+    pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
         self.crossfade_progress = progress.map(|value| value.clamp(0.0, 1.0));
     }
 
-    pub(crate) fn set_note(&mut self, note: impl Into<String>) {
+    pub fn set_note<S: Into<String>>(&mut self, note: S) {
         self.last_note = Some(note.into());
     }
 
-    pub(crate) fn set_playing(&mut self, playing: bool) {
+    pub fn set_playing(&mut self, playing: bool) {
         self.playing = playing;
     }
 
-    pub(crate) fn set_position(&mut self, position: Duration) {
+    pub fn set_position(&mut self, position: Duration) {
         self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
     }
 
-    pub(crate) fn set_queue(&mut self, current_index: usize, item_count: usize) {
+    pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
         self.current_index = current_index;
         self.item_count = item_count;
     }
 
-    pub(crate) fn set_total(&mut self, total: Option<Duration>) {
+    pub fn set_total(&mut self, total: Option<Duration>) {
         self.total_ms =
             total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
     }
 
-    pub(crate) fn set_volume(&mut self, volume: f32) {
+    pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
     }
 
-    pub(crate) fn render(&self, frame: &mut Frame) {
+    pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
         frame.render_widget(Clear, area);
 
+        #[expect(clippy::cast_possible_truncation)]
         let playlist_lines = self.tracks.len() as u16;
         let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
             .split(area);
@@ -104,6 +106,7 @@ impl Dashboard {
             } else {
                 Style::default().fg(Color::DarkGray).bg(bg)
             };
+            #[expect(clippy::cast_possible_truncation)]
             let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
             let padded = fit_cell(&text, usize::from(row.width));
             frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
@@ -179,108 +182,6 @@ impl Dashboard {
             "▰".repeat(filled),
             "▱".repeat(width.saturating_sub(filled))
         )
-    }
-}
-
-struct RawModeGuard;
-
-impl RawModeGuard {
-    fn new() -> ExampleResult<Self> {
-        enable_raw_mode()?;
-        Ok(Self)
-    }
-}
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-    }
-}
-
-pub(crate) struct UiSession {
-    _raw: RawModeGuard,
-    pub(crate) dashboard: Dashboard,
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
-}
-
-impl UiSession {
-    pub(crate) fn new(dashboard: Dashboard) -> ExampleResult<Self> {
-        let raw = RawModeGuard::new()?;
-        let (_, terminal_height) = size()?;
-        let max_height = terminal_height.saturating_sub(2).max(6);
-        let viewport_height = dashboard.height().min(max_height);
-        let backend = CrosstermBackend::new(io::stdout());
-        let mut terminal = Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(viewport_height),
-            },
-        )?;
-        terminal.hide_cursor()?;
-
-        let mut session = Self {
-            _raw: raw,
-            dashboard,
-            terminal,
-        };
-        session.stick_to_bottom()?;
-        session.park_cursor_above_dashboard()?;
-        Ok(session)
-    }
-
-    pub(crate) fn draw(&mut self) -> ExampleResult {
-        self.terminal.draw(|frame| self.dashboard.render(frame))?;
-        self.park_cursor_above_dashboard()?;
-        Ok(())
-    }
-
-    pub(crate) fn log_line(&mut self, line: &str) -> ExampleResult {
-        let line = line.replace('\n', " ");
-        self.terminal.insert_before(1, |buf| {
-            Paragraph::new(line).render(buf.area, buf);
-        })?;
-        self.park_cursor_above_dashboard()?;
-        Ok(())
-    }
-
-    pub(crate) fn on_resize(&mut self) -> ExampleResult {
-        self.terminal.autoresize()?;
-        self.stick_to_bottom()?;
-        self.park_cursor_above_dashboard()?;
-        Ok(())
-    }
-
-    fn dashboard_height(&self) -> u16 {
-        self.dashboard.height()
-    }
-
-    fn stick_to_bottom(&mut self) -> ExampleResult {
-        let terminal_height = self.terminal.size()?.height.max(1);
-        let viewport_height = self.dashboard_height().min(terminal_height);
-        let cursor_y = self.terminal.get_cursor_position()?.y;
-        let target_top = terminal_height.saturating_sub(viewport_height);
-        let pad = target_top.saturating_sub(cursor_y);
-        if pad == 0 {
-            return Ok(());
-        }
-        self.terminal.insert_before(pad, |buf| {
-            Clear.render(buf.area, buf);
-        })?;
-        Ok(())
-    }
-
-    fn park_cursor_above_dashboard(&mut self) -> ExampleResult {
-        let terminal_height = self.terminal.size()?.height.max(1);
-        let height = self.dashboard_height().min(terminal_height);
-        let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
-        self.terminal.set_cursor_position(Position { x: 0, y })?;
-        Ok(())
-    }
-}
-
-impl Drop for UiSession {
-    fn drop(&mut self) {
-        let _ = self.terminal.show_cursor();
     }
 }
 

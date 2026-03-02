@@ -1,14 +1,14 @@
-use std::{
-    error::Error,
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
-type ExampleError = Box<dyn Error + Send + Sync>;
-type ExampleResult<T = ()> = Result<T, ExampleError>;
+use crate::session::TuiResult;
 
+/// A `Write` adapter that converts lone `\n` into `\r\n`.
+///
+/// Required for tracing output in raw-mode terminals where `\n` alone
+/// moves the cursor down without returning to the start of the line.
 struct CrlfWriter<W> {
     inner: W,
 }
@@ -47,7 +47,14 @@ fn make_log_writer() -> CrlfWriter<io::Stderr> {
     CrlfWriter::new(io::stderr())
 }
 
-pub(crate) fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> ExampleResult {
+/// Initialize tracing subscriber for TUI mode.
+///
+/// When `use_crlf_writer` is true, output is wrapped in [`CrlfWriter`]
+/// to produce correct line endings in raw-mode terminals.
+///
+/// # Errors
+/// Returns an error if a tracing directive cannot be parsed.
+pub fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> TuiResult {
     let mut filter = EnvFilter::default();
     for directive in directives {
         filter = filter.add_directive((*directive).parse()?);
