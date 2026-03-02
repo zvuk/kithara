@@ -108,16 +108,6 @@
             font-family: monospace;
             margin-bottom: 10px;
         }
-        #seek-correlation {
-            background: #0b1018;
-            border: 1px solid #2a3442;
-            border-radius: 8px;
-            padding: 10px;
-            font-size: 12px;
-            font-family: monospace;
-            color: #65f0d3;
-            margin-bottom: 10px;
-        }
         .eq-grid {
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -195,7 +185,7 @@
     <div class="card">
         <div class="row">
             <label class="setting-label" for="volume-slider">Volume</label>
-            <input type="range" id="volume-slider" min="0" max="1" value="1" step="0.01" disabled>
+            <input type="range" id="volume-slider" min="0" max="1" value="0.05" step="0.01" disabled>
             <span class="setting-value" id="volume-value">100%</span>
         </div>
         <div class="row">
@@ -214,941 +204,238 @@
     </div>
 
     <div id="status">Initializing WASM...</div>
-    <div id="seek-correlation">seek_id=- target_ms=- complete_ms=- active_segment_before=- active_segment_after=- bytes_start=- bytes_pos=-</div>
     <div id="event-log"></div>
 
     <script src="./coi-serviceworker.js"></script>
     <script type="module">
-        const logEl = document.getElementById('event-log');
-        const statusEl = document.getElementById('status');
-        const seekCorrelationEl = document.getElementById('seek-correlation');
-        const buildInfoEl = document.getElementById('build-info');
-        const playlistEl = document.getElementById('playlist');
-        const urlInput = document.getElementById('url-input');
-        const addBtn = document.getElementById('add-btn');
-        const playBtn = document.getElementById('play-btn');
-        const pauseBtn = document.getElementById('pause-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const seekSlider = document.getElementById('seek-slider');
-        const positionEl = document.getElementById('position');
-        const durationEl = document.getElementById('duration');
-        const volumeSlider = document.getElementById('volume-slider');
-        const volumeValueEl = document.getElementById('volume-value');
-        const crossfadeSlider = document.getElementById('crossfade-slider');
-        const crossfadeValueEl = document.getElementById('crossfade-value');
-        const eqGrid = document.getElementById('eq-grid');
-        const eqResetBtn = document.getElementById('eq-reset-btn');
+        const $ = id => document.getElementById(id);
+        const fmt = ms => {
+            const s = Math.max(0, Math.floor(ms / 1000));
+            return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        };
         const coiReloadKey = 'kithara_coi_wait_reloaded';
 
-        function log(message, cls = '') {
-            const line = document.createElement('div');
-            if (cls) line.className = cls;
-            const ts = new Date().toISOString().substring(11, 23);
-            line.textContent = `[${ts}] ${message}`;
-            logEl.appendChild(line);
-            logEl.scrollTop = logEl.scrollHeight;
+        function log(msg, cls = '') {
+            const div = document.createElement('div');
+            if (cls) div.className = cls;
+            div.textContent = `[${new Date().toISOString().slice(11, 23)}] ${msg}`;
+            $('event-log').appendChild(div);
+            $('event-log').scrollTop = $('event-log').scrollHeight;
         }
 
-        function formatTime(ms) {
-            const totalSec = Math.max(0, Math.floor(ms / 1000));
-            const min = Math.floor(totalSec / 60);
-            const sec = totalSec % 60;
-            return `${min}:${String(sec).padStart(2, '0')}`;
+        function setControlsEnabled(on) {
+            for (const id of ['add-btn','play-btn','pause-btn','stop-btn','seek-slider','volume-slider','crossfade-slider','eq-reset-btn'])
+                $(id).disabled = !on;
         }
 
-        function setControlsEnabled(enabled) {
-            addBtn.disabled = !enabled;
-            playBtn.disabled = !enabled;
-            pauseBtn.disabled = !enabled;
-            stopBtn.disabled = !enabled;
-            seekSlider.disabled = !enabled;
-            volumeSlider.disabled = !enabled;
-            crossfadeSlider.disabled = !enabled;
-            eqResetBtn.disabled = !enabled;
-        }
-
-        function formatVolume(volume) {
-            return `${Math.round(Math.max(0, Math.min(1, volume)) * 100)}%`;
-        }
-
-        function formatCrossfade(seconds) {
-            return seconds <= 0 ? 'Off' : `${seconds.toFixed(1)}s`;
-        }
-
-        function runtimeDiagnostics() {
-            return {
+        // --- COI runtime check (same logic as before) ---
+        function ensureRuntime() {
+            const d = {
                 crossOriginIsolated: self.crossOriginIsolated === true,
                 secureContext: self.isSecureContext === true,
                 sharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
             };
-        }
-
-        function ensureRuntimeSupport() {
-            const d = runtimeDiagnostics();
-            if (d.crossOriginIsolated) {
-                sessionStorage.removeItem(coiReloadKey);
-            }
-            if (d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) {
-                return true;
-            }
+            if (d.crossOriginIsolated) sessionStorage.removeItem(coiReloadKey);
+            if (d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) return true;
 
             const waitingForCoiReload =
-                d.secureContext &&
-                !d.crossOriginIsolated &&
+                d.secureContext && !d.crossOriginIsolated &&
                 typeof navigator.serviceWorker !== 'undefined' &&
                 !navigator.serviceWorker.controller;
             if (waitingForCoiReload) {
                 setControlsEnabled(false);
-                statusEl.textContent = 'Waiting for cross-origin isolation (service worker reload)...';
+                $('status').textContent = 'Waiting for cross-origin isolation (service worker reload)...';
                 log('Waiting for COI service worker to activate and reload the page.', 'info');
-
-                navigator.serviceWorker.ready
-                    .then(() => {
-                        if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
-                            sessionStorage.removeItem(coiReloadKey);
-                            return;
-                        }
-                        const alreadyReloaded = sessionStorage.getItem(coiReloadKey) === '1';
-                        if (alreadyReloaded) {
-                            log('COI service worker is active but page is still uncontrolled. Reload manually.', 'error');
-                            return;
-                        }
-                        sessionStorage.setItem(coiReloadKey, '1');
-                        window.location.reload();
-                    })
-                    .catch((err) => {
-                        log(`Service worker ready failed: ${err}`, 'error');
-                    });
+                navigator.serviceWorker.ready.then(() => {
+                    if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
+                        sessionStorage.removeItem(coiReloadKey);
+                        return;
+                    }
+                    if (sessionStorage.getItem(coiReloadKey) === '1') {
+                        log('COI service worker is active but page is still uncontrolled. Reload manually.', 'error');
+                        return;
+                    }
+                    sessionStorage.setItem(coiReloadKey, '1');
+                    window.location.reload();
+                }).catch(err => log(`Service worker ready failed: ${err}`, 'error'));
                 return false;
             }
 
             setControlsEnabled(false);
-            statusEl.textContent = 'Environment is not ready for WASM audio playback';
-            log(
-                `Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer}`,
-                'error',
-            );
-            log(
-                'This demo requires COOP=same-origin and COEP=require-corp to enable SharedArrayBuffer.',
-                'error',
-            );
-            log(
-                'For GitHub Pages use coi-serviceworker fallback, or host behind proxy/CDN with those headers.',
-                'error',
-            );
+            $('status').textContent = 'Environment is not ready for WASM audio playback';
+            log(`Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer}`, 'error');
             return false;
         }
 
-        function renderOutputSettings() {
-            const volume = player.get_volume();
-            volumeSlider.value = String(volume);
-            volumeValueEl.textContent = formatVolume(volume);
+        if (!ensureRuntime()) throw new Error('Runtime not ready');
 
-            const crossfade = player.get_crossfade_seconds();
-            crossfadeSlider.value = String(crossfade);
-            crossfadeValueEl.textContent = formatCrossfade(crossfade);
-        }
+        // --- Init WASM (setup() runs automatically via #[wasm_bindgen(start)]) ---
+        const wasm = await import('./kithara-wasm.js');
+        await wasm.default();
 
-        function parseDurationToMs(raw) {
-            const match = raw.match(/^([0-9]+(?:\.[0-9]+)?)([a-z]+)$/i);
-            if (!match) return null;
-            const value = Number(match[1]);
-            const unit = match[2].toLowerCase();
-            if (!Number.isFinite(value)) return null;
-            if (unit === 's') return value * 1000;
-            if (unit === 'ms') return value;
-            if (unit === 'us') return value / 1000;
-            if (unit === 'ns') return value / 1000000;
-            return null;
-        }
+        const player = new wasm.WasmPlayer();
+        window.__player = player;
 
-        const seekDiagnostics = {
-            nextId: 1,
-            pendingIds: [],
-            ops: [],
-            audioPosMs: null,
-            audioEpoch: null,
-            hls: {
-                bytesPos: null,
-                bytesTotal: null,
-                downloadOffset: null,
-                segmentIndex: null,
-                segmentStart: null,
-                throughputBps: null,
-                variant: null,
-            },
-        };
+        $('build-info').textContent = `(${wasm.build_info()})`;
 
-        function diag(prefix, payload) {
-            log(`${prefix}|${JSON.stringify(payload)}`, 'info');
-        }
-
-        function findSeekOp(id) {
-            return seekDiagnostics.ops.find((op) => op.id === id) ?? null;
-        }
-
-        function resetSeekDiagnostics() {
-            seekDiagnostics.nextId = 1;
-            seekDiagnostics.pendingIds.length = 0;
-            seekDiagnostics.ops.length = 0;
-            renderSeekCorrelation();
-        }
-
-        function parseResourceEvent(line) {
-            const marker = ' event=';
-            if (!line.startsWith('resource src=')) return null;
-            const markerIndex = line.indexOf(marker);
-            if (markerIndex < 0) return null;
-            const event = line.slice(markerIndex + marker.length);
-
-            let match = event.match(/^Hls\(SegmentStart \{ variant: (\d+), segment_index: (\d+), byte_offset: (\d+) \}\)$/);
-            if (match) {
-                return {
-                    byteOffset: Number(match[3]),
-                    segmentIndex: Number(match[2]),
-                    type: 'segment_start',
-                    variant: Number(match[1]),
-                };
-            }
-
-            match = event.match(/^Hls\(SegmentComplete \{ variant: (\d+), segment_index: (\d+), bytes_transferred: (\d+), duration: ([^)]+) \}\)$/);
-            if (match) {
-                return {
-                    bytesTransferred: Number(match[3]),
-                    durationMs: parseDurationToMs(match[4]),
-                    segmentIndex: Number(match[2]),
-                    type: 'segment_complete',
-                    variant: Number(match[1]),
-                };
-            }
-
-            match = event.match(/^Hls\((?:ByteProgress|PlaybackProgress) \{ position: (\d+), total: (?:Some\((\d+)\)|None) \}\)$/);
-            if (match) {
-                return {
-                    bytesPos: Number(match[1]),
-                    bytesTotal: match[2] ? Number(match[2]) : null,
-                    type: 'playback_progress',
-                };
-            }
-
-            match = event.match(
-                /^Audio\(SeekLifecycle \{ stage: ([A-Za-z]+), seek_epoch: (\d+), task_id: (\d+), variant: (?:Some\((\d+)\)|None), segment_index: (?:Some\((\d+)\)|None), byte_range_start: (?:Some\((\d+)\)|None), byte_range_end: (?:Some\((\d+)\)|None) \}\)$/
-            );
-            if (match) {
-                return {
-                    byteRangeEnd: match[7] ? Number(match[7]) : null,
-                    byteRangeStart: match[6] ? Number(match[6]) : null,
-                    seekEpoch: Number(match[2]),
-                    segmentIndex: match[5] ? Number(match[5]) : null,
-                    stage: match[1],
-                    taskId: Number(match[3]),
-                    type: 'seek_lifecycle',
-                    variant: match[4] ? Number(match[4]) : null,
-                };
-            }
-
-            match = event.match(/^Audio\(PlaybackProgress \{ position_ms: (\d+), total_ms: (?:Some\((\d+)\)|None), seek_epoch: (\d+) \}\)$/);
-            if (match) {
-                return {
-                    audioPosMs: Number(match[1]),
-                    audioTotalMs: match[2] ? Number(match[2]) : null,
-                    audioEpoch: Number(match[3]),
-                    type: 'audio_playback_progress',
-                };
-            }
-
-            match = event.match(/^Hls\(DownloadProgress \{ offset: (\d+), total: (?:Some\((\d+)\)|None) \}\)$/);
-            if (match) {
-                return {
-                    downloadOffset: Number(match[1]),
-                    downloadTotal: match[2] ? Number(match[2]) : null,
-                    type: 'download_progress',
-                };
-            }
-
-            match = event.match(/^Hls\(VariantApplied \{ from_variant: (\d+), to_variant: (\d+), reason: ([^)]+) \}\)$/);
-            if (match) {
-                return {
-                    fromVariant: Number(match[1]),
-                    reason: match[3].trim(),
-                    toVariant: Number(match[2]),
-                    type: 'variant_applied',
-                };
-            }
-
-            match = event.match(/^Hls\(ThroughputSample \{ bytes_per_second: ([0-9eE+.-]+) \}\)$/);
-            if (match) {
-                return {
-                    bytesPerSecond: Number(match[1]),
-                    type: 'throughput_sample',
-                };
-            }
-
-            match = event.match(/^Audio\(SeekComplete \{ position: ([a-zA-Z0-9.]+), seek_epoch: (\d+) \}\)$/);
-            if (match) {
-                return {
-                    completeMs: parseDurationToMs(match[1]),
-                    seekEpoch: Number(match[2]),
-                    type: 'seek_complete',
-                };
-            }
-
-            match = event.match(/^Audio\(FormatDetected \{ spec: PcmSpec \{ channels: (\d+), sample_rate: (\d+) \} \}\)$/);
-            if (match) {
-                return {
-                    channels: Number(match[1]),
-                    sampleRate: Number(match[2]),
-                    type: 'format_detected',
-                };
-            }
-
-            match = event.match(/^Audio\(FormatChanged \{ old: PcmSpec \{ channels: (\d+), sample_rate: (\d+) \}, new: PcmSpec \{ channels: (\d+), sample_rate: (\d+) \} \}\)$/);
-            if (match) {
-                return {
-                    newChannels: Number(match[3]),
-                    newRate: Number(match[4]),
-                    oldChannels: Number(match[1]),
-                    oldRate: Number(match[2]),
-                    type: 'format_changed',
-                };
-            }
-
-            if (event === 'Audio(EndOfStream)' || event === 'Hls(EndOfStream)') {
-                return { type: 'end_of_stream' };
-            }
-
-            return null;
-        }
-
-        function buildSeekReport() {
-            const completed = seekDiagnostics.ops.filter((op) => op.completeMs !== null);
-            const finalized = completed.filter((op) => op.finalized);
-            const deltaAbs = completed.map((op) => Math.abs(op.deltaMs));
-
-            const maxDelta = deltaAbs.length > 0 ? Math.max(...deltaAbs) : null;
-            const minDelta = deltaAbs.length > 0 ? Math.min(...deltaAbs) : null;
-            const avgDelta = deltaAbs.length > 0
-                ? deltaAbs.reduce((sum, value) => sum + value, 0) / deltaAbs.length
-                : null;
-
-            return {
-                delta_ms_avg: avgDelta === null ? null : Math.round(avgDelta),
-                delta_ms_max: maxDelta === null ? null : Math.round(maxDelta),
-                delta_ms_min: minDelta === null ? null : Math.round(minDelta),
-                seek_complete_without_audio_output: finalized.filter((op) => !op.audioOutput).length,
-                seek_complete_without_progress: finalized.filter((op) => !op.progressInRange).length,
-                seeks_completed: completed.length,
-                seeks_total: seekDiagnostics.ops.length,
-            };
-        }
-
-        function renderSeekCorrelation() {
-            const last = seekDiagnostics.ops.at(-1);
-            if (!last) {
-                seekCorrelationEl.textContent =
-                    'seek_id=- target_ms=- complete_ms=- active_segment_before=- active_segment_after=- bytes_start=- bytes_pos=-';
-                return;
-            }
-
-            const report = buildSeekReport();
-            const completeMs = last.completeMs === null ? '-' : Math.round(last.completeMs);
-            const bytesPos = last.bytesPos ?? seekDiagnostics.hls.bytesPos ?? '-';
-            const bytesStart = last.bytesStart ?? seekDiagnostics.hls.segmentStart ?? '-';
-
-            seekCorrelationEl.textContent =
-                `seek_id=${last.id} target_ms=${Math.round(last.targetMs)} complete_ms=${completeMs} ` +
-                `active_segment_before=${last.beforeSegment ?? '-'} active_segment_after=${last.afterSegment ?? '-'} ` +
-                `bytes_start=${bytesStart} bytes_pos=${bytesPos} ` +
-                `seeks_completed=${report.seeks_completed} delta_avg_ms=${report.delta_ms_avg ?? '-'} ` +
-                `no_progress=${report.seek_complete_without_progress} no_audio=${report.seek_complete_without_audio_output}`;
-        }
-
-        function markSeekCompleted(completeMs) {
-            const id = seekDiagnostics.pendingIds.shift();
-            if (id === undefined) {
-                diag('SEEK_AUDIO', {
-                    complete_ms: completeMs === null ? null : Math.round(completeMs),
-                    type: 'seek_complete_unmatched',
-                });
-                return;
-            }
-
-            const op = findSeekOp(id);
-            if (!op) {
-                diag('SEEK_AUDIO', { seek_id: id, type: 'seek_complete_missing_op' });
-                return;
-            }
-
-            op.completeAt = performance.now();
-            op.completeMs = completeMs;
-            op.deltaMs = completeMs === null ? null : completeMs - op.targetMs;
-            op.afterSegment = seekDiagnostics.hls.segmentIndex;
-            op.afterVariant = seekDiagnostics.hls.variant;
-            op.bytesPos = seekDiagnostics.hls.bytesPos;
-            op.bytesStart = seekDiagnostics.hls.segmentStart;
-
-            diag('SEEK_AUDIO', {
-                active_segment_after: op.afterSegment,
-                active_segment_before: op.beforeSegment,
-                bytes_pos: op.bytesPos,
-                bytes_start: op.bytesStart,
-                complete_ms: completeMs === null ? null : Math.round(completeMs),
-                delta_ms: op.deltaMs === null ? null : Math.round(op.deltaMs),
-                seek_id: id,
-                target_ms: Math.round(op.targetMs),
-                type: 'seek_complete',
-            });
-            renderSeekCorrelation();
-        }
-
-        function handleResourceEvent(parsed) {
-            if (parsed.type === 'segment_start') {
-                seekDiagnostics.hls.variant = parsed.variant;
-                seekDiagnostics.hls.segmentIndex = parsed.segmentIndex;
-                seekDiagnostics.hls.segmentStart = parsed.byteOffset;
-                diag('SEEK_STATE', {
-                    byte_offset: parsed.byteOffset,
-                    segment_index: parsed.segmentIndex,
-                    type: 'segment_start',
-                    variant: parsed.variant,
-                });
-                return;
-            }
-
-            if (parsed.type === 'segment_complete') {
-                diag('SEEK_NET', {
-                    bytes_transferred: parsed.bytesTransferred,
-                    duration_ms: parsed.durationMs === null ? null : Math.round(parsed.durationMs),
-                    segment_index: parsed.segmentIndex,
-                    type: 'segment_complete',
-                    variant: parsed.variant,
-                });
-                return;
-            }
-
-            if (parsed.type === 'playback_progress') {
-                seekDiagnostics.hls.bytesPos = parsed.bytesPos;
-                seekDiagnostics.hls.bytesTotal = parsed.bytesTotal;
-                return;
-            }
-
-            if (parsed.type === 'audio_playback_progress') {
-                seekDiagnostics.audioPosMs = parsed.audioPosMs;
-                seekDiagnostics.audioEpoch = parsed.audioEpoch;
-                sampleSeekProgress(parsed.audioPosMs);
-                return;
-            }
-
-            if (parsed.type === 'download_progress') {
-                seekDiagnostics.hls.downloadOffset = parsed.downloadOffset;
-                diag('SEEK_NET', {
-                    download_offset: parsed.downloadOffset,
-                    download_total: parsed.downloadTotal,
-                    type: 'download_progress',
-                });
-                return;
-            }
-
-            if (parsed.type === 'variant_applied') {
-                seekDiagnostics.hls.variant = parsed.toVariant;
-                diag('SEEK_STATE', {
-                    from_variant: parsed.fromVariant,
-                    reason: parsed.reason,
-                    to_variant: parsed.toVariant,
-                    type: 'variant_applied',
-                });
-                return;
-            }
-
-            if (parsed.type === 'throughput_sample') {
-                seekDiagnostics.hls.throughputBps = parsed.bytesPerSecond;
-                diag('SEEK_NET', {
-                    bytes_per_second: Math.round(parsed.bytesPerSecond),
-                    type: 'throughput_sample',
-                });
-                return;
-            }
-
-            if (parsed.type === 'seek_complete') {
-                markSeekCompleted(parsed.completeMs);
-                return;
-            }
-
-            if (parsed.type === 'seek_lifecycle') {
-                diag('SEEK_CHAIN', {
-                    byte_range_end: parsed.byteRangeEnd,
-                    byte_range_start: parsed.byteRangeStart,
-                    seek_epoch: parsed.seekEpoch,
-                    segment_index: parsed.segmentIndex,
-                    stage: parsed.stage,
-                    task_id: parsed.taskId,
-                    variant: parsed.variant,
-                });
-                return;
-            }
-
-            if (parsed.type === 'format_detected') {
-                diag('SEEK_AUDIO', {
-                    channels: parsed.channels,
-                    sample_rate: parsed.sampleRate,
-                    type: 'format_detected',
-                });
-                return;
-            }
-
-            if (parsed.type === 'format_changed') {
-                diag('SEEK_AUDIO', {
-                    new_channels: parsed.newChannels,
-                    new_rate: parsed.newRate,
-                    old_channels: parsed.oldChannels,
-                    old_rate: parsed.oldRate,
-                    type: 'format_changed',
-                });
-                return;
-            }
-
-            if (parsed.type === 'end_of_stream') {
-                diag('SEEK_AUDIO', { type: 'end_of_stream' });
-            }
-        }
-
-        function sampleSeekProgress(posMs) {
-            const now = performance.now();
-            for (const op of seekDiagnostics.ops) {
-                if (op.completeAt === null || op.finalized) continue;
-
-                if (op.firstProgressMs === null) {
-                    op.firstProgressMs = posMs;
-                    op.lastProgressMs = posMs;
-                } else {
-                    if (posMs + 30 < op.lastProgressMs) {
-                        op.nonMonotonicSteps += 1;
-                    }
-                    if (posMs > op.lastProgressMs + 20) {
-                        op.movedAfterComplete = true;
-                    }
-                    op.lastProgressMs = posMs;
-                }
-
-                if (now - op.completeAt >= 1200) {
-                    op.audioOutput = op.movedAfterComplete;
-                    op.finalized = true;
-                    op.progressInRange = Math.abs(op.firstProgressMs - op.targetMs) <= 250;
-
-                    diag('SEEK_AUDIO', {
-                        first_progress_ms: Math.round(op.firstProgressMs),
-                        in_range_250ms: op.progressInRange,
-                        moved: op.audioOutput,
-                        non_monotonic_steps: op.nonMonotonicSteps,
-                        seek_id: op.id,
-                        target_ms: Math.round(op.targetMs),
-                        type: 'post_seek_window',
-                    });
-                    renderSeekCorrelation();
-                }
-            }
-        }
-
-        function startSeekOperation(targetMs, origin) {
-            const op = {
-                afterSegment: null,
-                afterVariant: null,
-                audioOutput: false,
-                beforeSegment: seekDiagnostics.hls.segmentIndex,
-                beforeVariant: seekDiagnostics.hls.variant,
-                bytesPos: seekDiagnostics.hls.bytesPos,
-                bytesStart: seekDiagnostics.hls.segmentStart,
-                completeAt: null,
-                completeMs: null,
-                deltaMs: null,
-                finalized: false,
-                firstProgressMs: null,
-                id: seekDiagnostics.nextId,
-                lastProgressMs: null,
-                movedAfterComplete: false,
-                nonMonotonicSteps: 0,
-                origin,
-                progressInRange: false,
-                targetMs,
-            };
-            seekDiagnostics.nextId += 1;
-            seekDiagnostics.ops.push(op);
-            seekDiagnostics.pendingIds.push(op.id);
-
-            diag('SEEK_UI', {
-                active_segment_before: op.beforeSegment,
-                active_variant_before: op.beforeVariant,
-                bytes_pos: op.bytesPos,
-                bytes_start: op.bytesStart,
-                seek_id: op.id,
-                target_ms: Math.round(targetMs),
-                type: 'commit',
-            });
-            renderSeekCorrelation();
-            return op.id;
-        }
-
-        function commitSeek(targetMs, origin) {
-            const seekId = startSeekOperation(targetMs, origin);
-            player.seek(targetMs);
-            return seekId;
-        }
-
-        function waitForSeekCompletion(seekId, timeoutMs = 5000) {
-            return new Promise((resolve, reject) => {
-                const start = performance.now();
-                const timer = window.setInterval(() => {
-                    const op = findSeekOp(seekId);
-                    if (!op) {
-                        window.clearInterval(timer);
-                        reject(new Error(`seek operation not found: ${seekId}`));
-                        return;
-                    }
-                    if (op.completeAt !== null) {
-                        window.clearInterval(timer);
-                        resolve(op);
-                        return;
-                    }
-                    if (performance.now() - start > timeoutMs) {
-                        window.clearInterval(timer);
-                        reject(new Error(`seek completion timeout for id=${seekId}`));
-                    }
-                }, 50);
-            });
-        }
-
-        async function runSeekScenario(count = 24) {
-            const durationMs = player.get_duration_ms();
-            if (!(durationMs > 0)) {
-                throw new Error('duration is unknown, cannot run seek scenario');
-            }
-
-            const safeEnd = Math.max(1000, durationMs - 1000);
-            for (let i = 1; i <= count; i += 1) {
-                const targetMs = Math.round((safeEnd * i) / (count + 1));
-                const seekId = commitSeek(targetMs, 'auto');
-                await waitForSeekCompletion(seekId, 5000);
-                await new Promise((resolve) => window.setTimeout(resolve, 180));
-            }
-
-            await new Promise((resolve) => window.setTimeout(resolve, 1400));
-            const report = buildSeekReport();
-            diag('SEEK_UI', { type: 'scenario_report', ...report });
-            renderSeekCorrelation();
-            return report;
-        }
-
-        let wasm;
-        let player;
-        let uiRaf = null;
+        // --- Playlist (JS-side state, NOT in WASM memory) ---
+        const playlist = [
+            { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
+            { url: 'https://stream.silvercomet.top/hls/master.m3u8', label: 'HLS Stream' },
+        ];
+        let currentIndex = -1;
         let selectingTrack = false;
-        let lastTickErrorAt = 0;
-        let uiSuspended = false;
-        let lastProcessCount = 0;
-        let lastProcessCountLogTime = 0;
-        let lastWasmMemoryBytes = 0;
 
         function renderPlaylist() {
-            playlistEl.innerHTML = '';
-            const active = player.current_index();
-            const count = player.playlist_len();
-            for (let i = 0; i < count; i += 1) {
+            const ul = $('playlist');
+            ul.textContent = '';
+            playlist.forEach((track, i) => {
                 const li = document.createElement('li');
-                const url = player.playlist_item(i);
-                li.textContent = `${i + 1}. ${url}`;
-                if (active === i) li.classList.add('active');
+                li.textContent = `${i + 1}. ${track.label}`;
+                if (i === currentIndex) li.classList.add('active');
                 li.onclick = async () => {
                     if (selectingTrack) return;
-
                     selectingTrack = true;
-                    uiSuspended = true;
                     setControlsEnabled(false);
-                    statusEl.textContent = `Loading track ${i + 1}...`;
-
+                    $('status').textContent = `Loading ${track.label}...`;
                     try {
-                        await player.select_track(i);
-                        resetSeekDiagnostics();
-                        statusEl.textContent = `Playing track ${i + 1}`;
-                        log(`Track selected: ${url}`, 'info');
-                        startUiLoop();
+                        await player.select_track(track.url);
+                        currentIndex = i;
+                        $('status').textContent = `Playing ${track.label}`;
+                        log(`Track selected: ${track.label}`, 'info');
                     } catch (err) {
-                        statusEl.textContent = `Track load failed: ${err}`;
+                        $('status').textContent = `Track load failed: ${err}`;
                         log(`Track load failed: ${err}`, 'error');
                     } finally {
                         selectingTrack = false;
-                        uiSuspended = false;
                         setControlsEnabled(true);
                         renderPlaylist();
                     }
                 };
-                playlistEl.appendChild(li);
-            }
+                ul.appendChild(li);
+            });
         }
 
+        // --- Add track ---
+        $('add-btn').onclick = () => {
+            const url = $('url-input').value.trim();
+            if (!url) return;
+            playlist.push({ url, label: url });
+            $('url-input').value = '';
+            renderPlaylist();
+            log(`Added track: ${url}`, 'info');
+        };
+
+        // --- Transport ---
+        $('play-btn').onclick = () => { player.play(); $('status').textContent = 'Playing'; log('Play', 'info'); };
+        $('pause-btn').onclick = () => { player.pause(); $('status').textContent = 'Paused'; log('Pause', 'info'); };
+        $('stop-btn').onclick = () => {
+            player.stop();
+            $('seek-slider').value = '0';
+            $('position').textContent = '0:00';
+            $('status').textContent = 'Stopped';
+            log('Stop', 'info');
+        };
+
+        // --- Seek ---
+        $('seek-slider').oninput = () => {
+            $('position').textContent = fmt(Number($('seek-slider').value));
+        };
+        $('seek-slider').onchange = () => {
+            const ms = Number($('seek-slider').value);
+            player.seek(ms);
+            log(`Seek to ${fmt(ms)}`, 'info');
+        };
+
+        // --- Volume ---
+        $('volume-slider').oninput = () => {
+            const v = Number($('volume-slider').value);
+            player.set_volume(v);
+            $('volume-value').textContent = `${Math.round(v * 100)}%`;
+        };
+
+        // --- Crossfade ---
+        $('crossfade-slider').oninput = () => {
+            $('crossfade-value').textContent =
+                Number($('crossfade-slider').value) <= 0 ? 'Off'
+                : `${Number($('crossfade-slider').value).toFixed(1)}s`;
+        };
+        $('crossfade-slider').onchange = () => {
+            player.set_crossfade_seconds(Number($('crossfade-slider').value));
+        };
+
+        // --- Equalizer ---
         function renderEq() {
-            eqGrid.innerHTML = '';
+            const grid = $('eq-grid');
+            grid.textContent = '';
             const bands = player.eq_band_count();
-            for (let i = 0; i < bands; i += 1) {
+            for (let i = 0; i < bands; i++) {
                 const band = document.createElement('div');
                 band.className = 'eq-band';
-
                 const label = document.createElement('label');
                 label.textContent = `Band ${i + 1}`;
-
                 const slider = document.createElement('input');
-                slider.type = 'range';
-                slider.min = '-24';
-                slider.max = '6';
-                slider.step = '0.1';
-                slider.value = String(player.eq_gain(i));
-
+                Object.assign(slider, {
+                    type: 'range', min: '-24', max: '6', step: '0.1',
+                    value: String(player.eq_gain(i)),
+                });
                 const gain = document.createElement('span');
                 gain.className = 'gain';
                 gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
-
                 slider.oninput = () => {
                     gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
                 };
-
-                slider.onchange = () => {
-                    try {
-                        player.set_eq_gain(i, Number(slider.value));
-                    } catch (err) {
-                        log(`EQ update failed: ${err}`, 'error');
-                    }
-                };
-
-                band.appendChild(label);
-                band.appendChild(slider);
-                band.appendChild(gain);
-                eqGrid.appendChild(band);
+                slider.onchange = () => player.set_eq_gain(i, Number(slider.value));
+                band.append(label, slider, gain);
+                grid.appendChild(band);
             }
         }
+        $('eq-reset-btn').onclick = () => { player.reset_eq(); renderEq(); log('EQ reset', 'info'); };
 
-        function updateUi() {
-            try {
-            // Always pump session commands — even during track loading —
-            // so Worker ↔ main-thread session calls can complete.
-            try {
-                player.tick();
-            } catch (err) {
-                const now = Date.now();
-                if (now - lastTickErrorAt > 1000) {
-                    lastTickErrorAt = now;
-                    log(`Tick failed: ${err}`, 'error');
+        // --- UI loop (requestAnimationFrame) ---
+        function tick() {
+            player.tick();
+
+            const pos = player.get_position_ms();
+            const dur = player.get_duration_ms();
+            $('position').textContent = fmt(pos);
+            $('duration').textContent = fmt(dur);
+            if (dur > 0) {
+                $('seek-slider').max = String(dur);
+                if (!$('seek-slider').matches(':active')) {
+                    $('seek-slider').value = String(Math.min(pos, dur));
                 }
             }
-            if (uiSuspended) {
-                uiRaf = requestAnimationFrame(updateUi);
-                return;
-            }
-            const eventsChunk = player.take_events();
-            if (eventsChunk) {
-                const lines = eventsChunk.split('\n');
-                for (const line of lines) {
+
+            const events = player.take_events();
+            if (events) {
+                const logEl = $('event-log');
+                for (const line of events.split('\n')) {
                     if (!line) continue;
-                    const parsed = parseResourceEvent(line);
-                    if (parsed) {
-                        handleResourceEvent(parsed);
-                    }
-                    const cls = /error|failed|closed|lagged/i.test(line) ? 'error' : 'info';
-                    log(line, cls);
+                    const div = document.createElement('div');
+                    div.textContent = `[${new Date().toISOString().slice(11, 23)}] ${line}`;
+                    if (/error|failed|closed|lagged/i.test(line)) div.className = 'error';
+                    logEl.appendChild(div);
                 }
+                logEl.scrollTop = logEl.scrollHeight;
             }
-            const posMs = player.get_position_ms();
-            const durMs = player.get_duration_ms();
-            positionEl.textContent = formatTime(posMs);
-            durationEl.textContent = formatTime(durMs);
-            if (durMs > 0) {
-                seekSlider.max = String(durMs);
-                if (!seekSlider.matches(':active')) {
-                    seekSlider.value = String(Math.min(posMs, durMs));
-                }
-            }
-            sampleSeekProgress(posMs);
-            // Diagnostic: log process_count + WASM memory every ~1s
-            const pcNow = Date.now();
-            if (pcNow - lastProcessCountLogTime >= 1000) {
-                const pc = player.process_count();
-                const delta = pc - lastProcessCount;
-                let memMB = '?';
-                try {
-                    const bytes = wasm.wasm_memory_bytes();
-                    memMB = (bytes / (1024 * 1024)).toFixed(1);
-                    if (bytes !== lastWasmMemoryBytes) {
-                        console.log(`[DIAG-MEM] WASM memory GREW: ${(lastWasmMemoryBytes/(1024*1024)).toFixed(1)}MB -> ${memMB}MB`);
-                        lastWasmMemoryBytes = bytes;
-                    }
-                } catch(e) { memMB = 'err:' + e; }
-                console.log(`[DIAG] process_count=${pc} delta=${delta} pos=${posMs.toFixed(0)} wasmMem=${memMB}MB`);
-                lastProcessCount = pc;
-                lastProcessCountLogTime = pcNow;
-            }
-            } catch (err) {
-                console.error("[UPDATEUI-CRASH] " + err + " stack=" + (err.stack || "no stack"));
-            }
-            uiRaf = requestAnimationFrame(updateUi);
+
+            requestAnimationFrame(tick);
         }
 
-        function startUiLoop() {
-            if (uiRaf) cancelAnimationFrame(uiRaf);
-            uiRaf = requestAnimationFrame(updateUi);
+        // --- Init ---
+        {
+            const initVol = Number($('volume-slider').value);
+            player.set_volume(initVol);
         }
-
-        window.addEventListener('beforeunload', () => {
-            if (uiRaf) {
-                cancelAnimationFrame(uiRaf);
-                uiRaf = null;
-            }
-        });
-
-        try {
-            if (ensureRuntimeSupport()) {
-                wasm = await import('./kithara-wasm.js');
-                await wasm.default();
-                wasm.setup();
-
-                const build = wasm.build_info();
-                buildInfoEl.textContent = `(${build})`;
-
-                player = new wasm.WasmPlayer();
-                window.__player = player;
-                window.__seekDiagnostics = {
-                    report: () => buildSeekReport(),
-                    reset: () => {
-                        resetSeekDiagnostics();
-                        return buildSeekReport();
-                    },
-                    runScenario: (count = 24) => runSeekScenario(count),
-                };
-
-                renderPlaylist();
-                renderOutputSettings();
-                renderEq();
-                renderSeekCorrelation();
-
-                addBtn.onclick = () => {
-                    const url = urlInput.value.trim();
-                    if (!url) return;
-                    try {
-                        const index = player.add_track(url);
-                        log(`Added track ${index + 1}: ${url}`, 'info');
-                        urlInput.value = '';
-                        renderPlaylist();
-                    } catch (err) {
-                        log(`Add track failed: ${err}`, 'error');
-                    }
-                };
-
-                playBtn.onclick = () => {
-                    if (selectingTrack) return;
-                    player.play();
-                    statusEl.textContent = 'Playing';
-                    log('Play', 'info');
-                };
-
-                pauseBtn.onclick = () => {
-                    if (selectingTrack) return;
-                    player.pause();
-                    statusEl.textContent = 'Paused';
-                    log('Pause', 'info');
-                };
-
-                stopBtn.onclick = () => {
-                    if (selectingTrack) return;
-                    player.stop();
-                    seekSlider.value = '0';
-                    positionEl.textContent = '0:00';
-                    statusEl.textContent = 'Stopped';
-                    log('Stop', 'info');
-                };
-
-                seekSlider.oninput = () => {
-                    positionEl.textContent = formatTime(Number(seekSlider.value));
-                };
-
-                seekSlider.onpointerdown = () => {
-                    if (selectingTrack) return;
-                    diag('SEEK_UI', {
-                        slider_ms: Math.round(Number(seekSlider.value)),
-                        type: 'drag_start',
-                    });
-                };
-
-                seekSlider.onchange = () => {
-                    if (selectingTrack) return;
-                    try {
-                        commitSeek(Number(seekSlider.value), 'slider');
-                    } catch (err) {
-                        log(`Seek failed: ${err}`, 'error');
-                    }
-                };
-
-                function applyVolume(logResult) {
-                    if (selectingTrack) return;
-                    try {
-                        player.set_volume(Number(volumeSlider.value));
-                        const volume = player.get_volume();
-                        volumeSlider.value = String(volume);
-                        volumeValueEl.textContent = formatVolume(volume);
-                        if (logResult) {
-                            log(`Volume set: ${formatVolume(volume)}`, 'info');
-                        }
-                    } catch (err) {
-                        log(`Volume update failed: ${err}`, 'error');
-                    }
-                }
-
-                volumeSlider.oninput = () => {
-                    applyVolume(false);
-                };
-
-                volumeSlider.onchange = () => {
-                    applyVolume(true);
-                };
-
-                crossfadeSlider.oninput = () => {
-                    crossfadeValueEl.textContent = formatCrossfade(Number(crossfadeSlider.value));
-                };
-
-                crossfadeSlider.onchange = () => {
-                    if (selectingTrack) return;
-                    try {
-                        player.set_crossfade_seconds(Number(crossfadeSlider.value));
-                        const seconds = player.get_crossfade_seconds();
-                        crossfadeSlider.value = String(seconds);
-                        crossfadeValueEl.textContent = formatCrossfade(seconds);
-                        if (seconds <= 0) {
-                            log('Crossfade disabled (0s)', 'info');
-                        } else {
-                            log(`Crossfade set: ${seconds.toFixed(1)}s`, 'info');
-                        }
-                    } catch (err) {
-                        log(`Crossfade update failed: ${err}`, 'error');
-                    }
-                };
-
-                eqResetBtn.onclick = () => {
-                    if (selectingTrack) return;
-                    try {
-                        player.reset_eq();
-                        renderEq();
-                        log('EQ reset', 'info');
-                    } catch (err) {
-                        log(`EQ reset failed: ${err}`, 'error');
-                    }
-                };
-
-                setControlsEnabled(true);
-                statusEl.textContent = 'Ready';
-                log('WASM player initialized', 'info');
-                startUiLoop();
-            }
-        } catch (err) {
-            statusEl.textContent = `Initialization failed: ${err}`;
-            log(`Initialization failed: ${err}`, 'error');
-            console.error(err);
-        }
+        renderPlaylist();
+        renderEq();
+        $('volume-value').textContent = `${Math.round(player.get_volume() * 100)}%`;
+        $('crossfade-value').textContent = `${player.get_crossfade_seconds().toFixed(1)}s`;
+        setControlsEnabled(true);
+        $('status').textContent = 'Ready';
+        log('WASM player initialized', 'info');
+        requestAnimationFrame(tick);
     </script>
 
 <script type="module">
