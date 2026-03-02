@@ -29,19 +29,14 @@ fn main() -> AppResult {
     };
     kithara_tui::init_tracing(log_directives, mode == Mode::Tui)?;
 
-    let rt = build_runtime(mode)?;
-    rt.block_on(kithara_app::run(mode, args.tracks))
-}
-
-fn build_runtime(mode: Mode) -> Result<tokio::runtime::Runtime, std::io::Error> {
-    match mode {
-        Mode::Gui => tokio::runtime::Builder::new_multi_thread()
+    if mode == Mode::Gui {
+        // GUI: iced owns the tokio runtime, run synchronously.
+        kithara_app::run_gui_sync(args.tracks)
+    } else {
+        // TUI: we build our own tokio runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .worker_threads(2)
-            .thread_name("kithara-worker")
-            .build(),
-        _ => tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build(),
+            .build()?;
+        rt.block_on(kithara_app::run(mode, args.tracks))
     }
 }

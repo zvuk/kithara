@@ -22,7 +22,7 @@ pub enum Mode {
     Auto,
     /// Terminal UI (ratatui).
     Tui,
-    /// Graphical UI (Slint).
+    /// Graphical UI (iced).
     Gui,
 }
 
@@ -66,15 +66,43 @@ pub async fn run(mode: Mode, urls: Vec<String>) -> AppResult {
 
     match mode {
         Mode::Tui => run_tui_mode(&player, urls).await,
-        Mode::Gui => run_gui_mode(&player, urls),
+        Mode::Gui => {
+            // iced owns the tokio runtime — use `run_gui_sync()` from a
+            // non-async context instead.  Reaching this branch means the
+            // caller wrapped us in `block_on()`, which conflicts with iced.
+            Err(
+                "GUI mode must be started via run_gui_sync(), not from within an async runtime"
+                    .into(),
+            )
+        }
         Mode::Auto => unreachable!("resolved above"),
     }
 }
 
-/// GUI mode: kithara-ui owns track loading via its playlist + callbacks.
-fn run_gui_mode(player: &Arc<PlayerImpl>, urls: Vec<String>) -> AppResult {
-    events::start_event_logging(player);
-    kithara_ui::run(player, urls, true)?;
+/// GUI mode entry point for synchronous callers.
+///
+/// iced owns the tokio runtime, so this must **not** be called from
+/// within `rt.block_on()`.
+///
+/// # Errors
+/// Returns an error if the iced UI event loop fails.
+pub fn run_gui_sync(urls: Vec<String>) -> AppResult {
+    let urls = if urls.is_empty() {
+        vec![FILE_URL_DEFAULT.to_string(), HLS_URL_DEFAULT.to_string()]
+    } else {
+        urls
+    };
+
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default()
+            .with_crossfade_duration(CROSSFADE_SECONDS)
+            .with_eq_bands(3),
+    ));
+
+    // Note: event logging is started inside iced's tokio runtime
+    // (in Kithara::new boot function) because tokio::spawn requires
+    // an active runtime.
+    kithara_ui::run(&player, urls, true)?;
     Ok(())
 }
 

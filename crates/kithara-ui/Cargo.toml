@@ -9,10 +9,7 @@ workspace = true
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
-slint = { workspace = true }
+iced = { workspace = true }
+iced_aw = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-
-[build-dependencies]
-lucide-slint = { workspace = true }
-slint-build = "1.14.1"
