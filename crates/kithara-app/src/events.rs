@@ -1,10 +1,11 @@
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use kithara::{
-    play::{EngineEvent, PlayerEvent},
-    prelude::{AudioEvent, Event, FileEvent, HlsEvent},
+    play::{Engine, EngineEvent, PlayerEvent},
+    prelude::{AudioEvent, Event, FileEvent, HlsEvent, PlayerImpl},
 };
 use tokio::sync::{broadcast, broadcast::error::RecvError};
+use tracing::info;
 
 pub enum UiMsg {
     Engine(EngineEvent),
@@ -146,4 +147,29 @@ pub fn forward_source_events(
             }
         }
     })
+}
+
+/// Spawn a background task that logs all player and engine events via tracing.
+///
+/// Used in GUI mode where there is no TUI event loop to display events.
+pub fn start_event_logging(player: &Arc<PlayerImpl>) {
+    let mut player_rx = player.subscribe();
+    let mut engine_rx = player.engine().subscribe();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = player_rx.recv() => match result {
+                    Ok(event) => info!("[player] {event:?}"),
+                    Err(RecvError::Lagged(n)) => info!("[player] events lagged: {n}"),
+                    Err(RecvError::Closed) => break,
+                },
+                result = engine_rx.recv() => match result {
+                    Ok(event) => info!("[engine] {event:?}"),
+                    Err(RecvError::Lagged(n)) => info!("[engine] events lagged: {n}"),
+                    Err(RecvError::Closed) => break,
+                },
+            }
+        }
+    });
 }
