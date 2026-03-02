@@ -20,7 +20,35 @@ members = [
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
+    "crates/kithara-tui",
+    "crates/kithara-ui",
+    "crates/kithara-app",
     "tests",
+    "examples",
+]
+default-members = [
+    "crates/kithara",
+    "crates/kithara-abr",
+    "crates/kithara-drm",
+    "crates/kithara-events",
+    "crates/kithara-net",
+    "crates/kithara-file",
+    "crates/kithara-hls",
+    "crates/kithara-audio",
+    "crates/kithara-decode",
+    "crates/kithara-stream",
+    "crates/kithara-storage",
+    "crates/kithara-assets",
+    "crates/kithara-bufpool",
+    "crates/kithara-wasm",
+    "crates/kithara-platform",
+    "crates/kithara-hang-detector",
+    "crates/kithara-play",
+    "crates/kithara-test-utils",
+    "crates/kithara-test-macros",
+    "crates/kithara-tui",
+    "tests",
+    "examples",
 ]
 
 [workspace.lints.rust]
@@ -118,6 +146,9 @@ kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
+kithara-tui = { path = "crates/kithara-tui" }
+kithara-ui = { path = "crates/kithara-ui" }
+kithara-app = { path = "crates/kithara-app" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 unimock = { version = "0.6", features = ["std"] }
@@ -232,6 +263,14 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
+
+# UI frameworks
+slint = "1.14.1"
+lucide-slint = "0.1.4"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
 
 [profile.wasm-release]
 inherits = "release"

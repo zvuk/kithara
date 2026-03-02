@@ -1,0 +1,29 @@
+[package]
+name = "kithara-app"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+kithara = { workspace = true, features = ["file", "hls"] }
+kithara-tui = { workspace = true }
+kithara-ui = { workspace = true }
+clap = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+
+[[bin]]
+name = "kithara"
+path = "src/main.rs"
+
+[[bin]]
+name = "kithara-tui"
+path = "src/main_tui.rs"
+
+[[bin]]
+name = "kithara-gui"
+path = "src/main_gui.rs"

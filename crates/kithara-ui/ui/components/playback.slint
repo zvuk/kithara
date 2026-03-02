@@ -1,0 +1,86 @@
+import { HorizontalBox } from "std-widgets.slint";
+import { Icons } from "icons.slint";
+import { Button } from "button.slint";
+
+export component Playback inherits HorizontalLayout {
+    in-out property <bool> is-playing: false;
+    in-out property <bool> shuffle-active: false;
+    in-out property <bool> repeat-active: false;
+    in property <length> button-size: 24px;
+    in property <length> column-size: 90px;
+
+    callback play <=> play-button.clicked;
+    callback next <=> next-button.clicked;
+    callback prev <=> prev-button.clicked;
+    callback toggle-shuffle <=> shuffle-button.clicked;
+    callback toggle-repeat <=> repeat-button.clicked;
+
+    spacing: 2px;
+    alignment: space-between;
+
+    // Left Controls
+    HorizontalBox {
+        padding: 0px;
+        preferred-width: root.column-size;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            shuffle-button := Button {
+                y: (parent.height - self.height) / 2;
+                height: root.button-size;
+                width: root.button-size;
+                icon: Icons.ShuffleIcon;
+                icon-color: root.shuffle-active ? lightgreen : #eee;
+            }
+
+            repeat-button := Button {
+                y: (parent.height - self.height) / 2;
+                height: root.button-size;
+                width: root.button-size;
+                icon: Icons.RepeatIcon;
+                icon-color: root.repeat-active ? lightgreen : #eee;
+            }
+        }
+    }
+
+    // Main Controls
+    HorizontalBox {
+        padding: 0px;
+        preferred-width: root.column-size;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            prev-button := Button {
+                y: (parent.height - self.height) / 2;
+                height: root.button-size;
+                width: root.button-size;
+                icon: Icons.SkipBackIcon;
+            }
+
+            play-button := Button {
+                y: (parent.height - self.height) / 2;
+                height: root.button-size * 1.5;
+                width: root.button-size * 1.5;
+                icon: root.is-playing ? Icons.PauseIcon : Icons.PlayIcon;
+            }
+
+            next-button := Button {
+                y: (parent.height - self.height) / 2;
+                height: root.button-size;
+                width: root.button-size;
+                icon: Icons.SkipForwardIcon;
+            }
+        }
+    }
+
+    // Right placeholder
+    HorizontalBox {
+        padding: 0px;
+        preferred-width: root.column-size;
+        Rectangle { }
+    }
+}

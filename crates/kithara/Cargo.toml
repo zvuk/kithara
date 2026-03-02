@@ -83,32 +83,5 @@ url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rodio = { workspace = true, features = ["playback"] }
-ratatui = { workspace = true }
 
-[[example]]
-name = "resource_rodio"
-required-features = ["rodio"]
 
-[[example]]
-name = "file_audio"
-required-features = ["rodio"]
-
-[[example]]
-name = "hls_audio"
-required-features = ["rodio"]
-
-[[example]]
-name = "hls_drm_audio"
-required-features = ["rodio"]
-
-[[example]]
-name = "file_rodio"
-required-features = ["rodio"]
-
-[[example]]
-name = "hls_rodio"
-required-features = ["rodio"]
-
-[[example]]
-name = "player"
-required-features = ["file", "hls"]

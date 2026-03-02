@@ -1,0 +1,68 @@
+import {
+    Slider,
+    VerticalBox,
+    HorizontalBox,
+} from "std-widgets.slint";
+
+export struct EqBandModel {
+    gain: float,
+    freq: float,
+}
+
+export component Equalizer inherits HorizontalLayout {
+    in property <float> max-gain-db: 6.0;
+    in property <float> min-gain-db: -24.0;
+    in property <[EqBandModel]> bands;
+
+    callback band-changed(int, float);
+
+    pure function format-gain(value: float) -> string {
+        return @tr("{0} dB", value.to_fixed(1));
+    }
+
+    pure function format-frequency(value: float) -> string {
+        return (value < 1000.0) ? @tr("{0}", value.to_fixed(0)) : @tr("{0}k", (value / 1000.0).to_fixed(1));
+    }
+
+    padding: 10px;
+    spacing: 5px;
+    alignment: center;
+
+    for band[index] in root.bands: VerticalBox {
+        spacing: 5px;
+        padding: 0px;
+
+        s := Slider {
+            value: band.gain;
+            minimum: root.min-gain-db;
+            maximum: root.max-gain-db;
+            height: 100%;
+            orientation: vertical;
+
+            changed(new_value) => {
+                label-text.text = format-gain(new_value);
+                root.band-changed(index, new_value);
+            }
+
+            released(value) => {
+                label-text.text = format-frequency(band.freq);
+            }
+        }
+
+        container := Rectangle {
+            vertical-stretch: 1;
+
+            label-text := Text {
+                text: format-frequency(band.freq);
+                horizontal-alignment: center;
+            }
+
+            touch := TouchArea {
+                double-clicked => {
+                    s.value = 0.0;
+                    root.band-changed(index, s.value);
+                }
+            }
+        }
+    }
+}
