@@ -2,7 +2,8 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 // Set up panic hook and tracing. Called from JS main thread
 // before any other player operations.
-#[wasm_bindgen]
+#[allow(unreachable_pub)]
+#[wasm_bindgen(start)]
 pub fn setup() {
     console_error_panic_hook::set_once();
     let _ = tracing_log::LogTracer::init();

@@ -136,6 +136,9 @@ pub(crate) struct FileDownloader {
     shared: Arc<SharedFileState>,
     /// Current download phase.
     phase: FilePhase,
+    /// Start offset for restarted sequential download (backward seek).
+    /// When set, `ensure_writer()` opens a Range GET from this offset.
+    sequential_offset: Option<u64>,
 }
 
 impl FileDownloader {
@@ -171,6 +174,7 @@ impl FileDownloader {
             look_ahead_bytes,
             shared,
             phase: FilePhase::Sequential,
+            sequential_offset: None,
         }
     }
 
@@ -188,15 +192,28 @@ impl FileDownloader {
     ///
     /// When a pre-opened writer was set via `with_initial_writer()`, returns
     /// it directly. Otherwise falls back to opening a new HTTP stream.
+    ///
+    /// If `sequential_offset` is set (backward seek restart), opens a Range
+    /// GET from that offset instead of streaming from the beginning.
     async fn ensure_writer(&mut self) -> Result<&mut Writer, FileDownloadError> {
         let slot = self.writer.get_mut();
         if slot.is_none() {
-            match self
-                .io
-                .net_client
-                .stream(self.io.url.clone(), self.io.headers.clone())
-                .await
-            {
+            let start_offset = self.sequential_offset.take().unwrap_or(0);
+            let result = if start_offset > 0 {
+                // Backward seek restart: open Range GET from the seek position.
+                let spec = RangeSpec::from_start(start_offset);
+                self.io
+                    .net_client
+                    .get_range(self.io.url.clone(), spec, self.io.headers.clone())
+                    .await
+            } else {
+                self.io
+                    .net_client
+                    .stream(self.io.url.clone(), self.io.headers.clone())
+                    .await
+            };
+
+            match result {
                 Ok(byte_stream) => {
                     // Discover content-length from response headers if unknown
                     // (fallback path — normally set by create_remote via
@@ -216,10 +233,11 @@ impl FileDownloader {
                         self.progress.timeline().set_total_bytes(Some(cl));
                     }
 
-                    *slot = Some(Writer::new(
+                    *slot = Some(Writer::with_offset(
                         byte_stream,
                         self.res.clone(),
                         self.io.cancel.clone(),
+                        start_offset,
                     ));
                 }
                 Err(e) => {
@@ -382,15 +400,18 @@ impl Downloader for FileDownloader {
                 // Check if gap-filling completed everything.
                 let total = self.total.unwrap_or(0);
                 if total > 0 && self.res.next_gap(0, total).is_none() {
-                    if let Err(e) = self.res.commit(self.total) {
-                        tracing::error!(?e, "failed to commit resource after range done");
-                        self.res.fail(format!("commit failed: {e}"));
-                        self.bus.publish(FileEvent::DownloadError {
-                            error: format!("commit failed: {e}"),
-                        });
-                    } else if let Some(total) = self.total {
-                        self.bus
-                            .publish(FileEvent::DownloadComplete { total_bytes: total });
+                    // Only commit + emit event on first completion.
+                    if !matches!(self.phase, FilePhase::Complete) {
+                        if let Err(e) = self.res.commit(self.total) {
+                            tracing::error!(?e, "failed to commit resource after range done");
+                            self.res.fail(format!("commit failed: {e}"));
+                            self.bus.publish(FileEvent::DownloadError {
+                                error: format!("commit failed: {e}"),
+                            });
+                        } else if let Some(total) = self.total {
+                            self.bus
+                                .publish(FileEvent::DownloadComplete { total_bytes: total });
+                        }
                     }
                     self.phase = FilePhase::Complete;
                 }
@@ -530,6 +551,7 @@ mod tests {
             look_ahead_bytes: None,
             shared: shared.clone(),
             phase: FilePhase::Sequential,
+            sequential_offset: None,
         };
 
         // Seek far ahead — queue on-demand range request.

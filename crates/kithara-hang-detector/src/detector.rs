@@ -5,14 +5,23 @@ use std::time::Duration;
 use web_time::Instant;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 10;
+#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
 
-/// Watchdog that panics when progress is not observed before deadline.
+/// Watchdog that detects loops stuck without progress.
+///
+/// On native targets `tick()` panics after the deadline.
+/// On `wasm32` it logs an error and resets — panics are fatal there
+/// (`panic = "immediate-abort"` turns every panic into
+/// `RuntimeError: unreachable` which kills the Web Worker).
 #[cfg(not(feature = "disable-hang-detector"))]
 pub struct HangDetector {
     deadline: Instant,
     label: &'static str,
     timeout: Duration,
+    /// Suppresses repeated WASM error logs (one message per timeout window).
+    #[cfg(target_arch = "wasm32")]
+    fired: bool,
 }
 
 #[cfg(not(feature = "disable-hang-detector"))]
@@ -23,23 +32,49 @@ impl HangDetector {
             deadline: Instant::now() + timeout,
             label,
             timeout,
+            #[cfg(target_arch = "wasm32")]
+            fired: false,
         }
     }
 
+    /// Check progress.
+    ///
     /// # Panics
     ///
-    /// Panics when no progress is observed before the configured timeout.
+    /// On native targets, panics when no progress is observed before the
+    /// configured timeout. On `wasm32` logs an error to the console instead.
     pub fn tick(&mut self) {
         if Instant::now() >= self.deadline {
-            panic!(
-                "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
-                self.label, self.timeout,
-            );
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                panic!(
+                    "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
+                    self.label, self.timeout,
+                );
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                if !self.fired {
+                    tracing::error!(
+                        label = self.label,
+                        timeout_secs = self.timeout.as_secs(),
+                        "[HangDetector] no progress — possible deadlock or hang"
+                    );
+                    self.fired = true;
+                }
+                // Reset to avoid busy-logging every tick.
+                self.deadline = Instant::now() + self.timeout;
+            }
         }
     }
 
     pub fn reset(&mut self) {
         self.deadline = Instant::now() + self.timeout;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.fired = false;
+        }
     }
 }
 
@@ -90,6 +125,7 @@ fn env_timeout() -> Option<Duration> {
     None
 }
 
+#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 #[must_use]
 fn parse_timeout_secs(value: &str) -> Option<Duration> {
     let secs = value.parse::<u64>().ok()?;

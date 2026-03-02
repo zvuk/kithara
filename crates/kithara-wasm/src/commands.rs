@@ -18,5 +18,4 @@ pub(crate) enum WorkerCmd {
     },
     ResetEq,
     SetDucking(u32),
-    TestHlsRead,
 }

@@ -30,7 +30,8 @@ pub(crate) enum TrackState {
     /// Track is loaded but not yet playing.
     #[default]
     Preloading,
-    /// Track is paused (fade-out completed or initial state after stop).
+    /// Track is paused (explicit pause by user).
+    #[expect(dead_code, reason = "retained for future explicit-pause support")]
     Paused,
     /// Track is actively playing at full volume.
     Playing,
@@ -242,10 +243,17 @@ impl PlayerTrack {
     }
 
     /// Transition state after a fade completes.
+    ///
+    /// `FadingIn` → `Playing` (track is now audible).
+    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
+    ///
+    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
+    /// removes the track from the arena. Previously `Paused` left the track
+    /// in the arena indefinitely, leaking resources on every crossfade.
     fn update_state_after_fade(&mut self) {
         let new_state = match self.state {
             TrackState::FadingIn => TrackState::Playing,
-            TrackState::FadingOut => TrackState::Paused,
+            TrackState::FadingOut => TrackState::Finished,
             current => current,
         };
         self.set_state(new_state);

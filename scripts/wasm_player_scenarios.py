@@ -60,16 +60,17 @@ class WasmPlayerScenario:
                     """
                     const slider = document.getElementById('seek-slider');
                     const status = document.getElementById('status')?.textContent ?? '';
-                    const playlist = [...document.querySelectorAll('#playlist li')].map((el) => el.textContent ?? '');
+                    const items = [...document.querySelectorAll('#playlist li')];
+                    const playlist = items.map((el) => el.textContent ?? '');
+                    const activeIndex = items.findIndex((el) => el.classList.contains('active'));
                     const out = {
                         status,
                         playlist,
+                        activeIndex,
                         seek_value: slider ? Number(slider.value) : null,
                         seek_max: slider ? Number(slider.max) : null,
                     };
                     if (window.__player) {
-                        out.idx = window.__player.current_index();
-                        out.len = window.__player.playlist_len();
                         out.pc = window.__player.process_count();
                         out.pos = window.__player.get_position_ms();
                         out.dur = window.__player.get_duration_ms();
@@ -82,6 +83,7 @@ class WasmPlayerScenario:
         return {
             "status": "<snapshot-unavailable>",
             "playlist": [],
+            "activeIndex": -1,
             "seek_value": None,
             "seek_max": None,
         }
@@ -140,7 +142,7 @@ class WasmPlayerScenario:
         self.driver.get(self.page_url)
         self.wait_for(
             "player bootstrap",
-            lambda s: (s.get("len") or 0) >= 2 and len(s.get("playlist", [])) >= 2,
+            lambda s: len(s.get("playlist", [])) >= 2 and "Ready" in str(s.get("status", "")),
             timeout=45,
         )
         self.log(f"[scenario] Bootstrapped: {self.snapshot()}")
@@ -160,7 +162,7 @@ class WasmPlayerScenario:
 
         self.wait_for(
             f"track {label} selected",
-            lambda s: s.get("idx") == index,
+            lambda s: s.get("activeIndex") == index,
             timeout=45,
         )
         # Explicit Play is required for stable Selenium runs.

@@ -16,6 +16,7 @@ disable-hang-detector = []
 
 [dependencies]
 web-time = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 kithara-hang-detector = { path = "." }

@@ -1,10 +1,15 @@
 use std::{
     fmt,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_platform::Mutex;
+
+use crate::growth::BudgetExhausted;
 
 /// Trait for types that can be reused in a pool.
 ///
@@ -20,6 +25,14 @@ pub trait Reuse {
     /// Returns `true` if the value still has capacity and can be reused,
     /// `false` if it should be dropped.
     fn reuse(&mut self, trim: usize) -> bool;
+
+    /// Returns the number of bytes this value occupies in memory.
+    ///
+    /// Used by the pool's byte budget tracking. Default returns 0
+    /// (no budget tracking for types that don't override this).
+    fn byte_size(&self) -> usize {
+        0
+    }
 }
 
 /// Reuse implementation for `Vec<T>`.
@@ -30,6 +43,10 @@ impl<T> Reuse for Vec<T> {
         self.clear();
         self.shrink_to(trim);
         self.capacity() > 0
+    }
+
+    fn byte_size(&self) -> usize {
+        self.capacity() * size_of::<T>()
     }
 }
 
@@ -95,6 +112,10 @@ where
     T: Reuse,
 {
     shards: [Mutex<PoolShard<T>>; SHARDS],
+    /// Total bytes tracked across all live buffers (pooled + checked out).
+    allocated_bytes: AtomicUsize,
+    /// Maximum allowed byte budget. `usize::MAX` means unlimited.
+    max_bytes: usize,
 }
 
 impl<const SHARDS: usize, T> Pool<SHARDS, T>
@@ -118,10 +139,85 @@ where
 
     /// Return a buffer to the pool.
     pub(crate) fn put(&self, value: T, shard_idx: usize) {
+        let bytes = value.byte_size();
         let mut shard = self.shards[shard_idx].lock_sync();
         if !shard.try_put(value) {
-            // Shard full or buffer rejected, drop it
+            // Shard full or buffer rejected — release tracked bytes.
+            drop(shard);
+            self.release_budget(bytes);
         }
+    }
+
+    /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
+    ///
+    /// Uses a compare-and-swap loop to atomically check and update.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
+    /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
+    pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted> {
+        if additional == 0 {
+            return Ok(());
+        }
+        let mut current = self.allocated_bytes.load(Ordering::Relaxed);
+        loop {
+            let new = current.checked_add(additional).ok_or(BudgetExhausted)?;
+            if new > self.max_bytes {
+                return Err(BudgetExhausted);
+            }
+            match self.allocated_bytes.compare_exchange_weak(
+                current,
+                new,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
+    ///
+    /// Uses saturating subtraction to prevent underflow when buffers grow
+    /// via `DerefMut` (e.g., `Vec::resize`) without going through
+    /// [`ensure_len()`](PooledOwned::ensure_len).
+    pub fn release_budget(&self, amount: usize) {
+        if amount == 0 {
+            return;
+        }
+        let mut current = self.allocated_bytes.load(Ordering::Relaxed);
+        loop {
+            let new = current.saturating_sub(amount);
+            match self.allocated_bytes.compare_exchange_weak(
+                current,
+                new,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Track byte delta without enforcement (for `get_with` closures).
+    ///
+    /// When shrinking (before > after), uses saturating subtraction
+    /// to prevent underflow from untracked external growth.
+    fn track_byte_delta(&self, before: usize, after: usize) {
+        if after > before {
+            self.allocated_bytes
+                .fetch_add(after - before, Ordering::Relaxed);
+        } else if before > after {
+            self.release_budget(before - after);
+        }
+    }
+
+    /// Current number of tracked bytes across all live buffers.
+    pub fn allocated_bytes(&self) -> usize {
+        self.allocated_bytes.load(Ordering::Relaxed)
     }
 }
 
@@ -167,6 +263,20 @@ where
     /// ```
     #[must_use]
     pub fn new(max_buffers: usize, trim_capacity: usize) -> Self {
+        Self::with_byte_budget(max_buffers, trim_capacity, usize::MAX)
+    }
+
+    /// Create a pool with a byte budget limit.
+    ///
+    /// - `max_buffers`: Maximum total buffers across all shards.
+    /// - `trim_capacity`: Shrink buffers to this capacity when returning.
+    /// - `max_bytes`: Maximum total bytes tracked. `usize::MAX` = unlimited.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `SHARDS` is zero.
+    #[must_use]
+    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, max_bytes: usize) -> Self {
         assert!(SHARDS > 0, "Pool must have at least 1 shard");
         let buffers_per_shard = max_buffers / SHARDS;
 
@@ -174,6 +284,8 @@ where
             shards: std::array::from_fn(|_| {
                 Mutex::new(PoolShard::new(buffers_per_shard, trim_capacity))
             }),
+            allocated_bytes: AtomicUsize::new(0),
+            max_bytes,
         }
     }
 
@@ -224,7 +336,10 @@ where
         }
 
         let mut value = value.unwrap_or_default();
+        let before = value.byte_size();
         init(&mut value);
+        let after = value.byte_size();
+        self.track_byte_delta(before, after);
 
         Pooled {
             value: Some(value),
@@ -332,6 +447,44 @@ where
     }
 }
 
+impl<const SHARDS: usize> PooledOwned<SHARDS, Vec<u8>> {
+    /// Grow buffer to at least `min_len` bytes (zeroed). Budget-checked.
+    ///
+    /// No-op if buffer is already `>= min_len`. Charges the capacity delta
+    /// to the pool's byte budget. Returns `Err(BudgetExhausted)` if the
+    /// budget would be exceeded (buffer is left unchanged in that case).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BudgetExhausted`] if growing the buffer would exceed
+    /// the pool's byte budget.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner value has already been taken via [`into_inner()`](Self::into_inner).
+    pub fn ensure_len(&mut self, min_len: usize) -> Result<(), BudgetExhausted> {
+        let buf = self
+            .value
+            .as_mut()
+            .expect("PooledOwned value already taken");
+        if min_len <= buf.len() {
+            return Ok(());
+        }
+        let old_cap = buf.capacity();
+        buf.resize(min_len, 0);
+        let new_cap = buf.capacity();
+        if new_cap > old_cap
+            && let Err(e) = self.pool.request_budget(new_cap - old_cap)
+        {
+            // Budget exceeded — rollback the resize.
+            buf.truncate(0);
+            buf.shrink_to(old_cap);
+            return Err(e);
+        }
+        Ok(())
+    }
+}
+
 impl<const SHARDS: usize, T> Drop for PooledOwned<SHARDS, T>
 where
     T: Reuse,
@@ -418,6 +571,18 @@ where
         Self(Arc::new(Pool::new(max_buffers, trim_capacity)))
     }
 
+    /// Create a shared pool with a byte budget limit.
+    ///
+    /// See [`Pool::with_byte_budget()`] for details.
+    #[must_use]
+    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, max_bytes: usize) -> Self {
+        Self(Arc::new(Pool::with_byte_budget(
+            max_buffers,
+            trim_capacity,
+            max_bytes,
+        )))
+    }
+
     /// Get a buffer from the shared pool.
     #[must_use]
     pub fn get(&self) -> PooledOwned<SHARDS, T> {
@@ -448,7 +613,10 @@ where
         }
 
         let mut value = value.unwrap_or_default();
+        let before = value.byte_size();
         init(&mut value);
+        let after = value.byte_size();
+        self.0.track_byte_delta(before, after);
 
         PooledOwned {
             value: Some(value),
@@ -462,6 +630,12 @@ impl<const SHARDS: usize, T> SharedPool<SHARDS, T>
 where
     T: Reuse,
 {
+    /// Current number of tracked bytes across all live buffers.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.0.allocated_bytes()
+    }
+
     /// Return a value to the pool for reuse.
     ///
     /// See [`Pool::recycle()`] for details.

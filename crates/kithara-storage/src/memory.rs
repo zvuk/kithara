@@ -1,19 +1,15 @@
 #![forbid(unsafe_code)]
 
-//! In-memory storage driver backed by a ring buffer.
+//! In-memory storage driver backed by a growable byte pool buffer.
 //!
-//! [`MemDriver`] implements [`Driver`](crate::Driver) using a power-of-2 ring
-//! buffer with bitmask indexing for O(1) wrap-around. Intended for WASM
-//! (wasm32 + atomics) where mmap is unavailable.
-//!
-//! When writes wrap around and evict old data, the `available` `RangeSet` in
-//! `CommonState` is updated (via [`DriverIo::valid_window`]) to remove evicted
-//! ranges. This allows `wait_range()` to detect gaps and trigger re-fetches
-//! on seek.
+//! [`MemDriver`] implements [`Driver`](crate::Driver) using a pool-managed
+//! `Vec<u8>` from [`byte_pool()`](kithara_bufpool::byte_pool).
+//! All written data is retained (no eviction) — [`DriverIo::valid_window()`]
+//! returns `None`, meaning backward seeks never lose data.
 
-use std::{ops::Range, path::Path};
+use std::path::Path;
 
-use derivative::Derivative;
+use kithara_bufpool::{PooledOwned, byte_pool};
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -22,46 +18,42 @@ use crate::{
     driver::{Driver, DriverIo, DriverState, Resource},
 };
 
-/// Default ring buffer capacity (1 mebibyte, power of 2).
-const DEFAULT_RING_CAPACITY: usize = 1 << 20;
-
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone, Derivative)]
-#[derivative(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MemOptions {
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
-    /// Ring buffer capacity in bytes. Must be power of 2.
-    /// Defaults to 1 mebibyte. Rounded up to next power of 2 if not already.
-    #[derivative(Default(value = "DEFAULT_RING_CAPACITY"))]
+    /// Initial capacity hint in bytes.
+    /// The buffer starts with this capacity but grows as needed on writes.
+    /// Defaults to 0 (start empty, grow on demand).
     pub capacity: usize,
 }
 
-/// Internal state of the ring buffer driver.
-struct RingState {
-    /// Buffer data (power-of-2 sized).
-    buf: Vec<u8>,
-    /// Start of valid data window (absolute byte offset).
-    /// Data before this offset has been evicted by ring wrap-around.
-    window_start: u64,
-    /// Capacity (always power of 2).
-    capacity: usize,
+/// Internal state of the growable memory driver.
+struct MemState {
+    /// Pool-managed byte buffer. Grows via `ensure_len()`.
+    buf: PooledOwned<32, Vec<u8>>,
+    /// Logical length: highest write extent across all writes.
+    len: u64,
 }
 
-/// In-memory storage driver backed by a ring buffer.
+/// In-memory storage driver backed by a growable byte pool buffer.
 ///
-/// Uses power-of-2 bitmask indexing for O(1) wrap-around.
+/// Uses [`byte_pool()`](kithara_bufpool::byte_pool) for memory management
+/// with byte budget enforcement. Data is never evicted —
+/// [`valid_window()`](DriverIo::valid_window) returns `None`.
+///
 /// `path()` returns `None`.
 pub struct MemDriver {
-    state: Mutex<RingState>,
+    state: Mutex<MemState>,
 }
 
 impl std::fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.state.lock_sync();
         f.debug_struct("MemDriver")
-            .field("capacity", &state.capacity)
-            .field("window_start", &state.window_start)
+            .field("len", &state.len)
+            .field("capacity", &state.buf.capacity())
             .finish()
     }
 }
@@ -70,22 +62,22 @@ impl Driver for MemDriver {
     type Options = MemOptions;
 
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
-        let (ring, init) = if let Some(data) = opts.initial_data {
-            let len = data.len() as u64;
+        let mut buf = byte_pool().get();
+
+        let (len, init_state) = if let Some(data) = opts.initial_data {
+            let data_len = data.len();
+            if data_len > 0 {
+                buf.ensure_len(data_len)
+                    .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+                buf[..data_len].copy_from_slice(&data);
+            }
+            let len = data_len as u64;
             let mut available = rangemap::RangeSet::new();
             if len > 0 {
                 available.insert(0..len);
             }
-            // For pre-filled data: capacity must be at least data.len().
-            let actual_capacity = opts.capacity.max(data.len()).next_power_of_two();
-            let mut buf = vec![0u8; actual_capacity];
-            buf[..data.len()].copy_from_slice(&data);
             (
-                RingState {
-                    buf,
-                    window_start: 0,
-                    capacity: actual_capacity,
-                },
+                len,
                 DriverState {
                     available,
                     committed: true,
@@ -93,58 +85,44 @@ impl Driver for MemDriver {
                 },
             )
         } else {
-            let capacity = opts.capacity.next_power_of_two();
-            let buf = vec![0u8; capacity];
-            (
-                RingState {
-                    buf,
-                    window_start: 0,
-                    capacity,
-                },
-                DriverState::default(),
-            )
+            if opts.capacity > 0 {
+                buf.ensure_len(opts.capacity)
+                    .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+            }
+            (0, DriverState::default())
         };
 
         let driver = Self {
-            state: Mutex::new(ring),
+            state: Mutex::new(MemState { buf, len }),
         };
 
-        Ok((driver, init))
+        Ok((driver, init_state))
     }
 }
 
 impl DriverIo for MemDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        let ring = self.state.lock_sync();
-        let window_end = ring.window_start + ring.capacity as u64;
+        let state = self.state.lock_sync();
 
-        // Check offset is within the valid window.
-        if offset < ring.window_start || offset >= window_end {
+        if offset >= state.len {
             return Ok(0);
         }
 
-        // Clamp read length to not exceed window end.
-        #[expect(clippy::cast_possible_truncation)] // within ring capacity
-        let available = (window_end - offset) as usize;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to len which fits in memory"
+        )]
+        let available = (state.len - offset) as usize;
         let to_read = buf.len().min(available);
 
-        let mask = ring.capacity - 1;
-        #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
-        let start_idx = (offset as usize) & mask;
-
-        // Check if read wraps around the ring buffer.
-        let first_part = ring.capacity - start_idx;
-        if to_read <= first_part {
-            // No wrap: single copy.
-            buf[..to_read].copy_from_slice(&ring.buf[start_idx..start_idx + to_read]);
-        } else {
-            // Wrap: two copies.
-            buf[..first_part].copy_from_slice(&ring.buf[start_idx..]);
-            let second_part = to_read - first_part;
-            buf[first_part..to_read].copy_from_slice(&ring.buf[..second_part]);
-        }
-        drop(ring);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "offset < len which fits in memory"
+        )]
+        let start = offset as usize;
+        buf[..to_read].copy_from_slice(&state.buf[start..start + to_read]);
+        drop(state);
 
         Ok(to_read)
     }
@@ -157,42 +135,43 @@ impl DriverIo for MemDriver {
             ));
         }
 
-        let mut ring = self.state.lock_sync();
-        let mask = ring.capacity - 1;
+        let mut state = self.state.lock_sync();
+        let end = offset + data.len() as u64;
 
-        #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
-        let start_idx = (offset as usize) & mask;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "bounded by byte budget (256 MB)"
+        )]
+        let end_usize = end as usize;
 
-        // Copy with wrap-around.
-        let first_part = ring.capacity - start_idx;
-        if data.len() <= first_part {
-            // No wrap: single copy.
-            ring.buf[start_idx..start_idx + data.len()].copy_from_slice(data);
-        } else {
-            // Wrap: two copies.
-            ring.buf[start_idx..].copy_from_slice(&data[..first_part]);
-            let second_part = data.len() - first_part;
-            ring.buf[..second_part].copy_from_slice(&data[first_part..]);
+        // Grow buffer if write extends beyond current allocation.
+        if end_usize > state.buf.len() {
+            state
+                .buf
+                .ensure_len(end_usize)
+                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
         }
 
-        // Advance window_start if write extends past current window end.
-        let write_end = offset + data.len() as u64;
-        let window_end = ring.window_start + ring.capacity as u64;
-        if write_end > window_end {
-            ring.window_start = write_end - ring.capacity as u64;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "offset < end which fits in memory"
+        )]
+        let start = offset as usize;
+        state.buf[start..end_usize].copy_from_slice(data);
+
+        if end > state.len {
+            state.len = end;
         }
-        drop(ring);
+        drop(state);
 
         Ok(())
     }
 
     fn commit(&self, _final_len: Option<u64>) -> StorageResult<()> {
-        // Ring buffer does not truncate.
         Ok(())
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Buffer data preserved.
         Ok(())
     }
 
@@ -201,14 +180,11 @@ impl DriverIo for MemDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let ring = self.state.lock_sync();
-        ring.window_start + ring.capacity as u64
+        let state = self.state.lock_sync();
+        state.len
     }
 
-    fn valid_window(&self) -> Option<Range<u64>> {
-        let ring = self.state.lock_sync();
-        Some(ring.window_start..ring.window_start + ring.capacity as u64)
-    }
+    // valid_window() returns None (default) — no eviction, all data retained.
 }
 
 /// In-memory storage resource.
@@ -467,117 +443,68 @@ mod tests {
         assert_eq!(&zero_buf, &[0, 0, 0, 0]);
     }
 
+    // --- Growable buffer tests ---
+
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_wrap_around_evicts_old_data() {
-        // Small ring buffer (256 bytes) to test wrap-around.
+    fn test_growable_write_beyond_initial_capacity() {
+        // Start with a small capacity hint, then write beyond it.
         let res = MemResource::open(
             CancellationToken::new(),
             MemOptions {
-                capacity: 256,
+                capacity: 64,
                 ..Default::default()
             },
         )
         .unwrap();
 
-        // Write 200 bytes at offset 0.
-        res.write_at(0, &[0xAA; 200]).unwrap();
+        // Write 128 bytes — beyond the 64-byte initial capacity.
+        let data = vec![0xAB; 128];
+        res.write_at(0, &data).unwrap();
 
-        // Verify data is readable.
-        let mut buf = [0u8; 10];
+        let mut buf = vec![0u8; 128];
         let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 10);
-        assert_eq!(&buf, &[0xAA; 10]);
-
-        // Write 200 bytes at offset 200 — this wraps, evicting first 144 bytes.
-        // window_start advances to (200+200) - 256 = 144
-        res.write_at(200, &[0xBB; 200]).unwrap();
-
-        // Offset 0..144 is evicted — read returns 0 bytes.
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 0, "evicted data should not be readable");
-
-        // Offset 144..200 should still have 0xAA data.
-        let n = res.read_at(144, &mut buf).unwrap();
-        assert!(n > 0, "data within window should be readable");
-        assert!(
-            buf[..n].iter().all(|b| *b == 0xAA),
-            "expected 0xAA bytes in preserved range"
-        );
-
-        // Offset 200..400 should have 0xBB data.
-        let n = res.read_at(200, &mut buf).unwrap();
-        assert_eq!(n, 10);
-        assert_eq!(&buf, &[0xBB; 10]);
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn test_ring_eviction_invalidates_coverage() {
-        // Small ring to force eviction.
-        let res = MemResource::open(
-            CancellationToken::new(),
-            MemOptions {
-                capacity: 256,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        // Write 0..200 — should be available.
-        res.write_at(0, &[0xAA; 200]).unwrap();
-        assert_eq!(res.wait_range(0..200).unwrap(), WaitOutcome::Ready);
-
-        // Write 200..400 — evicts 0..144.
-        res.write_at(200, &[0xBB; 200]).unwrap();
-
-        // 144..400 should still be available.
-        assert_eq!(res.wait_range(144..400).unwrap(), WaitOutcome::Ready);
-
-        // 0..144 has been evicted from the available set.
-        // We can't easily test wait_range(0..144) because it would block.
-        // Instead, verify read returns 0 for evicted offset.
-        let mut buf = [0u8; 1];
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 0, "evicted offset should return 0 bytes");
+        assert_eq!(n, 128);
+        assert!(buf.iter().all(|b| *b == 0xAB));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_multiple_wraps() {
-        let res = MemResource::open(
-            CancellationToken::new(),
-            MemOptions {
-                capacity: 128,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    fn test_growable_sparse_write() {
+        let res = create_resource();
 
-        // Write 3 rounds of 128 bytes each.
-        for round in 0u8..3 {
-            let offset = u64::from(round) * 128;
-            res.write_at(offset, &[round; 128]).unwrap();
-        }
+        // Write at a large offset — buffer auto-extends.
+        res.write_at(1000, b"far away").unwrap();
 
-        // Only the last 128 bytes (offset 256..384) should be readable.
-        let mut buf = [0u8; 10];
+        let mut buf = [0u8; 8];
+        let n = res.read_at(1000, &mut buf).unwrap();
+        assert_eq!(n, 8);
+        assert_eq!(&buf, b"far away");
 
-        // Offset 0 — evicted.
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 0);
-
-        // Offset 128 — evicted.
-        let n = res.read_at(128, &mut buf).unwrap();
-        assert_eq!(n, 0);
-
-        // Offset 256 — current window.
-        let n = res.read_at(256, &mut buf).unwrap();
-        assert_eq!(n, 10);
-        assert_eq!(&buf, &[2u8; 10]);
+        // Earlier offsets are zero-filled.
+        let mut zero_buf = [0xFFu8; 4];
+        let n = res.read_at(0, &mut zero_buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&zero_buf, &[0, 0, 0, 0]);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_from_bytes_readable() {
+    fn test_growable_multiple_writes_extend() {
+        let res = create_resource();
+
+        // Sequential writes that extend the buffer.
+        res.write_at(0, b"aaa").unwrap();
+        res.write_at(3, b"bbb").unwrap();
+        res.write_at(6, b"ccc").unwrap();
+
+        let mut buf = [0u8; 9];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 9);
+        assert_eq!(&buf, b"aaabbbccc");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn test_from_bytes_readable() {
         // from_bytes creates a committed resource — the data should be readable.
-        let data = b"hello ring buffer world";
+        let data = b"hello growable buffer world";
         let res = MemResource::from_bytes(data, CancellationToken::new());
 
         let mut buf = vec![0u8; data.len()];
@@ -587,21 +514,28 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_ring_capacity_power_of_two() {
-        // Non-power-of-2 capacity should be rounded up.
-        let res = MemResource::open(
-            CancellationToken::new(),
-            MemOptions {
-                capacity: 100,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    fn test_backward_write_does_not_lose_data() {
+        let res = create_resource();
 
-        // Write 128 bytes (the rounded-up capacity).
-        res.write_at(0, &[0xFF; 128]).unwrap();
-        let mut buf = [0u8; 128];
+        // Write forward.
+        res.write_at(0, &[0xAA; 100]).unwrap();
+        // Write at a later offset.
+        res.write_at(200, &[0xBB; 100]).unwrap();
+        // Write backward — should NOT evict earlier data.
+        res.write_at(50, &[0xCC; 50]).unwrap();
+
+        // All three regions should be readable.
+        let mut buf = [0u8; 10];
         let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 128);
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[0xAA; 10]);
+
+        let n = res.read_at(50, &mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[0xCC; 10]);
+
+        let n = res.read_at(200, &mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[0xBB; 10]);
     }
 }

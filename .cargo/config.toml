@@ -21,6 +21,4 @@ rustflags = [
 # Needed to rebuild std with shared-memory support for wasm32 + atomics.
 [unstable]
 build-std = ["std", "panic_abort", "core", "alloc"]
-# Empty: panic_immediate_abort cfg was removed in nightly 1.95+,
-# use -Cpanic=immediate-abort rustflag instead.
 build-std-features = []

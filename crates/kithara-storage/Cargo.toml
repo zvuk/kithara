@@ -22,7 +22,6 @@ derivative = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-slice_ring_buf = { workspace = true }
 kithara-bufpool = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)

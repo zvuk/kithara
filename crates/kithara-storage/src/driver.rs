@@ -273,9 +273,14 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
             // Invalidate evicted ranges for ring buffer drivers.
             if let Some(window) = self.inner.driver.valid_window() {
-                let evict_end = window.start;
-                if evict_end > 0 {
-                    state.available.remove(0..evict_end);
+                if window.start > 0 {
+                    state.available.remove(0..window.start);
+                }
+                // Also evict data above window end (backward seek case).
+                // For ring buffers, data outside the valid window is overwritten.
+                let upper = state.final_len.unwrap_or(u64::MAX);
+                if window.end < upper {
+                    state.available.remove(window.end..upper);
                 }
             }
         }
@@ -326,7 +331,22 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                     if range.start >= final_len {
                         return Ok(WaitOutcome::Eof);
                     }
-                    return Ok(WaitOutcome::Ready);
+                    // Clamp range to file size: readers may request beyond
+                    // EOF (e.g., Symphonia probing). Data within 0..final_len
+                    // is what matters.
+                    let clamped = range.start..range.end.min(final_len);
+                    if range_covered_by(&state.available, &clamped) {
+                        return Ok(WaitOutcome::Ready);
+                    }
+                    // For non-ring-buffer drivers, committed means all data
+                    // is available (range_covered_by above may fail if
+                    // available wasn't populated, but the data is on disk).
+                    if self.inner.driver.valid_window().is_none() {
+                        return Ok(WaitOutcome::Ready);
+                    }
+                    // Ring buffer with evicted data: fall through to
+                    // spin-wait. The on-demand mechanism re-downloads
+                    // needed data and notifies the condvar.
                 }
 
                 // Reset hang detector when download makes progress.
@@ -369,6 +389,16 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 && len > 0
             {
                 state.available.insert(0..len);
+                // For ring buffer drivers, only data in the valid window is
+                // actually available. Remove evicted ranges.
+                if let Some(window) = self.inner.driver.valid_window() {
+                    if window.start > 0 {
+                        state.available.remove(0..window.start);
+                    }
+                    if window.end < len {
+                        state.available.remove(window.end..len);
+                    }
+                }
             }
         }
         self.inner.condvar.notify_all();

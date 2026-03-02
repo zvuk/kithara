@@ -27,8 +27,17 @@ static GLOBAL_PCM_POOL: std::sync::OnceLock<PcmPool> = std::sync::OnceLock::new(
 ///
 /// Lazily initialized on first call. Use this instead of creating
 /// separate `BytePool` instances.
+///
+/// Configured with a 256 MB byte budget (expected baseline ~16 MB).
+/// Same limits for all platforms (WASM and native).
 pub fn byte_pool() -> &'static BytePool {
-    GLOBAL_BYTE_POOL.get_or_init(|| BytePool::new(1024, 64 * 1024))
+    GLOBAL_BYTE_POOL.get_or_init(|| {
+        BytePool::with_byte_budget(
+            usize::MAX,        // no buffer count limit — budget is the cap
+            0,                 // no trim (WASM can't return pages; native reuses)
+            256 * 1024 * 1024, // 256 MB hard ceiling
+        )
+    })
 }
 
 /// Get global PCM buffer pool for the entire workspace.

@@ -7,7 +7,7 @@ use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::Headers;
 use kithara_platform::time::Duration;
-use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
+use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::Timeline;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -239,19 +239,24 @@ impl kithara_stream::Source for FileSource {
         // If shared state exists, check if on-demand download is needed
         // BEFORE calling res.wait_range() — the resource blocks indefinitely
         // for Active resources when data is not available.
-        if let Some(ref shared) = self.shared {
-            let download_pos = self.progress.download_pos();
-            if range.start >= download_pos
-                && !matches!(self.res.status(), ResourceStatus::Committed { .. })
-            {
-                debug!(
-                    range_start = range.start,
-                    range_end = range.end,
-                    download_pos,
-                    "requesting on-demand download for range beyond download_pos"
-                );
-                shared.request_range(range.clone());
-            }
+        //
+        // Uses non-blocking contains_range() to detect two cases:
+        // 1. Forward seek: data not yet downloaded
+        // 2. Backward seek: data evicted by ring buffer wrap-around
+        //    (WASM MemResource). Without re-download, wait_range() spins
+        //    forever because evicted data is removed from the available set.
+        //
+        // No Committed guard — ring buffer resources lose data after commit
+        // when capacity < total, so contains_range() is the only reliable check.
+        if let Some(ref shared) = self.shared
+            && !self.res.contains_range(range.clone())
+        {
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                "file_source::wait_range requesting on-demand download"
+            );
+            shared.request_range(range.clone());
         }
 
         // Wait on the resource. If on-demand was requested, the downloader

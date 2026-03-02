@@ -25,12 +25,14 @@
 #![forbid(unsafe_code)]
 
 mod global;
+mod growth;
 mod pool;
 
 #[cfg(feature = "internal")]
 pub mod internal;
 
 pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
+pub use growth::BudgetExhausted;
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]
 pub use pool::{Pool, Pooled, PooledOwned, Reuse, SharedPool};

@@ -55,3 +55,4 @@ docs/
 .claude/*.md
 .claude-octopus
 .claude/debates
+crates/kithara-wasm/pkg

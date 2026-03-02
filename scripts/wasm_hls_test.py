@@ -51,9 +51,9 @@ def main():
         # Click HLS playlist item
         log("[test] Clicking HLS playlist item...")
         driver.execute_script("""
-            const items = document.querySelectorAll('*');
+            const items = document.querySelectorAll('#playlist li');
             for (const el of items) {
-                if (el.childElementCount === 0 && el.textContent.includes('master.m3u8')) {
+                if (el.textContent.includes('HLS')) {
                     el.click();
                     break;
                 }

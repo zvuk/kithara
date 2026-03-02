@@ -2669,6 +2669,7 @@ name = "kithara-hang-detector"
 version = "0.1.0"
 dependencies = [
  "kithara-hang-detector",
+ "tracing",
  "web-time",
 ]
 
@@ -2859,7 +2860,6 @@ dependencies = [
  "kithara-test-macros",
  "mmap-io",
  "rangemap",
- "slice_ring_buf",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
@@ -2934,18 +2934,13 @@ name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "js-sys",
- "kithara-abr",
- "kithara-hls",
  "kithara-platform",
  "kithara-play",
- "kithara-stream",
  "kithara-wasm",
  "tokio",
  "tracing",
  "tracing-log",
  "tracing-wasm",
- "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -4439,12 +4434,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "slice_ring_buf"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cd6db7fe3939155b6a220cca745c2558254c21bca0e461394fe2d081253fc33"
 
 [[package]]
 name = "slotmap"
