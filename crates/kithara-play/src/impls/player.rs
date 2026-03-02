@@ -74,6 +74,7 @@ pub struct PlayerImpl {
     crossfade_duration: AtomicF32,
     current_index: AtomicUsize,
     current_slot: Mutex<Option<SlotId>>,
+    default_rate: AtomicF32,
     events_tx: broadcast::Sender<PlayerEvent>,
     items: Mutex<Vec<Option<Resource>>>,
     muted: AtomicBool,
@@ -106,6 +107,7 @@ impl PlayerImpl {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             current_index: AtomicUsize::new(0),
             current_slot: Mutex::new(None),
+            default_rate: AtomicF32::new(config.default_rate),
             events_tx,
             items: Mutex::new(Vec::new()),
             muted: AtomicBool::new(false),
@@ -174,7 +176,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.config.default_rate;
+        let rate = self.default_rate();
         self.rate.store(rate, Ordering::Relaxed);
 
         // Start engine and allocate slot if needed.
@@ -214,6 +216,16 @@ impl PlayerImpl {
     pub fn set_rate(&self, rate: f32) {
         self.rate.store(rate, Ordering::Relaxed);
         let _ = self.events_tx.send(PlayerEvent::RateChanged { rate });
+    }
+
+    /// Default playback rate used by `play()` and `select_item()`.
+    pub fn default_rate(&self) -> f32 {
+        self.default_rate.load(Ordering::Relaxed)
+    }
+
+    /// Set the default playback rate used by `play()` and `select_item()`.
+    pub fn set_default_rate(&self, rate: f32) {
+        self.default_rate.store(rate, Ordering::Relaxed);
     }
 
     /// Get current volume (0.0..=1.0).
@@ -446,11 +458,12 @@ impl PlayerImpl {
         self.load_current_item();
 
         if autoplay {
-            self.rate.store(self.config.default_rate, Ordering::Relaxed);
+            let default_rate = self.default_rate();
+            self.rate.store(default_rate, Ordering::Relaxed);
             let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
-            let _ = self.events_tx.send(PlayerEvent::RateChanged {
-                rate: self.config.default_rate,
-            });
+            let _ = self
+                .events_tx
+                .send(PlayerEvent::RateChanged { rate: default_rate });
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
             self.rate.store(0.0, Ordering::Relaxed);
@@ -805,6 +818,28 @@ mod tests {
         player.play();
         // After a failed play, rate may or may not be set depending on
         // where the failure occurs. The key invariant: no panic.
+    }
+
+    #[kithara::test]
+    fn player_default_rate_getter_setter() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        // Default rate from config is 1.0
+        assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
+        // Change at runtime
+        player.set_default_rate(0.75);
+        assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn player_play_uses_runtime_default_rate() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        // Override default rate before play
+        player.set_default_rate(0.5);
+        // play() stores the rate before attempting engine start (which fails
+        // in test env without audio hardware).
+        player.play();
+        // Rate should reflect the runtime default_rate, not config's 1.0
+        assert!((player.rate() - 0.5).abs() < f32::EPSILON);
     }
 
     #[kithara::test(tokio)]

@@ -133,10 +133,12 @@ impl<E: Estimator> AbrController<E> {
     }
 
     fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
+        let max_bw = self.cfg.max_bandwidth_bps;
         let mut variants: Vec<(usize, u64)> = self
             .cfg
             .variants
             .iter()
+            .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
             .map(|v| (v.variant_index, v.bandwidth_bps))
             .collect();
         variants.sort_by_key(|(_, bw)| *bw);
@@ -275,6 +277,16 @@ impl<E: Estimator> AbrController<E> {
             current_bw,
             "ABR decide: candidate selected"
         );
+
+        // If current variant exceeds the bandwidth cap, force immediate downswitch
+        // bypassing hysteresis (hard upper bound).
+        if let Some(cap) = self.cfg.max_bandwidth_bps
+            && current_bw > cap
+            && candidate_idx != current
+        {
+            self.record_switch(now);
+            return Self::decision(current, candidate_idx, AbrReason::DownSwitch);
+        }
 
         let switch_ctx = SwitchContext {
             adjusted_bps,
@@ -934,5 +946,98 @@ mod tests {
             AbrReason::MinInterval,
             "Should allow after interval elapses"
         );
+    }
+
+    // max_bandwidth_bps tests
+
+    #[kithara::test]
+    fn max_bandwidth_filters_variants() {
+        // Cap at 512k — variant 2 (1024k) excluded.
+        // High throughput should pick variant 1 (512k), not variant 2 (1024k).
+        let cfg = AbrOptions {
+            max_bandwidth_bps: Some(512_000),
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        let mock = estimator_static(Some(5_000_000), 0.0);
+        let c = AbrController::with_estimator(cfg, mock);
+        let d = c.decide(Instant::now());
+
+        assert_eq!(
+            d.target_variant_index, 1,
+            "Should pick variant 1 (512k), not 2 (1024k)"
+        );
+        assert!(d.changed);
+    }
+
+    #[kithara::test]
+    fn no_max_bandwidth_selects_highest() {
+        // No cap — high throughput selects highest variant (2, 1024k).
+        let cfg = AbrOptions {
+            max_bandwidth_bps: None,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        let mock = estimator_static(Some(5_000_000), 0.0);
+        let c = AbrController::with_estimator(cfg, mock);
+        let d = c.decide(Instant::now());
+
+        assert_eq!(d.target_variant_index, 2, "Should pick highest variant");
+        assert!(d.changed);
+    }
+
+    #[kithara::test]
+    fn max_bandwidth_forces_downswitch_from_above_cap() {
+        // Current variant (2, 1024k) is above cap (512k).
+        // Even with high throughput, decide() should down-switch because the
+        // candidate from filtered list (variant 1, 512k) has lower bw.
+        let cfg = AbrOptions {
+            max_bandwidth_bps: Some(512_000),
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(2)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        let mock = estimator_static(Some(5_000_000), 20.0);
+        let c = AbrController::with_estimator(cfg, mock);
+        let d = c.decide(Instant::now());
+
+        assert_eq!(
+            d.target_variant_index, 1,
+            "Should down-switch from above-cap variant 2 to variant 1"
+        );
+        assert!(d.changed);
+        assert_eq!(d.reason, AbrReason::DownSwitch);
+    }
+
+    #[kithara::test]
+    fn max_bandwidth_below_all_variants_picks_none() {
+        // Cap below all variants — filtered list is empty, AlreadyOptimal.
+        let cfg = AbrOptions {
+            max_bandwidth_bps: Some(100_000),
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        let mock = estimator_static(Some(5_000_000), 0.0);
+        let c = AbrController::with_estimator(cfg, mock);
+        let d = c.decide(Instant::now());
+
+        assert_eq!(d.target_variant_index, 0);
+        assert!(!d.changed);
+        assert_eq!(d.reason, AbrReason::AlreadyOptimal);
     }
 }

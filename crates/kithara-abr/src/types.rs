@@ -24,6 +24,12 @@ pub struct AbrOptions {
     /// Buffer level (seconds) that triggers down-switch.
     #[derivative(Default(value = "5.0"))]
     pub down_switch_buffer_secs: f64,
+    /// Maximum bandwidth (bps) for variant selection.
+    ///
+    /// When set, variants with `bandwidth_bps` exceeding this value are excluded
+    /// from ABR decisions. Maps to the `preferredPeakBitRate` concept from
+    /// `AVPlayer`. `None` means no limit.
+    pub max_bandwidth_bps: Option<u64>,
     /// Minimum buffer level (seconds) required for up-switch.
     #[derivative(Default(value = "10.0"))]
     pub min_buffer_for_up_switch_secs: f64,
