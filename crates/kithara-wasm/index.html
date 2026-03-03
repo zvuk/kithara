@@ -273,7 +273,7 @@
         const wasm = await import('./kithara-wasm.js');
         await wasm.default();
 
-        const player = new wasm.WasmPlayer();
+        const player = new wasm.Player();
         window.__player = player;
 
         $('build-info').textContent = `(${wasm.build_info()})`;

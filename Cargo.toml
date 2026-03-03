@@ -273,6 +273,9 @@ iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "t
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 
+[patch.crates-io]
+firewheel-web-audio = { path = "../firewheel-web-audio" }
+
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"

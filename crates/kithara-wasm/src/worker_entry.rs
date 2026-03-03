@@ -33,9 +33,11 @@ pub(crate) fn worker_main(
     clog!("[WORKER] engine worker started");
 
     tokio::task::spawn(async move {
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS),
-        ));
+        clog!("[WORKER] spawn: creating PlayerConfig");
+        let config = PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS);
+        clog!("[WORKER] spawn: creating PlayerImpl");
+        let player = Arc::new(PlayerImpl::new(config));
+        clog!("[WORKER] spawn: PlayerImpl created, entering command loop");
 
         loop {
             let cmd = match cmd_rx.recv_async().await {
@@ -136,12 +138,23 @@ async fn handle_select_track(
 
     clog!("[WORKER] select_track: calling play_resource via spawn_blocking");
     let p = Arc::clone(player);
-    tokio::task::spawn_blocking(move || {
-        p.play_resource(resource)
-            .map_err(|e| format!("play_resource: {e}"))
+    let play_result = tokio::task::spawn_blocking(move || {
+        clog!("[WORKER:blocking] play_resource: starting");
+        let result = p
+            .play_resource(resource)
+            .map_err(|e| format!("play_resource: {e}"));
+        clog!(
+            "[WORKER:blocking] play_resource: done, ok={}",
+            result.is_ok()
+        );
+        result
     })
-    .await
-    .map_err(|e| format!("spawn_blocking: {e}"))??;
+    .await;
+    clog!(
+        "[WORKER] spawn_blocking returned: ok={}",
+        play_result.is_ok()
+    );
+    play_result.map_err(|e| format!("spawn_blocking: {e}"))??;
 
     clog!("[WORKER] select_track: done");
     Ok(())

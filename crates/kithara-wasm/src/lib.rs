@@ -16,4 +16,4 @@ mod worker_entry;
 #[cfg(target_arch = "wasm32")]
 pub use bindings::build_info;
 #[cfg(target_arch = "wasm32")]
-pub use player::WasmPlayer;
+pub use player::Player;

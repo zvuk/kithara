@@ -526,6 +526,30 @@ pub(crate) fn bridge_process_count() -> u64 {
     })
 }
 
+/// Pre-initialise the audio context and AudioWorklet eagerly.
+///
+/// Must be called on the main thread **after** [`session_client()`] has
+/// initialised the session state. Creates the AudioContext (which starts
+/// suspended) and kicks off the async AudioWorklet module load. Once the
+/// module is ready, `firewheel-web-audio` registers auto-resume listeners
+/// for user-gesture events (click, keydown, …). This way the very first
+/// user click resumes the context — no second click required.
+///
+/// Passing `sample_rate = 0` makes `NonZeroU32::new(0)` return `None`,
+/// letting the browser pick the default sample rate.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn warm_up_audio() {
+    WASM_SESSION_STATE.with(|state_cell| {
+        let mut state_opt = state_cell.borrow_mut();
+        let Some(ref mut state) = *state_opt else {
+            return;
+        };
+        if let Err(err) = ensure_ctx(state, 0) {
+            warn!("audio warm-up failed: {err}");
+        }
+    });
+}
+
 fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {
         SessionDuckingMode::Off => 1.0,

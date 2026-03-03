@@ -1,17 +1,14 @@
-//! Worker-based WASM player.
+//! Worker-based WASM player — struct API.
 //!
-//! [`WasmPlayer`] is a `#[wasm_bindgen]` wrapper that forwards player commands
-//! to the engine Worker and reads status from shared atomics. It owns the
-//! firewheel session host (via [`kithara_play::wasm_support`]) and drives graph
-//! updates in `tick()`.
+//! Exported as `#[wasm_bindgen]` struct [`Player`]. The `Rc<WasmRefCell<…>>`
+//! wrapper that wasm-bindgen creates is safe because `firewheel-web-audio`
+//! passes `thread_stack_size` to `initSync`, preventing Worker TLS init from
+//! corrupting the WASM heap.
 //!
-//! Getter values (volume, crossfade, EQ, ducking) are cached on the main thread
+//! Getter values (volume, crossfade, EQ, ducking) are cached inside the struct
 //! so that reads never require a Worker round-trip.
 
-use std::{
-    cell::{Cell, RefCell},
-    sync::Arc,
-};
+use std::{cell::Cell, sync::Arc};
 
 use kithara_platform::Mutex;
 use kithara_play::wasm_support;
@@ -33,75 +30,55 @@ fn js_error(message: impl Into<String>) -> JsValue {
     JsValue::from_str(&message.into())
 }
 
-/// Cached player settings — main-thread mirror of Worker state.
-/// Written by setters, read by getters. No Worker round-trip.
-struct CachedState {
-    volume: Cell<f32>,
-    crossfade_secs: Cell<f32>,
-    eq_gains: RefCell<Vec<f32>>,
-    ducking: Cell<u32>,
-    eq_bands: u32,
-}
-
-impl CachedState {
-    fn new() -> Self {
-        Self {
-            volume: Cell::new(1.0),
-            crossfade_secs: Cell::new(CROSSFADE_SECONDS),
-            eq_gains: RefCell::new(vec![0.0; EQ_BANDS]),
-            ducking: Cell::new(0),
-            eq_bands: EQ_BANDS as u32,
-        }
-    }
-}
+// ── Exported player struct ──────────────────────────────────────────
 
 #[wasm_bindgen]
-pub struct WasmPlayer {
+pub struct Player {
     cmd_tx: kithara_platform::sync::mpsc::Sender<WorkerCmd>,
     event_log: Arc<Mutex<Vec<String>>>,
-    _worker: kithara_platform::JoinHandle<()>,
-    cache: CachedState,
+    // Cached settings (main-thread mirror, no Worker round-trip)
+    volume: Cell<f32>,
+    crossfade_secs: Cell<f32>,
+    eq_gains: [Cell<f32>; EQ_BANDS],
+    ducking: Cell<u32>,
 }
 
 #[wasm_bindgen]
-impl WasmPlayer {
+impl Player {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        info!("WasmPlayer: initialising worker session channel");
+    pub fn new() -> Player {
+        info!("Player::new: initialising worker session channel");
 
-        // 1. Initialise the session channel BEFORE spawning the Worker.
         wasm_support::ensure_main_session();
         wasm_support::init_worker_session();
 
-        // 2. Create command channel.
         let (cmd_tx, cmd_rx) = kithara_platform::sync::mpsc::channel();
         let event_log = Arc::new(Mutex::new(Vec::new()));
+        let worker_log = Arc::clone(&event_log);
 
-        // 3. Spawn the engine Worker.
-        let log = Arc::clone(&event_log);
-        let worker = kithara_platform::spawn(move || {
-            crate::worker_entry::worker_main(cmd_rx, log);
+        let _worker = kithara_platform::spawn(move || {
+            crate::worker_entry::worker_main(cmd_rx, worker_log);
         });
 
-        info!("WasmPlayer: engine worker spawned");
+        info!("Player::new: engine worker spawned");
 
-        Self {
+        Player {
             cmd_tx,
             event_log,
-            _worker: worker,
-            cache: CachedState::new(),
+            volume: Cell::new(0.5),
+            crossfade_secs: Cell::new(CROSSFADE_SECONDS),
+            eq_gains: [const { Cell::new(0.0) }; EQ_BANDS],
+            ducking: Cell::new(0),
         }
     }
 
-    // -- Commands forwarded to Worker ------------------------------------
+    // -- Track loading ────────────────────────────────────────────
 
     pub async fn select_track(&self, url: String) -> Result<(), JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
 
         let (reply_tx, reply_rx) = kithara_platform::tokio::sync::oneshot::channel();
-        self.cmd_tx
-            .send_sync(WorkerCmd::SelectTrack { url, reply_tx })
-            .map_err(|_| js_error("worker channel closed"))?;
+        self.send_cmd(WorkerCmd::SelectTrack { url, reply_tx })?;
 
         let result = reply_rx
             .await
@@ -113,66 +90,62 @@ impl WasmPlayer {
         Ok(())
     }
 
+    // -- Audio context ────────────────────────────────────────────
+
+    pub fn warm_up_audio(&self) {
+        wasm_support::warm_up_audio();
+    }
+
+    // -- Transport ────────────────────────────────────────────────
+
     pub fn play(&self) {
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Play);
+        let _ = self.send_cmd(WorkerCmd::Play);
     }
 
     pub fn pause(&self) {
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Pause);
+        let _ = self.send_cmd(WorkerCmd::Pause);
     }
 
     pub fn stop(&self) {
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Stop);
+        let _ = self.send_cmd(WorkerCmd::Stop);
     }
 
     pub fn seek(&self, position_ms: f64) -> Result<(), JsValue> {
-        self.cmd_tx
-            .send_sync(WorkerCmd::Seek(position_ms))
-            .map_err(|_| js_error("worker channel closed"))
+        self.send_cmd(WorkerCmd::Seek(position_ms))
     }
 
+    // -- Settings ─────────────────────────────────────────────────
+
     pub fn set_volume(&self, volume: f32) {
-        self.cache.volume.set(volume);
-        let _ = self.cmd_tx.send_sync(WorkerCmd::SetVolume(volume));
+        self.volume.set(volume);
+        let _ = self.send_cmd(WorkerCmd::SetVolume(volume));
     }
 
     pub fn set_crossfade_seconds(&self, seconds: f32) {
-        self.cache.crossfade_secs.set(seconds);
-        let _ = self.cmd_tx.send_sync(WorkerCmd::SetCrossfade(seconds));
+        self.crossfade_secs.set(seconds);
+        let _ = self.send_cmd(WorkerCmd::SetCrossfade(seconds));
     }
 
     pub fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), JsValue> {
-        {
-            let mut gains = self.cache.eq_gains.borrow_mut();
-            if let Some(slot) = gains.get_mut(band as usize) {
-                *slot = gain_db;
-            }
+        if let Some(slot) = self.eq_gains.get(band as usize) {
+            slot.set(gain_db);
         }
-        self.cmd_tx
-            .send_sync(WorkerCmd::SetEqGain { band, gain_db })
-            .map_err(|_| js_error("worker channel closed"))
+        self.send_cmd(WorkerCmd::SetEqGain { band, gain_db })
     }
 
     pub fn reset_eq(&self) -> Result<(), JsValue> {
-        {
-            let mut gains = self.cache.eq_gains.borrow_mut();
-            for g in gains.iter_mut() {
-                *g = 0.0;
-            }
+        for g in &self.eq_gains {
+            g.set(0.0);
         }
-        self.cmd_tx
-            .send_sync(WorkerCmd::ResetEq)
-            .map_err(|_| js_error("worker channel closed"))
+        self.send_cmd(WorkerCmd::ResetEq)
     }
 
     pub fn set_session_ducking(&self, mode: u32) -> Result<(), JsValue> {
-        self.cache.ducking.set(mode);
-        self.cmd_tx
-            .send_sync(WorkerCmd::SetDucking(mode))
-            .map_err(|_| js_error("worker channel closed"))
+        self.ducking.set(mode);
+        self.send_cmd(WorkerCmd::SetDucking(mode))
     }
 
-    // -- Status reads from shared atomics (no Worker round-trip) ----------
+    // -- Status reads from shared atomics (no Worker round-trip) ──
 
     pub fn get_position_ms(&self) -> f64 {
         wasm_support::bridge_position_secs() * 1000.0
@@ -190,41 +163,38 @@ impl WasmPlayer {
         wasm_support::bridge_process_count() as f64
     }
 
-    // -- Cached getters (no Worker round-trip) ----------------------------
+    // -- Cached getters (no Worker round-trip) ────────────────────
 
     pub fn get_volume(&self) -> f32 {
-        self.cache.volume.get()
+        self.volume.get()
     }
 
     pub fn get_crossfade_seconds(&self) -> f32 {
-        self.cache.crossfade_secs.get()
+        self.crossfade_secs.get()
     }
 
     pub fn eq_band_count(&self) -> u32 {
-        self.cache.eq_bands
+        EQ_BANDS as u32
     }
 
     pub fn eq_gain(&self, band: u32) -> f32 {
-        let gains = self.cache.eq_gains.borrow();
-        gains.get(band as usize).copied().unwrap_or(0.0)
+        self.eq_gains
+            .get(band as usize)
+            .map(Cell::get)
+            .unwrap_or(0.0)
     }
 
     pub fn get_session_ducking(&self) -> u32 {
-        self.cache.ducking.get()
+        self.ducking.get()
     }
 
-    // -- Tick (main thread graph update) ----------------------------------
+    // -- Tick (main thread graph update) ──────────────────────────
 
-    /// Poll session commands from Workers and update the audio graph.
-    ///
-    /// Must be called unconditionally — even before a track is selected —
-    /// because `select_track` sends session-engine commands from the Worker
-    /// that the main thread must process for the call to complete.
     pub fn tick(&self) {
         wasm_support::tick_and_poll();
     }
 
-    // -- Events -----------------------------------------------------------
+    // -- Events ──────────────────────────────────────────────────
 
     pub fn take_events(&self) -> String {
         let mut events = self.event_log.lock_sync();
@@ -234,5 +204,15 @@ impl WasmPlayer {
         let out = events.join("\n");
         events.clear();
         out
+    }
+}
+
+// ── Private helpers ─────────────────────────────────────────────────
+
+impl Player {
+    fn send_cmd(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
+        self.cmd_tx
+            .send_sync(cmd)
+            .map_err(|_| js_error("worker channel closed"))
     }
 }

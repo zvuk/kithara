@@ -21,6 +21,17 @@ pub fn init_worker_session() {
     session_engine::init_worker_channel();
 }
 
+/// Pre-initialise the audio context and AudioWorklet eagerly.
+///
+/// Call on the main thread **after** [`ensure_main_session`] and
+/// [`init_worker_session`]. This creates the AudioContext in suspended
+/// state and starts the async AudioWorklet module load. Once complete,
+/// `firewheel-web-audio` registers auto-resume listeners so that the
+/// very first user click resumes the context.
+pub fn warm_up_audio() {
+    session_engine::warm_up_audio();
+}
+
 /// Poll pending session commands from Workers and update the audio graph.
 ///
 /// Call this on the main thread from `requestAnimationFrame`.
