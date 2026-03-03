@@ -30,8 +30,8 @@ use kithara::{
     stream::Stream,
 };
 use kithara_audio::internal::{ResamplerParams, ResamplerProcessor};
+use kithara_platform::tokio::runtime::{Builder, Runtime};
 use kithara_test_utils::TestHttpServer;
-use tokio::runtime::{Builder, Runtime};
 use url::Url;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../assets/test.mp3");

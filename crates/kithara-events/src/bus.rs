@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use tokio::sync::broadcast;
+use kithara_platform::tokio::sync::broadcast;
 
 use crate::Event;
 

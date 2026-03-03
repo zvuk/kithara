@@ -3,12 +3,12 @@
 use std::{sync::Arc, time::Duration};
 
 use kithara_decode::PcmChunk;
+use kithara_platform::tokio::sync::Notify;
 use kithara_stream::{Fetch, Timeline};
 use ringbuf::{
     HeapCons, HeapProd,
     traits::{Consumer, Producer},
 };
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 

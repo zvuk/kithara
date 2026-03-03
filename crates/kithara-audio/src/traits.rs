@@ -8,7 +8,7 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 // Re-export for convenience
 pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
-use tokio::sync::Notify;
+use kithara_platform::tokio::sync::Notify;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
@@ -79,7 +79,9 @@ pub trait PcmReader: Send {
     fn metadata(&self) -> &TrackMetadata;
 
     /// Subscribe to audio events.
-    fn decode_events(&self) -> tokio::sync::broadcast::Receiver<kithara_events::AudioEvent>;
+    fn decode_events(
+        &self,
+    ) -> kithara_platform::tokio::sync::broadcast::Receiver<kithara_events::AudioEvent>;
 
     /// Set the target sample rate of the audio host.
     ///

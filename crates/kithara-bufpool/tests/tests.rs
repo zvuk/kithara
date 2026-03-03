@@ -209,7 +209,7 @@ async fn test_multi_threaded_contention() {
     let mut handles = Vec::with_capacity(num_threads);
     for t in 0..num_threads {
         let pool = Arc::clone(&pool);
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             for i in 0..iterations {
                 let mut buf = pool.get_with(|b| b.resize(64, 0));
                 // Write a pattern unique to this thread+iteration

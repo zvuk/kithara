@@ -208,9 +208,8 @@ mod tests {
     use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{time::Duration, tokio::sync::broadcast};
     use kithara_test_utils::kithara;
-    use tokio::sync::broadcast;
 
     use super::*;
 

@@ -99,7 +99,7 @@ async fn audio_file_ephemeral_mp3_does_not_end_early() {
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    let (samples_read, position, eof) = kithara_platform::spawn_blocking(move || {
+    let (samples_read, position, eof) = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
 

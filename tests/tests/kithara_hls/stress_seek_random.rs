@@ -115,7 +115,7 @@ async fn stress_random_seek_read_hls(
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 
     // Steps 3-7 in blocking thread
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         // Step 3: Total byte length from fixture config
         info!(total_bytes, "Stream byte length");
 

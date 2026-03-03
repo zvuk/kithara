@@ -108,7 +108,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<Outcome>> = Vec::new();
 
     // Healthy instances (0, 1)
     for i in 0..2 {
@@ -117,7 +117,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -142,12 +142,12 @@ async fn healthy_instances_survive_cancelled_peers() {
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         // Fire the cancel after a short delay.
-        kithara_platform::spawn_task(async move {
+        kithara_platform::tokio::task::spawn(async move {
             kithara_platform::time::sleep(Duration::from_millis(500)).await;
             cancel_clone.cancel();
         });
 
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -213,7 +213,7 @@ async fn eight_instances_half_cancelled() {
 
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<Outcome>> = Vec::new();
 
     // 4 healthy instances
     for i in 0..4 {
@@ -222,7 +222,7 @@ async fn eight_instances_half_cancelled() {
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -246,12 +246,12 @@ async fn eight_instances_half_cancelled() {
 
         // Stagger cancellation slightly to make it more realistic.
         let delay_ms = 200 + ((i - 4) as u64 * 100);
-        kithara_platform::spawn_task(async move {
+        kithara_platform::tokio::task::spawn(async move {
             kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
             cancel_clone.cancel();
         });
 
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;

@@ -202,7 +202,7 @@ async fn writer_with_offset_cancellation() {
     let start_offset: u64 = 500;
 
     // Use a channel-based stream so we can control when chunks arrive.
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    let (tx, rx) = kithara_platform::tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
     let source = tokio_stream::wrappers::ReceiverStream::new(rx);
 
     let cancel = CancellationToken::new();

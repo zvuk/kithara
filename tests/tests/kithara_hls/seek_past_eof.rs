@@ -78,7 +78,7 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Step 1: Read all data sequentially (downloads all 3 segments).
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];

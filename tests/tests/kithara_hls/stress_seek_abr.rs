@@ -55,7 +55,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
 
     // Phase 1: Warmup — read PCM for ~10s to let ABR switch happen
     // Phase 2: 20s rapid seeking
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         let start = Instant::now();
 
@@ -166,7 +166,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
         .await
         .expect("audio creation");
 
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         // Warm up pipeline before seek sequence.
         let warmup_deadline = Instant::now() + Duration::from_secs(4);

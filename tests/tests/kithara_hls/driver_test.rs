@@ -52,7 +52,7 @@ async fn test_driver_seek_after_playlist_finished(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Read ALL data until EOF
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
@@ -157,7 +157,7 @@ async fn test_driver_abr_seek_backward(
     // Give ABR time to start downloading
     kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Read some data forward
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();

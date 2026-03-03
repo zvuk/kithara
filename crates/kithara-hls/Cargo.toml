@@ -26,7 +26,6 @@ futures = { workspace = true }
 hls_m3u8 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
 tokio-util = { workspace = true }
 url = { workspace = true }
 async-stream = { workspace = true }
@@ -43,7 +42,6 @@ internal = []
 disable-hang-detector = ["kithara-platform/disable-hang-detector"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]

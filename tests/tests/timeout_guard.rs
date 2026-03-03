@@ -22,7 +22,7 @@ fn sync_infinite_loop_is_killed_by_timeout() {
 #[should_panic(expected = "timed out")]
 async fn async_infinite_loop_is_killed_by_timeout() {
     loop {
-        kithara_platform::yield_now().await;
+        kithara_platform::tokio::task::yield_now().await;
     }
 }
 

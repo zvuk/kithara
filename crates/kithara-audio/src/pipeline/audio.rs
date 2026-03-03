@@ -13,7 +13,10 @@ use std::{
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
-use kithara_platform::JoinHandle;
+use kithara_platform::{
+    JoinHandle, tokio,
+    tokio::sync::{Notify, broadcast},
+};
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
 };
@@ -21,7 +24,6 @@ use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Split},
 };
-use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -493,7 +495,7 @@ where
         debug!("Audio::new — Stream created");
 
         debug!("Audio::new — spawning probe task...");
-        let stream = kithara_platform::spawn_blocking(move || {
+        let stream = tokio::task::spawn_blocking(move || {
             let mut stream = stream;
             let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
             let _ = stream.read(&mut probe_buf);
@@ -526,7 +528,7 @@ where
         };
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
-        let decoder = kithara_platform::spawn_blocking(move || {
+        let decoder = tokio::task::spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
                 kithara_decode::DecoderFactory::create_from_media_info(
                     shared_stream,

@@ -152,7 +152,7 @@ async fn two_hls_instances() {
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
         // Keep server and temp alive until reader finishes.
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -188,7 +188,7 @@ async fn four_hls_instances() {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -224,7 +224,7 @@ async fn eight_hls_instances() {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -260,7 +260,7 @@ async fn four_hls_instances_with_abr() {
         let server = create_hls_server_abr(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio_abr(&server, temp.path()).await;
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;

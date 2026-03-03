@@ -1,5 +1,4 @@
-use kithara_platform::{MaybeSend, MaybeSync};
-use tokio::sync::broadcast;
+use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
 
 use crate::{
     error::PlayError, events::EngineEvent, traits::dj::crossfade::CrossfadeConfig, types::SlotId,

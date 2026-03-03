@@ -144,7 +144,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     // Read samples in blocking thread
     let temp_path = temp_dir.path().to_path_buf();
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0usize;
 

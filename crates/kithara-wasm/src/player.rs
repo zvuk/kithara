@@ -98,7 +98,7 @@ impl WasmPlayer {
     pub async fn select_track(&self, url: String) -> Result<(), JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let (reply_tx, reply_rx) = kithara_platform::tokio::sync::oneshot::channel();
         self.cmd_tx
             .send_sync(WorkerCmd::SelectTrack { url, reply_tx })
             .map_err(|_| js_error("worker channel closed"))?;

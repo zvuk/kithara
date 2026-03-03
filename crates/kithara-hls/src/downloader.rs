@@ -13,7 +13,7 @@ use kithara_abr::{
 };
 use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
-use kithara_platform::{time::Instant, yield_now};
+use kithara_platform::{time::Instant, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
@@ -762,7 +762,7 @@ impl HlsDownloader {
 
     async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
         if self.shared.timeline.is_flushing() {
-            yield_now().await;
+            tokio::task::yield_now().await;
             return None;
         }
 
@@ -974,7 +974,7 @@ impl HlsDownloader {
 
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
         if self.shared.timeline.is_flushing() {
-            yield_now().await;
+            tokio::task::yield_now().await;
             return PlanOutcome::Idle;
         }
 
@@ -1025,7 +1025,7 @@ impl HlsDownloader {
             Err(e) => {
                 self.publish_download_error("failed to query segment count", &e);
                 self.shared.condvar.notify_all();
-                yield_now().await;
+                tokio::task::yield_now().await;
                 None
             }
         }

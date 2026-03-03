@@ -23,6 +23,5 @@ workspace = true
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false, features = ["internal"] }
 kithara-test-macros = { workspace = true }
-tokio = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

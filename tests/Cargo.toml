@@ -19,7 +19,6 @@ kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 
 # Async runtime
-tokio = { workspace = true }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 

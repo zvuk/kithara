@@ -211,7 +211,7 @@ fn test_stream_from_source(source: TestSource) -> Stream<TestStream> {
     let config = TestConfig {
         source: Some(source),
     };
-    tokio::runtime::Runtime::new()
+    kithara_platform::tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(Stream::new(config))
         .unwrap()

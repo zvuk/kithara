@@ -145,7 +145,7 @@ async fn stress_seek_audio_hls_wav(_tracing_setup: (), #[case] ephemeral: bool) 
     );
 
     // Steps 5-6 in blocking thread
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         // Compute chunk size: ~50ms of audio
         let chunk_duration_secs = 0.05;
         let chunk_samples =

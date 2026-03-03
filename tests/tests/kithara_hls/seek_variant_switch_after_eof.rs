@@ -66,7 +66,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     // Get handle to ABR variant index atomic so we can force a switch.
     let variant_index = source_variant_index_handle(stream.source());
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Step 1: Read all data to EOF (caches all variant 0 segments).
         let mut buf = [0u8; 64 * 1024];
         loop {

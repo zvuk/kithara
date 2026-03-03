@@ -483,13 +483,12 @@ mod tests {
     use kithara_audio::{DecodeResult, PcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
-    use kithara_platform::Mutex as PlatformMutex;
+    use kithara_platform::{Mutex as PlatformMutex, tokio::sync::broadcast};
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,
         traits::{Consumer, Producer, Split},
     };
-    use tokio::sync::broadcast;
 
     use super::*;
     use crate::impls::resource::Resource;

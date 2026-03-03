@@ -79,7 +79,7 @@ async fn test_basic_hls_playback(
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
     let decoder_result =
-        kithara_platform::spawn_blocking(move || rodio::Decoder::new(stream)).await;
+        kithara_platform::tokio::task::spawn_blocking(move || rodio::Decoder::new(stream)).await;
 
     match decoder_result {
         Ok(_decoder) => {
@@ -245,9 +245,11 @@ async fn test_init_segment_at_stream_start(
     // Variant is ABR-dependent, so validate init marker generically.
     let mut buf = [0u8; 32];
 
-    let n = kithara_platform::spawn_blocking(move || stream.read(&mut buf).map(|n| (n, buf)))
-        .await?
-        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+    let n = kithara_platform::tokio::task::spawn_blocking(move || {
+        stream.read(&mut buf).map(|n| (n, buf))
+    })
+    .await?
+    .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
 
     let (bytes_read, data) = n;
     assert!(bytes_read > 0, "Should read data from offset 0");

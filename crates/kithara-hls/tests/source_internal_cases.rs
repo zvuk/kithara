@@ -16,8 +16,8 @@ use kithara_hls::internal::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    spawn_blocking,
     time::{Duration, Instant, sleep, timeout},
+    tokio::task::spawn_blocking,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
@@ -1251,7 +1251,7 @@ async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
     // satisfies `range_ready` for offset 100.
     let bg_shared = Arc::clone(&shared);
     let bg_cancel = cancel.clone();
-    let bg = tokio::spawn(async move {
+    let bg = kithara_platform::tokio::task::spawn(async move {
         for i in 0..100u64 {
             if bg_cancel.is_cancelled() {
                 break;

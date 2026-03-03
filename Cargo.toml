@@ -155,6 +155,7 @@ unimock = { version = "0.6", features = ["std"] }
 
 # async/runtime
 tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt", "time"] }
+tokio_with_wasm = { version = "0.9", features = ["full"] }
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
 futures = "0.3.31"
@@ -213,7 +214,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Blob", "console", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
+web-sys = { version = "0.3", features = ["Blob", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }

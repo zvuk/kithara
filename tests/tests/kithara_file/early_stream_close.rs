@@ -189,7 +189,7 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    let blocking_task = kithara_platform::spawn_blocking(move || {
+    let blocking_task = kithara_platform::tokio::task::spawn_blocking(move || {
         // Read first chunk from initial partial stream
         let mut buf = [0u8; 10_000];
         let n = stream.read(&mut buf).unwrap();
@@ -263,7 +263,7 @@ async fn partial_cache_resume_works() {
 
     let stream1 = Stream::<File>::new(config1).await.unwrap();
 
-    let phase1 = kithara_platform::spawn_blocking(move || {
+    let phase1 = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut stream1 = stream1;
         let mut buf = [0u8; 10_000];
         let n = stream1.read(&mut buf).unwrap();
@@ -293,7 +293,7 @@ async fn partial_cache_resume_works() {
 
     let stream2 = Stream::<File>::new(config2).await.unwrap();
 
-    let phase2 = kithara_platform::spawn_blocking(move || {
+    let phase2 = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut stream2 = stream2;
         let seek_offset = 700_000u64;
         tracing::info!(

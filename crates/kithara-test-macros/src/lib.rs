@@ -261,14 +261,59 @@ fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-fn make_test_attrs(args: &TestArgs, is_async: bool) -> TokenStream2 {
-    let native = if is_async || args.is_tokio {
-        quote! { #[cfg_attr(not(target_arch = "wasm32"), tokio::test)] }
-    } else {
-        quote! { #[cfg_attr(not(target_arch = "wasm32"), test)] }
-    };
+/// Test attributes for **sync** tests only (dual-platform: native `#[test]` + WASM).
+///
+/// Async tests are handled separately via [`emit_async_runtime_test`] /
+/// [`emit_async_timeout_test`] which create a manual tokio runtime on native.
+fn make_sync_test_attrs() -> TokenStream2 {
+    let native = quote! { #[cfg_attr(not(target_arch = "wasm32"), test)] };
     let wasm = quote! { #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)] };
     quote! { #native #wasm }
+}
+
+/// Emit a native async test with a **manual tokio runtime** (no timeout).
+///
+/// Generates a sync `#[test]` fn that creates a `current_thread` runtime via
+/// `kithara_platform::tokio::runtime::Builder` and calls `block_on`.
+///
+/// This avoids depending on `#[tokio::test]` so consumer crates do not need
+/// `tokio` as a direct dependency.
+#[allow(clippy::too_many_arguments)]
+fn emit_async_runtime_test(
+    fn_name: &Ident,
+    vis: &syn::Visibility,
+    ret_type: &syn::ReturnType,
+    remaining_attrs: &[&Attribute],
+    body: &TokenStream2,
+    args: &TestArgs,
+    serial_attr: &TokenStream2,
+) -> TokenStream2 {
+    let env_setup = make_env_setup(&args.env_vars);
+    let inner_body = if !args.soft_fail_patterns.is_empty() {
+        wrap_with_soft_fail(
+            &quote! { { #body } },
+            fn_name,
+            true,
+            &args.soft_fail_patterns,
+        )
+    } else {
+        quote! { { #body } }
+    };
+
+    quote! {
+        #(#remaining_attrs)*
+        #serial_attr
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        #vis fn #fn_name() #ret_type {
+            #env_setup
+            let __rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("kithara test runtime");
+            __rt.block_on(async #inner_body)
+        }
+    }
 }
 
 /// Emit a `const _: ()` block that tells `wasm-bindgen-test-runner` to use a
@@ -465,15 +510,15 @@ fn emit_async_timeout_test(
             }
             let _wg = __WG(__done);
 
-            let __rt = ::tokio::runtime::Builder::new_current_thread()
+            let __rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("tokio runtime");
+                .expect("kithara test runtime");
 
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(async {
-                        ::tokio::time::timeout(__timeout_dur, async {
+                        kithara_platform::time::timeout(__timeout_dur, async {
                             #inner_body
                         })
                         .await
@@ -709,15 +754,38 @@ fn emit_one_test(
         return output;
     }
 
-    let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async, fn_name);
-    let wrapped = finalize_body(&with_timeout, args, fn_name, is_async);
-    let asyncness = is_async.then(|| quote! { async });
+    // Async WITHOUT timeout: manual runtime (simple block_on, no watchdog).
+    if is_async {
+        let mut output = emit_async_runtime_test(
+            fn_name,
+            vis,
+            ret_type,
+            remaining_attrs,
+            &full,
+            args,
+            &serial_attr,
+        );
+        // WASM side: plain async function
+        let braced = quote! { { #full } };
+        let wasm_wrapped = finalize_body(&braced, args, fn_name, true);
+        output.extend(quote! {
+            #(#remaining_attrs)*
+            #[cfg(target_arch = "wasm32")]
+            #[wasm_bindgen_test::wasm_bindgen_test]
+            #vis async fn #fn_name() #ret_type #wasm_wrapped
+        });
+        return output;
+    }
+
+    // Sync tests: dual-platform attrs (#[test] + #[wasm_bindgen_test])
+    let with_timeout = wrap_with_timeout(&full, &args.timeout, false, fn_name);
+    let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
     quote! {
         #(#remaining_attrs)*
         #serial_attr
         #test_attrs
-        #vis #asyncness fn #fn_name() #ret_type #wrapped
+        #vis fn #fn_name() #ret_type #wrapped
     }
 }
 
@@ -775,23 +843,28 @@ fn emit_browser_test(
                 args,
                 &serial_attr,
             ));
+        } else if native_is_async {
+            // Async without timeout: manual runtime
+            output.extend(emit_async_runtime_test(
+                fn_name,
+                vis,
+                ret_type,
+                remaining_attrs,
+                &native_body,
+                args,
+                &serial_attr,
+            ));
         } else {
-            let native_attr = if native_is_async {
-                quote! { #[tokio::test] }
-            } else {
-                quote! { #[test] }
-            };
-            let native_asyncness = native_is_async.then(|| quote! { async });
+            // Sync native test
             let native_with_timeout =
-                wrap_with_timeout(&native_body, &args.timeout, native_is_async, fn_name);
-            let native_wrapped =
-                finalize_body(&native_with_timeout, args, fn_name, native_is_async);
+                wrap_with_timeout(&native_body, &args.timeout, false, fn_name);
+            let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
-                #native_attr
-                #vis #native_asyncness fn #fn_name() #ret_type #native_wrapped
+                #[test]
+                #vis fn #fn_name() #ret_type #native_wrapped
             });
         }
     }
@@ -929,20 +1002,27 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                 ));
             }
 
-            let test_attr = if native_is_async {
-                quote! { #[tokio::test] }
-            } else {
-                quote! { #[test] }
-            };
-            let asyncness = native_is_async.then(|| quote! { async });
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, native_is_async, fn_name);
-            let wrapped = finalize_body(&with_timeout, &args, fn_name, native_is_async);
+            // Async without timeout: manual runtime
+            if native_is_async {
+                return Ok(emit_async_runtime_test(
+                    fn_name,
+                    vis,
+                    ret_type,
+                    &remaining_attrs,
+                    &full,
+                    &args,
+                    &serial_attr,
+                ));
+            }
+
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, false, fn_name);
+            let wrapped = finalize_body(&with_timeout, &args, fn_name, false);
             return Ok(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
-                #test_attr
-                #vis #asyncness fn #fn_name() #ret_type #wrapped
+                #[test]
+                #vis fn #fn_name() #ret_type #wrapped
             });
         }
 
@@ -969,20 +1049,28 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                 continue;
             }
 
-            let test_attr = if native_is_async {
-                quote! { #[tokio::test] }
-            } else {
-                quote! { #[test] }
-            };
-            let asyncness = native_is_async.then(|| quote! { async });
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, native_is_async, &case_name);
-            let wrapped = finalize_body(&with_timeout, &args, &case_name, native_is_async);
+            // Async without timeout: manual runtime (per case)
+            if native_is_async {
+                tests.extend(emit_async_runtime_test(
+                    &case_name,
+                    vis,
+                    ret_type,
+                    &remaining_attrs,
+                    &full,
+                    &args,
+                    &serial_attr,
+                ));
+                continue;
+            }
+
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, false, &case_name);
+            let wrapped = finalize_body(&with_timeout, &args, &case_name, false);
             tests.extend(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
-                #test_attr
-                #vis #asyncness fn #case_name() #ret_type #wrapped
+                #[test]
+                #vis fn #case_name() #ret_type #wrapped
             });
         }
         return Ok(tests);
@@ -1030,7 +1118,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         return Ok(tests);
     }
 
-    let test_attrs = make_test_attrs(&args, is_async);
+    let test_attrs = make_sync_test_attrs();
 
     if cases.is_empty() {
         // Single test — inject fixtures only

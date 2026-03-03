@@ -129,7 +129,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     // Read bytes in blocking thread
-    let result = kithara_platform::spawn_blocking(
+    let result = kithara_platform::tokio::task::spawn_blocking(
         move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
             let mut all_bytes = Vec::new();
             let mut buffer = vec![0u8; 4096];
@@ -224,7 +224,7 @@ async fn test_basic_multi_segment_reading(
 
     let mut stream = Stream::<Hls>::new(config).await?;
 
-    let result = kithara_platform::spawn_blocking(
+    let result = kithara_platform::tokio::task::spawn_blocking(
         move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
             let mut all_bytes = Vec::new();
             let mut buffer = vec![0u8; 4096];
@@ -330,39 +330,41 @@ async fn test_abr_variant_switch_with_seek_backward(
     // Give ABR time to trigger and load some segments
     kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
-    kithara_platform::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
-        use std::io::SeekFrom;
+    kithara_platform::tokio::task::spawn_blocking(
+        move || -> Result<(), Box<dyn Error + Send + Sync>> {
+            use std::io::SeekFrom;
 
-        // Read some bytes to trigger ABR switch
-        let mut buffer = vec![0u8; 50000];
-        let n1 = stream.read(&mut buffer)?;
-        println!("Read {} bytes initially", n1);
+            // Read some bytes to trigger ABR switch
+            let mut buffer = vec![0u8; 50000];
+            let n1 = stream.read(&mut buffer)?;
+            println!("Read {} bytes initially", n1);
 
-        // Seek back to beginning - this should trigger loading earlier segments
-        // if ABR switched to a variant that only has later segments loaded
-        println!("Seeking back to offset 0");
-        stream.seek(SeekFrom::Start(0))?;
+            // Seek back to beginning - this should trigger loading earlier segments
+            // if ABR switched to a variant that only has later segments loaded
+            println!("Seeking back to offset 0");
+            stream.seek(SeekFrom::Start(0))?;
 
-        // Try to read from beginning again
-        let mut buffer2 = vec![0u8; 1000];
-        let n2 = stream.read(&mut buffer2)?;
-        println!("Read {} bytes after seek to 0", n2);
+            // Try to read from beginning again
+            let mut buffer2 = vec![0u8; 1000];
+            let n2 = stream.read(&mut buffer2)?;
+            println!("Read {} bytes after seek to 0", n2);
 
-        // Verify we read some data (not EOF)
-        assert!(n2 > 0, "Should be able to read after seeking to beginning");
+            // Verify we read some data (not EOF)
+            assert!(n2 > 0, "Should be able to read after seeking to beginning");
 
-        // Verify we're reading from segment 0 (should start with "V")
-        let data_str = String::from_utf8_lossy(&buffer2[..n2]);
-        assert!(
-            data_str.starts_with("V"),
-            "Should read segment data after seek, got: {}",
-            &data_str[..20.min(data_str.len())]
-        );
+            // Verify we're reading from segment 0 (should start with "V")
+            let data_str = String::from_utf8_lossy(&buffer2[..n2]);
+            assert!(
+                data_str.starts_with("V"),
+                "Should read segment data after seek, got: {}",
+                &data_str[..20.min(data_str.len())]
+            );
 
-        println!("Successfully read after seek backward");
+            println!("Successfully read after seek backward");
 
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .await??;
 
     // Check if ABR switch occurred

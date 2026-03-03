@@ -50,7 +50,7 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 1024];
         let n = decoder.read(&mut buf);
         assert!(n > 0, "should read samples");
@@ -69,7 +69,7 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 1024];
 
         let n = decoder.read(&mut buf);
@@ -98,7 +98,7 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Read initial samples.
         let mut buf = [0.0f32; 1024];
         let n1 = decoder.read(&mut buf);
@@ -132,7 +132,7 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         // Read some data to advance position.
         let mut buf = [0.0f32; 4096];
         let mut total = 0;
@@ -173,7 +173,7 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 512];
 
         // Read initial.
@@ -220,7 +220,7 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     // Read + seek in blocking thread.
-    kithara_platform::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 1024];
 
         // Read to trigger FormatDetected.

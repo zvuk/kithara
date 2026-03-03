@@ -59,7 +59,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
         "fixture stream must be larger than probe"
     );
 
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         // Phase 1: dense seek burst with immediate probe reads.
         let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
         let max_seek = total_bytes - PROBE_SIZE as u64;
@@ -162,7 +162,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
         });
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let mut buf = vec![0u8; 8192];
         let mut total_read = 0u64;
 

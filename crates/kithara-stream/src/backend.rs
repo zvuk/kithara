@@ -13,7 +13,7 @@
 #[cfg(test)]
 use std::future::Future;
 
-use kithara_platform::JoinHandle;
+use kithara_platform::{JoinHandle, tokio};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -94,7 +94,7 @@ impl Backend {
             // on the worker's JS event loop.
             // task_begin/task_finished keep the Worker alive while async work runs.
             kithara_platform::thread::spawn(move || {
-                kithara_platform::spawn_task(Self::run_downloader(downloader, task_cancel));
+                tokio::task::spawn(Self::run_downloader(downloader, task_cancel));
             })
         };
 
@@ -151,7 +151,7 @@ impl Backend {
                 // 4. Periodic yield (only when not throttled — backpressure loop
                 //    already yields to runtime via wait_ready).
                 if !dl.should_throttle() && steps_since_yield >= yield_interval {
-                    kithara_platform::yield_now().await;
+                    tokio::task::yield_now().await;
                     steps_since_yield = 0;
                 }
             }
@@ -218,7 +218,7 @@ impl Backend {
             () = cancel.cancelled() => LoopControl::Exit,
             () = dl.wait_for_work() => {
                 // Yield to let other tasks run (e.g. TUI updates).
-                kithara_platform::yield_now().await;
+                tokio::task::yield_now().await;
                 LoopControl::Proceed
             }
         }
@@ -230,7 +230,7 @@ impl Backend {
         plans: Vec<D::Plan>,
     ) -> LoopControl {
         if plans.is_empty() {
-            kithara_platform::yield_now().await;
+            tokio::task::yield_now().await;
             return LoopControl::Restart;
         }
 
@@ -357,8 +357,7 @@ mod tests {
 
     use std::{sync::Arc, time::Duration};
 
-    use kithara_platform::Mutex;
-    use tokio::sync::Notify;
+    use kithara_platform::{Mutex, tokio::sync::Notify};
     use tokio_util::sync::CancellationToken;
 
     use super::*;

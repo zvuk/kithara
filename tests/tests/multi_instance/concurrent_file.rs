@@ -83,7 +83,7 @@ async fn two_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -120,7 +120,7 @@ async fn four_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -157,7 +157,7 @@ async fn eight_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::spawn_blocking(move || {
+        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");

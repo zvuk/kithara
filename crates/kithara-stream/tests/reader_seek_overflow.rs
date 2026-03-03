@@ -142,7 +142,7 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
         source: Some(source),
     };
     // Uses a simple blocking wrapper since MockStream::create is trivial.
-    tokio::runtime::Runtime::new()
+    kithara_platform::tokio::runtime::Runtime::new()
         .expect("runtime creation should succeed")
         .block_on(Stream::new(config))
         .expect("stream creation should succeed")

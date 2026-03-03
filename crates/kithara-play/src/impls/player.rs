@@ -12,10 +12,9 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
-use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use super::{

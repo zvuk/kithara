@@ -57,7 +57,7 @@ async fn debug_sequential_read(
     // Read with detailed logging
     // Use 64KB buffer to avoid async lock overhead per small read
     info!("Starting blocking read task...");
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         info!("Inside blocking task, starting read");
         let mut all_data = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];

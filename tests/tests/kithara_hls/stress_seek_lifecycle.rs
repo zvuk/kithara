@@ -249,7 +249,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         "Audio pipeline created"
     );
 
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_samples = (0.05 * spec.sample_rate as f64 * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];

@@ -13,7 +13,7 @@ use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
-use tokio::sync::broadcast;
+use kithara_platform::tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::source::build_pair;

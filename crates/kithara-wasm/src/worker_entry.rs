@@ -8,9 +8,8 @@
 
 use std::sync::Arc;
 
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, tokio, tokio::sync::broadcast::error::RecvError};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
-use tokio::sync::broadcast::error::RecvError;
 use tracing::{info, warn};
 
 use crate::commands::WorkerCmd;
@@ -25,7 +24,7 @@ const CROSSFADE_SECONDS: f32 = 5.0;
 
 /// Blocking entry called inside a Web Worker thread (via `kithara_platform::spawn`).
 ///
-/// Sets up an async event loop via [`kithara_platform::spawn_task`] and
+/// Sets up an async event loop via [`tokio::task::spawn`] and
 /// returns immediately — the Worker stays alive until the async task finishes.
 pub(crate) fn worker_main(
     cmd_rx: kithara_platform::sync::mpsc::Receiver<WorkerCmd>,
@@ -33,7 +32,7 @@ pub(crate) fn worker_main(
 ) {
     clog!("[WORKER] engine worker started");
 
-    kithara_platform::spawn_task(async move {
+    tokio::task::spawn(async move {
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS),
         ));
@@ -51,14 +50,14 @@ pub(crate) fn worker_main(
                 WorkerCmd::SelectTrack { url, reply_tx } => {
                     let p = Arc::clone(&player);
                     let log = Arc::clone(&event_log);
-                    kithara_platform::spawn_task(async move {
+                    tokio::task::spawn(async move {
                         let result = handle_select_track(&p, &url, &log).await;
                         let _ = reply_tx.send(result);
                     });
                 }
                 WorkerCmd::Play => {
                     let p = Arc::clone(&player);
-                    kithara_platform::spawn_blocking(move || p.play());
+                    tokio::task::spawn_blocking(move || p.play());
                 }
                 WorkerCmd::Pause => {
                     player.pause();
@@ -72,20 +71,20 @@ pub(crate) fn worker_main(
                 }
                 WorkerCmd::SetVolume(vol) => {
                     let p = Arc::clone(&player);
-                    kithara_platform::spawn_blocking(move || p.set_volume(vol));
+                    tokio::task::spawn_blocking(move || p.set_volume(vol));
                 }
                 WorkerCmd::SetCrossfade(secs) => {
                     player.set_crossfade_duration(secs);
                 }
                 WorkerCmd::SetEqGain { band, gain_db } => {
                     let p = Arc::clone(&player);
-                    kithara_platform::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         let _ = p.set_eq_gain(band as usize, gain_db);
                     });
                 }
                 WorkerCmd::ResetEq => {
                     let p = Arc::clone(&player);
-                    kithara_platform::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         let _ = p.reset_eq();
                     });
                 }
@@ -96,7 +95,7 @@ pub(crate) fn worker_main(
                         _ => SessionDuckingMode::Off,
                     };
                     let p = Arc::clone(&player);
-                    kithara_platform::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         let _ = p.set_session_ducking(mode);
                     });
                 }
@@ -131,13 +130,13 @@ async fn handle_select_track(
     let events_rx = resource.subscribe();
     let url_owned = url.to_owned();
     let log = Arc::clone(event_log);
-    kithara_platform::spawn_task(async move {
+    tokio::task::spawn(async move {
         log_resource_events(events_rx, url_owned, log).await;
     });
 
     clog!("[WORKER] select_track: calling play_resource via spawn_blocking");
     let p = Arc::clone(player);
-    kithara_platform::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         p.play_resource(resource)
             .map_err(|e| format!("play_resource: {e}"))
     })

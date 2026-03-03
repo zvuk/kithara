@@ -7,7 +7,7 @@
 pub use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use tokio::time::sleep;
+pub use tokio_with_wasm::alias::time::sleep;
 pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]
@@ -56,7 +56,7 @@ pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, Time
 where
     F: Future,
 {
-    tokio::time::timeout(duration, future)
+    tokio_with_wasm::alias::time::timeout(duration, future)
         .await
         .map_err(|_| TimeoutError)
 }

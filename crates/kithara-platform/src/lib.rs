@@ -7,8 +7,8 @@
 //!
 //! # Async tasks
 //!
-//! [`task`] module mirrors [`tokio::task`] layout: [`task::spawn`],
-//! [`task::spawn_blocking`], [`task::yield_now`].
+//! [`tokio::task`] module: [`tokio::task::spawn`],
+//! [`tokio::task::spawn_blocking`], [`tokio::task::yield_now`].
 //!
 //! # Conditional trait bounds
 //!
@@ -24,9 +24,9 @@
 
 mod maybe_send;
 pub mod sync;
-pub mod task;
 pub mod thread;
 pub mod time;
+pub mod tokio;
 
 #[cfg(feature = "internal")]
 pub mod internal;
@@ -37,9 +37,6 @@ pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
 };
-// Backward-compatible re-exports for the rename.
-pub use task::spawn as spawn_task;
-pub use task::{BlockingError, BlockingHandle, spawn_blocking, yield_now};
 pub use thread::{Duration, JoinHandle, sleep, spawn};
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -3,7 +3,7 @@
 pub mod audio {
     use std::sync::Arc;
 
-    use tokio::sync::Notify;
+    use kithara_platform::tokio::sync::Notify;
 
     pub use crate::{AudioConfig, pipeline::audio::Audio};
 

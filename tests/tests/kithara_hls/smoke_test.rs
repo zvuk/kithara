@@ -7,9 +7,8 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::sync::oneshot};
 use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
@@ -44,7 +43,7 @@ async fn test_hls_session_creation(
     // Spawn a task to consume events (prevent channel from filling up)
     let (events_sender, events_receiver) = oneshot::channel::<u64>();
 
-    kithara_platform::spawn_task(async move {
+    kithara_platform::tokio::task::spawn(async move {
         let mut event_count = 0;
         while let Ok(Ok(event)) =
             kithara_platform::time::timeout(Duration::from_millis(100), events_rx.recv()).await

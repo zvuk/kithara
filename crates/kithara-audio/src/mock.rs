@@ -8,8 +8,7 @@
 
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::AudioEvent;
-use kithara_platform::time::Duration;
-use tokio::sync::broadcast;
+use kithara_platform::{time::Duration, tokio::sync::broadcast};
 
 use crate::traits::PcmReader;
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};

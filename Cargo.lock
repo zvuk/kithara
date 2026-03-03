@@ -3613,7 +3613,6 @@ dependencies = [
  "smallvec",
  "tempfile",
  "thiserror 2.0.18",
- "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -3633,7 +3632,6 @@ dependencies = [
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
- "tokio",
  "unimock",
  "wasm-bindgen-test",
 ]
@@ -3681,7 +3679,6 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
- "tokio",
  "wasm-bindgen-test",
 ]
 
@@ -3722,7 +3719,6 @@ dependencies = [
  "rodio",
  "tempfile",
  "thiserror 2.0.18",
- "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -3768,7 +3764,6 @@ dependencies = [
  "rodio",
  "tempfile",
  "thiserror 2.0.18",
- "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -3849,7 +3844,6 @@ dependencies = [
  "memory-stats",
  "reqwest",
  "thiserror 2.0.18",
- "tokio",
  "tokio-util",
  "tower",
  "unimock",
@@ -3868,10 +3862,12 @@ dependencies = [
  "kithara-test-macros",
  "parking_lot",
  "tokio",
+ "tokio_with_wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
+ "web-sys",
  "web-time",
 ]
 
@@ -3905,7 +3901,6 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "thunderdome",
- "tokio",
  "tokio-util",
  "tracing",
  "unimock",
@@ -3952,7 +3947,6 @@ dependencies = [
  "memory-stats",
  "tempfile",
  "thiserror 2.0.18",
- "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
@@ -4025,7 +4019,6 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-wasm",
- "tokio",
  "tracing",
  "tracing-log",
  "tracing-wasm",
@@ -7153,6 +7146,30 @@ dependencies = [
  "pin-project-lite",
  "slab",
  "tokio",
+]
+
+[[package]]
+name = "tokio_with_wasm"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef3ce6a8f5b5190dfe4851db6c969e8360a262759e16a0b75dfc43af19d97a86"
+dependencies = [
+ "js-sys",
+ "tokio",
+ "tokio_with_wasm_proc",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "tokio_with_wasm_proc"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d8aa1d26c1550eef93cfb2dafadc145b3220432dae8d156b5ba485880594ffe"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

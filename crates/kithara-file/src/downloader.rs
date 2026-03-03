@@ -9,7 +9,7 @@ use futures::StreamExt;
 use kithara_assets::AssetResource;
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_platform::WasmSend;
+use kithara_platform::{WasmSend, tokio};
 use kithara_storage::ResourceExt;
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;

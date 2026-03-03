@@ -12,7 +12,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tracing = { workspace = true }
-tokio = { workspace = true }
 
 [features]
 default = []

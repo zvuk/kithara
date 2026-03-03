@@ -229,7 +229,7 @@ async fn stress_seek_abr_audio(_tracing_setup: ()) {
     );
 
     // Run test phases in blocking thread
-    let result = kithara_platform::spawn_blocking(move || {
+    let result = kithara_platform::tokio::task::spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =

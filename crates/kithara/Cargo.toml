@@ -76,7 +76,6 @@ internal = [
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false, features = ["internal"] }
-tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }

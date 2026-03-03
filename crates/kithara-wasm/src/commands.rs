@@ -4,7 +4,7 @@
 pub(crate) enum WorkerCmd {
     SelectTrack {
         url: String,
-        reply_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+        reply_tx: kithara_platform::tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     Play,
     Pause,
