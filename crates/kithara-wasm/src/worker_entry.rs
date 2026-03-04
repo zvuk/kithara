@@ -6,7 +6,7 @@
 //! Session graph operations are transparently proxied to the main thread via
 //! the remote session channel (the Worker's [`SessionClient`] is in `Remote` mode).
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_platform::{Mutex, tokio, tokio::sync::broadcast::error::RecvError};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
@@ -121,7 +121,7 @@ async fn handle_select_track(
     // smoother seek and ABR transitions (default 5 is too small for HLS with
     // segment throttle).
     if config.store.cache_capacity.is_none() {
-        config.store.cache_capacity = std::num::NonZeroUsize::new(64);
+        config.store.cache_capacity = NonZeroUsize::new(64);
     }
 
     let resource = Resource::new(config)

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::env;
+use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, byte_pool};
@@ -49,7 +51,7 @@ impl Default for StoreOptions {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            cache_dir: std::env::temp_dir().join("kithara"),
+            cache_dir: env::temp_dir().join("kithara"),
             #[cfg(target_arch = "wasm32")]
             cache_dir: PathBuf::from("/kithara"),
             cache_capacity: None,
@@ -191,7 +193,7 @@ impl AssetStoreBuilder<()> {
 
 impl<Ctx> AssetStoreBuilder<Ctx>
 where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + fmt::Debug + 'static,
 {
     /// Build the storage backend.
     ///
@@ -380,6 +382,8 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use kithara_platform::time::Duration;
     use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
@@ -392,7 +396,7 @@ mod tests {
     fn builder_local_mode_decorators_inactive() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
-        std::fs::write(&file_path, b"data").unwrap();
+        fs::write(&file_path, b"data").unwrap();
 
         // Empty asset_root → capabilities lack CACHE/EVICT/LEASE
         let store = AssetStoreBuilder::new()
@@ -431,7 +435,7 @@ mod tests {
     fn builder_no_asset_root_with_absolute_key() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
-        std::fs::write(&file_path, b"test data").unwrap();
+        fs::write(&file_path, b"test data").unwrap();
 
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())

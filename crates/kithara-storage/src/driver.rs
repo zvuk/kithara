@@ -7,7 +7,12 @@
 //! `Resource<D>` owns the common state machine (range tracking, committed/failed
 //! flags, condvar coordination, cancellation) and delegates I/O to the driver.
 
-use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
+use std::{
+    fmt::{self, Debug},
+    ops::Range,
+    path::Path,
+    sync::Arc,
+};
 
 use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
@@ -159,7 +164,7 @@ pub struct Resource<D: DriverIo> {
 }
 
 impl<D: DriverIo + Debug> Debug for Resource<D> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.inner.state.lock_sync();
         f.debug_struct("Resource")
             .field("driver", &self.inner.driver)

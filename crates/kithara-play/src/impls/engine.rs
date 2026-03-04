@@ -383,6 +383,7 @@ impl Engine for EngineImpl {
 
 #[cfg(test)]
 pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
-    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    use std::sync::OnceLock;
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }

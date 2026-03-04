@@ -6,6 +6,7 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
@@ -15,6 +16,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -52,7 +54,7 @@ async fn test_driver_seek_after_playlist_finished(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
+    spawn_blocking(move || {
         // Read ALL data until EOF
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
@@ -131,7 +133,7 @@ async fn test_driver_abr_seek_backward(
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     // Track variant switches in background
-    let variant_switches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let switches_clone = variant_switches.clone();
 
     tokio::spawn(async move {
@@ -155,9 +157,9 @@ async fn test_driver_abr_seek_backward(
     });
 
     // Give ABR time to start downloading
-    kithara_platform::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
+    spawn_blocking(move || {
         // Read some data forward
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();

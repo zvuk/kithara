@@ -33,7 +33,7 @@
 //!     len=1890485 `current_pos=595033` `seek_from=Current(9223372036854115238)`")
 
 use std::{
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
 };
@@ -79,7 +79,7 @@ impl MockSource {
 }
 
 impl Source for MockSource {
-    type Error = std::io::Error;
+    type Error = io::Error;
 
     fn wait_range(
         &mut self,
@@ -118,13 +118,11 @@ struct MockStream;
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
     type Source = MockSource;
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config
-            .source
-            .ok_or_else(|| std::io::Error::other("no source"))
+        config.source.ok_or_else(|| io::Error::other("no source"))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {

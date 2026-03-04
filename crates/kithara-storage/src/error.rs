@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::io;
+
 use thiserror::Error;
 
 /// Result type used by `kithara-storage`.
@@ -13,7 +15,7 @@ pub type StorageResult<T> = Result<T, StorageError>;
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     #[cfg(not(target_arch = "wasm32"))]
     #[error("mmap error: {0}")]

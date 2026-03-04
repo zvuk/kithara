@@ -3,13 +3,15 @@
 //! Verifies that 2, 4, and 8 `Audio<Stream<File>>` instances can run
 //! concurrently and each reads PCM data to EOF.
 
+use std::path::Path;
+
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::TestTempDir;
 use tracing::info;
 
@@ -37,7 +39,7 @@ fn read_to_eof(audio: &mut Audio<Stream<File>>) -> u64 {
 }
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
-async fn create_file_audio(url: url::Url, cache_dir: &std::path::Path) -> Audio<Stream<File>> {
+async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
     let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(cache_dir));
 
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
@@ -83,7 +85,7 @@ async fn two_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -120,7 +122,7 @@ async fn four_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -157,7 +159,7 @@ async fn eight_file_instances() {
         let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path()).await;
         temps.push(temp);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");

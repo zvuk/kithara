@@ -6,7 +6,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     storage::ResourceExt,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
 /// Helper to read bytes from resource into a new Vec
@@ -94,7 +94,7 @@ fn streaming_resource_concurrent_writes(
     // Spawn concurrent writes
     let mut handles = Vec::new();
     for i in 0..write_count {
-        let handle = kithara_platform::thread::spawn({
+        let handle = thread::spawn({
             move || {
                 let offset = (i * chunk_size) as u64;
                 let data: Vec<u8> = (0..chunk_size)

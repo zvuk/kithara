@@ -1,4 +1,8 @@
 // StreamingResource tests (merged from edge cases)
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+use std::ops::Range;
+
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -6,7 +10,10 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, OpenMode};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    thread,
+    time::{Duration, Instant},
+};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -65,24 +72,24 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf
 }
 
-fn assert_wait_times_out<T>(handle: &kithara_platform::thread::JoinHandle<T>, timeout: Duration) {
+fn assert_wait_times_out<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if handle.is_finished() {
             panic!("wait_range completed before expected timeout");
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(1));
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn assert_wait_finishes<T>(handle: &kithara_platform::thread::JoinHandle<T>, timeout: Duration) {
+fn assert_wait_finishes<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if handle.is_finished() {
             return;
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(1));
     }
     panic!("wait_range did not wake within expected timeout");
 }
@@ -289,9 +296,9 @@ fn streaming_resource_concurrent_wait_and_write() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let resource_clone = resource.clone();
-        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
 
-        kithara_platform::thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(10));
 
         resource.write_at(0, b"0123456789").unwrap();
 
@@ -335,7 +342,7 @@ fn streaming_resource_persists_across_reopen() {
         }
 
         let file_path = _temp_dir.path().join("reopen.dat");
-        let file_len = std::fs::metadata(&file_path).unwrap().len();
+        let file_len = fs::metadata(&file_path).unwrap().len();
         let resource: MmapResource = Resource::open(
             CancellationToken::new(),
             MmapOptions {
@@ -384,7 +391,7 @@ fn streaming_resource_wait_after_reopen() {
         }
 
         let file_path = _temp_dir.path().join("wait_reopen.dat");
-        let file_len = std::fs::metadata(&file_path).unwrap().len();
+        let file_len = fs::metadata(&file_path).unwrap().len();
         let resource: MmapResource = Resource::open(
             CancellationToken::new(),
             MmapOptions {
@@ -422,7 +429,7 @@ fn streaming_resource_wait_range_partial_coverage() {
     resource.write_at(0, b"Hello").unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+    let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
 
     // Should not complete within 100ms (only 5 bytes written, need 10)
     assert_wait_times_out(&wait_handle, Duration::from_millis(100));
@@ -503,9 +510,9 @@ fn streaming_resource_cancel_during_wait() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let resource_clone = resource.clone();
-        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
 
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
         cancel_token.cancel();
 
         let wait_result = wait_handle.join().unwrap();
@@ -533,7 +540,7 @@ fn streaming_resource_fail_wakes_waiters() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
         assert_wait_finishes(&wait_handle, Duration::from_secs(1));
         let wait_result = wait_handle.join().unwrap();
         assert!(matches!(wait_result, Err(StorageError::Failed(_))));
@@ -556,11 +563,11 @@ fn streaming_resource_concurrent_operations() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let resource_clone = resource.clone();
-        let handle1 = kithara_platform::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
+        let handle1 = thread::spawn(move || resource_clone.write_at(0, b"Hello"));
 
         let resource_clone = resource.clone();
-        let handle2 = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(10));
+        let handle2 = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
             resource_clone.write_at(5, b"World")
         });
 
@@ -602,7 +609,7 @@ fn streaming_resource_invalid_ranges() {
 
     // Reversed range (start > end) should return InvalidRange
     assert!(matches!(
-        resource.wait_range(std::ops::Range { start: 10, end: 5 }),
+        resource.wait_range(Range { start: 10, end: 5 }),
         Err(StorageError::InvalidRange { start: 10, end: 5 })
     ));
 
@@ -670,7 +677,7 @@ fn streaming_resource_complex_range_scenario() {
     resource.write_at(20, b"0123456789").unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..15));
+    let wait_handle = thread::spawn(move || resource_clone.wait_range(0..15));
 
     assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 

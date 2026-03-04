@@ -12,7 +12,10 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{
+    time::Duration,
+    tokio::task::{JoinHandle, spawn_blocking},
+};
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -92,7 +95,7 @@ async fn mixed_two_file_two_hls() {
 
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
-    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<InstanceResult>> = Vec::new();
+    let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
     let mut servers = Vec::new();
 
@@ -109,7 +112,7 @@ async fn mixed_two_file_two_hls() {
             .expect("create File audio");
 
         temps.push(temp);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let total = read_file_to_eof(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
@@ -152,7 +155,7 @@ async fn mixed_two_file_two_hls() {
 
         temps.push(temp);
         servers.push(server);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let total = read_hls_to_eof(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {
@@ -194,7 +197,7 @@ async fn mixed_four_file_four_hls() {
 
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
-    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<InstanceResult>> = Vec::new();
+    let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
     let mut servers = Vec::new();
 
@@ -211,7 +214,7 @@ async fn mixed_four_file_four_hls() {
             .expect("create File audio");
 
         temps.push(temp);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let total = read_file_to_eof(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
@@ -254,7 +257,7 @@ async fn mixed_four_file_four_hls() {
 
         temps.push(temp);
         servers.push(server);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let total = read_hls_to_eof(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {

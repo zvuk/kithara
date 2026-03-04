@@ -3,6 +3,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use std::sync::LazyLock;
+#[cfg(target_arch = "wasm32")]
+use std::{num::NonZeroU32, sync::atomic::Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::OnceLock, time::Duration};
 
@@ -490,9 +492,9 @@ pub(crate) fn tick_and_poll_remote() {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn bridge_position_secs() -> f64 {
     BRIDGE_PLAYER_STATE.with(|cell| {
-        cell.borrow().as_ref().map_or(0.0, |s| {
-            s.position.load(std::sync::atomic::Ordering::Relaxed)
-        })
+        cell.borrow()
+            .as_ref()
+            .map_or(0.0, |s| s.position.load(Ordering::Relaxed))
     })
 }
 
@@ -500,9 +502,9 @@ pub(crate) fn bridge_position_secs() -> f64 {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn bridge_duration_secs() -> f64 {
     BRIDGE_PLAYER_STATE.with(|cell| {
-        cell.borrow().as_ref().map_or(0.0, |s| {
-            s.duration.load(std::sync::atomic::Ordering::Relaxed)
-        })
+        cell.borrow()
+            .as_ref()
+            .map_or(0.0, |s| s.duration.load(Ordering::Relaxed))
     })
 }
 
@@ -512,7 +514,7 @@ pub(crate) fn bridge_is_playing() -> bool {
     BRIDGE_PLAYER_STATE.with(|cell| {
         cell.borrow()
             .as_ref()
-            .is_some_and(|s| s.playing.load(std::sync::atomic::Ordering::Relaxed))
+            .is_some_and(|s| s.playing.load(Ordering::Relaxed))
     })
 }
 
@@ -520,9 +522,9 @@ pub(crate) fn bridge_is_playing() -> bool {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn bridge_process_count() -> u64 {
     BRIDGE_PLAYER_STATE.with(|cell| {
-        cell.borrow().as_ref().map_or(0, |s| {
-            s.process_count.load(std::sync::atomic::Ordering::Relaxed)
-        })
+        cell.borrow()
+            .as_ref()
+            .map_or(0, |s| s.process_count.load(Ordering::Relaxed))
     })
 }
 
@@ -661,7 +663,7 @@ fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
     let config = firewheel_web_audio::WebAudioConfig {
-        sample_rate: std::num::NonZeroU32::new(sample_rate),
+        sample_rate: NonZeroU32::new(sample_rate),
         request_input: false,
     };
     ctx.start_stream(config).map_err(|err| err.to_string())

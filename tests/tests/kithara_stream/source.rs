@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::memory_source::{
@@ -175,7 +175,7 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
 }
 
 // Error cases
@@ -190,7 +190,7 @@ fn seek_past_eof_fails(test_data: Vec<u8>) {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)))]
@@ -202,7 +202,7 @@ fn seek_negative_position_fails(test_data: Vec<u8>) {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)))]
@@ -214,7 +214,7 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
 
 // Multiple seeks

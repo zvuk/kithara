@@ -11,7 +11,10 @@
 //! that equals `Send` on native and is a no-op on wasm32. This eliminates
 //! the need for duplicate trait definitions.
 
-use std::future::Future;
+use std::{
+    error::Error as StdError,
+    future::{self, Future},
+};
 
 use kithara_platform::MaybeSend;
 
@@ -49,7 +52,7 @@ pub trait DownloaderIo: Clone + MaybeSend + 'static {
     /// Fetch result passed to [`Downloader::commit`].
     type Fetch: MaybeSend;
     /// Error type.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: StdError + Send + Sync + 'static;
 
     /// Execute a single fetch (network I/O).
     fn fetch(&self, plan: Self::Plan) -> impl Future<Output = Result<Self::Fetch, Self::Error>>;
@@ -68,7 +71,7 @@ pub trait Downloader: MaybeSend + 'static {
     /// Fetch result.
     type Fetch: MaybeSend;
     /// Error type.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: StdError + Send + Sync + 'static;
     /// I/O executor type.
     type Io: DownloaderIo<Plan = Self::Plan, Fetch = Self::Fetch, Error = Self::Error>;
 
@@ -88,7 +91,7 @@ pub trait Downloader: MaybeSend + 'static {
     /// Only needed for downloaders that return [`PlanOutcome::Step`] from [`plan`](Self::plan).
     /// Default: pends forever (never called if `plan` never returns `Step`).
     fn step(&mut self) -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> {
-        std::future::pending()
+        future::pending()
     }
 
     /// Commit a fetch result to storage/state.
@@ -112,7 +115,7 @@ pub trait Downloader: MaybeSend + 'static {
     ///
     /// Default: never resolves (no demand signaling).
     fn demand_signal(&self) -> impl Future<Output = ()> + use<Self> {
-        std::future::pending()
+        future::pending()
     }
 
     /// Wait for external signal that new work may be available.
@@ -120,6 +123,6 @@ pub trait Downloader: MaybeSend + 'static {
     /// Called by Backend when [`plan`](Self::plan) returns [`PlanOutcome::Idle`].
     /// Default: pends forever (never woken if no external signals).
     fn wait_for_work(&self) -> impl Future<Output = ()> {
-        std::future::pending()
+        future::pending()
     }
 }

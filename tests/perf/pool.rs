@@ -4,9 +4,10 @@
 
 #![cfg(feature = "perf")]
 
-use std::{sync::Arc, thread};
+use std::{mem, sync::Arc, thread};
 
 use kithara::bufpool::{PcmPool, pcm_pool};
+use kithara_platform::time::Instant;
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {
@@ -98,7 +99,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
                         b.clear();
                         b.resize(2048, 0.0);
                     });
-                    std::mem::forget(buf);
+                    mem::forget(buf);
                 }
             });
 
@@ -115,7 +116,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
                     Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
                 let _guard = hotpath::FunctionsGuardBuilder::new(scenario_label).build();
                 let pool = Arc::new(pcm_pool().clone());
-                let start = kithara_platform::time::Instant::now();
+                let start = Instant::now();
 
                 run_threaded(pool, num_threads, iterations_per_thread);
 

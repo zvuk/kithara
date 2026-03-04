@@ -9,6 +9,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -78,8 +79,7 @@ async fn test_basic_hls_playback(
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
-    let decoder_result =
-        kithara_platform::tokio::task::spawn_blocking(move || rodio::Decoder::new(stream)).await;
+    let decoder_result = spawn_blocking(move || rodio::Decoder::new(stream)).await;
 
     match decoder_result {
         Ok(_decoder) => {
@@ -239,17 +239,15 @@ async fn test_init_segment_at_stream_start(
     let mut stream = Stream::<Hls>::new(config).await?;
 
     // Wait for INIT and first segment to be loaded.
-    kithara_platform::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // Read from offset 0 - should get INIT data, not SEG-0.
     // Variant is ABR-dependent, so validate init marker generically.
     let mut buf = [0u8; 32];
 
-    let n = kithara_platform::tokio::task::spawn_blocking(move || {
-        stream.read(&mut buf).map(|n| (n, buf))
-    })
-    .await?
-    .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+    let n = spawn_blocking(move || stream.read(&mut buf).map(|n| (n, buf)))
+        .await?
+        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
 
     let (bytes_read, data) = n;
     assert!(bytes_read > 0, "Should read data from offset 0");

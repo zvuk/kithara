@@ -7,6 +7,8 @@
 //! Deterministic xorshift64 PRNG guarantees reproducibility.
 //! No network required.
 
+use std::{fs, io};
+
 use kithara::{
     audio::{Audio, AudioConfig},
     file::{File, FileConfig, FileSrc},
@@ -54,8 +56,8 @@ async fn stress_random_seek_read_synthetic_wav() {
     );
 
     let tmp = tempfile::NamedTempFile::new().expect("create temp file");
-    std::io::Write::write_all(
-        &mut std::fs::File::create(tmp.path()).expect("open temp file"),
+    io::Write::write_all(
+        &mut fs::File::create(tmp.path()).expect("open temp file"),
         &wav_data,
     )
     .expect("write WAV data");

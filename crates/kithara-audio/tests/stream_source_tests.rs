@@ -4,6 +4,7 @@ use std::{
     collections::VecDeque,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
+    panic,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1152,7 +1153,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
     loop {
         if handle.is_finished() {
             if let Err(e) = handle.join() {
-                std::panic::resume_unwind(e);
+                panic::resume_unwind(e);
             }
             return;
         }

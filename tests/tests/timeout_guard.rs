@@ -4,7 +4,10 @@
 //! Each test simulates a hang (infinite loop / spawn_blocking that never returns)
 //! and expects the timeout mechanism to panic with "timed out".
 
-use kithara_platform::time::Duration;
+use std::hint;
+
+use kithara_platform::{time::Duration, tokio::task::yield_now};
+use tokio::task::spawn_blocking;
 
 // ── Sync: infinite loop in a sync test ──────────────────────────────
 
@@ -12,7 +15,7 @@ use kithara_platform::time::Duration;
 #[should_panic(expected = "timed out")]
 fn sync_infinite_loop_is_killed_by_timeout() {
     loop {
-        std::hint::spin_loop();
+        hint::spin_loop();
     }
 }
 
@@ -22,7 +25,7 @@ fn sync_infinite_loop_is_killed_by_timeout() {
 #[should_panic(expected = "timed out")]
 async fn async_infinite_loop_is_killed_by_timeout() {
     loop {
-        kithara_platform::tokio::task::yield_now().await;
+        yield_now().await;
     }
 }
 
@@ -36,9 +39,9 @@ async fn async_infinite_loop_is_killed_by_timeout() {
 #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[should_panic(expected = "timed out")]
 async fn async_spawn_blocking_zombie_is_killed_by_timeout() {
-    let _handle = tokio::task::spawn_blocking(|| {
+    let _handle = spawn_blocking(|| {
         loop {
-            std::hint::spin_loop();
+            hint::spin_loop();
         }
     })
     .await;

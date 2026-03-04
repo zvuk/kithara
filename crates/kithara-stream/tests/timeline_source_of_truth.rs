@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    io::{Read, Seek},
+    io::{self, Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
 };
@@ -30,7 +30,7 @@ impl TimelineSource {
 }
 
 impl Source for TimelineSource {
-    type Error = std::io::Error;
+    type Error = io::Error;
 
     fn wait_range(
         &mut self,
@@ -74,13 +74,13 @@ struct TimelineStream;
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
     type Source = TimelineSource;
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config
             .source
-            .ok_or_else(|| std::io::Error::other("missing source"))
+            .ok_or_else(|| io::Error::other("missing source"))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
@@ -113,7 +113,7 @@ fn stream_must_use_source_timeline_as_single_position_truth() {
     assert_eq!(stream.position(), 4);
     assert_eq!(timeline.byte_position(), 4);
 
-    let pos = stream.seek(std::io::SeekFrom::Start(1)).expect("seek");
+    let pos = stream.seek(SeekFrom::Start(1)).expect("seek");
     assert_eq!(pos, 1);
     assert_eq!(timeline.byte_position(), 1);
 }
@@ -146,7 +146,7 @@ fn read_must_succeed_while_flushing() {
 
     // Decoder seeks to byte offset 100 (inside apply_pending_seek)
     let pos = stream
-        .seek(std::io::SeekFrom::Start(100))
+        .seek(SeekFrom::Start(100))
         .expect("seek must succeed while flushing");
     assert_eq!(pos, 100);
 

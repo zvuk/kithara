@@ -42,7 +42,7 @@ pub mod audio {
 
 pub mod source {
     use std::{
-        io::{Read, Seek, SeekFrom},
+        io::{self, Read, Seek, SeekFrom},
         sync::{Arc, atomic::AtomicU64},
         time::Duration,
     };
@@ -67,13 +67,13 @@ pub mod source {
     }
 
     impl<T: StreamType> Read for SharedStream<T> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.0.read(buf)
         }
     }
 
     impl<T: StreamType> Seek for SharedStream<T> {
-        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
             self.0.seek(pos)
         }
     }
@@ -81,13 +81,13 @@ pub mod source {
     pub struct OffsetReader<T: StreamType>(crate::pipeline::source::OffsetReader<T>);
 
     impl<T: StreamType> Read for OffsetReader<T> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.0.read(buf)
         }
     }
 
     impl<T: StreamType> Seek for OffsetReader<T> {
-        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
             self.0.seek(pos)
         }
     }

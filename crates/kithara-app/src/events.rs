@@ -1,4 +1,7 @@
-use std::sync::{Arc, mpsc};
+use std::{
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
 use kithara::{
     play::{Engine, EngineEvent, PlayerEvent},
@@ -52,7 +55,7 @@ pub fn source_note(source: &str, event: &Event) -> Option<String> {
 #[must_use]
 pub fn format_seconds(seconds: f64) -> String {
     let whole = if seconds.is_finite() && seconds > 0.0 {
-        std::time::Duration::from_secs_f64(seconds).as_secs()
+        Duration::from_secs_f64(seconds).as_secs()
     } else {
         0
     };

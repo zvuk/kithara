@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
@@ -151,14 +154,13 @@ impl Assets for DiskAssetStore {
 }
 
 /// Delete an asset directory by `asset_root` directly via filesystem.
-pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> std::io::Result<()> {
-    let safe = sanitize_rel(asset_root).map_err(|()| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid asset_root")
-    })?;
+pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> io::Result<()> {
+    let safe = sanitize_rel(asset_root)
+        .map_err(|()| io::Error::new(io::ErrorKind::InvalidInput, "invalid asset_root"))?;
     let path = root_dir.join(safe);
-    match std::fs::remove_dir_all(&path) {
+    match fs::remove_dir_all(&path) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -217,7 +219,7 @@ mod tests {
     fn test_open_absolute_resource_readonly() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("local_audio.mp3");
-        std::fs::write(&file_path, b"fake audio data").unwrap();
+        fs::write(&file_path, b"fake audio data").unwrap();
 
         let store = DiskAssetStore::new(dir.path().join("cache"), "_", CancellationToken::new());
 

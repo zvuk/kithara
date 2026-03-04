@@ -483,7 +483,7 @@ mod tests {
     use kithara_audio::{DecodeResult, PcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
-    use kithara_platform::{Mutex as PlatformMutex, tokio::sync::broadcast};
+    use kithara_platform::{Mutex as PlatformMutex, time::Duration, tokio::sync::broadcast};
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,
@@ -706,7 +706,7 @@ mod tests {
                 0
             }
 
-            fn seek(&mut self, position: kithara_platform::time::Duration) -> DecodeResult<()> {
+            fn seek(&mut self, position: Duration) -> DecodeResult<()> {
                 // Log position in millis to distinguish seek sources.
                 #[expect(clippy::cast_possible_truncation, reason = "test values fit in u64")]
                 let ms = position.as_millis() as u64;
@@ -725,11 +725,11 @@ mod tests {
                 false
             }
 
-            fn position(&self) -> kithara_platform::time::Duration {
-                kithara_platform::time::Duration::ZERO
+            fn position(&self) -> Duration {
+                Duration::ZERO
             }
 
-            fn duration(&self) -> Option<kithara_platform::time::Duration> {
+            fn duration(&self) -> Option<Duration> {
                 None
             }
 

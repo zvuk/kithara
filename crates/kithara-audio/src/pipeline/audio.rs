@@ -2,6 +2,7 @@
 
 use std::{
     io::{self, Read, Seek, SeekFrom},
+    marker::PhantomData,
     num::NonZeroU32,
     sync::{
         Arc,
@@ -153,7 +154,7 @@ pub struct Audio<S> {
     _worker: Option<JoinHandle<()>>,
 
     /// Marker for source type.
-    _marker: std::marker::PhantomData<S>,
+    _marker: PhantomData<S>,
 }
 
 // Public API for cpal/rodio compatibility
@@ -769,7 +770,7 @@ where
             preloaded: false,
             notify_waiting,
             _worker: Some(worker),
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         })
     }
 

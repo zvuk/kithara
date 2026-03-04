@@ -16,6 +16,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -47,14 +48,14 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     // Give HLS time to start fetching
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Read ALL bytes using std::io::Read
     let mut all_bytes = Vec::new();
     let mut read_buf = vec![0u8; 64 * 1024];
     let mut total_reads = 0;
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         loop {
             match stream.read(&mut read_buf) {
                 Ok(0) => {

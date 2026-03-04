@@ -9,6 +9,8 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
+use std::io;
+
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus};
@@ -38,7 +40,7 @@ async fn writer_stream_end_does_not_commit_resource() {
     let source_stream = futures::stream::iter(data);
 
     let cancel = CancellationToken::new();
-    let mut writer: Writer<std::io::Error> = Writer::new(source_stream, res.clone(), cancel);
+    let mut writer: Writer<io::Error> = Writer::new(source_stream, res.clone(), cancel);
 
     // Consume all writer items
     let mut total = 0u64;

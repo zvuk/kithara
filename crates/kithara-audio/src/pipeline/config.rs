@@ -2,7 +2,10 @@
 
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    sync::{Arc, atomic::AtomicU32},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use derive_setters::Setters;
@@ -98,7 +101,7 @@ pub(super) fn expected_output_spec(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
 ) -> PcmSpec {
-    let host_sr = host_sample_rate.load(std::sync::atomic::Ordering::Relaxed);
+    let host_sr = host_sample_rate.load(Ordering::Relaxed);
     if host_sr == 0 || host_sr == initial_spec.sample_rate {
         initial_spec
     } else {

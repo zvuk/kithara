@@ -1,4 +1,8 @@
-use std::{error::Error, sync::Arc};
+use std::{
+    error::Error,
+    io,
+    sync::{Arc, mpsc},
+};
 
 use kithara::{
     play::{Engine, PlayerConfig},
@@ -37,7 +41,7 @@ pub fn track_name(url: &str) -> String {
 pub fn resolve_mode(mode: Mode) -> Mode {
     match mode {
         Mode::Auto => {
-            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            if io::IsTerminal::is_terminal(&io::stdin()) {
                 Mode::Tui
             } else {
                 Mode::Gui
@@ -108,8 +112,8 @@ pub fn run_gui_sync(urls: Vec<String>) -> AppResult {
 
 /// TUI mode: load resources upfront, then run the terminal UI event loop.
 async fn run_tui_mode(player: &Arc<PlayerImpl>, urls: Vec<String>) -> AppResult {
-    let (ui_tx, ui_rx) = std::sync::mpsc::channel::<events::UiMsg>();
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let (ui_tx, ui_rx) = mpsc::channel::<events::UiMsg>();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let mut forwarders = vec![
         events::forward_player_events(player.subscribe(), ui_tx.clone()),

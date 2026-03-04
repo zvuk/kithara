@@ -19,13 +19,15 @@ use std::{
     cell::Cell,
     collections::VecDeque,
     ffi::c_void,
-    io::{Read, Seek, SeekFrom},
+    fmt,
+    io::{self, Read, Seek, SeekFrom},
     marker::PhantomData,
-    ptr,
+    mem, ptr, slice,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    thread,
     time::Duration,
 };
 
@@ -406,7 +408,7 @@ struct AppleInner {
     /// PCM buffer pool (resolved from config or global).
     pool: PcmPool,
     /// Owner thread for FFI decoder state (set on first decoder operation in debug builds).
-    owner_thread: Cell<Option<std::thread::ThreadId>>,
+    owner_thread: Cell<Option<thread::ThreadId>>,
 }
 
 impl AppleInner {
@@ -414,7 +416,7 @@ impl AppleInner {
     fn assert_thread_affinity(&self) {
         #[cfg(debug_assertions)]
         {
-            let current = std::thread::current().id();
+            let current = thread::current().id();
             if let Some(owner) = self.owner_thread.get() {
                 debug_assert_eq!(
                     owner, current,
@@ -471,8 +473,8 @@ impl AppleInner {
         if status != noErr {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioFileStreamOpen failed");
-            return Err(DecodeError::Backend(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
                 format!("AudioFileStreamOpen failed: {}", err_str),
             ))));
         }
@@ -516,8 +518,8 @@ impl AppleInner {
                 }
                 let err_str = os_status_to_string(status);
                 warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
-                return Err(DecodeError::Backend(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                return Err(DecodeError::Backend(Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
                     format!("AudioFileStreamParseBytes failed: {}", err_str),
                 ))));
             }
@@ -589,8 +591,8 @@ impl AppleInner {
             }
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioConverterNew failed");
-            return Err(DecodeError::Backend(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
                 format!("AudioConverterNew failed: {}", err_str),
             ))));
         }
@@ -625,7 +627,7 @@ impl AppleInner {
         // Query codec-reported priming (encoder delay).
         let prime_info = {
             let mut info = AudioConverterPrimeInfo::default();
-            let mut size = std::mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
+            let mut size = mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
             let status = unsafe {
                 AudioConverterGetProperty(
                     converter,
@@ -779,9 +781,10 @@ impl AppleInner {
                     err = %err_str,
                     "Apple decoder: AudioConverterFillComplexBuffer failed"
                 );
-                return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                    format!("AudioConverterFillComplexBuffer failed: {}", err_str),
-                ))));
+                return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+                    "AudioConverterFillComplexBuffer failed: {}",
+                    err_str
+                )))));
             }
 
             if output_packets == 0 {
@@ -849,8 +852,8 @@ impl AppleInner {
         if status != noErr && status != kAudioFileStreamError_NotOptimized {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, bytes = n, "Apple decoder: parse failed");
-            return Err(DecodeError::Backend(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
                 format!("AudioFileStreamParseBytes failed: {}", err_str),
             ))));
         }
@@ -965,7 +968,7 @@ impl AppleInner {
             return None;
         }
         let mut info = AudioConverterPrimeInfo::default();
-        let mut size = std::mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
+        let mut size = mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
         let status = unsafe {
             AudioConverterGetProperty(
                 self.converter,
@@ -1038,7 +1041,7 @@ extern "C" fn property_listener_callback(
     match property_id {
         kAudioFileStreamProperty_DataFormat => {
             let mut format = AudioStreamBasicDescription::default();
-            let mut size = std::mem::size_of::<AudioStreamBasicDescription>() as UInt32;
+            let mut size = mem::size_of::<AudioStreamBasicDescription>() as UInt32;
 
             let status = unsafe {
                 AudioFileStreamGetProperty(
@@ -1100,7 +1103,7 @@ extern "C" fn property_listener_callback(
         }
         kAudioFileStreamProperty_DataOffset => {
             let mut offset: SInt64 = 0;
-            let mut size = std::mem::size_of::<SInt64>() as UInt32;
+            let mut size = mem::size_of::<SInt64>() as UInt32;
 
             let status = unsafe {
                 AudioFileStreamGetProperty(
@@ -1136,8 +1139,7 @@ extern "C" fn packets_callback(
         return;
     }
 
-    let data_slice =
-        unsafe { std::slice::from_raw_parts(input_data as *const u8, num_bytes as usize) };
+    let data_slice = unsafe { slice::from_raw_parts(input_data as *const u8, num_bytes as usize) };
 
     if packet_descriptions.is_null() {
         // CBR format - single packet with all data
@@ -1153,7 +1155,7 @@ extern "C" fn packets_callback(
     } else {
         // VBR format - multiple packets with descriptions
         let descriptions =
-            unsafe { std::slice::from_raw_parts(packet_descriptions, num_packets as usize) };
+            unsafe { slice::from_raw_parts(packet_descriptions, num_packets as usize) };
 
         for desc in descriptions {
             let start = desc.mStartOffset as usize;
@@ -1233,8 +1235,8 @@ pub struct Apple<C: CodecType> {
     _codec: PhantomData<C>,
 }
 
-impl<C: CodecType> std::fmt::Debug for Apple<C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<C: CodecType> fmt::Debug for Apple<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Apple")
             .field("spec", &self.inner.spec)
             .field("position", &self.inner.position)

@@ -7,7 +7,7 @@
 //! All written data is retained (no eviction) — [`DriverIo::valid_window()`]
 //! returns `None`, meaning backward seeks never lose data.
 
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use kithara_bufpool::{PooledOwned, byte_pool};
 use kithara_platform::Mutex;
@@ -48,8 +48,8 @@ pub struct MemDriver {
     state: Mutex<MemState>,
 }
 
-impl std::fmt::Debug for MemDriver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for MemDriver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state.lock_sync();
         f.debug_struct("MemDriver")
             .field("len", &state.len)

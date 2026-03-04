@@ -130,6 +130,8 @@ impl AudioNode for PlayerNode {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -171,6 +173,6 @@ mod tests {
     fn player_node_shared_state_accessible() {
         let node = PlayerNode::new();
         let state = node.shared_state();
-        assert!(!state.playing.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!state.playing.load(Ordering::Relaxed));
     }
 }

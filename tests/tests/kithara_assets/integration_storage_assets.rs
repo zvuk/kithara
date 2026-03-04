@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::{fs, path::Path};
+
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     bufpool::byte_pool,
@@ -33,12 +35,12 @@ struct PinsIndexFile {
     pinned: Vec<String>,
 }
 
-fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
+fn read_pins_file(root: &Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.bin");
     if !path.exists() {
         return None;
     }
-    let bytes = std::fs::read(&path).expect("pins index file should be readable if exists");
+    let bytes = fs::read(&path).expect("pins index file should be readable if exists");
     let (file, _): (PinsIndexFile, _) =
         bincode::serde::decode_from_slice(&bytes, bincode::config::legacy())
             .expect("pins index must be valid bincode if exists");

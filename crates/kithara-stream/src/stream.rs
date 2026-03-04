@@ -8,8 +8,10 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    error::Error as StdError,
     future::Future,
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
+    ops::Range,
     sync::Arc,
 };
 
@@ -37,7 +39,7 @@ pub trait StreamType: MaybeSend + 'static {
     type Source: Source;
 
     /// Error type for stream creation.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: StdError + Send + Sync + 'static;
 
     /// Create the source from configuration.
     ///
@@ -115,7 +117,7 @@ impl<T: StreamType> Stream<T> {
     }
 
     /// Get current segment byte range (for segmented sources like HLS).
-    pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
+    pub fn current_segment_range(&self) -> Option<Range<u64>> {
         self.source.current_segment_range()
     }
 
@@ -123,7 +125,7 @@ impl<T: StreamType> Stream<T> {
     ///
     /// For HLS: returns the first segment of the new variant which contains
     /// init data (ftyp/moov). This is where the decoder should be recreated.
-    pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+    pub fn format_change_segment_range(&self) -> Option<Range<u64>> {
         self.source.format_change_segment_range()
     }
 
@@ -162,11 +164,11 @@ impl<T: StreamType> Stream<T> {
     pub fn seek_time_anchor(
         &mut self,
         position: Duration,
-    ) -> Result<Option<SourceSeekAnchor>, std::io::Error> {
+    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
         let anchor = self
             .source
             .seek_time_anchor(position)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         if let Some(anchor) = anchor {
             self.timeline.set_byte_position(anchor.byte_offset);
         }
@@ -176,7 +178,7 @@ impl<T: StreamType> Stream<T> {
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -194,7 +196,7 @@ impl<T: StreamType> Read for Stream<T> {
                 match self
                     .source
                     .wait_range(range, WAIT_RANGE_TIMEOUT)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?
+                    .map_err(|e| io::Error::other(e.to_string()))?
                 {
                     WaitOutcome::Ready => {}
                     WaitOutcome::Eof => return Ok(0),
@@ -206,8 +208,8 @@ impl<T: StreamType> Read for Stream<T> {
                             kithara_platform::thread::yield_now();
                             continue;
                         }
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
                             "seek pending",
                         ));
                     }
@@ -219,7 +221,7 @@ impl<T: StreamType> Read for Stream<T> {
                 match self
                     .source
                     .read_at(pos, buf)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?
+                    .map_err(|e| io::Error::other(e.to_string()))?
                 {
                     ReadOutcome::Data(n) => {
                         hang_reset!();
@@ -228,8 +230,8 @@ impl<T: StreamType> Read for Stream<T> {
                         return Ok(n);
                     }
                     ReadOutcome::VariantChange => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
                             "variant change: decoder recreation required",
                         ));
                     }
@@ -246,15 +248,15 @@ impl<T: StreamType> Read for Stream<T> {
 }
 
 impl<T: StreamType> Seek for Stream<T> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let current = self.timeline.byte_position();
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => i128::from(p),
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Unsupported,
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
                         "seek from end requires known length",
                     ));
                 };
@@ -263,8 +265,8 @@ impl<T: StreamType> Seek for Stream<T> {
         };
 
         if new_pos < 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "negative seek position",
             ));
         }
@@ -276,8 +278,8 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 format!(
                     "seek past EOF: new_pos={new_pos} len={len} current_pos={current} seek_from={pos:?}",
                 ),
@@ -330,7 +332,7 @@ mod tests {
 
         fn wait_range(
             &mut self,
-            _range: std::ops::Range<u64>,
+            _range: Range<u64>,
             _timeout: Duration,
         ) -> crate::StreamResult<WaitOutcome, Self::Error> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))

@@ -4,14 +4,14 @@
 //! cargo run -p kithara --example hls_drm_audio --features rodio [URL]
 //! ```
 
-use std::error::Error;
+use std::{env, error::Error};
 
 use kithara::prelude::*;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let url: Url = std::env::args()
+    let url: Url = env::args()
         .nth(1)
         .unwrap_or_else(|| "https://stream.silvercomet.top/drm/master.m3u8".into())
         .parse()?;

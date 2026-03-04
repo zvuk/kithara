@@ -17,7 +17,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -67,7 +67,7 @@ async fn manual_variant_returns_correct_data(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut buf = [0u8; 10];
         let n = stream.read(&mut buf).unwrap();
         (n, buf)
@@ -114,7 +114,7 @@ async fn sequential_read_across_segments_maintains_variant(
 
     // Read all three segments sequentially
     // Use 64KB buffer to avoid async lock overhead per small read
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut all_data = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];
         let mut read_count = 0;
@@ -185,7 +185,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         // Seek to middle of segment 1 (200KB per segment)
         stream.seek(SeekFrom::Start(200_100)).unwrap();
 
@@ -242,7 +242,7 @@ async fn multiple_seeks_maintain_correct_variant(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         // First, read all data to ensure all segments are fetched
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
@@ -340,7 +340,7 @@ async fn seek_to_segment_boundary_reads_correct_segment(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         stream.seek(SeekFrom::Start(position)).unwrap();
 
         // Read first 26 bytes (the meaningful prefix before padding)

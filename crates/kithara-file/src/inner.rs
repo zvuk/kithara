@@ -2,7 +2,7 @@
 //!
 //! Provides `File` marker type implementing `StreamType` trait.
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
@@ -54,7 +54,7 @@ impl File {
     /// Opens the file via `AssetStore` with an absolute `ResourceKey`,
     /// skipping network and background downloader entirely.
     fn create_local(
-        path: std::path::PathBuf,
+        path: PathBuf,
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {

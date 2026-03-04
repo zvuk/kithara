@@ -355,7 +355,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::{sync::Arc, time::Duration};
+    use std::{error::Error as StdError, fmt, future, sync::Arc, time::Duration};
 
     use kithara_platform::{Mutex, tokio::sync::Notify};
     use tokio_util::sync::CancellationToken;
@@ -367,13 +367,13 @@ mod tests {
     #[derive(Debug)]
     struct MockError;
 
-    impl std::fmt::Display for MockError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl fmt::Display for MockError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "mock error")
         }
     }
 
-    impl std::error::Error for MockError {}
+    impl StdError for MockError {}
 
     /// Mock I/O executor that signals when a demand fetch completes.
     #[derive(Clone)]
@@ -423,7 +423,7 @@ mod tests {
             self.step_entered.notify_one();
             // Simulate stalled HTTP stream — block forever.
             // (test timeout on native prevents actual hang)
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
             Ok(StepResult::Item(0))
         }
 
@@ -434,7 +434,7 @@ mod tests {
         }
 
         fn wait_ready(&self) -> impl Future<Output = ()> {
-            std::future::pending()
+            future::pending()
         }
 
         fn demand_signal(&self) -> impl Future<Output = ()> + use<> {

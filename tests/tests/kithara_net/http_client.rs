@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -14,11 +17,12 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use kithara::{
     internal::TimeoutNet,
     net::{Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy},
 };
+use kithara_platform::time::sleep;
 use kithara_test_utils::TestHttpServer;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -107,19 +111,19 @@ async fn error_429_endpoint() -> impl IntoResponse {
 }
 
 async fn slow_headers_endpoint() -> impl IntoResponse {
-    kithara_platform::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
     "Slow headers"
 }
 
 async fn slow_body_endpoint() -> impl IntoResponse {
-    let stream = futures::stream::iter(vec![
+    let stream = stream::iter(vec![
         Ok::<_, axum::BoxError>(Bytes::from("Hello")),
         Ok(Bytes::from(", ")),
         Ok(Bytes::from("World")),
         Ok(Bytes::from("!")),
     ])
     .then(|chunk| async move {
-        kithara_platform::time::sleep(Duration::from_millis(200)).await;
+        sleep(Duration::from_millis(200)).await;
         chunk
     });
 
@@ -135,18 +139,18 @@ async fn ignore_range_endpoint() -> &'static str {
 
 #[derive(Clone, Default)]
 struct RequestCounter {
-    count: Arc<std::sync::atomic::AtomicUsize>,
+    count: Arc<AtomicUsize>,
 }
 
 impl RequestCounter {
     fn new() -> Self {
         Self {
-            count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     fn increment(&self) -> usize {
-        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        self.count.fetch_add(1, Ordering::SeqCst)
     }
 }
 
@@ -178,7 +182,7 @@ async fn retry_test_endpoint(State(counter): State<RequestCounter>) -> impl Into
 }
 
 async fn timeout_test_endpoint() -> impl IntoResponse {
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
     "Should timeout"
 }
 

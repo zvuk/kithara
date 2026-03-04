@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::error::Error as StdError;
+
 use thiserror::Error;
 
 /// Errors produced by `kithara-stream` (generic over source error).
@@ -14,7 +16,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum StreamError<E>
 where
-    E: std::error::Error + Send + Sync + 'static,
+    E: StdError + Send + Sync + 'static,
 {
     #[error("seek not supported")]
     SeekNotSupported,
@@ -44,28 +46,30 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
+    use std::io;
+
     use super::*;
 
     #[kithara::test(wasm)]
-    #[case::seek_not_supported(StreamError::<std::io::Error>::SeekNotSupported, "seek not supported")]
-    #[case::invalid_seek(StreamError::<std::io::Error>::InvalidSeek, "invalid seek position")]
-    #[case::unknown_length(StreamError::<std::io::Error>::UnknownLength, "seek requires known length, but source length is unknown")]
-    #[case::channel_closed(StreamError::<std::io::Error>::ChannelClosed, "internal channel closed")]
-    #[case::writer_join(StreamError::<std::io::Error>::WriterJoin("panic message".into()), "writer task join error: panic message")]
-    fn test_error_display(#[case] error: StreamError<std::io::Error>, #[case] expected: &str) {
+    #[case::seek_not_supported(StreamError::<io::Error>::SeekNotSupported, "seek not supported")]
+    #[case::invalid_seek(StreamError::<io::Error>::InvalidSeek, "invalid seek position")]
+    #[case::unknown_length(StreamError::<io::Error>::UnknownLength, "seek requires known length, but source length is unknown")]
+    #[case::channel_closed(StreamError::<io::Error>::ChannelClosed, "internal channel closed")]
+    #[case::writer_join(StreamError::<io::Error>::WriterJoin("panic message".into()), "writer task join error: panic message")]
+    fn test_error_display(#[case] error: StreamError<io::Error>, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
     }
 
     #[kithara::test]
     fn test_source_error_display() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
-        let err: StreamError<std::io::Error> = StreamError::Source(io_err);
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file missing");
+        let err: StreamError<io::Error> = StreamError::Source(io_err);
         assert_eq!(err.to_string(), "source error: file missing");
     }
 
     #[kithara::test]
     fn test_stream_error_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<StreamError<std::io::Error>>();
+        assert_send_sync::<StreamError<io::Error>>();
     }
 }

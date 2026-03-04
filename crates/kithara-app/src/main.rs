@@ -1,3 +1,5 @@
+use std::env;
+
 use clap::Parser;
 use kithara_app::{AppResult, Mode, resolve_mode};
 
@@ -18,7 +20,7 @@ fn main() -> AppResult {
     #[cfg(target_os = "macos")]
     // SAFETY: called at program start before any threads are spawned.
     unsafe {
-        std::env::set_var("OS_ACTIVITY_MODE", "disable");
+        env::set_var("OS_ACTIVITY_MODE", "disable");
     }
 
     let args = Args::parse();

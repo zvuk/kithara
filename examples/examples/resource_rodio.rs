@@ -4,13 +4,13 @@
 //! cargo run -p kithara --example resource_rodio --features rodio [URL]
 //! ```
 
-use std::error::Error;
+use std::{env, error::Error};
 
 use kithara::prelude::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let url = std::env::args()
+    let url = env::args()
         .nth(1)
         .unwrap_or_else(|| "https://stream.silvercomet.top/track.mp3".into());
 

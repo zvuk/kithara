@@ -9,7 +9,7 @@
 //! (via the `tempfile` crate), then atomically renames over the target path.
 //! For in-memory resources, `write_all()` delegates directly (no filesystem to protect).
 
-use std::{ops::Range, path::Path};
+use std::{fs, io::Write, ops::Range, path::Path};
 
 use crate::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 
@@ -77,14 +77,14 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
             let parent = path.parent().ok_or_else(|| {
                 crate::StorageError::Failed("atomic write: no parent dir".to_string())
             })?;
-            let _ = std::fs::create_dir_all(parent);
+            let _ = fs::create_dir_all(parent);
 
             // 1. Create unique temp file via `tempfile` crate.
             let mut tmp = tempfile::NamedTempFile::new_in(parent)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write tmpfile: {e}")))?;
 
             // 2. Write data to temp file.
-            std::io::Write::write_all(&mut tmp, data)
+            Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
             // 3. Atomic rename (POSIX guarantees atomicity).
@@ -115,6 +115,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
+    use kithara_platform::time::Duration;
     #[cfg(not(target_arch = "wasm32"))]
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
@@ -143,7 +144,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mmap_write_all_read_into_roundtrip() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "test.bin");
@@ -159,7 +160,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mmap_tmp_file_cleaned_up() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "index.bin");
@@ -168,7 +169,7 @@ mod tests {
         atomic.write_all(b"data").unwrap();
 
         // No tmp files should remain (they have unique suffixes like index.tmp.0).
-        let tmp_files: Vec<_> = std::fs::read_dir(dir.path())
+        let tmp_files: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
             .filter(|e| e.path().to_str().is_some_and(|s| s.contains(".tmp.")))
@@ -179,7 +180,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mem_write_all_read_into_roundtrip() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);
@@ -193,7 +194,7 @@ mod tests {
         assert_eq!(&buf, data);
     }
 
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mem_write_all_overwrites_committed_data() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);
@@ -208,7 +209,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mmap_read_into_empty_returns_zero() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "empty.bin");
@@ -220,7 +221,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mmap_overwrite_atomically() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "overwrite.bin");
@@ -236,7 +237,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mmap_path_returns_inner_path() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "path_test.bin");
@@ -246,7 +247,7 @@ mod tests {
         assert_eq!(atomic.path(), Some(expected.as_path()));
     }
 
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
+    #[kithara::test(timeout(Duration::from_secs(2)))]
     fn mem_path_returns_none() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);

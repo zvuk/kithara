@@ -6,6 +6,7 @@
 //! Currently a placeholder — actual FFI implementation pending.
 
 use std::{
+    fmt, io,
     marker::PhantomData,
     sync::{
         Arc,
@@ -45,8 +46,8 @@ pub struct Android<C: CodecType> {
     _codec: PhantomData<C>,
 }
 
-impl<C: CodecType> std::fmt::Debug for Android<C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<C: CodecType> fmt::Debug for Android<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Android")
             .field("spec", &self.inner.spec)
             .finish_non_exhaustive()
@@ -62,8 +63,8 @@ impl<C: CodecType> AudioDecoder for Android<C> {
         Self: Sized,
     {
         // TODO: Implement actual MediaCodec initialization
-        Err(DecodeError::Backend(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
+        Err(DecodeError::Backend(Box::new(io::Error::new(
+            io::ErrorKind::Unsupported,
             "Android MediaCodec decoder not yet implemented",
         ))))
     }

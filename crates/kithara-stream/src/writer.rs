@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    error::Error as StdError,
+    fmt,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -20,7 +22,7 @@ use tracing::{debug, warn};
 #[derive(Debug, Error)]
 pub enum WriterError<E = NetError>
 where
-    E: std::error::Error + 'static,
+    E: StdError + 'static,
 {
     #[error("source stream error: {0}")]
     SourceStream(#[source] E),
@@ -94,7 +96,7 @@ pub enum WriterItem {
 /// ```
 pub struct Writer<E = NetError>
 where
-    E: std::error::Error + 'static,
+    E: StdError + 'static,
 {
     #[cfg(not(target_arch = "wasm32"))]
     inner: Pin<Box<dyn Stream<Item = Result<WriterItem, WriterError<E>>> + Send>>,
@@ -114,8 +116,8 @@ fn create_writer_stream<S, R, E>(
 ) -> impl Stream<Item = Result<WriterItem, WriterError<E>>>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-    R: ResourceExt + Clone + std::fmt::Debug + 'static,
-    E: std::error::Error + 'static,
+    R: ResourceExt + Clone + fmt::Debug + 'static,
+    E: StdError + 'static,
 {
     async_stream::stream! {
         let mut offset: u64 = start_offset;
@@ -191,7 +193,7 @@ where
 #[cfg(not(target_arch = "wasm32"))]
 impl<E> Writer<E>
 where
-    E: std::error::Error + Send + Sync + 'static,
+    E: StdError + Send + Sync + 'static,
 {
     /// Create a new writer from any byte stream source.
     ///
@@ -203,7 +205,7 @@ where
     pub fn new<S, R>(stream: S, res: R, cancel: CancellationToken) -> Self
     where
         S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
-        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
+        R: ResourceExt + Clone + Send + Sync + fmt::Debug + 'static,
     {
         Self::with_offset(stream, res, cancel, 0)
     }
@@ -219,7 +221,7 @@ where
     ) -> Self
     where
         S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
-        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
+        R: ResourceExt + Clone + Send + Sync + fmt::Debug + 'static,
     {
         let inner = Box::pin(create_writer_stream(stream, res, cancel, start_offset));
         Self { inner }
@@ -229,12 +231,12 @@ where
 #[cfg(target_arch = "wasm32")]
 impl<E> Writer<E>
 where
-    E: std::error::Error + 'static,
+    E: StdError + 'static,
 {
     pub fn new<S, R>(stream: S, res: R, cancel: CancellationToken) -> Self
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        R: ResourceExt + Clone + std::fmt::Debug + 'static,
+        R: ResourceExt + Clone + fmt::Debug + 'static,
     {
         Self::with_offset(stream, res, cancel, 0)
     }
@@ -247,7 +249,7 @@ where
     ) -> Self
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        R: ResourceExt + Clone + std::fmt::Debug + 'static,
+        R: ResourceExt + Clone + fmt::Debug + 'static,
     {
         let inner = Box::pin(create_writer_stream(stream, res, cancel, start_offset));
         Self { inner }
@@ -256,7 +258,7 @@ where
 
 impl<E> Stream for Writer<E>
 where
-    E: std::error::Error + Send + Sync + 'static,
+    E: StdError + Send + Sync + 'static,
 {
     type Item = Result<WriterItem, WriterError<E>>;
 

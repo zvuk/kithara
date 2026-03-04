@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, path::Path, sync::Arc};
+use std::{fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus};
@@ -45,11 +45,11 @@ where
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
 }
 
-impl<A> std::fmt::Debug for CachedAssets<A>
+impl<A> fmt::Debug for CachedAssets<A>
 where
     A: Assets,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let size = self.cache.try_lock().ok().map(|c| c.len());
         f.debug_struct("CachedAssets")
             .field("cache_size", &size)
@@ -223,7 +223,7 @@ where
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{fs, sync::Arc, time::Duration};
 
     use kithara_platform::thread;
     use kithara_storage::ResourceExt;
@@ -313,7 +313,7 @@ mod tests {
         let keys: Vec<ResourceKey> = (0..3)
             .map(|i| {
                 let p = dir.path().join(format!("seg_{i}.m4s"));
-                std::fs::write(&p, b"data").unwrap();
+                fs::write(&p, b"data").unwrap();
                 ResourceKey::absolute(&p)
             })
             .collect();
@@ -331,7 +331,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
         let p = dir.path().join("audio.mp3");
-        std::fs::write(&p, b"data").unwrap();
+        fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
         let res1 = cached.open_resource(&key).unwrap();

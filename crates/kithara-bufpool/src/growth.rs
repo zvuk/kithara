@@ -1,3 +1,5 @@
+use std::{error::Error as StdError, fmt};
+
 /// Error returned when a byte budget limit is exceeded.
 ///
 /// Returned by [`PooledOwned::ensure_len()`](crate::PooledOwned) when growing
@@ -5,10 +7,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetExhausted;
 
-impl std::fmt::Display for BudgetExhausted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for BudgetExhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("byte budget exhausted")
     }
 }
 
-impl std::error::Error for BudgetExhausted {}
+impl StdError for BudgetExhausted {}

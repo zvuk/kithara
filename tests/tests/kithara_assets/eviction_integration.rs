@@ -6,11 +6,13 @@
 //! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
 //! requires creating multiple `AssetStore` instances with the same `root_dir`.
 
+use std::{fs, path::Path};
+
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
 #[derive(serde::Deserialize)]
@@ -21,7 +23,7 @@ struct PinsIndexFile {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
+fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
 }
 
@@ -65,7 +67,7 @@ fn eviction_max_assets_skips_pinned_assets(
         if i == create_count - 1 {
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
-            if let Ok(pins_bytes) = std::fs::read(dir.join("_index/pins.bin"))
+            if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
                 && let Ok((pins_file, _)) = bincode::serde::decode_from_slice::<PinsIndexFile, _>(
                     &pins_bytes,
                     bincode::config::legacy(),
@@ -137,7 +139,7 @@ fn eviction_ignores_missing_index(
     // Manually corrupt LRU index to simulate missing metadata
     let index_path = dir.join("_index/lru.bin");
     if index_path.exists() {
-        std::fs::write(&index_path, b"corrupted json").unwrap();
+        fs::write(&index_path, b"corrupted json").unwrap();
     }
 
     // Creating one more asset should work without crashing despite missing index
@@ -207,7 +209,7 @@ fn eviction_respects_max_assets_limit(
     }
 
     // Give eviction a moment to complete
-    kithara_platform::thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(100));
 
     // Count how many asset directories exist
     let mut existing_count = 0;

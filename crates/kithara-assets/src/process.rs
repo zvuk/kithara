@@ -5,7 +5,7 @@
 //! Processes content chunk-by-chunk on commit, writes to disk.
 //! Uses buffer pool — no allocations during processing.
 
-use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
+use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
@@ -75,7 +75,7 @@ where
     R: Debug,
     Ctx: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)

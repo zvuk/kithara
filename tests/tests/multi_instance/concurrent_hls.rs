@@ -4,7 +4,7 @@
 //! concurrently and each reads PCM data to EOF.
 //! Tests both manual variant (no ABR) and auto ABR modes.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
@@ -12,7 +12,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -75,10 +75,7 @@ async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
 }
 
 /// Create an `Audio<Stream<Hls>>` for a single-variant (manual ABR) stream.
-async fn create_hls_audio(
-    server: &HlsTestServer,
-    cache_dir: &std::path::Path,
-) -> Audio<Stream<Hls>> {
+async fn create_hls_audio(server: &HlsTestServer, cache_dir: &Path) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
     let cancel = CancellationToken::new();
 
@@ -100,10 +97,7 @@ async fn create_hls_audio(
 }
 
 /// Create an `Audio<Stream<Hls>>` with auto ABR.
-async fn create_hls_audio_abr(
-    server: &HlsTestServer,
-    cache_dir: &std::path::Path,
-) -> Audio<Stream<Hls>> {
+async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
     let cancel = CancellationToken::new();
 
@@ -152,7 +146,7 @@ async fn two_hls_instances() {
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
         // Keep server and temp alive until reader finishes.
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -188,7 +182,7 @@ async fn four_hls_instances() {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -224,7 +218,7 @@ async fn eight_hls_instances() {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -260,7 +254,7 @@ async fn four_hls_instances_with_abr() {
         let server = create_hls_server_abr(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio_abr(&server, temp.path()).await;
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;

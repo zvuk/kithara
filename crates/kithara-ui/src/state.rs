@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use iced::{Subscription, Task, Theme};
 use kithara::{
@@ -101,7 +101,7 @@ impl Kithara {
     /// 100 ms tick subscription for player state sync.
     #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::Tick)
+        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
     }
 
     /// Asynchronously load a track by playlist index.

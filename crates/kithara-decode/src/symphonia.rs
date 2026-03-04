@@ -25,8 +25,9 @@
 //! ```
 
 use std::{
-    io::{Read, Seek},
+    io::{self, Read, Seek, SeekFrom},
     marker::PhantomData,
+    panic::{self, AssertUnwindSafe},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -418,7 +419,7 @@ impl SymphoniaInner {
     /// Wraps the inner decode loop in `catch_unwind` to convert Symphonia
     /// codec panics into `DecodeError::InvalidData` instead of aborting.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.next_chunk_impl())) {
+        match panic::catch_unwind(AssertUnwindSafe(|| self.next_chunk_impl())) {
             Ok(result) => result,
             Err(payload) => {
                 let msg = match payload.downcast::<String>() {
@@ -443,9 +444,7 @@ impl SymphoniaInner {
                     self.decoder.reset();
                     continue;
                 }
-                Err(SymphoniaError::IoError(ref e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
+                Err(SymphoniaError::IoError(ref e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
                     tracing::debug!("Treating UnexpectedEof as EOF");
                     return Ok(None);
                 }
@@ -712,20 +711,20 @@ impl<R: Seek> ReadSeekAdapter<R> {
     /// Probe stream length via `Seek::seek(End(0))` + restore position.
     fn probe_byte_len(reader: &mut R) -> Option<u64> {
         let current = reader.stream_position().ok()?;
-        let end = reader.seek(std::io::SeekFrom::End(0)).ok()?;
-        reader.seek(std::io::SeekFrom::Start(current)).ok()?;
+        let end = reader.seek(SeekFrom::End(0)).ok()?;
+        reader.seek(SeekFrom::Start(current)).ok()?;
         Some(end)
     }
 }
 
 impl<R: Read> Read for ReadSeekAdapter<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
 }
 
 impl<R: Seek> Seek for ReadSeekAdapter<R> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         self.inner.seek(pos)
     }
 }

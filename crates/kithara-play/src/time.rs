@@ -1,3 +1,5 @@
+use std::{cmp, hash, ops};
+
 use derivative::Derivative;
 use kithara_platform::time::Duration;
 
@@ -82,8 +84,8 @@ impl MediaTime {
 
 impl Eq for MediaTime {}
 
-impl std::hash::Hash for MediaTime {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl hash::Hash for MediaTime {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.value.hash(state);
         self.timescale.hash(state);
     }
@@ -96,20 +98,20 @@ impl From<Duration> for MediaTime {
 }
 
 impl PartialOrd for MediaTime {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for MediaTime {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         let lhs = i128::from(self.value) * i128::from(other.timescale);
         let rhs = i128::from(other.value) * i128::from(self.timescale);
         lhs.cmp(&rhs)
     }
 }
 
-impl std::ops::Add for MediaTime {
+impl ops::Add for MediaTime {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -121,7 +123,7 @@ impl std::ops::Add for MediaTime {
     }
 }
 
-impl std::ops::Sub for MediaTime {
+impl ops::Sub for MediaTime {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {

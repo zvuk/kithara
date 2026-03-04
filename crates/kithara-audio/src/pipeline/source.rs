@@ -2,7 +2,8 @@
 
 use std::{
     any::Any,
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
+    ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
@@ -56,11 +57,11 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock_sync().media_info()
     }
 
-    fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
+    fn current_segment_range(&self) -> Option<Range<u64>> {
         self.inner.lock_sync().current_segment_range()
     }
 
-    fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+    fn format_change_segment_range(&self) -> Option<Range<u64>> {
         self.inner.lock_sync().format_change_segment_range()
     }
 
@@ -72,10 +73,7 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock_sync().set_seek_epoch(seek_epoch);
     }
 
-    fn seek_time_anchor(
-        &self,
-        position: Duration,
-    ) -> Result<Option<SourceSeekAnchor>, std::io::Error> {
+    fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error> {
         self.inner.lock_sync().seek_time_anchor(position)
     }
 
@@ -111,13 +109,13 @@ impl<T: StreamType> Clone for SharedStream<T> {
 }
 
 impl<T: StreamType> Read for SharedStream<T> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.lock_sync().read(buf)
     }
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         self.inner.lock_sync().seek(pos)
     }
 }
@@ -148,13 +146,13 @@ impl<T: StreamType> OffsetReader<T> {
 }
 
 impl<T: StreamType> Read for OffsetReader<T> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.shared.read(buf)
     }
 }
 
 impl<T: StreamType> Seek for OffsetReader<T> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         match pos {
             SeekFrom::Start(p) => {
                 let real_pos = self.shared.seek(SeekFrom::Start(self.base_offset + p))?;

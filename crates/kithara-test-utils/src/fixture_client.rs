@@ -2,6 +2,9 @@
 //!
 //! Works on both native and WASM targets via `reqwest`.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::env;
+
 use crate::fixture_protocol::{
     AbrSessionConfig, AudioFixturesSessionConfig, FileSessionConfig, FixedHlsSessionConfig,
     HlsSessionConfig, HttpTestSessionConfig, SessionResponse,
@@ -12,7 +15,7 @@ use crate::fixture_protocol::{
 pub fn fixture_server_url() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::var("FIXTURE_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3333".to_string())
+        env::var("FIXTURE_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3333".to_string())
     }
     #[cfg(target_arch = "wasm32")]
     {

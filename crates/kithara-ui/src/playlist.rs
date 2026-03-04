@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, PoisonError},
+};
 
 const MAX_HISTORY_SIZE: usize = 100;
 
@@ -46,19 +49,13 @@ impl Playlist {
     }
 
     pub(crate) fn toggle_shuffle(&self) -> bool {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.shuffle_enabled = !state.shuffle_enabled;
         state.shuffle_enabled
     }
 
     pub(crate) fn on_track_selected(&self, track_idx: usize) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(current) = state.current_index
             && current != track_idx
             && state.history.back() != Some(&current)
@@ -69,10 +66,7 @@ impl Playlist {
     }
 
     pub(crate) fn get_next_track(&self) -> Option<usize> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if self.tracks.is_empty() {
             return None;
         }
@@ -91,10 +85,7 @@ impl Playlist {
     }
 
     pub(crate) fn get_prev_track(&self) -> Option<usize> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if self.tracks.is_empty() {
             return None;
         }

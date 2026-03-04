@@ -6,7 +6,7 @@ use kithara::{
     bufpool::byte_pool,
     storage::{ResourceExt, StorageError},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -190,10 +190,10 @@ fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: Cancel
     let atomic = open_test_resource(&temp_dir, "concurrent.dat", cancel_token);
 
     let atomic_clone = atomic.clone();
-    let handle1 = kithara_platform::thread::spawn(move || atomic_clone.write_all(b"data1"));
+    let handle1 = thread::spawn(move || atomic_clone.write_all(b"data1"));
 
     let atomic_clone = atomic.clone();
-    let handle2 = kithara_platform::thread::spawn(move || atomic_clone.write_all(b"data2"));
+    let handle2 = thread::spawn(move || atomic_clone.write_all(b"data2"));
 
     let result1 = handle1.join().unwrap();
     let result2 = handle2.join().unwrap();

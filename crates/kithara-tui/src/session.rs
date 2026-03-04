@@ -1,4 +1,4 @@
-use std::io;
+use std::{error::Error as StdError, io};
 
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
@@ -13,7 +13,7 @@ use crate::Dashboard;
 const CURSOR_GUARD_LINES: u16 = 2;
 
 /// Error type returned by TUI session operations.
-pub type TuiError = Box<dyn std::error::Error + Send + Sync>;
+pub type TuiError = Box<dyn StdError + Send + Sync>;
 
 /// Result type for TUI session operations.
 pub type TuiResult<T = ()> = Result<T, TuiError>;

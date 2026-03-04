@@ -1,6 +1,7 @@
 //! Configuration for [`Item`](crate::impls::item::Item).
 
 use std::{
+    fmt,
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
 };
@@ -38,8 +39,8 @@ impl From<PathBuf> for ResourceSrc {
     }
 }
 
-impl std::fmt::Display for ResourceSrc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ResourceSrc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Url(url) => write!(f, "{url}"),
             Self::Path(path) => write!(f, "{}", path.display()),
@@ -368,6 +369,8 @@ impl ResourceConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -385,7 +388,7 @@ mod tests {
         let config = ResourceConfig::new(input).unwrap();
         assert!(matches!(
             &config.src,
-            ResourceSrc::Path(path) if path == std::path::Path::new(expected)
+            ResourceSrc::Path(path) if path == Path::new(expected)
         ));
     }
 

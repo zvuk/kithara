@@ -7,7 +7,7 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::ops::Range;
+use std::{error::Error as StdError, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -57,7 +57,7 @@ pub struct SourceSeekAnchor {
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
     /// Error type.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: StdError + Send + Sync + 'static;
 
     /// Wait for data in range to be available.
     ///

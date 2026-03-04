@@ -122,7 +122,8 @@ pub fn debug_tracing_setup() {
 
 #[cfg(target_arch = "wasm32")]
 fn init_wasm_tracing() {
-    static INIT: std::sync::Once = std::sync::Once::new();
+    use std::sync::Once;
+    static INIT: Once = Once::new();
     INIT.call_once(|| {
         tracing_wasm::set_as_global_default();
     });

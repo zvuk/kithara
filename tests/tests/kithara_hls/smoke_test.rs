@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::error::Error as StdError;
+
 use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
@@ -7,7 +9,10 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::{time::Duration, tokio::sync::oneshot};
+use kithara_platform::{
+    time::{Duration, sleep, timeout},
+    tokio::{sync::oneshot, task::spawn},
+};
 use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -21,7 +26,7 @@ use super::fixture;
 async fn test_hls_session_creation(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session creation with URL: {}", test_stream_url);
@@ -43,11 +48,9 @@ async fn test_hls_session_creation(
     // Spawn a task to consume events (prevent channel from filling up)
     let (events_sender, events_receiver) = oneshot::channel::<u64>();
 
-    kithara_platform::tokio::task::spawn(async move {
+    spawn(async move {
         let mut event_count = 0;
-        while let Ok(Ok(event)) =
-            kithara_platform::time::timeout(Duration::from_millis(100), events_rx.recv()).await
-        {
+        while let Ok(Ok(event)) = timeout(Duration::from_millis(100), events_rx.recv()).await {
             event_count += 1;
             if event_count <= 3 {
                 info!("Event {}: {:?}", event_count, event);
@@ -68,7 +71,7 @@ async fn test_hls_session_creation(
 async fn test_hls_with_local_fixture(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8")?;
     info!("Testing HLS with local fixture at: {}", url);
@@ -87,7 +90,7 @@ async fn test_hls_with_local_fixture(
 async fn test_hls_session_with_init_segments(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS session with init segments at URL: {}", url);
@@ -106,7 +109,7 @@ async fn test_hls_session_with_init_segments(
 async fn test_hls_session_events_consumption(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session events consumption");
@@ -123,8 +126,8 @@ async fn test_hls_session_events_consumption(
     let _stream = Stream::<Hls>::new(config).await?;
 
     // Try to receive events with timeout
-    let timeout = Duration::from_millis(500);
-    let event_result = kithara_platform::time::timeout(timeout, events_rx.recv()).await;
+    let wait = Duration::from_millis(500);
+    let event_result = timeout(wait, events_rx.recv()).await;
 
     match event_result {
         Ok(Ok(event)) => {
@@ -145,7 +148,7 @@ async fn test_hls_session_events_consumption(
 async fn test_hls_invalid_url_handling(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     // Test with invalid URL
     let invalid_url = "http://invalid-domain-that-does-not-exist-12345.com/master.m3u8";
     let url_result = Url::parse(invalid_url);
@@ -171,7 +174,7 @@ async fn test_hls_invalid_url_handling(
 async fn test_hls_session_drop_cleanup(
     _tracing_setup: (),
     temp_dir: TestTempDir,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session drop cleanup");
@@ -185,7 +188,7 @@ async fn test_hls_session_drop_cleanup(
     drop(stream);
 
     // Wait a bit to ensure cleanup happens
-    kithara_platform::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     info!("HLS session dropped without issues");
     Ok(())

@@ -14,7 +14,7 @@
 //! 3. **Reset**: seek to 0 → read entire track beginning to end,
 //!    verify saw-tooth continuity on every frame
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
@@ -22,7 +22,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Instant;
+use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -149,7 +149,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         if audio.is_eof() {
             return (0, retry);
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(1));
     }
     (0, MAX_ZERO_READS)
 }
@@ -219,7 +219,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        let cap = std::num::NonZeroUsize::new(SEGMENT_COUNT * VARIANT_COUNT + 20).expect("nz");
+        let cap = NonZeroUsize::new(SEGMENT_COUNT * VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
         store.ephemeral = true;
     }
@@ -249,7 +249,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         "Audio pipeline created"
     );
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_samples = (0.05 * spec.sample_rate as f64 * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];

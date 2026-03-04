@@ -149,6 +149,7 @@ mod native {
         Encryptor,
         cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
     };
+    use kithara_platform::time::sleep;
     use kithara_test_utils::{TestHttpServer, fixture_protocol::eval_delay};
     use url::Url;
 
@@ -374,7 +375,7 @@ mod native {
 
         let delay_ms = eval_delay(&config.delay_rules, variant, segment);
         if delay_ms > 0 {
-            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
+            sleep(Duration::from_millis(delay_ms)).await;
         }
 
         let plaintext = if let Some(ref per_variant) = config.custom_data_per_variant {

@@ -2,9 +2,13 @@
 //!
 //! Reacts to dynamic `host_sample_rate` changes via `Arc<AtomicU32>`.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
+use std::{
+    iter,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use derive_setters::Setters;
@@ -255,7 +259,7 @@ impl ResamplerProcessor {
         // Pad with zeros to reach input_frames
         let padding_needed = input_frames.saturating_sub(buffered);
         for buf in &mut self.input_buffer {
-            buf.extend(std::iter::repeat_n(0.0, padding_needed));
+            buf.extend(iter::repeat_n(0.0, padding_needed));
         }
 
         debug!(buffered, padding_needed, "Flushing resampler buffer");
@@ -616,8 +620,7 @@ impl ResamplerProcessor {
         }
 
         // Use fast_interleave (SIMD-optimized) to deinterleave
-        let num_channels =
-            std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
         deinterleave_variable(
             interleaved,
             num_channels,
@@ -647,8 +650,7 @@ impl ResamplerProcessor {
         });
 
         // Use fast_interleave (SIMD-optimized)
-        let num_channels =
-            std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
         interleave_variable(planar, 0..frames, &mut result[..], num_channels);
 
         result

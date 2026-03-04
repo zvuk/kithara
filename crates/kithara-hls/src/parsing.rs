@@ -1,5 +1,7 @@
 //! HLS playlist parsing and data types.
 
+use std::str;
+
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
@@ -148,8 +150,7 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
-    let input =
-        std::str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
+    let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
     let hls_master = HlsMasterPlaylist::try_from(input)
         .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
         .into_owned();
@@ -232,8 +233,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         })
     }
 
-    let input =
-        std::str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
+    let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
     let hls_media = HlsMediaPlaylist::try_from(input)
         .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
         .into_owned();

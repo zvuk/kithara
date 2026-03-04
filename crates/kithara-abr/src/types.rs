@@ -1,3 +1,5 @@
+use std::fmt;
+
 use derivative::Derivative;
 use kithara_platform::time::{Duration, Instant};
 
@@ -53,7 +55,7 @@ pub struct AbrOptions {
     pub variants: Vec<Variant>,
 }
 
-fn fmt_variants_len(val: &[Variant], f: &mut std::fmt::Formatter) -> std::fmt::Result {
+fn fmt_variants_len(val: &[Variant], f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{}", val.len())
 }
 

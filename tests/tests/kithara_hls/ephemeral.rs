@@ -9,6 +9,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs, path::Path};
 
 use kithara::{assets::AssetStoreBuilder, storage::ResourceExt};
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,6 +21,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_platform::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::tokio::task::spawn_blocking;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
@@ -80,8 +84,8 @@ const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE;
 
 /// Recursively count files inside a directory tree.
 #[cfg(not(target_arch = "wasm32"))]
-fn count_files(dir: &std::path::Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn count_files(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
     let mut count = 0;
@@ -144,7 +148,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     // Read samples in blocking thread
     let temp_path = temp_dir.path().to_path_buf();
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0usize;
 

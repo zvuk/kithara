@@ -20,7 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -173,7 +173,7 @@ async fn next_chunk_with_timeout(
     timeout: Duration,
     stage: &str,
 ) -> Option<PcmChunk> {
-    let deadline = kithara_platform::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(chunk) = PcmReader::next_chunk(audio) {
             return Some(chunk);
@@ -182,11 +182,11 @@ async fn next_chunk_with_timeout(
             return None;
         }
         assert!(
-            kithara_platform::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        kithara_platform::time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -283,7 +283,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // Phase 1: Warmup + ABR switch detection
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
-    let warmup_start = kithara_platform::time::Instant::now();
+    let warmup_start = Instant::now();
     let warmup_timeout = Duration::from_secs(WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;

@@ -1,6 +1,6 @@
 //! In-memory Source implementation for testing.
 
-use std::{ops::Range, sync::Arc};
+use std::{io, ops::Range, sync::Arc};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -130,13 +130,11 @@ pub struct MemStream;
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
     type Source = MemorySource;
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config
-            .source
-            .ok_or_else(|| std::io::Error::other("no source"))
+        config.source.ok_or_else(|| io::Error::other("no source"))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
@@ -155,13 +153,11 @@ pub struct UnknownLenStream;
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
     type Source = UnknownLenSource;
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config
-            .source
-            .ok_or_else(|| std::io::Error::other("no source"))
+        config.source.ok_or_else(|| io::Error::other("no source"))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {

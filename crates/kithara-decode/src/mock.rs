@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -15,21 +15,21 @@ use crate::{DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
-    inner: std::sync::Mutex<T>,
+    inner: StdMutex<T>,
 }
 
 impl<T> MockLog<T> {
     #[must_use]
     pub fn new(value: T) -> Self {
         Self {
-            inner: std::sync::Mutex::new(value),
+            inner: StdMutex::new(value),
         }
     }
 
     /// # Panics
     ///
     /// Panics if the mutex is poisoned.
-    pub fn lock(&self) -> std::sync::MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         self.inner
             .lock()
             .expect("decoder mock log mutex should not be poisoned")

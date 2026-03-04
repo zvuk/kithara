@@ -3,13 +3,22 @@
 //! Uses production HLS stream (requires network).
 //! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    thread,
+    time::{Duration, Instant},
+    tokio::task::spawn_blocking,
+};
 use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
 use tracing::info;
 
@@ -41,13 +50,13 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
     let mut events_rx = audio.events();
 
     // Track ABR switches in background
-    let switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             let ev_str = format!("{:?}", ev);
             if ev_str.contains("VariantApplied") {
-                switches_bg.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                switches_bg.fetch_add(1, Ordering::Relaxed);
                 info!("ABR switch detected: {}", ev_str);
             }
         }
@@ -55,7 +64,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
 
     // Phase 1: Warmup — read PCM for ~10s to let ABR switch happen
     // Phase 2: 20s rapid seeking
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         let start = Instant::now();
 
@@ -113,7 +122,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
             }
 
             // Small pause between seeks (simulate real user interaction)
-            kithara_platform::thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(50));
         }
 
         info!(
@@ -166,7 +175,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
         .await
         .expect("audio creation");
 
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         // Warm up pipeline before seek sequence.
         let warmup_deadline = Instant::now() + Duration::from_secs(4);
@@ -185,7 +194,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;
                 if n == 0 {
-                    kithara_platform::thread::sleep(Duration::from_millis(15));
+                    thread::sleep(Duration::from_millis(15));
                 }
             }
 

@@ -13,6 +13,7 @@
 //!   for full synchronization.
 
 use std::{
+    fmt, fs,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -80,8 +81,8 @@ pub struct MmapDriver {
     mode: OpenMode,
 }
 
-impl std::fmt::Debug for MmapDriver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for MmapDriver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MmapDriver")
             .field("path", &self.path)
             .field("mode", &self.mode)
@@ -95,7 +96,7 @@ impl Driver for MmapDriver {
     fn open(opts: MmapOptions) -> StorageResult<(Self, DriverState)> {
         let mode = opts.mode;
 
-        let (mmap_state, init) = if opts.path.exists() && std::fs::metadata(&opts.path)?.len() > 0 {
+        let (mmap_state, init) = if opts.path.exists() && fs::metadata(&opts.path)?.len() > 0 {
             let len;
             let mmap_state = if mode == OpenMode::ReadWrite {
                 let mmap = MemoryMappedFile::open_rw(&opts.path)?;
@@ -125,7 +126,7 @@ impl Driver for MmapDriver {
             )
         } else {
             if let Some(parent) = opts.path.parent() {
-                std::fs::create_dir_all(parent)?;
+                fs::create_dir_all(parent)?;
             }
             let size = opts.initial_len.unwrap_or(DEFAULT_INITIAL_SIZE);
             let mmap_state = if size == 0 {
@@ -245,9 +246,9 @@ impl DriverIo for MmapDriver {
                     // Truncate file to final size via ftruncate (no mmap involved).
                     // After atomic rename, the file already has the correct size
                     // so this branch is skipped.
-                    let file_len = std::fs::metadata(&self.path).map_or(0, |m| m.len());
+                    let file_len = fs::metadata(&self.path).map_or(0, |m| m.len());
                     if file_len > len {
-                        let f = std::fs::OpenOptions::new()
+                        let f = fs::OpenOptions::new()
                             .write(true)
                             .open(&self.path)
                             .map_err(|e| StorageError::Failed(format!("truncate open: {e}")))?;
@@ -260,13 +261,13 @@ impl DriverIo for MmapDriver {
                 *mmap_guard = MmapState::Committed(ro);
             } else {
                 *mmap_guard = MmapState::Empty;
-                let _ = std::fs::write(&self.path, b"");
+                let _ = fs::write(&self.path, b"");
             }
         } else {
             let is_active = matches!(*mmap_guard, MmapState::Active(_));
             if is_active {
                 *mmap_guard = MmapState::Empty;
-                if self.path.exists() && std::fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
+                if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let ro = MemoryMappedFile::open_ro(&self.path)?;
                     *mmap_guard = MmapState::Committed(ro);
                 }
@@ -284,7 +285,7 @@ impl DriverIo for MmapDriver {
             MmapState::Active(_) => {}
             MmapState::Committed(_) | MmapState::Empty => {
                 *mmap_guard = MmapState::Empty;
-                if self.path.exists() && std::fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
+                if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
                     *mmap_guard = MmapState::Active(rw);
                 }

@@ -6,16 +6,19 @@
 //! to be ready, then delegates to `wasm-bindgen-test-runner` with all args
 //! forwarded. When the process exits, the fixture server dies with it.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::{env, process, time::Instant};
+
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::time::{Duration, sleep};
+
 // On wasm32, provide a no-op main.
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn run_wasm_bindgen_runner(
-    args: &[String],
-    runner_timeout_secs: u64,
-) -> std::process::ExitStatus {
-    let mut child = std::process::Command::new("wasm-bindgen-test-runner")
+async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> process::ExitStatus {
+    let mut child = process::Command::new("wasm-bindgen-test-runner")
         .env("WASM_BINDGEN_USE_BROWSER", "1")
         .env_remove("WASM_BINDGEN_USE_NO_MODULE")
         .args(args)
@@ -28,25 +31,25 @@ async fn run_wasm_bindgen_runner(
             .expect("failed waiting for wasm-bindgen-test-runner");
     }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(runner_timeout_secs);
+    let deadline = Instant::now() + Duration::from_secs(runner_timeout_secs);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             return status;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             panic!(
                 "wasm-bindgen-test-runner exceeded {runner_timeout_secs} seconds and was killed (likely browser/renderer hang). Override with WASM_TEST_RUNNER_TIMEOUT_SECS."
             );
         }
-        kithara_platform::time::sleep(kithara_platform::time::Duration::from_millis(250)).await;
+        sleep(Duration::from_millis(250)).await;
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn default_runner_timeout_secs(args: &[String]) -> u64 {
-    if let Ok(raw) = std::env::var("WASM_TEST_RUNNER_TIMEOUT_SECS")
+    if let Ok(raw) = env::var("WASM_TEST_RUNNER_TIMEOUT_SECS")
         && let Ok(parsed) = raw.parse::<u64>()
     {
         return parsed;
@@ -61,12 +64,12 @@ fn default_runner_timeout_secs(args: &[String]) -> u64 {
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let port: u16 = std::env::var("FIXTURE_PORT")
+    let args: Vec<String> = env::args().skip(1).collect();
+    let port: u16 = env::var("FIXTURE_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3333);
-    let fixture_startup_timeout_secs: u64 = std::env::var("FIXTURE_STARTUP_TIMEOUT_SECS")
+    let fixture_startup_timeout_secs: u64 = env::var("FIXTURE_STARTUP_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
@@ -81,7 +84,7 @@ async fn main() {
         // Start fixture server as a background tokio task (in this process).
         // Import the server module from fixture_server binary is not possible
         // directly, so we start it as a subprocess.
-        let fixture_bin = std::env::current_exe()
+        let fixture_bin = env::current_exe()
             .ok()
             .and_then(|p| {
                 let dir = p.parent()?;
@@ -89,10 +92,10 @@ async fn main() {
             })
             .expect("could not find fixture_server binary next to wasm_test_runner");
 
-        let mut child = std::process::Command::new(&fixture_bin)
+        let mut child = process::Command::new(&fixture_bin)
             .env("FIXTURE_PORT", port.to_string())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| {
                 panic!(
@@ -126,7 +129,7 @@ async fn main() {
                 ready = true;
                 break;
             }
-            kithara_platform::time::sleep(kithara_platform::time::Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(100)).await;
         }
         if !ready {
             let _ = child.kill();
@@ -155,13 +158,13 @@ async fn main() {
         let _ = child.kill();
         let _ = child.wait();
 
-        std::process::exit(status.code().unwrap_or(1));
+        process::exit(status.code().unwrap_or(1));
     } else {
         eprintln!("Fixture server already running on port {port}");
 
         // Delegate to wasm-bindgen-test-runner with all args forwarded.
         let status = run_wasm_bindgen_runner(&args, runner_timeout_secs).await;
 
-        std::process::exit(status.code().unwrap_or(1));
+        process::exit(status.code().unwrap_or(1));
     }
 }

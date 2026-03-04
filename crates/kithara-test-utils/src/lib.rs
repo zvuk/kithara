@@ -18,6 +18,9 @@
 //! Shared test utilities for the kithara workspace.
 
 #[cfg(not(target_arch = "wasm32"))]
+use std::env;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_server;
 pub mod fixture_client;
 pub mod fixture_protocol;
@@ -50,7 +53,7 @@ pub use wav::{create_saw_wav, create_test_wav};
 pub fn rust_log_filter(default: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::var("RUST_LOG").unwrap_or_else(|_| default.to_string())
+        env::var("RUST_LOG").unwrap_or_else(|_| default.to_string())
     }
     #[cfg(target_arch = "wasm32")]
     {

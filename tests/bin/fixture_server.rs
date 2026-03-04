@@ -33,9 +33,12 @@
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
+use std::env;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
-    let port: u16 = std::env::var("FIXTURE_PORT")
+    let port: u16 = env::var("FIXTURE_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3333);
@@ -53,7 +56,12 @@ async fn main() {
 mod server {
     use std::{
         collections::HashMap,
-        sync::Arc,
+        iter,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -64,6 +72,7 @@ mod server {
         http::{HeaderMap, Response, StatusCode, header},
         routing::{delete, get, post},
     };
+    use kithara_platform::time::sleep;
     use kithara_test_utils::fixture_protocol::{
         AbrSessionConfig, DataMode, EncryptionRequest, FileSessionConfig, HlsSessionConfig,
         HttpTestSessionConfig, InitMode, PcmPattern, SessionResponse, create_pcm_segments,
@@ -117,14 +126,14 @@ mod server {
     struct FileData {
         config: FileSessionConfig,
         /// Tracks how many sequential (non-range) GET requests have been made per file.
-        sequential_count: std::sync::atomic::AtomicUsize,
+        sequential_count: AtomicUsize,
     }
 
     /// Data for generic HTTP test sessions.
     struct HttpTestData {
         config: HttpTestSessionConfig,
         /// Per-route request counters (indexed by route path).
-        route_counts: HashMap<String, std::sync::atomic::AtomicUsize>,
+        route_counts: HashMap<String, AtomicUsize>,
     }
 
     type Sessions = Arc<RwLock<HashMap<String, Session>>>;
@@ -159,8 +168,8 @@ mod server {
     const SILENCE_WAV: &[u8] = include_bytes!("../../assets/silence_1s.wav");
     const TEST_MP3: &[u8] = include_bytes!("../../assets/test.mp3");
 
-    fn assets_dir() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn assets_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("repo root")
             .join("assets")
@@ -482,7 +491,7 @@ seg/v{}_2.bin
         total_len: usize,
     ) -> Vec<u8> {
         if delay != Duration::ZERO {
-            kithara_platform::time::sleep(delay).await;
+            sleep(delay).await;
         }
         let mut data = Vec::new();
         data.push(variant as u8);
@@ -490,7 +499,7 @@ seg/v{}_2.bin
         let header_size = 1 + 4 + 4;
         let data_len = total_len.saturating_sub(header_size);
         data.extend(&(data_len as u32).to_be_bytes());
-        data.extend(std::iter::repeat_n(b'A', data_len));
+        data.extend(iter::repeat_n(b'A', data_len));
         data
     }
 
@@ -711,7 +720,7 @@ seg/v{}_2.bin
         let session = Session {
             kind: SessionKind::File(Box::new(FileData {
                 config,
-                sequential_count: std::sync::atomic::AtomicUsize::new(0),
+                sequential_count: AtomicUsize::new(0),
             })),
             created: Instant::now(),
         };
@@ -735,7 +744,7 @@ seg/v{}_2.bin
         let route_counts = config
             .routes
             .iter()
-            .map(|r| (r.path.clone(), std::sync::atomic::AtomicUsize::new(0)))
+            .map(|r| (r.path.clone(), AtomicUsize::new(0)))
             .collect();
         let session = Session {
             kind: SessionKind::HttpTest(Box::new(HttpTestData {
@@ -917,7 +926,7 @@ seg/v{}_2.bin
                     // Drop the read lock before sleeping to avoid holding it.
                     let delay = Duration::from_millis(delay_ms);
                     drop(sessions);
-                    kithara_platform::time::sleep(delay).await;
+                    sleep(delay).await;
                     let sessions = state.sessions.read().await;
                     let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
                     let SessionKind::Hls(data) = &session.kind else {
@@ -1086,9 +1095,7 @@ seg/v{}_2.bin
         if let Some(ref pc) = data.config.partial_close
             && parse_range_header(&headers).is_none()
         {
-            let count = data
-                .sequential_count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let count = data.sequential_count.fetch_add(1, Ordering::SeqCst);
             if count == 0 {
                 // First sequential request: send partial data then close
                 let truncated = &entry.data[..pc.close_after_bytes.min(entry.data.len())];
@@ -1164,7 +1171,7 @@ seg/v{}_2.bin
         let count = data
             .route_counts
             .get(&route_path)
-            .map_or(0, |c| c.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+            .map_or(0, |c| c.fetch_add(1, Ordering::SeqCst));
 
         // Clone what we need before dropping the read lock
         let route = route.clone();
@@ -1184,7 +1191,7 @@ seg/v{}_2.bin
         if let Some(delay_ms) = route.delay_ms
             && delay_ms > 0
         {
-            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
+            sleep(Duration::from_millis(delay_ms)).await;
         }
 
         let body_data = route.body.unwrap_or_default();
@@ -1346,7 +1353,7 @@ seg/v{}_2.bin
 
     async fn cleanup_expired_sessions(sessions: Sessions) {
         loop {
-            kithara_platform::time::sleep(Duration::from_secs(30)).await;
+            sleep(Duration::from_secs(30)).await;
             let mut map = sessions.write().await;
             let now = Instant::now();
             map.retain(|_, session| {

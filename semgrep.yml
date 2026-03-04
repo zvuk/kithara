@@ -33,75 +33,88 @@ rules:
     patterns:
       - pattern-either:
           - pattern-inside: |
-              fn $F($...ARGS) {
+              fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              fn $F($...ARGS) -> $RET {
+              fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) {
+              async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) -> $RET {
+              async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) {
+              pub fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) -> $RET {
+              pub fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) {
+              pub async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) -> $RET {
+              pub async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) {
+              pub(crate) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) -> $RET {
+              pub(crate) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) {
+              pub(crate) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) -> $RET {
+              pub(crate) async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) {
+              pub(super) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) -> $RET {
+              pub(super) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) {
+              pub(super) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) -> $RET {
+              pub(super) async fn $F(...) -> $RET {
                   ...
               }
-      - pattern-regex: '(std::io::|std::fmt::|std::error::|std::ops::|std::sync::atomic::|std::collections::|tokio::sync::|tokio::time::|tokio::task::)'
+      - pattern-regex: '(std::io::|std::fmt::|std::error::|std::ops::|std::sync::atomic::|std::collections::|tokio::sync::|tokio::time::|tokio::task::|kithara_platform::\w+::)'
       - pattern-not-regex: '^\\s*use\\s+'
       - pattern-not-regex: '^\\s*//'
       - pattern-not-regex: '^\\s*///'
       - pattern-not-regex: '^\\s*//!'
       - pattern-not-regex: '^\\s*macro_rules!'
+
+  - id: style.no-deep-qualified-paths
+    languages:
+      - rust
+    message: "Qualified path 3+ segments; add `use` import at file top."
+    severity: WARNING
+    paths:
+      include:
+        - /crates/**/*.rs
+        - /tests/**/*.rs
+      exclude:
+        - /crates/kithara-test-macros/**
+    pattern-regex: '(?m)^(?!\s*(?:use\s|pub\b[^;{]*\buse\s|//|#\[)).*?(?<!::)\b(?!self::)(?!super::)(?!crate::)(?!std::)(?!tokio::)([a-z_]\w*(?:::[A-Za-z_]\w*){2,})'
 
   - id: rust.no-thin-async-wrapper
     languages:
@@ -136,67 +149,67 @@ rules:
           use $X;
       - pattern-either:
           - pattern-inside: |
-              fn $F($...ARGS) {
+              fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              fn $F($...ARGS) -> $RET {
+              fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) {
+              async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) -> $RET {
+              async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) {
+              pub fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) -> $RET {
+              pub fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) {
+              pub async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) -> $RET {
+              pub async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) {
+              pub(crate) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) -> $RET {
+              pub(crate) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) {
+              pub(crate) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) -> $RET {
+              pub(crate) async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) {
+              pub(super) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) -> $RET {
+              pub(super) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) {
+              pub(super) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) -> $RET {
+              pub(super) async fn $F(...) -> $RET {
                   ...
               }
       - pattern-not-inside: |
@@ -242,76 +255,76 @@ rules:
     patterns:
       - pattern-either:
           - pattern-inside: |
-              fn $F($...ARGS) {
+              fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              fn $F($...ARGS) -> $RET {
+              fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) {
+              async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              async fn $F($...ARGS) -> $RET {
+              async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) {
+              pub fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub fn $F($...ARGS) -> $RET {
+              pub fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) {
+              pub async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub async fn $F($...ARGS) -> $RET {
+              pub async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) {
+              pub(crate) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) fn $F($...ARGS) -> $RET {
+              pub(crate) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) {
+              pub(crate) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(crate) async fn $F($...ARGS) -> $RET {
+              pub(crate) async fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) {
+              pub(super) fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) fn $F($...ARGS) -> $RET {
+              pub(super) fn $F(...) -> $RET {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) {
+              pub(super) async fn $F(...) {
                   ...
               }
           - pattern-inside: |
-              pub(super) async fn $F($...ARGS) -> $RET {
+              pub(super) async fn $F(...) -> $RET {
                   ...
               }
       - pattern: $NUM
       - metavariable-regex:
           metavariable: $NUM
           regex: '^(?:-?(?:[2-9]|[1-9][0-9_]+|0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+)(?:[iu](?:8|16|32|64|128|size))?|-?(?:[0-9][0-9_]*\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?)(?:f(?:32|64))?|-?(?:[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)(?:f(?:32|64))?)$'
-      - pattern-not: 0
-      - pattern-not: 1
-      - pattern-not: -1
+      - pattern-not: "0"
+      - pattern-not: "1"
+      - pattern-not: "-1"
       - pattern-not: "0.0"
       - pattern-not: "1.0"
       - pattern-not: "-1.0"

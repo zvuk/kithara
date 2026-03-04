@@ -2,7 +2,8 @@
 
 use std::{
     collections::HashSet,
-    fmt::Debug,
+    fmt::{self, Debug},
+    fs,
     ops::Range,
     path::Path,
     sync::{
@@ -184,7 +185,7 @@ impl<R, L> Debug for LeaseResource<R, L>
 where
     R: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaseResource")
             .field("inner", &self.inner)
             .field("asset_root", &self.asset_root)
@@ -218,7 +219,7 @@ where
         // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
             && let Some(path) = self.inner.path()
-            && let Ok(metadata) = std::fs::metadata(path)
+            && let Ok(metadata) = fs::metadata(path)
             && metadata.is_file()
         {
             recorder.record_bytes(&self.asset_root, metadata.len());
@@ -451,7 +452,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
         let p = dir.path().join("audio.mp3");
-        std::fs::write(&p, b"data").unwrap();
+        fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
         let _res = lease.open_resource(&key).unwrap();
@@ -465,7 +466,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
         let p = dir.path().join("audio.mp3");
-        std::fs::write(&p, b"data").unwrap();
+        fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
         let _res = lease.open_resource(&key).unwrap();
@@ -481,7 +482,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
         let p = dir.path().join("audio.mp3");
-        std::fs::write(&p, b"data").unwrap();
+        fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
         let res = lease.open_resource(&key).unwrap();

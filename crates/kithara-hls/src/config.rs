@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use bytes::Bytes;
 use derivative::Derivative;
@@ -39,8 +39,8 @@ pub struct KeyOptions {
     pub request_headers: Option<HashMap<String, String>>,
 }
 
-fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-    std::fmt::Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
+fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut fmt::Formatter) -> fmt::Result {
+    fmt::Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
 }
 
 impl KeyOptions {

@@ -7,8 +7,10 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::iter;
+
     use axum::{Router, routing::get};
-    use kithara_platform::time::Duration;
+    use kithara_platform::time::{Duration, sleep};
     use kithara_test_utils::TestHttpServer;
     use url::Url;
 
@@ -147,7 +149,7 @@ mod native {
         total_len: usize,
     ) -> Vec<u8> {
         if delay != Duration::ZERO {
-            kithara_platform::time::sleep(delay).await;
+            sleep(delay).await;
         }
 
         let mut data = Vec::new();
@@ -156,7 +158,7 @@ mod native {
         let header_size = 1 + 4 + 4;
         let data_len = total_len.saturating_sub(header_size);
         data.extend(&(data_len as u32).to_be_bytes());
-        data.extend(std::iter::repeat_n(b'A', data_len));
+        data.extend(iter::repeat_n(b'A', data_len));
         data
     }
 }
@@ -168,6 +170,7 @@ pub(crate) use native::AbrTestServer;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use Duration;
     use kithara_test_utils::{fixture_client, fixture_protocol::AbrSessionConfig};
     use url::Url;
 
@@ -183,7 +186,7 @@ mod wasm {
         pub(crate) async fn new(
             master_playlist: String,
             init: bool,
-            segment0_delay: kithara_platform::time::Duration,
+            segment0_delay: Duration,
         ) -> Self {
             let config = AbrSessionConfig {
                 master_playlist,

@@ -15,6 +15,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::{Instant, sleep};
 use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
@@ -120,7 +121,7 @@ async fn next_chunk_with_timeout(
     timeout: Duration,
     stage: &str,
 ) -> Option<PcmChunk> {
-    let deadline = kithara_platform::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(chunk) = PcmReader::next_chunk(audio) {
             return Some(chunk);
@@ -129,11 +130,11 @@ async fn next_chunk_with_timeout(
             return None;
         }
         assert!(
-            kithara_platform::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        kithara_platform::time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -225,9 +226,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     });
 
     info!(ephemeral, "Phase 1: warmup until ABR switch");
-    let warmup_deadline =
-        kithara_platform::time::Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
-    while kithara_platform::time::Instant::now() < warmup_deadline {
+    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    while Instant::now() < warmup_deadline {
         let _ = next_chunk_with_timeout(
             &mut audio,
             Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
@@ -258,14 +258,13 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         chunks_per_seek = CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
-    let random_deadline =
-        kithara_platform::time::Instant::now() + Duration::from_secs(RANDOM_PHASE_BUDGET_SECS);
+    let random_deadline = Instant::now() + Duration::from_secs(RANDOM_PHASE_BUDGET_SECS);
     let mut random_ops_done = 0usize;
     let mut chunks_read = 0usize;
     let mut variant_match_checks = 0usize;
     let mut variant_match_hits = 0usize;
     for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
-        if kithara_platform::time::Instant::now() > random_deadline {
+        if Instant::now() > random_deadline {
             break;
         }
         audio
@@ -478,10 +477,10 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     audio.preload();
 
     info!("Reading audio chunks for 60 seconds with small ephemeral cache");
-    let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let mut chunks_read = 0usize;
 
-    while kithara_platform::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         let Some(_chunk) = next_chunk_with_timeout(
             &mut audio,
             Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),

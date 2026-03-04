@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use crate::pool::{PooledOwned, SharedPool};
 
 /// Standard byte buffer pool type for the entire workspace.
@@ -18,10 +20,10 @@ pub type PcmPool = SharedPool<32, Vec<f32>>;
 pub type PcmBuf = PooledOwned<32, Vec<f32>>;
 
 // Global byte pool (32 shards, 1024 max buffers, 64KB trim capacity)
-static GLOBAL_BYTE_POOL: std::sync::OnceLock<BytePool> = std::sync::OnceLock::new();
+static GLOBAL_BYTE_POOL: OnceLock<BytePool> = OnceLock::new();
 
 // Global PCM pool (32 shards, 64 max buffers, 200K trim capacity)
-static GLOBAL_PCM_POOL: std::sync::OnceLock<PcmPool> = std::sync::OnceLock::new();
+static GLOBAL_PCM_POOL: OnceLock<PcmPool> = OnceLock::new();
 
 /// Get global byte buffer pool for the entire workspace.
 ///

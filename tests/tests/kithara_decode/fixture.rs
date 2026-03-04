@@ -42,7 +42,10 @@ impl EmbeddedAudio {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex as StdMutex},
+    };
 
     use axum::{
         Router,
@@ -59,13 +62,13 @@ mod native {
     /// Test server for serving audio fixtures
     pub(crate) struct AudioTestServer {
         server: TestHttpServer,
-        request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+        request_counts: Arc<StdMutex<HashMap<String, usize>>>,
     }
 
     impl AudioTestServer {
         /// Create a new test server
         pub(crate) async fn new() -> Self {
-            let request_counts = Arc::new(std::sync::Mutex::new(HashMap::new()));
+            let request_counts = Arc::new(StdMutex::new(HashMap::new()));
             let request_counts_clone = request_counts.clone();
 
             let app = Router::new()

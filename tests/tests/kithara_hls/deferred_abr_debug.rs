@@ -11,7 +11,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -57,7 +57,7 @@ async fn debug_sequential_read(
     // Read with detailed logging
     // Use 64KB buffer to avoid async lock overhead per small read
     info!("Starting blocking read task...");
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         info!("Inside blocking task, starting read");
         let mut all_data = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];

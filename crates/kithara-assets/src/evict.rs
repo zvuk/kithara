@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
@@ -57,8 +57,8 @@ struct PreparedEviction<R: ResourceExt> {
     pinned: HashSet<String>,
 }
 
-impl<A: Assets> std::fmt::Debug for EvictAssets<A> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<A: Assets> fmt::Debug for EvictAssets<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EvictAssets")
             .field("cfg", &self.cfg)
             .finish_non_exhaustive()

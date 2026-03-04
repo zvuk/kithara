@@ -201,6 +201,8 @@ impl AudioEffect for EqEffect {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::PI;
+
     use kithara_bufpool::pcm_pool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
@@ -258,7 +260,7 @@ mod tests {
         let num_frames = 1024;
         let mut pcm = Vec::with_capacity(num_frames * 2);
         for i in 0..num_frames {
-            let sample = (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 44100.0).sin();
+            let sample = (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin();
             pcm.push(sample); // L
             pcm.push(sample); // R
         }

@@ -1,6 +1,6 @@
 //! Error types for audio decoding.
 
-use std::io;
+use std::{error::Error as StdError, io};
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 use thiserror::Error;
@@ -39,7 +39,7 @@ pub enum DecodeError {
     Interrupted,
 
     #[error("Decoder error: {0}")]
-    Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Backend(#[source] Box<dyn StdError + Send + Sync>),
 }
 
 impl DecodeError {

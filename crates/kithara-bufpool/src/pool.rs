@@ -1,5 +1,5 @@
 use std::{
-    fmt,
+    array, fmt,
     ops::{Deref, DerefMut},
     sync::{
         Arc,
@@ -281,7 +281,7 @@ where
         let buffers_per_shard = max_buffers / SHARDS;
 
         Self {
-            shards: std::array::from_fn(|_| {
+            shards: array::from_fn(|_| {
                 Mutex::new(PoolShard::new(buffers_per_shard, trim_capacity))
             }),
             allocated_bytes: AtomicUsize::new(0),

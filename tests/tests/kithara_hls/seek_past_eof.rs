@@ -20,7 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -78,7 +78,7 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
+    spawn_blocking(move || {
         // Step 1: Read all data sequentially (downloads all 3 segments).
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];

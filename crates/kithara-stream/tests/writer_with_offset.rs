@@ -6,6 +6,8 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
+use std::io;
+
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
@@ -13,9 +15,7 @@ use kithara_stream::{Writer, WriterError, WriterItem};
 use tokio_util::sync::CancellationToken;
 
 /// Run a writer to completion, returning total bytes written.
-async fn run_writer(
-    mut writer: Writer<std::io::Error>,
-) -> Result<u64, WriterError<std::io::Error>> {
+async fn run_writer(mut writer: Writer<io::Error>) -> Result<u64, WriterError<io::Error>> {
     while let Some(result) = writer.next().await {
         match result {
             Ok(WriterItem::ChunkWritten { .. }) => {}
@@ -66,11 +66,11 @@ async fn writer_with_offset_writes_expected_offsets(
     let source = futures::stream::iter(
         source_chunks
             .into_iter()
-            .map(|chunk| Ok::<Bytes, std::io::Error>(Bytes::from(chunk))),
+            .map(|chunk| Ok::<Bytes, io::Error>(Bytes::from(chunk))),
     );
 
     let cancel = CancellationToken::new();
-    let mut writer: Writer<std::io::Error> =
+    let mut writer: Writer<io::Error> =
         Writer::with_offset(source, res.clone(), cancel, start_offset);
 
     let mut offsets = Vec::new();
@@ -107,20 +107,18 @@ async fn writer_with_offset_zero_is_same_as_new() {
 
     // Writer::new
     let res_new = open_resource(&dir, "via_new.bin", 512);
-    let source_new = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
-        payload.clone(),
-    ))]);
+    let source_new =
+        futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
     let cancel_new = CancellationToken::new();
-    let writer_new: Writer<std::io::Error> = Writer::new(source_new, res_new.clone(), cancel_new);
+    let writer_new: Writer<io::Error> = Writer::new(source_new, res_new.clone(), cancel_new);
     let total_new = run_writer(writer_new).await.unwrap();
 
     // Writer::with_offset(0)
     let res_offset = open_resource(&dir, "via_offset.bin", 512);
-    let source_offset = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
-        payload.clone(),
-    ))]);
+    let source_offset =
+        futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
     let cancel_offset = CancellationToken::new();
-    let writer_offset: Writer<std::io::Error> =
+    let writer_offset: Writer<io::Error> =
         Writer::with_offset(source_offset, res_offset.clone(), cancel_offset, 0);
     let total_offset = run_writer(writer_offset).await.unwrap();
 
@@ -149,13 +147,10 @@ async fn writer_with_offset_overflow_returns_error() {
     // The write_at(u64::MAX - 5, &[..10]) may or may not succeed in storage,
     // but the offset arithmetic: (u64::MAX - 5).checked_add(10) = None => OffsetOverflow.
     let start_offset: u64 = u64::MAX - 5;
-    let source = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(vec![
-        0u8;
-        10
-    ]))]);
+    let source = futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(vec![0u8; 10]))]);
 
     let cancel = CancellationToken::new();
-    let mut writer: Writer<std::io::Error> =
+    let mut writer: Writer<io::Error> =
         Writer::with_offset(source, res.clone(), cancel, start_offset);
 
     let mut found_overflow = false;
@@ -202,11 +197,11 @@ async fn writer_with_offset_cancellation() {
     let start_offset: u64 = 500;
 
     // Use a channel-based stream so we can control when chunks arrive.
-    let (tx, rx) = kithara_platform::tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    let (tx, rx) = kithara_platform::tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(4);
     let source = tokio_stream::wrappers::ReceiverStream::new(rx);
 
     let cancel = CancellationToken::new();
-    let mut writer: Writer<std::io::Error> =
+    let mut writer: Writer<io::Error> =
         Writer::with_offset(source, res.clone(), cancel.clone(), start_offset);
 
     // Send one chunk so the writer makes progress.

@@ -18,7 +18,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Instant;
+use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -229,7 +229,7 @@ async fn stress_seek_abr_audio(_tracing_setup: ()) {
     );
 
     // Run test phases in blocking thread
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =

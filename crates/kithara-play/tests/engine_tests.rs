@@ -1,3 +1,5 @@
+use std::sync::{Mutex as StdMutex, OnceLock};
+
 use kithara_play::internal::engine::*;
 use kithara_test_utils::kithara;
 
@@ -5,9 +7,9 @@ fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default())
 }
 
-fn session_ducking_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+fn session_ducking_lock() -> &'static StdMutex<()> {
+    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| StdMutex::new(()))
 }
 
 #[derive(Clone, Copy)]

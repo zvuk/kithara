@@ -1,7 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig},
@@ -11,7 +16,7 @@ use kithara::{
 use kithara_test_utils::temp_dir;
 use tokio_util::sync::CancellationToken;
 
-fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
+fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")
 }
 
@@ -62,10 +67,10 @@ fn pins_index_invalid_json_returns_default(
 
     // Write a corrupted JSON file directly on disk to simulate index damage.
     let index_dir = dir.join("_index");
-    std::fs::create_dir_all(&index_dir).unwrap();
+    fs::create_dir_all(&index_dir).unwrap();
 
     let path = pins_path(dir);
-    std::fs::write(&path, b"{ this is not valid json").unwrap();
+    fs::write(&path, b"{ this is not valid json").unwrap();
     assert!(path.exists(), "pins.bin must exist for this test");
 
     let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();

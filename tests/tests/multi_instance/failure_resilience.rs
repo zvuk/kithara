@@ -4,7 +4,7 @@
 //! a network failure), other instances continue to read PCM data to EOF
 //! without being affected.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
@@ -12,7 +12,10 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{
+    time::{Duration, sleep},
+    tokio::task::{JoinHandle, spawn, spawn_blocking},
+};
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -73,7 +76,7 @@ async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
 /// Create an `Audio<Stream<Hls>>` instance.
 async fn create_hls_audio(
     server: &HlsTestServer,
-    cache_dir: &std::path::Path,
+    cache_dir: &Path,
     cancel: CancellationToken,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
@@ -108,7 +111,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
 
     // Healthy instances (0, 1)
     for i in 0..2 {
@@ -117,7 +120,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -142,12 +145,12 @@ async fn healthy_instances_survive_cancelled_peers() {
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         // Fire the cancel after a short delay.
-        kithara_platform::tokio::task::spawn(async move {
-            kithara_platform::time::sleep(Duration::from_millis(500)).await;
+        spawn(async move {
+            sleep(Duration::from_millis(500)).await;
             cancel_clone.cancel();
         });
 
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -213,7 +216,7 @@ async fn eight_instances_half_cancelled() {
 
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<kithara_platform::tokio::task::JoinHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
 
     // 4 healthy instances
     for i in 0..4 {
@@ -222,7 +225,7 @@ async fn eight_instances_half_cancelled() {
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -246,12 +249,12 @@ async fn eight_instances_half_cancelled() {
 
         // Stagger cancellation slightly to make it more realistic.
         let delay_ms = 200 + ((i - 4) as u64 * 100);
-        kithara_platform::tokio::task::spawn(async move {
-            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
+        spawn(async move {
+            sleep(Duration::from_millis(delay_ms)).await;
             cancel_clone.cancel();
         });
 
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;

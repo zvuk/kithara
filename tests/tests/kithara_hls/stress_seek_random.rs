@@ -17,7 +17,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    thread,
+    time::{Duration, Instant},
+    tokio::task::spawn_blocking,
+};
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -115,7 +119,7 @@ async fn stress_random_seek_read_hls(
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 
     // Steps 3-7 in blocking thread
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         // Step 3: Total byte length from fixture config
         info!(total_bytes, "Stream byte length");
 
@@ -125,11 +129,11 @@ async fn stress_random_seek_read_hls(
         let n = loop {
             match stream.read(&mut probe) {
                 Ok(0) if Instant::now() < probe_deadline => {
-                    kithara_platform::thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(10));
                 }
                 Ok(n) => break n,
                 Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < probe_deadline => {
-                    kithara_platform::thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(10));
                 }
                 Err(e) => panic!("initial probe read failed: {e}"),
             }

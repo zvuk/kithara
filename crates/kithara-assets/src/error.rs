@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::io;
+
 use kithara_storage::StorageError;
 use thiserror::Error;
 
@@ -10,7 +12,7 @@ pub enum AssetsError {
     InvalidKey,
 
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     #[error("bincode error: {0}")]
     Bincode(#[from] bincode::error::EncodeError),

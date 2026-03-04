@@ -7,6 +7,7 @@
 //! 4. Data is fetched and read correctly
 
 use std::{
+    fs, io,
     io::{Read, Seek, SeekFrom},
     sync::{
         Arc,
@@ -24,11 +25,16 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use futures;
+use futures::stream;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig, FileSrc},
     stream::Stream,
+};
+use kithara_platform::{
+    thread,
+    time::{sleep, timeout},
+    tokio::task::spawn_blocking,
 };
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 use tokio_util::sync::CancellationToken;
@@ -38,7 +44,7 @@ const STREAM_CLOSES_AT: usize = 512_000;
 
 fn clean_temp_dir() -> TestTempDir {
     let dir = TestTempDir::new();
-    let entries: Vec<_> = std::fs::read_dir(dir.path())
+    let entries: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -128,7 +134,7 @@ async fn handle_request(
     );
 
     let chunk = Bytes::from(state.file_data[0..STREAM_CLOSES_AT].to_vec());
-    let body_stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(chunk)]);
+    let body_stream = stream::iter(vec![Ok::<_, io::Error>(chunk)]);
 
     Response::builder()
         .status(StatusCode::OK)
@@ -189,7 +195,7 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    let blocking_task = kithara_platform::tokio::task::spawn_blocking(move || {
+    let blocking_task = spawn_blocking(move || {
         // Read first chunk from initial partial stream
         let mut buf = [0u8; 10_000];
         let n = stream.read(&mut buf).unwrap();
@@ -229,8 +235,7 @@ async fn file_stream_closes_early_seek_still_works() {
         }
     });
 
-    let result = match kithara_platform::time::timeout(Duration::from_secs(5), blocking_task).await
-    {
+    let result = match timeout(Duration::from_secs(5), blocking_task).await {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
         Err(_) => panic!(
@@ -263,7 +268,7 @@ async fn partial_cache_resume_works() {
 
     let stream1 = Stream::<File>::new(config1).await.unwrap();
 
-    let phase1 = kithara_platform::tokio::task::spawn_blocking(move || {
+    let phase1 = spawn_blocking(move || {
         let mut stream1 = stream1;
         let mut buf = [0u8; 10_000];
         let n = stream1.read(&mut buf).unwrap();
@@ -271,17 +276,17 @@ async fn partial_cache_resume_works() {
         tracing::info!("Phase 1: read {} bytes", n);
 
         // Give sequential download time to finish (server sends 512KB quickly)
-        kithara_platform::thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(500));
         // stream1 drops here
     });
 
-    kithara_platform::time::timeout(Duration::from_secs(3), phase1)
+    timeout(Duration::from_secs(3), phase1)
         .await
         .expect("Phase 1 timed out")
         .expect("Phase 1 panicked");
 
     cancel1.cancel();
-    kithara_platform::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
     tracing::info!("Phase 1 complete, stream dropped");
 
     // Phase 2: reopen same URL + cache dir, seek beyond partial
@@ -293,7 +298,7 @@ async fn partial_cache_resume_works() {
 
     let stream2 = Stream::<File>::new(config2).await.unwrap();
 
-    let phase2 = kithara_platform::tokio::task::spawn_blocking(move || {
+    let phase2 = spawn_blocking(move || {
         let mut stream2 = stream2;
         let seek_offset = 700_000u64;
         tracing::info!(
@@ -321,7 +326,7 @@ async fn partial_cache_resume_works() {
         tracing::info!("Phase 2: read {} bytes at 700KB, data verified", n);
     });
 
-    let result = match kithara_platform::time::timeout(Duration::from_secs(5), phase2).await {
+    let result = match timeout(Duration::from_secs(5), phase2).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(format!("Phase 2 panicked: {:?}", e)),
         Err(_) => Err("DEADLOCK: resume seek hung. Partial cache resume not working.".to_string()),

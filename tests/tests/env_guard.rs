@@ -1,3 +1,5 @@
+use std::env;
+
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
@@ -16,7 +18,7 @@ fn no_proxy_env_clears_proxy_variables() {
         "all_proxy",
     ] {
         assert!(
-            std::env::var(key).is_err(),
+            env::var(key).is_err(),
             "{key} must be unset when NO_PROXY is configured",
         );
     }
@@ -32,7 +34,7 @@ fn no_proxy_env_clears_proxy_variables() {
 )]
 fn no_proxy_env_keeps_explicit_proxy_override() {
     assert_eq!(
-        std::env::var("HTTP_PROXY").ok().as_deref(),
+        env::var("HTTP_PROXY").ok().as_deref(),
         Some("http://example.test:8080"),
         "explicit proxy override must not be removed by NO_PROXY helper",
     );

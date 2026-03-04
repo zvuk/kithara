@@ -7,6 +7,7 @@
 use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory, InnerDecoder};
+use kithara_platform::time::Instant;
 use kithara_test_utils::create_test_wav;
 
 fn create_wav_decoder(frames: usize) -> Box<dyn InnerDecoder> {
@@ -90,7 +91,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
         PerfScenario::Throughput => {
             let mut decoder = create_wav_decoder(44100 * 5);
 
-            let start = kithara_platform::time::Instant::now();
+            let start = Instant::now();
             let mut total_samples = 0;
             hotpath::measure_block!("decode_all_chunks", {
                 while let Ok(Some(chunk)) = decoder.next_chunk() {
