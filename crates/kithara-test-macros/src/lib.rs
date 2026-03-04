@@ -15,10 +15,6 @@ use syn::{
     punctuated::Punctuated,
 };
 
-// ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
-
 struct TestArgs {
     is_tokio: bool,
     is_wasm_only: bool,
@@ -125,10 +121,6 @@ impl Parse for TestArgs {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Case / parameter extraction
-// ---------------------------------------------------------------------------
-
 struct Case {
     name: Option<Ident>,
     values: Vec<Expr>,
@@ -207,10 +199,6 @@ fn extract_params(func: &ItemFn) -> Vec<ParamInfo> {
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// Code generation helpers
-// ---------------------------------------------------------------------------
 
 fn make_preamble(params: &[ParamInfo], case_values: Option<&[Expr]>) -> TokenStream2 {
     let mut stmts = Vec::new();
@@ -789,10 +777,6 @@ fn emit_one_test(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Browser test generation
-// ---------------------------------------------------------------------------
-
 /// Emit a single browser test pair: WASM side (with `ensure_thread_pool`) and
 /// optional native side. Returns one or two `#[cfg]`-gated functions.
 #[allow(clippy::too_many_arguments)]
@@ -871,10 +855,6 @@ fn emit_browser_test(
 
     output
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// Unified test attribute.
 ///

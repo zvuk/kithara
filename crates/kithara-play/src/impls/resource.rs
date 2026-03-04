@@ -9,8 +9,6 @@ use kithara_platform::{tokio, tokio::sync::broadcast};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
-// -- Resource ---------------------------------------------------------------------
-
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
 /// Provides a unified interface for reading decoded PCM audio
@@ -258,8 +256,6 @@ mod tests {
 
     use super::Resource;
 
-    // -- Helpers ------------------------------------------------------------------
-
     fn mock_spec() -> PcmSpec {
         PcmSpec {
             channels: 2,
@@ -283,8 +279,6 @@ mod tests {
         Interleaved,
         Planar,
     }
-
-    // -- Tests --------------------------------------------------------------------
 
     #[kithara::test(tokio)]
     #[case(ReadMode::Interleaved)]

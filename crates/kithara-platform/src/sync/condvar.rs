@@ -5,8 +5,6 @@
 
 use super::MutexGuard;
 
-// ── Native ──────────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 pub struct Condvar(parking_lot::Condvar);
 
@@ -52,8 +50,6 @@ impl Default for Condvar {
     }
 }
 
-// ── WASM ────────────────────────────────────────────────────────────
-
 #[cfg(target_arch = "wasm32")]
 pub struct Condvar(wasm_safe_thread::condvar::Condvar);
 
@@ -97,8 +93,6 @@ impl Default for Condvar {
         Self::new()
     }
 }
-
-// ── Shared ──────────────────────────────────────────────────────────
 
 /// Result of a timed wait on a [`Condvar`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

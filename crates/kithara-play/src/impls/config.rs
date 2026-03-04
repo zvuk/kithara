@@ -228,8 +228,6 @@ impl ResourceConfig {
         self
     }
 
-    // -- Internal conversions -------------------------------------------------
-
     /// Convert into an `AudioConfig<File>`.
     #[cfg(feature = "file")]
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {

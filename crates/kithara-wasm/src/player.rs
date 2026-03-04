@@ -30,8 +30,6 @@ fn js_error(message: impl Into<String>) -> JsValue {
     JsValue::from_str(&message.into())
 }
 
-// ── Exported player struct ──────────────────────────────────────────
-
 #[wasm_bindgen]
 pub struct Player {
     cmd_tx: kithara_platform::sync::mpsc::Sender<WorkerCmd>,
@@ -72,8 +70,6 @@ impl Player {
         }
     }
 
-    // -- Track loading ────────────────────────────────────────────
-
     pub async fn select_track(&self, url: String) -> Result<(), JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
 
@@ -90,13 +86,9 @@ impl Player {
         Ok(())
     }
 
-    // -- Audio context ────────────────────────────────────────────
-
     pub fn warm_up_audio(&self) {
         wasm_support::warm_up_audio();
     }
-
-    // -- Transport ────────────────────────────────────────────────
 
     pub fn play(&self) {
         let _ = self.send_cmd(WorkerCmd::Play);
@@ -113,8 +105,6 @@ impl Player {
     pub fn seek(&self, position_ms: f64) -> Result<(), JsValue> {
         self.send_cmd(WorkerCmd::Seek(position_ms))
     }
-
-    // -- Settings ─────────────────────────────────────────────────
 
     pub fn set_volume(&self, volume: f32) {
         self.volume.set(volume);
@@ -163,8 +153,6 @@ impl Player {
         wasm_support::bridge_process_count() as f64
     }
 
-    // -- Cached getters (no Worker round-trip) ────────────────────
-
     pub fn get_volume(&self) -> f32 {
         self.volume.get()
     }
@@ -188,13 +176,9 @@ impl Player {
         self.ducking.get()
     }
 
-    // -- Tick (main thread graph update) ──────────────────────────
-
     pub fn tick(&self) {
         wasm_support::tick_and_poll();
     }
-
-    // -- Events ──────────────────────────────────────────────────
 
     pub fn take_events(&self) -> String {
         let mut events = self.event_log.lock_sync();
@@ -206,8 +190,6 @@ impl Player {
         out
     }
 }
-
-// ── Private helpers ─────────────────────────────────────────────────
 
 impl Player {
     fn send_cmd(&self, cmd: WorkerCmd) -> Result<(), JsValue> {

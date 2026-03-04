@@ -3,8 +3,6 @@
 //! * **Native** — [`std::sync::mpsc`].
 //! * **WASM** — [`wasm_safe_thread::mpsc`] (async-capable on Web Workers).
 
-// ── Native ──────────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::sync::mpsc::{RecvError, SendError, TryRecvError};
 
@@ -61,8 +59,6 @@ impl<T> Receiver<T> {
         self.0.try_recv()
     }
 }
-
-// ── WASM ────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_safe_thread::mpsc::{RecvError, SendError, TryRecvError};

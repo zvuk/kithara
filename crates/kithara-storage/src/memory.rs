@@ -443,8 +443,6 @@ mod tests {
         assert_eq!(&zero_buf, &[0, 0, 0, 0]);
     }
 
-    // --- Growable buffer tests ---
-
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_growable_write_beyond_initial_capacity() {
         // Start with a small capacity hint, then write beyond it.

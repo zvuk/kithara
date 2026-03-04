@@ -31,8 +31,6 @@ use crate::{
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
 
-// -- PlayerConfig -----------------------------------------------------------------
-
 /// Configuration for the player.
 #[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
@@ -56,8 +54,6 @@ pub struct PlayerConfig {
     /// PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
 }
-
-// -- PlayerImpl -------------------------------------------------------------------
 
 /// Concrete Player implementation managing items queue.
 ///
@@ -480,8 +476,6 @@ impl PlayerImpl {
         self.select_item(index, true)
     }
 
-    // -- Internal helpers ---------------------------------------------------------
-
     /// Internal: set status and emit event if changed.
     fn set_status(&self, new_status: PlayerStatus) {
         let mut status = self.status.lock_sync();
@@ -593,8 +587,6 @@ mod tests {
     fn make_resource(duration_secs: f64) -> Resource {
         Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs))
     }
-
-    // -- Tests --------------------------------------------------------------------
 
     #[kithara::test]
     #[case(PlayerBasicScenario::StartsPaused)]
@@ -712,8 +704,6 @@ mod tests {
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
         assert_eq!(config.eq_bands, 5);
     }
-
-    // -- Integration tests (player + resource + queue) ----------------------------
 
     #[kithara::test(tokio)]
     #[case(InsertScenario::AppendTwice, 2)]

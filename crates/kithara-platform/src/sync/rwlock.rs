@@ -5,8 +5,6 @@
 
 use std::ops::{Deref, DerefMut};
 
-// ── Native ──────────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 pub struct RwLock<T>(parking_lot::RwLock<T>);
 
@@ -68,8 +66,6 @@ impl<T> DerefMut for RwLockWriteGuard<'_, T> {
         &mut self.0
     }
 }
-
-// ── WASM ────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
 pub struct RwLock<T>(wasm_safe_thread::rwlock::RwLock<T>);

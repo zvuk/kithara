@@ -5,8 +5,6 @@
 
 use std::ops::{Deref, DerefMut};
 
-// ── Native ──────────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 pub struct Mutex<T>(parking_lot::Mutex<T>);
 
@@ -61,8 +59,6 @@ impl<T> DerefMut for MutexGuard<'_, T> {
     }
 }
 
-// ── WASM ────────────────────────────────────────────────────────────
-
 #[cfg(target_arch = "wasm32")]
 pub struct Mutex<T>(wasm_safe_thread::Mutex<T>);
 
@@ -116,8 +112,6 @@ impl<T> DerefMut for MutexGuard<'_, T> {
         &mut self.0
     }
 }
-
-// ── Shared ──────────────────────────────────────────────────────────
 
 /// `try_lock()` failed because the mutex is already held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

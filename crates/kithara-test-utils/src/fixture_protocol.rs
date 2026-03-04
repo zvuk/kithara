@@ -12,8 +12,6 @@
 
 use serde::{Deserialize, Serialize};
 
-// ── Session Configs ────────────────────────────────────────────────
-
 /// Configuration for an HLS test session (maps to `HlsTestServer`).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HlsSessionConfig {
@@ -137,8 +135,6 @@ pub struct HttpTestRoute {
     pub fail_first_n: Option<usize>,
 }
 
-// ── Data Mode ──────────────────────────────────────────────────────
-
 /// How media segment data is generated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum DataMode {
@@ -169,8 +165,6 @@ pub enum PcmPattern {
     ShiftedAscending,
 }
 
-// ── Init Mode ──────────────────────────────────────────────────────
-
 /// How init segments are generated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum InitMode {
@@ -183,8 +177,6 @@ pub enum InitMode {
     /// Variant `v` uses `data[v]`; missing entries produce an empty init segment.
     Custom(Vec<Vec<u8>>),
 }
-
-// ── Delay Rules ────────────────────────────────────────────────────
 
 /// Declarative delay rule for segment serving.
 ///
@@ -235,8 +227,6 @@ pub fn eval_delay(rules: &[DelayRule], variant: usize, segment: usize) -> u64 {
         .unwrap_or(0)
 }
 
-// ── Encryption ─────────────────────────────────────────────────────
-
 /// Encryption parameters for HLS segments.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EncryptionRequest {
@@ -245,8 +235,6 @@ pub struct EncryptionRequest {
     /// Optional 16-byte IV as hex string. When `None`, derived from segment sequence.
     pub iv_hex: Option<String>,
 }
-
-// ── Session Response ───────────────────────────────────────────────
 
 /// Response returned after creating a session.
 #[derive(Serialize, Deserialize, Debug)]
@@ -260,8 +248,6 @@ pub struct SessionResponse {
     /// Init segment length for variant 0 (0 if no init segments).
     pub init_len: u64,
 }
-
-// ── Data Generation (pure functions) ───────────────────────────────
 
 /// Saw-tooth period in samples.
 pub const SAW_PERIOD: usize = 65536;

@@ -6,8 +6,6 @@
 
 pub use std::time::Duration;
 
-// ── yield_now ───────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 #[inline]
 pub fn yield_now() {
@@ -23,15 +21,11 @@ pub fn yield_now() {
     // frame added unnecessary latency causing audio stuttering.
 }
 
-// ── JoinHandle ──────────────────────────────────────────────────────
-
 #[cfg(not(target_arch = "wasm32"))]
 pub type JoinHandle<T> = std::thread::JoinHandle<T>;
 
 #[cfg(target_arch = "wasm32")]
 pub type JoinHandle<T> = wasm_safe_thread::JoinHandle<T>;
-
-// ── spawn ───────────────────────────────────────────────────────────
 
 /// Spawn a new thread.
 ///
@@ -69,8 +63,6 @@ where
         .expect("failed to spawn thread")
 }
 
-// ── sleep ────────────────────────────────────────────────────────────
-
 /// Block the current thread for at least `duration`.
 #[cfg(not(target_arch = "wasm32"))]
 #[inline]
@@ -83,8 +75,6 @@ pub fn sleep(duration: Duration) {
 pub fn sleep(duration: Duration) {
     wasm_safe_thread::sleep(duration);
 }
-
-// ── current_thread_id ───────────────────────────────────────────────
 
 /// Hash of the current thread's ID, usable for shard indexing.
 #[cfg(not(target_arch = "wasm32"))]
@@ -108,8 +98,6 @@ pub fn current_thread_id() -> u64 {
     id.hash(&mut hasher);
     hasher.finish()
 }
-
-// ── available_parallelism ───────────────────────────────────────────
 
 /// Returns the number of hardware threads available.
 #[cfg(not(target_arch = "wasm32"))]

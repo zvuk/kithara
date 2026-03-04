@@ -418,8 +418,6 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
     }
 }
 
-// ── WASM Worker support ─────────────────────────────────────────────
-
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static WASM_SESSION_CLIENT: RefCell<Option<Arc<SessionClient>>> = const { RefCell::new(None) };

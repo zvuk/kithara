@@ -8,7 +8,7 @@ rules:
       include:
         - /crates/**/*.rs
         - /tests/**/*.rs
-    pattern-regex: '(?m)^\\s*//\\s*[=─-]{3,}'
+    pattern-regex: '(?m)^\s*//.*[=─-]{3,}'
 
   - id: style.no-separator-comments-toml
     languages:
@@ -19,7 +19,7 @@ rules:
       include:
         - /Cargo.toml
         - /crates/**/*.toml
-    pattern-regex: '(?m)^\\s*#\\s*[=─-]{3,}'
+    pattern-regex: '(?m)^\s*#.*[=─-]{3,}'
 
   - id: style.no-inline-qualified-paths
     languages:
