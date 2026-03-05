@@ -61,5 +61,6 @@ crates/kithara-wasm/pkg
 apple/.build/
 apple/.swiftpm/
 apple/KitharaFFIInternal.xcframework/
+apple/Examples/KitharaDemo/KitharaDemo.xcodeproj/
 crates/kithara-ffi/KitharaFFI/
 crates/kithara-ffi/generated/
