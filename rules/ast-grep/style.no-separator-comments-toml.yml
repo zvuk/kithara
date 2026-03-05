@@ -1,0 +1,11 @@
+id: style.no-separator-comments-toml
+message: Separator comments are not allowed; use plain # comments.
+severity: error
+language: Yaml
+files:
+  - Cargo.toml
+  - crates/**/*.toml
+rule:
+  all:
+    - kind: comment
+    - regex: '[=─-]{3,}'

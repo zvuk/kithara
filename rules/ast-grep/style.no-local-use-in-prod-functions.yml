@@ -1,0 +1,12 @@
+id: style.no-local-use-in-prod-functions
+message: Move `use` imports to file top; local `use` inside non-test functions is discouraged.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: use_declaration
+    - inside:
+        kind: function_item
+        stopBy: end

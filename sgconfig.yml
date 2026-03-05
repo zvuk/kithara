@@ -1,2 +1,6 @@
 ruleDirs:
   - rules/ast-grep
+languageGlobs:
+  Yaml:
+    - Cargo.toml
+    - crates/**/*.toml

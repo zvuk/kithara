@@ -28,7 +28,7 @@ ast-grep-blocking:
       exit 1; \
     fi; \
     "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short \
-      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper)$'
+      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml)$'
 
 ast-grep-advisory:
     AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
@@ -37,12 +37,6 @@ ast-grep-advisory:
       exit 1; \
     fi; \
     "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short --warning
-
-toml-separator-check:
-    if rg -n --pcre2 '^\s*#.*[=─-]{3,}' Cargo.toml crates -g '*.toml'; then \
-      echo "FAILED: separator comments are not allowed in Cargo.toml files."; \
-      exit 1; \
-    fi
 
 arch:
     bash scripts/ci/check-arch.sh
@@ -68,7 +62,7 @@ trait-mock-audit:
 trait-mock-exceptions:
     bash scripts/ci/trait-mock-exceptions.sh
 
-lint-fast: fmt-check clippy ast-grep-blocking toml-separator-check arch
+lint-fast: fmt-check clippy ast-grep-blocking arch
 
 lint-full: lint-fast perf-compare-selftest quality-report play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 

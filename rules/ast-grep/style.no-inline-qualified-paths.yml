@@ -1,0 +1,22 @@
+id: style.no-inline-qualified-paths
+message: Avoid inline qualified paths; import at file top and use short names in function bodies.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+rule:
+  all:
+    - kind: scoped_identifier
+    - regex: '^(std::io::|std::fmt::|std::error::|std::ops::|std::sync::atomic::|std::collections::|tokio::sync::|tokio::time::|tokio::task::|kithara_platform::\w+::)'
+    - inside:
+        kind: function_item
+        stopBy: end
+    - not:
+        inside:
+          kind: use_declaration
+          stopBy: end
+    - not:
+        inside:
+          kind: scoped_identifier
+          stopBy: end

@@ -1,0 +1,24 @@
+id: style.no-deep-qualified-paths
+message: Qualified path 3+ segments; add `use` import at file top.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  - crates/kithara-test-macros/**
+rule:
+  all:
+    - kind: scoped_identifier
+    - regex: '^[a-z_]\w*(?:::[A-Za-z_]\w*){2,}$'
+    - not:
+        inside:
+          kind: scoped_identifier
+    - not:
+        regex: '^(self|super|crate|std|tokio)::'
+    - not:
+        inside:
+          kind: use_declaration
+    - not:
+        inside:
+          kind: attribute_item
