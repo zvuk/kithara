@@ -105,6 +105,7 @@ console_error_panic_hook = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
+kithara-bufpool = { workspace = true, features = ["internal"] }
 
 [features]
 perf = [
@@ -157,4 +158,8 @@ required-features = ["perf"]
 
 [[bench]]
 name = "refactor_hotpaths"
+harness = false
+
+[[bench]]
+name = "bufpool"
 harness = false

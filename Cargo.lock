@@ -3717,6 +3717,7 @@ dependencies = [
  "kithara",
  "kithara-assets",
  "kithara-audio",
+ "kithara-bufpool",
  "kithara-events",
  "kithara-hls",
  "kithara-net",

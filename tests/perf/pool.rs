@@ -109,6 +109,8 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::Scalability => {
+            // hotpath allows only one FunctionsGuard alive at a time.
+            drop(_guard);
             let thread_counts = [1, 2, 4, 8, 16];
             let iterations_per_thread = 1000;
             for &num_threads in &thread_counts {

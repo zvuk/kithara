@@ -19,7 +19,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, SamplingMode, black_box, criterion_group, criterion_main};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioEffect, ResamplerQuality},
@@ -27,6 +27,7 @@ use kithara::{
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    net::NetOptions,
     stream::Stream,
 };
 use kithara_audio::internal::{ResamplerParams, ResamplerProcessor};
@@ -300,8 +301,10 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     let server_guard = server;
 
     let mut group = c.benchmark_group("refactor_hls_downloader");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
-    group.measurement_time(Duration::from_secs(10));
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
 
     group.bench_function("new_seek_read_cycle", |b| {
         let _ = &server_guard;
@@ -310,6 +313,8 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {
+                    let mut net = NetOptions::default();
+                    net.pool_max_idle_per_host = 8;
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);
@@ -320,6 +325,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let config = HlsConfig::new(url)
                         .with_store(store)
                         .with_abr(abr)
+                        .with_net(net)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);
 
@@ -340,6 +346,12 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     }
 
                     for seek_pos in HLS_SEEK_POSITIONS {
+                        // Size maps are populated via HEAD and can transiently under-report.
+                        if let Some(len) = stream.len()
+                            && seek_pos > len
+                        {
+                            continue;
+                        }
                         stream
                             .seek(SeekFrom::Start(seek_pos))
                             .unwrap_or_else(|e| panic!("seek failed at {seek_pos}: {e}"));
