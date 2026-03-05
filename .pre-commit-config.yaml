@@ -14,8 +14,9 @@ repos:
           - pre-commit
       - id: test-all
         name: test-all
-        entry: just test-all
+        entry: bash -lc 'echo "[prek pre-push] running just test-all"; just test-all'
         language: system
         pass_filenames: false
+        verbose: true
         stages:
           - pre-push
