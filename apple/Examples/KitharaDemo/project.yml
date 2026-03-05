@@ -1,0 +1,29 @@
+name: KitharaDemo
+options:
+  bundleIdPrefix: com.kithara
+  deploymentTarget:
+    iOS: "16.0"
+    macOS: "13.0"
+  xcodeVersion: "16.0"
+
+packages:
+  Kithara:
+    path: ../..
+
+targets:
+  KitharaDemo:
+    type: application
+    platform: [iOS, macOS]
+    sources:
+      - Sources
+    dependencies:
+      - package: Kithara
+        product: Kithara
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
+      platforms:
+        iOS:
+          INFOPLIST_KEY_UILaunchScreen_Generation: true
