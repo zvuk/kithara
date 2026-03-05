@@ -7,7 +7,6 @@
 [![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
 [![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
-[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
 [![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
@@ -40,22 +39,28 @@ Components are independent crates that can be used standalone or composed into a
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
+    apps["Apps<br/>kithara-app + kithara-ui + kithara-tui + kithara-wasm"]
     facade["Facade<br/>kithara + kithara-play"]
     pipeline["Pipeline<br/>audio + decode + events"]
     protocols["Protocols<br/>file + hls + abr + drm"]
     io["I/O<br/>stream + net"]
-    storage["Storage<br/>assets + storage + bufpool + platform"]
-    wasm["Browser<br/>kithara-wasm"]
+    storage["Storage<br/>assets + storage"]
+    infra["Infra<br/>bufpool + platform + hang-detector"]
+    tooling["Tooling<br/>test-macros + wasm-macros + test-utils + tests"]
 
-    facade --> pipeline --> protocols --> io --> storage
-    wasm --> pipeline
+    apps --> facade
+    facade --> pipeline --> protocols --> io --> storage --> infra
+    tooling -.-> facade
+    tooling -.-> apps
 
+    style apps fill:#4f6d7a,color:#fff
     style facade fill:#4a6fa5,color:#fff
     style pipeline fill:#6b8cae,color:#fff
     style protocols fill:#7ea87e,color:#fff
     style io fill:#c4a35a,color:#fff
     style storage fill:#8b6b8b,color:#fff
-    style wasm fill:#5b8f8f,color:#fff
+    style infra fill:#5b8f8f,color:#fff
+    style tooling fill:#7f7f7f,color:#fff
 ```
 
 <table>
@@ -67,8 +72,10 @@ flowchart LR
 <tr><td><b>I/O</b></td><td><a href="crates/kithara-stream/README.md"><code>kithara-stream</code></a><br/><a href="crates/kithara-net/README.md"><code>kithara-net</code></a></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
 <tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
 <tr><td><b>Primitives</b></td><td><a href="crates/kithara-bufpool/README.md"><code>kithara-bufpool</code></a><br/><a href="crates/kithara-platform/README.md"><code>kithara-platform</code></a></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
+<tr><td><b>Runtime Safety</b></td><td><a href="crates/kithara-hang-detector/README.md"><code>kithara-hang-detector</code></a></td><td>Hang watchdog and loop guard macro used by runtime crates</td></tr>
+<tr><td><b>Applications</b></td><td><a href="crates/kithara-app/README.md"><code>kithara-app</code></a><br/><a href="crates/kithara-ui/README.md"><code>kithara-ui</code></a><br/><a href="crates/kithara-tui/README.md"><code>kithara-tui</code></a><br/><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>Desktop/TUI/WASM demo players built on shared engine crates</td></tr>
+<tr><td><b>Macros</b></td><td><a href="crates/kithara-test-macros/README.md"><code>kithara-test-macros</code></a><br/><a href="crates/kithara-wasm-macros/README.md"><code>kithara-wasm-macros</code></a></td><td>Proc-macro glue for tests and wasm exports/thread guards</td></tr>
 <tr><td><b>Testing</b></td><td><a href="crates/kithara-test-utils/README.md"><code>kithara-test-utils</code></a></td><td>Shared fixtures and helpers for workspace tests</td></tr>
-<tr><td><b>Browser</b></td><td><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>WASM bindings over the shared <code>kithara-play</code> pipeline</td></tr>
 </table>
 
 ## Getting Started
@@ -94,6 +101,20 @@ just test-all
 # Lint / policy checks
 just lint-fast
 just lint-full
+```
+
+## Demo Players
+
+```bash
+# Desktop GUI demo
+cargo run -p kithara-app --bin kithara-gui -- <TRACK_URL_1> <TRACK_URL_2>
+
+# Terminal demo
+cargo run -p kithara-app --bin kithara-tui -- <TRACK_URL_1> <TRACK_URL_2>
+
+# WASM demo player
+cd crates/kithara-wasm
+RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml --port 8080
 ```
 
 ## Examples

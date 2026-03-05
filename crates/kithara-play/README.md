@@ -4,8 +4,8 @@
 
 <div align="center">
 
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/kithara-play.svg)](https://crates.io/crates/kithara-play)
-[![Downloads](https://img.shields.io/crates/d/kithara-play.svg)](https://crates.io/crates/kithara-play)
 [![docs.rs](https://docs.rs/kithara-play/badge.svg)](https://docs.rs/kithara-play)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
@@ -198,9 +198,11 @@ gantt
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>default</code></td><td>yes</td><td>Enables <code>file</code>, <code>hls</code>, <code>backend-cpal</code></td></tr>
 <tr><td><code>file</code></td><td>yes</td><td>Progressive file pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
+<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code></td></tr>
 <tr><td><code>rodio</code></td><td>no</td><td><code>rodio</code> integration (<code>kithara-audio/rodio</code>)</td></tr>
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
 <tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code></td></tr>

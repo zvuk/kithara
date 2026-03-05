@@ -1,3 +1,15 @@
+<div align="center">
+  <img src="../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
+
+</div>
+
 # Scripts inventory
 
 This directory keeps CI and developer helper scripts that are not easily expressed with existing Cargo tools.
@@ -28,7 +40,14 @@ The following scripts were removed because they were shell pass-through wrappers
 ## Rust ecosystem replacements already used
 
 - Formatting/linting: `cargo fmt`, `cargo clippy`
+- Static rules: `ast-grep` via `just ast-grep-blocking` / `just ast-grep-advisory`
 - Tests: `cargo nextest`, `cargo test --doc`
 - Coverage: `cargo llvm-cov`
 - Bench compare: `critcmp` (optional in `just bench-ci`)
 - Dependency hygiene: `cargo machete` (see `just machete`)
+- Hooks: `prek` (`prek install -f` in repo root)
+
+## Notes
+
+- `scripts/ci/*` remain the project-specific policy layer (architecture checks, wasm size/test gates, quality reports).
+- CI configs in `.gitlab-ci.yml` and `.github/workflows/*.disabled` are kept aligned with the same script/`just` entrypoints.

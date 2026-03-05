@@ -4,16 +4,14 @@
 
 <div align="center">
 
-[![Crates.io](https://img.shields.io/crates/v/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
-[![Downloads](https://img.shields.io/crates/d/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
-[![docs.rs](https://docs.rs/kithara-wasm/badge.svg)](https://docs.rs/kithara-wasm)
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-wasm
 
-WASM player bindings built on top of `kithara-play`.
+Workspace-only (`publish = false`) wasm-bindgen bindings and demo player for browser playback on top of the shared `kithara-play` engine.
 
 ## Usage
 
@@ -28,7 +26,7 @@ const index = player.add_track("https://example.com/track.mp3");
 await player.select_track(index); // starts playback with crossfade
 ```
 
-## Key API
+## Key API surface
 
 - `WasmPlayer::add_track(url)`
 - `WasmPlayer::select_track(index)`
@@ -40,15 +38,25 @@ await player.select_track(index); // starts playback with crossfade
 
 ## Architecture
 
-- Playback core is `kithara-play::PlayerImpl`
-- Resource loading uses `kithara-play::Resource` / `ResourceConfig`
-- Crossfade and EQ are handled in the shared player pipeline, not in JS-specific DSP
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+flowchart LR
+    js["JS / UI thread<br/>WasmPlayer bindings"]
+    setup["setup() + runtime checks<br/>SAB / COOP / COEP"]
+    worker["Web Worker<br/>kithara-play::PlayerImpl"]
+    transport["Command channel<br/>play/pause/seek/select"]
+    core["Shared playback core<br/>kithara-play + kithara-stream + kithara-audio"]
+
+    js --> setup --> worker
+    js --> transport --> worker
+    worker --> core
+```
 
 ## Features
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
-<tr><td><code>threads</code></td><td>yes</td><td>Web Worker thread pool (requires <code>atomics</code> + <code>bulk-memory</code> target features)</td></tr>
+<tr><td><code>default</code></td><td>yes</td><td>No extra flags; runtime behavior comes from target + dependencies</td></tr>
 <tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
 </table>
 
@@ -85,7 +93,7 @@ At runtime, the demo checks these requirements and prints a clear error in the e
 
 ## Integration
 
-`kithara-wasm` is a wasm-bindgen wrapper around `kithara-play` so web and desktop follow the same playback logic.
+`kithara-wasm` enables `kithara-play` with `backend-web-audio` and `wasm-bindgen` features, so browser and desktop flows use the same playback pipeline, queueing logic, crossfade, and EQ behavior.
 
 ## Testing
 

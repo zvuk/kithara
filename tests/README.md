@@ -1,3 +1,15 @@
+<div align="center">
+  <img src="../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
+
+</div>
+
 # Tests
 
 `tests/` is a dedicated workspace crate (`kithara-integration-tests`) that hosts:
@@ -127,6 +139,10 @@ Environment knobs:
 - `KITHARA_SELENIUM_TOOLCHAIN=nightly` (default: `nightly`)
 - `KITHARA_SELENIUM_PAGE_URL=http://...` (use external trunk page instead of auto-start)
 - `KITHARA_SELENIUM_WEBDRIVER_URL=http://...` (use external webdriver instead of auto-start)
+
+WebDriver capabilities/profile defaults are versioned in:
+
+- `tests/webdriver.json`
 
 ### agent-browser status
 

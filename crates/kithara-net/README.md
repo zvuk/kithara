@@ -4,8 +4,8 @@
 
 <div align="center">
 
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/kithara-net.svg)](https://crates.io/crates/kithara-net)
-[![Downloads](https://img.shields.io/crates/d/kithara-net.svg)](https://crates.io/crates/kithara-net)
 [![docs.rs](https://docs.rs/kithara-net/badge.svg)](https://docs.rs/kithara-net)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
