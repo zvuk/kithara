@@ -238,7 +238,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 tempfile = "3.26.0"
 
 # FFI
-uniffi = { version = "0.29.1" }
+uniffi = { version = "0.31.0" }
 
 # async traits
 async-trait = "0.1.89"

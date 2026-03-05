@@ -56,3 +56,10 @@ docs/
 .claude-octopus
 .claude/debates
 crates/kithara-wasm/pkg
+
+# Swift / Xcode
+apple/.build/
+apple/.swiftpm/
+apple/KitharaFFIInternal.xcframework/
+crates/kithara-ffi/KitharaFFI/
+crates/kithara-ffi/generated/
