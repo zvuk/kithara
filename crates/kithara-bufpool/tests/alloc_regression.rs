@@ -1,4 +1,6 @@
 use std::alloc::System;
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 use kithara_bufpool::SharedPool;
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
@@ -10,10 +12,30 @@ mod kithara {
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-// ── Tier 2: Allocation regression tests ─────────────────────────────────
-// These tests require --test-threads=1 because they share a global allocator.
+// Allocation regression tests share a global allocator, so they must not run in parallel.
 
-#[kithara::test]
+fn wait_for_allocator_quiet() {
+    let mut stable_samples = 0usize;
+    let mut prev = GLOBAL.stats();
+
+    while stable_samples < 8 {
+        #[cfg(not(target_arch = "wasm32"))]
+        thread::yield_now();
+
+        #[cfg(target_arch = "wasm32")]
+        std::hint::spin_loop();
+
+        let next = GLOBAL.stats();
+        if next == prev {
+            stable_samples += 1;
+        } else {
+            stable_samples = 0;
+            prev = next;
+        }
+    }
+}
+
+#[kithara::test(serial)]
 fn test_steady_state_get_put_zero_allocs() {
     let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
     pool.pre_warm(4, |v| v.resize(4096, 0));
@@ -22,6 +44,8 @@ fn test_steady_state_get_put_zero_allocs() {
     for _ in 0..10 {
         let _buf = pool.get();
     }
+
+    wait_for_allocator_quiet();
 
     // Measure steady-state get/drop cycle
     let reg = Region::new(GLOBAL);
@@ -38,7 +62,7 @@ fn test_steady_state_get_put_zero_allocs() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(serial)]
 fn test_get_with_resize_tracks_growth() {
     let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
 
@@ -49,6 +73,8 @@ fn test_get_with_resize_tracks_growth() {
     } // returned to pool
 
     // Second get: should reuse the grown buffer without allocating
+    wait_for_allocator_quiet();
+
     let reg = Region::new(GLOBAL);
     {
         let _buf = pool.get();
@@ -63,7 +89,7 @@ fn test_get_with_resize_tracks_growth() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(serial)]
 fn test_no_leak_after_many_cycles() {
     let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
     pool.pre_warm(4, |v| v.resize(4096, 0));
@@ -72,6 +98,8 @@ fn test_no_leak_after_many_cycles() {
     for _ in 0..10 {
         let _buf = pool.get();
     }
+
+    wait_for_allocator_quiet();
 
     let reg = Region::new(GLOBAL);
     for _ in 0..1000 {
@@ -91,7 +119,7 @@ fn test_no_leak_after_many_cycles() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(serial)]
 fn test_ensure_len_reuse_avoids_alloc() {
     let pool = SharedPool::<4, Vec<f32>>::new(16, 200_000);
     pool.pre_warm(4, |v| v.resize(4096, 0.0));
@@ -102,6 +130,8 @@ fn test_ensure_len_reuse_avoids_alloc() {
     }
 
     // ensure_len within pre-warmed capacity should not allocate
+    wait_for_allocator_quiet();
+
     let reg = Region::new(GLOBAL);
     {
         let mut buf = pool.get();

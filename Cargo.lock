@@ -3681,6 +3681,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
+ "serial_test",
  "stats_alloc",
  "unimock",
  "wasm-bindgen-test",
