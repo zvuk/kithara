@@ -57,7 +57,7 @@ jobs:
           restore-keys: perf-baseline-
 
       - name: Run performance tests
-        run: bash scripts/ci/perf-test.sh
+        run: just perf-test
 
       - name: Prepare baseline for caching
         if: github.ref == 'refs/heads/main'
