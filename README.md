@@ -7,9 +7,7 @@
 [![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
 [![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
-[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
 [![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 </div>
 
@@ -18,21 +16,6 @@
 Modular Rust audio stack for progressive HTTP and HLS playback, shared by desktop and wasm players.
 
 Status: early-stage APIs with active internal refactoring. The architecture is not being "simplified" by removing layers; it is being improved by making crate boundaries clearer and contracts stricter.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    facade["Facade<br/>kithara + kithara-play"]
-    pipeline["Pipeline<br/>audio + decode + events"]
-    protocols["Protocols<br/>file + hls + abr + drm"]
-    io["I/O<br/>stream + net"]
-    storage["Storage<br/>assets + storage + bufpool + platform"]
-    apps["Apps<br/>desktop gui/tui + wasm"]
-
-    apps --> facade --> pipeline --> protocols --> io --> storage
-    apps --> pipeline
-```
 
 ## Workspace map
 
