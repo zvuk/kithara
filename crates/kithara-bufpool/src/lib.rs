@@ -35,4 +35,4 @@ pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
 pub use growth::BudgetExhausted;
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]
-pub use pool::{Pool, Pooled, PooledOwned, Reuse, SharedPool};
+pub use pool::{Pool, PoolStats, Pooled, PooledOwned, Reuse, SharedPool};

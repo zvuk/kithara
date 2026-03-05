@@ -643,11 +643,13 @@ impl ResamplerProcessor {
         let frames = planar[0].len();
         let total = frames * self.channels;
 
-        // Get buffer from pool — returned as PooledOwned for auto-recycling
-        let mut result = self.pool.get_with(|b| {
-            b.clear();
-            b.resize(total, 0.0);
-        });
+        // Get buffer from pool — returned as PooledOwned for auto-recycling.
+        // PcmPool has unlimited budget so ensure_len never fails in practice.
+        let mut result = self.pool.get();
+        if let Err(_e) = result.ensure_len(total) {
+            tracing::warn!("PCM pool budget exhausted during resampling");
+            return self.pool.get();
+        }
 
         // Use fast_interleave (SIMD-optimized)
         let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");

@@ -481,7 +481,10 @@ impl SymphoniaInner {
 
             // Convert to f32 interleaved (pool-backed to reduce allocations).
             // The PooledOwned buffer flows through PcmChunk and auto-recycles on drop.
-            let mut pooled = self.pool.get_with(|v| v.resize(num_samples, 0.0));
+            let mut pooled = self.pool.get();
+            pooled
+                .ensure_len(num_samples)
+                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
             decoded.copy_to_slice_interleaved(&mut *pooled);
 
             #[expect(clippy::cast_possible_truncation)] // audio channel count always fits u16

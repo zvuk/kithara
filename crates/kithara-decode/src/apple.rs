@@ -794,7 +794,13 @@ impl AppleInner {
 
             let frames = output_packets as usize;
             let samples = frames * channels;
-            let pcm = self.pcm_buffer[..samples].to_vec();
+
+            // Decode into a pool-backed buffer (reuses allocations).
+            let mut pooled = self.pool.get();
+            pooled
+                .ensure_len(samples)
+                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            pooled[..samples].copy_from_slice(&self.pcm_buffer[..samples]);
 
             let meta = PcmMeta {
                 spec: self.spec,
@@ -804,7 +810,7 @@ impl AppleInner {
                 variant_index: None,
                 epoch: 0,
             };
-            let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
+            let chunk = PcmChunk::new(meta, pooled);
 
             // Update position and frame offset
             self.frames_decoded += frames as u64;

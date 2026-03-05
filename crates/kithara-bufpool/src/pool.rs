@@ -3,7 +3,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -37,11 +37,19 @@ pub trait Reuse {
 
 /// Reuse implementation for `Vec<T>`.
 ///
-/// Clears the vector and shrinks capacity to trim size.
+/// Clears the vector and optionally shrinks capacity.
+///
+/// - `trim = 0` means "never shrink" — the buffer is always accepted
+///   for reuse as long as it has capacity. This is used by [`BytePool`]
+///   where buffers vary in size and trimming would defeat reuse.
+/// - `trim > 0` only shrinks when capacity exceeds `2 × trim`,
+///   preventing realloc churn for buffers near the target size.
 impl<T> Reuse for Vec<T> {
     fn reuse(&mut self, trim: usize) -> bool {
         self.clear();
-        self.shrink_to(trim);
+        if trim > 0 && self.capacity() > trim.saturating_mul(2) {
+            self.shrink_to(trim);
+        }
         self.capacity() > 0
     }
 
@@ -92,6 +100,21 @@ where
     }
 }
 
+/// Pool hit/miss statistics for observability.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    /// Buffer retrieved from home shard (best case).
+    pub home_hits: u64,
+    /// Buffer stolen from a non-home shard.
+    pub steal_hits: u64,
+    /// No reusable buffer found — fresh allocation.
+    pub alloc_misses: u64,
+    /// Buffer dropped on return (shard full or reuse rejected).
+    pub put_drops: u64,
+    /// Current tracked byte budget usage.
+    pub allocated_bytes: usize,
+}
+
 /// Generic sharded buffer pool.
 ///
 /// Type parameters:
@@ -116,12 +139,22 @@ where
     allocated_bytes: AtomicUsize,
     /// Maximum allowed byte budget. `usize::MAX` means unlimited.
     max_bytes: usize,
+    // ── Stats counters ──
+    stat_home_hits: AtomicU64,
+    stat_steal_hits: AtomicU64,
+    stat_alloc_misses: AtomicU64,
+    stat_put_drops: AtomicU64,
 }
 
 impl<const SHARDS: usize, T> Pool<SHARDS, T>
 where
     T: Reuse,
 {
+    /// Maximum number of non-home shards to probe on a miss.
+    ///
+    /// Uses `try_lock` to avoid blocking — locked shards are skipped.
+    const MAX_PROBE: usize = 4;
+
     /// Determine shard index for current thread.
     #[inline]
     #[expect(
@@ -137,6 +170,23 @@ where
         idx
     }
 
+    /// Try to steal a buffer from nearby shards using non-blocking `try_lock`.
+    ///
+    /// Probes up to [`MAX_PROBE`](Self::MAX_PROBE) shards starting from `home + 1`.
+    /// Skips shards whose lock is currently held.
+    fn try_steal(&self, home: usize) -> Option<T> {
+        let probe = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
+        for i in 1..=probe {
+            let idx = (home + i) % SHARDS;
+            if let Ok(mut shard) = self.shards[idx].try_lock()
+                && let Some(v) = shard.try_get()
+            {
+                return Some(v);
+            }
+        }
+        None
+    }
+
     /// Return a buffer to the pool.
     pub(crate) fn put(&self, value: T, shard_idx: usize) {
         let bytes = value.byte_size();
@@ -145,6 +195,18 @@ where
             // Shard full or buffer rejected — release tracked bytes.
             drop(shard);
             self.release_budget(bytes);
+            self.stat_put_drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Get pool hit/miss statistics.
+    pub fn stats(&self) -> PoolStats {
+        PoolStats {
+            home_hits: self.stat_home_hits.load(Ordering::Relaxed),
+            steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
+            alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
+            put_drops: self.stat_put_drops.load(Ordering::Relaxed),
+            allocated_bytes: self.allocated_bytes.load(Ordering::Relaxed),
         }
     }
 
@@ -286,6 +348,10 @@ where
             }),
             allocated_bytes: AtomicUsize::new(0),
             max_bytes,
+            stat_home_hits: AtomicU64::new(0),
+            stat_steal_hits: AtomicU64::new(0),
+            stat_alloc_misses: AtomicU64::new(0),
+            stat_put_drops: AtomicU64::new(0),
         }
     }
 
@@ -323,15 +389,14 @@ where
             shard.try_get()
         };
 
-        if value.is_none() {
-            // Try other shards before allocating
-            for i in 1..SHARDS {
-                let idx = (shard_idx + i) % SHARDS;
-                let mut shard = self.shards[idx].lock_sync();
-                if let Some(v) = shard.try_get() {
-                    value = Some(v);
-                    break;
-                }
+        if value.is_some() {
+            self.stat_home_hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            value = self.try_steal(shard_idx);
+            if value.is_some() {
+                self.stat_steal_hits.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.stat_alloc_misses.fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -447,12 +512,16 @@ where
     }
 }
 
-impl<const SHARDS: usize> PooledOwned<SHARDS, Vec<u8>> {
-    /// Grow buffer to at least `min_len` bytes (zeroed). Budget-checked.
+impl<const SHARDS: usize, U> PooledOwned<SHARDS, Vec<U>>
+where
+    U: Default + Clone,
+{
+    /// Grow buffer to at least `min_len` elements. Budget-checked.
     ///
     /// No-op if buffer is already `>= min_len`. Charges the capacity delta
-    /// to the pool's byte budget. Returns `Err(BudgetExhausted)` if the
-    /// budget would be exceeded (buffer is left unchanged in that case).
+    /// (in bytes, `capacity × size_of::<U>()`) to the pool's byte budget.
+    /// Returns `Err(BudgetExhausted)` if the budget would be exceeded
+    /// (buffer is left unchanged in that case).
     ///
     /// # Errors
     ///
@@ -471,10 +540,11 @@ impl<const SHARDS: usize> PooledOwned<SHARDS, Vec<u8>> {
             return Ok(());
         }
         let old_cap = buf.capacity();
-        buf.resize(min_len, 0);
+        buf.resize(min_len, U::default());
         let new_cap = buf.capacity();
-        if new_cap > old_cap
-            && let Err(e) = self.pool.request_budget(new_cap - old_cap)
+        let byte_delta = (new_cap - old_cap) * size_of::<U>();
+        if byte_delta > 0
+            && let Err(e) = self.pool.request_budget(byte_delta)
         {
             // Budget exceeded — rollback the resize.
             buf.truncate(0);
@@ -532,19 +602,6 @@ where
     }
 }
 
-impl<const SHARDS: usize, T> Clone for PooledOwned<SHARDS, T>
-where
-    T: Reuse + Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            pool: Arc::clone(&self.pool),
-            shard_idx: self.shard_idx,
-        }
-    }
-}
-
 impl<const SHARDS: usize, T> PartialEq for PooledOwned<SHARDS, T>
 where
     T: Reuse + PartialEq,
@@ -583,6 +640,26 @@ where
         )))
     }
 
+    /// Pre-warm the pool by creating and recycling `count` buffers.
+    ///
+    /// Each buffer is initialized via `init`, then returned to the pool.
+    /// This eliminates cold-start allocation misses for real-time paths.
+    ///
+    /// Respects byte budget — the `init` closure may trigger allocations
+    /// tracked via `get_with`. Buffers that exceed budget are simply dropped.
+    pub fn pre_warm<F: Fn(&mut T)>(&self, count: usize, init: F) {
+        for _ in 0..count {
+            let mut val = T::default();
+            init(&mut val);
+            let bytes = val.byte_size();
+            // Stop if adding this buffer would exceed budget.
+            if self.0.request_budget(bytes).is_err() {
+                break;
+            }
+            self.0.recycle(val);
+        }
+    }
+
     /// Get a buffer from the shared pool.
     #[must_use]
     pub fn get(&self) -> PooledOwned<SHARDS, T> {
@@ -600,15 +677,14 @@ where
             shard.try_get()
         };
 
-        if value.is_none() {
-            // Try other shards before allocating
-            for i in 1..SHARDS {
-                let idx = (shard_idx + i) % SHARDS;
-                let mut shard = self.0.shards[idx].lock_sync();
-                if let Some(v) = shard.try_get() {
-                    value = Some(v);
-                    break;
-                }
+        if value.is_some() {
+            self.0.stat_home_hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            value = self.0.try_steal(shard_idx);
+            if value.is_some() {
+                self.0.stat_steal_hits.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.0.stat_alloc_misses.fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -634,6 +710,12 @@ where
     #[must_use]
     pub fn allocated_bytes(&self) -> usize {
         self.0.allocated_bytes()
+    }
+
+    /// Get pool hit/miss statistics.
+    #[must_use]
+    pub fn stats(&self) -> PoolStats {
+        self.0.stats()
     }
 
     /// Return a value to the pool for reuse.

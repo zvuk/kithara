@@ -58,12 +58,27 @@ pub struct PcmMeta {
 /// - `pcm.len() % channels == 0` (frame-aligned)
 /// - `spec.channels > 0` and `spec.sample_rate > 0`
 /// - All samples are f32 and interleaved (LRLRLR...)
-#[derive(Clone, Debug, Derivative)]
+#[derive(Debug, Derivative)]
 #[derivative(Default)]
 pub struct PcmChunk {
     #[derivative(Default(value = "pcm_pool().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,
+}
+
+impl Clone for PcmChunk {
+    /// Clone creates a new pool-backed buffer with copied samples.
+    ///
+    /// Each clone gets its own [`PcmBuf`] from the global pool,
+    /// so both original and clone recycle independently on drop.
+    fn clone(&self) -> Self {
+        let mut new_pcm = pcm_pool().get();
+        new_pcm.extend_from_slice(&self.pcm);
+        Self {
+            pcm: new_pcm,
+            meta: self.meta,
+        }
+    }
 }
 
 impl PcmChunk {
