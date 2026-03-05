@@ -11,6 +11,11 @@ publish = false
 [lib]
 crate-type = ["lib", "staticlib"]
 
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/uniffi_bindgen.rs"
+required-features = ["backend-uniffi"]
+
 [lints]
 workspace = true
 
@@ -26,7 +31,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
-uniffi = { workspace = true, optional = true }
+uniffi = { workspace = true, optional = true, features = ["cli"] }
 
 [features]
 default = ["backend-uniffi"]
