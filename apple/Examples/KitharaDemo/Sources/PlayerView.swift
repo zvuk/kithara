@@ -23,6 +23,7 @@ struct PlayerView: View {
                     viewModel.loadAndPlay()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(viewModel.urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             // Status
@@ -39,15 +40,18 @@ struct PlayerView: View {
             Text(viewModel.formattedTime)
                 .font(.system(.title2, design: .monospaced))
 
-            // Progress slider
+            // Progress slider — seeks only on drag end to avoid flooding
             if let duration = viewModel.duration, duration > 0 {
                 Slider(
-                    value: Binding(
-                        get: { viewModel.currentTime },
-                        set: { viewModel.seek(to: $0) }
-                    ),
+                    value: $viewModel.currentTime,
                     in: 0...duration
-                )
+                ) { editing in
+                    if editing {
+                        viewModel.onSeekStarted()
+                    } else {
+                        viewModel.onSeekEnded(viewModel.currentTime)
+                    }
+                }
             }
 
             // Play/Pause button

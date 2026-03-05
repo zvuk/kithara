@@ -2,16 +2,13 @@
 //!
 //! Subscribes to [`PlayerEvent`] channels, translates events into
 //! [`PlayerObserver`] callback invocations on a dedicated tokio task.
-//! A secondary task polls `position_seconds()` / `duration_seconds()`
-//! for periodic time updates.
+//! A secondary **OS thread** polls `position_seconds()` / `duration_seconds()`
+//! for periodic time updates — avoiding blocking `Mutex::lock_sync()` inside async.
 
-use std::{
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::sync::Arc;
 
 use kithara::play::{PlayerEvent, PlayerImpl, PlayerStatus};
-use tokio::sync::broadcast;
+use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::observer::PlayerObserver;
@@ -19,6 +16,7 @@ use crate::observer::PlayerObserver;
 /// Forwards player events to an observer on background tasks.
 pub(crate) struct EventBridge {
     cancel: CancellationToken,
+    time_thread: Option<JoinHandle<()>>,
 }
 
 impl EventBridge {
@@ -31,8 +29,11 @@ impl EventBridge {
         cancel: CancellationToken,
     ) -> Self {
         Self::spawn_event_task(rx, Arc::clone(&observer), cancel.clone());
-        Self::spawn_time_task(player, observer, cancel.clone());
-        Self { cancel }
+        let time_thread = Self::spawn_time_thread(player, observer, cancel.clone());
+        Self {
+            cancel,
+            time_thread: Some(time_thread),
+        }
     }
 
     /// Task that listens to `PlayerEvent` broadcast channel.
@@ -43,7 +44,7 @@ impl EventBridge {
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             loop {
-                tokio::select! {
+                kithara_platform::tokio::select! {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
@@ -57,43 +58,51 @@ impl EventBridge {
         });
     }
 
-    /// Task that polls current time and duration at ~10 Hz.
-    fn spawn_time_task(
+    /// Dedicated OS thread that polls current time and duration at ~10 Hz.
+    ///
+    /// Uses a plain thread instead of an async task to avoid blocking the
+    /// single-threaded tokio runtime with `Mutex::lock_sync()`.
+    fn spawn_time_thread(
         player: Arc<Mutex<PlayerImpl>>,
         observer: Arc<dyn PlayerObserver>,
         cancel: CancellationToken,
-    ) {
-        crate::FFI_RUNTIME.spawn(async move {
+    ) -> JoinHandle<()> {
+        spawn(move || {
+            let interval = Duration::from_millis(100);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
-            let interval = Duration::from_millis(100);
 
-            loop {
-                tokio::select! {
-                    () = cancel.cancelled() => break,
-                    () = tokio::time::sleep(interval) => {
-                        let inner = player.lock().unwrap_or_else(PoisonError::into_inner);
-                        let time = inner.position_seconds();
-                        let duration = inner.duration_seconds();
-                        drop(inner);
+            while !cancel.is_cancelled() {
+                sleep(interval);
 
-                        if let Some(t) = time
-                            && last_time.is_none_or(|prev| (prev - t).abs() > 0.01)
-                        {
-                            observer.on_time_changed(t);
-                            last_time = Some(t);
-                        }
+                let inner = player.lock_sync();
+                let time = inner.position_seconds();
+                let duration = inner.duration_seconds();
+                drop(inner);
 
-                        if let Some(d) = duration
-                            && last_duration.is_none_or(|prev| (prev - d).abs() > 0.01)
-                        {
-                            observer.on_duration_changed(d);
-                            last_duration = Some(d);
-                        }
+                match time {
+                    Some(t) if last_time.is_none_or(|prev| (prev - t).abs() > 0.01) => {
+                        observer.on_time_changed(t);
+                        last_time = Some(t);
                     }
+                    None if last_time.is_some() => {
+                        last_time = None;
+                    }
+                    _ => {}
+                }
+
+                match duration {
+                    Some(d) if last_duration.is_none_or(|prev| (prev - d).abs() > 0.01) => {
+                        observer.on_duration_changed(d);
+                        last_duration = Some(d);
+                    }
+                    None if last_duration.is_some() => {
+                        last_duration = None;
+                    }
+                    _ => {}
                 }
             }
-        });
+        })
     }
 
     fn dispatch(observer: &Arc<dyn PlayerObserver>, event: &PlayerEvent) {
@@ -116,6 +125,9 @@ impl EventBridge {
 impl Drop for EventBridge {
     fn drop(&mut self) {
         self.cancel.cancel();
+        if let Some(handle) = self.time_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 

@@ -1,11 +1,9 @@
 //! FFI wrapper for audio player items.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, PoisonError},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use kithara::play::{Resource, ResourceConfig};
+use kithara_platform::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -53,31 +51,19 @@ impl AudioPlayerItem {
     }
 
     pub fn preferred_peak_bitrate(&self) -> f64 {
-        *self
-            .preferred_peak_bitrate
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *self.preferred_peak_bitrate.lock_sync()
     }
 
     pub fn set_preferred_peak_bitrate(&self, bitrate: f64) {
-        *self
-            .preferred_peak_bitrate
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = bitrate;
+        *self.preferred_peak_bitrate.lock_sync() = bitrate;
     }
 
     pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
-        *self
-            .preferred_peak_bitrate_expensive
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *self.preferred_peak_bitrate_expensive.lock_sync()
     }
 
     pub fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64) {
-        *self
-            .preferred_peak_bitrate_expensive
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = bitrate;
+        *self.preferred_peak_bitrate_expensive.lock_sync() = bitrate;
     }
 
     /// Asynchronously create the underlying [`Resource`].
@@ -105,12 +91,12 @@ impl AudioPlayerItem {
                 message: e.to_string(),
             })?;
 
-        *self.resource.lock().unwrap_or_else(PoisonError::into_inner) = Some(resource);
+        *self.resource.lock_sync() = Some(resource);
         Ok(())
     }
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
-        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
+        *self.observer.lock_sync() = Some(observer);
     }
 }
 
@@ -123,19 +109,12 @@ impl AudioPlayerItem {
 
     /// Take the loaded resource for insertion into the player queue.
     pub(crate) fn take_resource(&self) -> FfiResult<Resource> {
-        self.resource
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or(FfiError::NotReady)
+        self.resource.lock_sync().take().ok_or(FfiError::NotReady)
     }
 
     #[expect(dead_code, reason = "used when EventBridge dispatches item events")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
-        self.observer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.observer.lock_sync().clone()
     }
 }
 

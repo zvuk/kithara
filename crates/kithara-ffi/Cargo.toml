@@ -22,9 +22,9 @@ workspace = true
 [dependencies]
 kithara = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
+kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

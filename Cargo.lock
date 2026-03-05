@@ -3738,6 +3738,7 @@ version = "0.1.0"
 dependencies = [
  "kithara",
  "kithara-events",
+ "kithara-platform",
  "kithara-play",
  "thiserror 2.0.18",
  "tokio",

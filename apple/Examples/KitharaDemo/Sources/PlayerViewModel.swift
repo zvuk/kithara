@@ -10,9 +10,11 @@ final class PlayerViewModel: ObservableObject {
     @Published var isPlaying = false
     @Published var errorMessage: String?
     @Published var urlText = ""
+    @Published var isSeeking = false
 
     private let player = KitharaPlayer()
     private var currentItem: KitharaPlayerItem?
+    private var loadTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -23,7 +25,10 @@ final class PlayerViewModel: ObservableObject {
 
         player.timePublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.currentTime = $0 }
+            .sink { [weak self] in
+                guard let self, !self.isSeeking else { return }
+                self.currentTime = $0
+            }
             .store(in: &cancellables)
 
         player.durationPublisher
@@ -44,18 +49,26 @@ final class PlayerViewModel: ObservableObject {
 
     func loadAndPlay() {
         let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
+        guard !url.isEmpty else {
+            errorMessage = "Enter a URL"
+            return
+        }
 
         errorMessage = nil
 
-        Task {
+        // Cancel any previous load to avoid race conditions.
+        loadTask?.cancel()
+        loadTask = Task {
             do {
                 let item = KitharaPlayerItem(url: url)
                 try await item.load()
+                guard !Task.isCancelled else { return }
                 player.removeAllItems()
                 try player.insert(item)
                 self.currentItem = item
                 player.play()
+            } catch is CancellationError {
+                // Superseded by a newer load — ignore.
             } catch {
                 self.errorMessage = "\(error)"
             }
@@ -71,11 +84,21 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval) {
+        currentTime = seconds
         do {
             try player.seek(to: seconds)
         } catch {
             errorMessage = "\(error)"
         }
+    }
+
+    func onSeekStarted() {
+        isSeeking = true
+    }
+
+    func onSeekEnded(_ value: TimeInterval) {
+        isSeeking = false
+        seek(to: value)
     }
 
     var formattedTime: String {

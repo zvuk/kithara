@@ -5,6 +5,8 @@
 
 use std::sync::LazyLock;
 
+use kithara_platform::tokio::runtime;
+
 #[cfg(feature = "backend-uniffi")]
 uniffi::setup_scaffolding!();
 
@@ -18,18 +20,16 @@ pub mod types;
 ///
 /// Runs a single-threaded tokio runtime on a dedicated OS thread.
 /// Only requires the `rt` feature (no `rt-multi-thread`), compatible with iOS.
-pub(crate) static FFI_RUNTIME: LazyLock<tokio::runtime::Handle> = LazyLock::new(|| {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("kithara-ffi".into())
-        .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create FFI tokio runtime");
-            let _ = tx.send(rt.handle().clone());
-            rt.block_on(std::future::pending::<()>());
-        })
-        .expect("failed to spawn FFI runtime thread");
-    rx.recv().expect("failed to receive FFI runtime handle")
+pub(crate) static FFI_RUNTIME: LazyLock<runtime::Handle> = LazyLock::new(|| {
+    let (tx, rx) = kithara_platform::sync::mpsc::channel();
+    kithara_platform::spawn(move || {
+        let rt = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to create FFI tokio runtime");
+        let _ = tx.send_sync(rt.handle().clone());
+        rt.block_on(std::future::pending::<()>());
+    });
+    rx.recv_sync()
+        .expect("failed to receive FFI runtime handle")
 });

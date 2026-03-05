@@ -1,8 +1,9 @@
 //! FFI wrapper for the audio player.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use kithara::play::{PlayerConfig, PlayerImpl};
+use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -33,17 +34,11 @@ impl AudioPlayer {
     }
 
     pub fn play(&self) {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .play();
+        self.inner.lock_sync().play();
     }
 
     pub fn pause(&self) {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pause();
+        self.inner.lock_sync().pause();
     }
 
     /// # Errors
@@ -51,8 +46,7 @@ impl AudioPlayer {
     /// Returns [`FfiError`] if the seek position is invalid.
     pub fn seek(&self, to_seconds: f64) -> Result<(), FfiError> {
         self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_sync()
             .seek_seconds(to_seconds)
             .map_err(FfiError::from)
     }
@@ -69,7 +63,7 @@ impl AudioPlayer {
     ) -> Result<(), FfiError> {
         // Lock queue first, validate `after`, then take_resource to avoid
         // consuming it before validation succeeds.
-        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = self.queue.lock_sync();
 
         let after_index = after
             .as_ref()
@@ -86,10 +80,7 @@ impl AudioPlayer {
         let resource = item.take_resource()?;
 
         // Hold both locks to keep inner and queue in sync.
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(resource, after_index);
+        self.inner.lock_sync().insert(resource, after_index);
 
         match after_index {
             Some(idx) => queue.insert(idx + 1, item),
@@ -105,7 +96,7 @@ impl AudioPlayer {
     /// Returns [`FfiError::InvalidArgument`] if the item is not in the queue.
     pub fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
         // Hold both locks to keep inner and queue in sync.
-        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = self.queue.lock_sync();
         let idx = queue
             .iter()
             .position(|i| i.uuid() == item.uuid())
@@ -113,10 +104,7 @@ impl AudioPlayer {
                 reason: format!("item {} not found in queue", item.id()),
             })?;
 
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove_at(idx);
+        self.inner.lock_sync().remove_at(idx);
 
         queue.remove(idx);
         drop(queue);
@@ -125,48 +113,29 @@ impl AudioPlayer {
 
     pub fn remove_all_items(&self) {
         // Hold both locks to keep inner and queue in sync.
-        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove_all_items();
+        let mut queue = self.queue.lock_sync();
+        self.inner.lock_sync().remove_all_items();
         queue.clear();
     }
 
     pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
-        self.queue
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.queue.lock_sync().clone()
     }
 
     pub fn default_rate(&self) -> f32 {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .default_rate()
+        self.inner.lock_sync().default_rate()
     }
 
     pub fn set_default_rate(&self, rate: f32) {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .set_default_rate(rate);
+        self.inner.lock_sync().set_default_rate(rate);
     }
 
     pub fn rate(&self) -> f32 {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .rate()
+        self.inner.lock_sync().rate()
     }
 
     pub fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
-        let rx = self
-            .inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .subscribe();
+        let rx = self.inner.lock_sync().subscribe();
 
         let bridge = EventBridge::spawn(
             rx,
@@ -175,11 +144,14 @@ impl AudioPlayer {
             CancellationToken::new(),
         );
 
-        *self
-            .event_bridge
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(bridge);
-        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
+        // Update both atomically: old bridge is dropped (cancelled) only after
+        // new one is stored, and observer ref stays in sync with bridge.
+        let mut eb = self.event_bridge.lock_sync();
+        let mut obs = self.observer.lock_sync();
+        *eb = Some(bridge);
+        *obs = Some(observer);
+        drop(obs);
+        drop(eb);
     }
 }
 
@@ -187,10 +159,7 @@ impl AudioPlayer {
 impl AudioPlayer {
     #[expect(dead_code, reason = "reserved for future event bridge extensions")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
-        self.observer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.observer.lock_sync().clone()
     }
 }
 
