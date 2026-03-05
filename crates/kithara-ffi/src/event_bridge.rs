@@ -137,7 +137,7 @@ mod tests {
 
     fn assert_send<T: Send>() {}
 
-    #[test]
+    #[kithara::test]
     fn event_bridge_is_send() {
         assert_send::<EventBridge>();
     }

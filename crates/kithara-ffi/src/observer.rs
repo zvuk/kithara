@@ -36,7 +36,7 @@ mod tests {
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
 
-    #[test]
+    #[kithara::test]
     fn observer_traits_are_send_sync() {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();

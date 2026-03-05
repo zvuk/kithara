@@ -167,12 +167,12 @@ impl AudioPlayer {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn create_player() {
         let _player = AudioPlayer::new();
     }
 
-    #[test]
+    #[kithara::test]
     fn default_rate_roundtrip() {
         let player = AudioPlayer::new();
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
@@ -180,13 +180,13 @@ mod tests {
         assert!((player.default_rate() - 0.5).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn items_initially_empty() {
         let player = AudioPlayer::new();
         assert!(player.items().is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn remove_all_items_on_empty_queue() {
         let player = AudioPlayer::new();
         player.remove_all_items();

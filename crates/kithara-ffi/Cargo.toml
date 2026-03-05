@@ -38,4 +38,6 @@ default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 
 [dev-dependencies]
+futures = { workspace = true }
+kithara = { workspace = true, features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

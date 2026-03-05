@@ -3744,6 +3744,7 @@ dependencies = [
 name = "kithara-ffi"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "kithara",
  "kithara-events",
  "kithara-platform",

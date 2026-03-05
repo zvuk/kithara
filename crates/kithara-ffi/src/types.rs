@@ -172,35 +172,35 @@ impl From<TimeRange> for FfiTimeRange {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn seconds_to_duration_valid() {
         let d = seconds_to_duration(1.5).expect("valid");
         assert_eq!(d, Duration::from_secs_f64(1.5));
     }
 
-    #[test]
+    #[kithara::test]
     fn seconds_to_duration_zero() {
         let d = seconds_to_duration(0.0).expect("valid");
         assert_eq!(d, Duration::ZERO);
     }
 
-    #[test]
+    #[kithara::test]
     fn seconds_to_duration_nan() {
         assert!(seconds_to_duration(f64::NAN).is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn seconds_to_duration_infinity() {
         assert!(seconds_to_duration(f64::INFINITY).is_err());
         assert!(seconds_to_duration(f64::NEG_INFINITY).is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn seconds_to_duration_negative() {
         assert!(seconds_to_duration(-1.0).is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn duration_roundtrip() {
         let secs = 42.123_456;
         let d = seconds_to_duration(secs).expect("valid");
@@ -208,36 +208,36 @@ mod tests {
         assert!((back - secs).abs() < 1e-9);
     }
 
-    #[test]
+    #[kithara::test]
     fn parse_url_valid() {
         let u = parse_url("https://example.com/song.mp3").expect("valid");
         assert_eq!(u.scheme(), "https");
     }
 
-    #[test]
+    #[kithara::test]
     fn parse_url_trimmed() {
         let u = parse_url("  https://example.com/  ").expect("valid");
         assert_eq!(u.host_str(), Some("example.com"));
     }
 
-    #[test]
+    #[kithara::test]
     fn parse_url_empty() {
         assert!(parse_url("").is_err());
         assert!(parse_url("   ").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn parse_url_invalid() {
         assert!(parse_url("not a url").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn play_error_not_ready() {
         let ffi: FfiError = PlayError::NotReady.into();
         assert!(matches!(ffi, FfiError::NotReady));
     }
 
-    #[test]
+    #[kithara::test]
     fn play_error_item_failed() {
         let ffi: FfiError = PlayError::ItemFailed {
             reason: "bad codec".into(),
@@ -246,13 +246,13 @@ mod tests {
         assert!(matches!(ffi, FfiError::ItemFailed { .. }));
     }
 
-    #[test]
+    #[kithara::test]
     fn play_error_internal_fallback() {
         let ffi: FfiError = PlayError::ArenaFull.into();
         assert!(matches!(ffi, FfiError::Internal { .. }));
     }
 
-    #[test]
+    #[kithara::test]
     fn player_status_conversion() {
         assert_eq!(
             FfiPlayerStatus::from(PlayerStatus::ReadyToPlay),
@@ -268,7 +268,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn item_status_conversion() {
         assert_eq!(
             FfiItemStatus::from(ItemStatus::ReadyToPlay),
@@ -276,7 +276,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn time_control_status_conversion() {
         assert_eq!(
             FfiTimeControlStatus::from(TimeControlStatus::Playing),
@@ -284,7 +284,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn time_range_conversion() {
         let tr = TimeRange::new(Duration::from_secs(10), Duration::from_secs(5));
         let ffi = FfiTimeRange::from(tr);

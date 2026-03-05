@@ -85,8 +85,14 @@ impl AudioPlayerItem {
             config = config.with_headers(headers.clone().into());
         }
 
-        let resource = Resource::new(config)
+        // Spawn on FFI_RUNTIME so the future runs within a Tokio reactor context.
+        // UniFFI polls async futures on its own thread pool which lacks a Tokio runtime.
+        let resource = crate::FFI_RUNTIME
+            .spawn(Resource::new(config))
             .await
+            .map_err(|e| FfiError::Internal {
+                message: e.to_string(),
+            })?
             .map_err(|e| FfiError::Internal {
                 message: e.to_string(),
             })?;
@@ -122,20 +128,20 @@ impl AudioPlayerItem {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn new_item_has_unique_id() {
         let a = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
         let b = AudioPlayerItem::new("https://example.com/b.mp3".into(), None);
         assert_ne!(a.id(), b.id());
     }
 
-    #[test]
+    #[kithara::test]
     fn url_preserved() {
         let item = AudioPlayerItem::new("https://example.com/song.mp3".into(), None);
         assert_eq!(item.url(), "https://example.com/song.mp3");
     }
 
-    #[test]
+    #[kithara::test]
     fn preferred_peak_bitrate_roundtrip() {
         let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
         assert_eq!(item.preferred_peak_bitrate(), 0.0);
@@ -143,10 +149,25 @@ mod tests {
         assert_eq!(item.preferred_peak_bitrate(), 256_000.0);
     }
 
-    #[test]
+    #[kithara::test]
     fn take_resource_without_load_returns_not_ready() {
         let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
         let result = item.take_resource();
         assert!(matches!(result, Err(FfiError::NotReady)));
+    }
+
+    /// Simulates UniFFI's async polling: `load()` is called from a thread
+    /// with NO Tokio runtime context. The future must not panic — it should
+    /// run I/O on `FFI_RUNTIME` internally.
+    #[kithara::test]
+    fn load_without_tokio_context_does_not_panic() {
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        let result = std::thread::spawn(move || futures::executor::block_on(item.load()))
+            .join()
+            .expect("load() panicked — no Tokio runtime context");
+
+        // Network error is expected (example.com won't serve audio).
+        // The point is: no panic from missing Tokio reactor.
+        assert!(result.is_err());
     }
 }
