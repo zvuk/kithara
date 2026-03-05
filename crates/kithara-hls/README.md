@@ -1,15 +1,146 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-hls.svg)](https://crates.io/crates/kithara-hls)
+[![Downloads](https://img.shields.io/crates/d/kithara-hls.svg)](https://crates.io/crates/kithara-hls)
+[![docs.rs](https://docs.rs/kithara-hls/badge.svg)](https://docs.rs/kithara-hls)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-hls
 
-## Purpose
-HLS VOD orchestration with ABR, caching, and segment lifecycle management.
+HLS (HTTP Live Streaming) VOD orchestration with adaptive bitrate, persistent caching, and encryption key management. Implements `StreamType` for use with `Stream<Hls>`, coordinating playlist parsing, segment fetching, ABR decisions, and disk cache.
 
-## Owns
-- Playlist and segment coordination
-- Variant selection integration with `kithara-abr`
-- Decrypt/cache/fetch orchestration for HLS assets
+## Usage
 
-## Integrates with
-- `kithara-net`, `kithara-assets`, `kithara-stream`, `kithara-drm`
+```rust
+use kithara_stream::Stream;
+use kithara_hls::{Hls, HlsConfig};
 
-## Notes
-- Keep protocol-specific orchestration here, not in facade/player crates.
+let config = HlsConfig::new(url);
+let stream = Stream::<Hls>::new(config).await?;
+```
+
+## Segment download flow
+
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+flowchart LR
+    subgraph Network
+        MasterPL["Master<br/>Playlist"]
+        MediaPL["Media<br/>Playlist"]
+        SegSrv["Segment<br/>Server"]
+        KeySrv["Key<br/>Server"]
+    end
+
+    subgraph "Async (tokio)"
+        FM["FetchManager<br/><i>fetch + cache</i>"]
+        KM["KeyManager<br/><i>key resolution</i>"]
+        W["Writer<br/><i>byte pump</i>"]
+    end
+
+    subgraph "Downloader (worker thread)"
+        DL["HlsDownloader<br/><i>plan, commit</i>"]
+        ABR["AbrController<br/><i>variant select</i>"]
+    end
+
+    subgraph "Assets"
+        AB["AssetStore<br/><i>Disk or Mem</i>"]
+        Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
+    end
+
+    subgraph "Sync (worker thread)"
+        HS["HlsSource<br/><i>Source impl</i>"]
+        SI["DownloadState<br/><i>virtual stream</i>"]
+        StreamH["Stream&lt;Hls&gt;"]
+    end
+
+    subgraph "Decode (worker thread)"
+        Dec["Symphonia<br/><i>InnerDecoder</i>"]
+        PCM2["PcmChunk"]
+    end
+
+    subgraph "Consumer"
+        Audio2["Audio&lt;Stream&lt;Hls&gt;&gt;"]
+    end
+
+    MasterPL --> FM
+    MediaPL --> FM
+    SegSrv --> FM
+    KeySrv --> KM
+    KM --> FM
+    FM --> W
+    W --> AB
+    AB --> Proc
+    DL -- "plan()" --> FM
+    DL -- "commit()" --> SI
+    ABR -- "decide()" --> DL
+    DL -- "throughput sample" --> ABR
+    HS -- "wait on condvar" --> SI
+    HS -- "read_at()" --> AB
+    StreamH --> HS
+    Dec -- "Read + Seek" --> StreamH
+    Dec --> PCM2
+    PCM2 -- "ringbuf" --> Audio2
+
+    style SI fill:#d4a574,color:#000
+    style AB fill:#d4a574,color:#000
+```
+
+- **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `HlsEvent::VariantApplied` on quality switch.
+- **Virtual byte stream**: segments are indexed linearly. Reader sees a single contiguous byte stream via `DownloadState`.
+- **Backpressure**: downloader waits when too far ahead of reader position (`look_ahead_bytes`).
+
+## Virtual Stream Layout
+
+Segments are logically stitched into a contiguous byte stream:
+
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+flowchart LR
+    subgraph "Single variant"
+        I[Init] --> S0[Seg0] --> S1[Seg1] --> S2[Seg2] --> M1[...]
+    end
+```
+
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+flowchart LR
+    subgraph "Mid-stream ABR switch (V0 → V1)"
+        V0S0["V0 Seg0"] --> V0S1["V0 Seg1"] --> F["⛔ fence"]
+        F --> V1I["V1 Init"] --> V1S2["V1 Seg2"] --> V1S3["V1 Seg3"] --> M2[...]
+    end
+
+    style F fill:#c44,color:#fff
+```
+
+`DownloadState` maintains a `BTreeMap<u64, LoadedSegment>` ordered by byte offset plus a `RangeSet<u64>` for loaded byte ranges. On ABR switch, `fence_at()` discards old variant segments.
+
+## ABR Integration
+
+1. `plan()` calls `make_abr_decision()` which queries `AbrController`.
+2. On variant change: emit `VariantApplied`, calculate new variant metadata via HEAD requests.
+3. `ensure_variant_ready()` handles mid-stream switches by fencing old segments.
+4. Throughput samples are fed to ABR after each segment download.
+
+## Caching and Offline Support
+
+- Leverages `AssetStore<DecryptContext>` (disk or ephemeral) for persistent segment storage.
+- `populate_cached_segments()` scans disk for committed segments on startup.
+- `#EXT-X-ALLOW-CACHE` is parsed into playlist metadata (`allow_cache`) for compatibility; current cache policy is not switched by this flag.
+
+## Seek and wait_range contract
+
+- `wait_range(start..end)` returns `Ready` only when the requested bytes are readable in current virtual layout.
+- Coverage is checked at media-byte level for segment resources; partial segment files are not treated as ready until marked.
+- On seek miss, source enqueues an explicit on-demand segment request for the active variant and seek epoch.
+- On ABR mid-stream switch, metadata offsets are no longer trusted for old layout, so source wakes sequential downloader instead of forcing stale offset lookup.
+- `Eof` is returned only when timeline is marked EOF and requested range starts at/after effective total bytes.
+
+## Integration
+
+Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetStore`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.
