@@ -14,10 +14,10 @@
 
 # kithara
 
-> Built with AI, tested by a human. Vibe-coded -- but with care.
-> Contributions, reviews, and fresh eyes are welcome.
+> Open-source modular audio engine in Rust.
+> Contributions and reviews are welcome.
 
-> **Status: early development.** Public API will be kept as stable as possible, but internal architecture is actively being simplified — expect significant refactoring of larger crates. Pin to an exact version if you depend on kithara today.
+> **Status: active development.** Public APIs are intended to remain stable within a release line, while internal implementation may evolve. Pin exact versions for production use.
 
 Modular audio engine in Rust. Streams, decodes, and plays audio from progressive HTTP and HLS sources with persistent caching and offline support. Designed as an open-source alternative to AVPlayer with DJ-grade mixing capabilities — multi-slot playback, crossfading, BPM sync, and per-channel EQ.
 
