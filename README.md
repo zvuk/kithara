@@ -84,6 +84,10 @@ cargo install cargo-nextest --locked
 # https://github.com/j178/prek
 prek install -f
 
+# Optional: worktree workflow for parallel agents
+brew install worktrunk
+wt config shell install
+
 # Test (nextest + doctests)
 just test-all
 

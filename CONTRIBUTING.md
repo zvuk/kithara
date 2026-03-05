@@ -30,6 +30,10 @@ cargo install cargo-nextest --locked
 # Install prek:
 # https://github.com/j178/prek
 prek install -f
+
+# Optional: worktree workflow for parallel agents
+brew install worktrunk
+wt config shell install
 ```
 
 See [`AGENTS.md`](AGENTS.md) for the full coding rules.
