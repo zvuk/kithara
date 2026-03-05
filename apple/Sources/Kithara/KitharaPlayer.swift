@@ -221,14 +221,7 @@ public final class KitharaPlayer: @unchecked Sendable {
     }
 
     fileprivate func handleError(code: Int32, message: String) {
-        let error: KitharaError = switch code {
-        case 1: .notReady
-        case 2: .itemFailed(message)
-        case 3: .seekFailed(message)
-        case 4: .engineNotRunning
-        case 5: .invalidArgument(message)
-        default: .internal(message)
-        }
+        let error = KitharaError(observerCode: code, message: message)
         _state.withLock { $0.error = error }
         _errorSubject.send(error)
     }
@@ -247,37 +240,37 @@ public final class KitharaPlayer: @unchecked Sendable {
 // MARK: - PlayerObserver bridge
 
 private final class PlayerObserverBridge: KitharaFFI.PlayerObserver, @unchecked Sendable {
-    private let _player: LockedValue<KitharaPlayer?>
+    private let _player: WeakRef<KitharaPlayer>
 
     init(player: KitharaPlayer) {
-        self._player = LockedValue(player)
+        self._player = WeakRef(player)
     }
 
     func onTimeChanged(seconds: Double) {
-        _player.withLock { $0 }?.handleTimeChanged(seconds)
+        _player.value?.handleTimeChanged(seconds)
     }
 
     func onRateChanged(rate: Float) {
-        _player.withLock { $0 }?.handleRateChanged(rate)
+        _player.value?.handleRateChanged(rate)
     }
 
     func onCurrentItemChanged() {
-        _player.withLock { $0 }?.handleCurrentItemChanged()
+        _player.value?.handleCurrentItemChanged()
     }
 
     func onStatusChanged(statusCode: Int32) {
-        _player.withLock { $0 }?.handleStatusChanged(statusCode)
+        _player.value?.handleStatusChanged(statusCode)
     }
 
     func onError(code: Int32, message: String) {
-        _player.withLock { $0 }?.handleError(code: code, message: message)
+        _player.value?.handleError(code: code, message: message)
     }
 
     func onDurationChanged(seconds: Double) {
-        _player.withLock { $0 }?.handleDurationChanged(seconds)
+        _player.value?.handleDurationChanged(seconds)
     }
 
     func onBufferedDurationChanged(seconds: Double) {
-        _player.withLock { $0 }?.handleBufferedDurationChanged(seconds)
+        _player.value?.handleBufferedDurationChanged(seconds)
     }
 }

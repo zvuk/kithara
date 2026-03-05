@@ -51,6 +51,11 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         _bufferedDurationSubject.eraseToAnyPublisher()
     }
 
+    /// Publishes errors.
+    public nonisolated var errorPublisher: AnyPublisher<KitharaError, Never> {
+        _errorSubject.eraseToAnyPublisher()
+    }
+
     // MARK: - Bitrate preferences
 
     /// Preferred peak bitrate (0 = no limit).
@@ -80,6 +85,7 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     private let _statusSubject = PassthroughSubject<ItemStatus, Never>()
     private let _durationSubject = PassthroughSubject<TimeInterval, Never>()
     private let _bufferedDurationSubject = PassthroughSubject<TimeInterval, Never>()
+    private let _errorSubject = PassthroughSubject<KitharaError, Never>()
 
     // MARK: - Init
 
@@ -129,40 +135,34 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     }
 
     fileprivate func handleError(code: Int32, message: String) {
-        let error: KitharaError = switch code {
-        case 1: .notReady
-        case 2: .itemFailed(message)
-        case 3: .seekFailed(message)
-        case 4: .engineNotRunning
-        case 5: .invalidArgument(message)
-        default: .internal(message)
-        }
+        let error = KitharaError(observerCode: code, message: message)
         _state.withLock { $0.error = error }
+        _errorSubject.send(error)
     }
 }
 
 // MARK: - ItemObserver bridge
 
 private final class ItemObserverBridge: KitharaFFI.ItemObserver, @unchecked Sendable {
-    private let _item: LockedValue<KitharaPlayerItem?>
+    private let _item: WeakRef<KitharaPlayerItem>
 
     init(item: KitharaPlayerItem) {
-        self._item = LockedValue(item)
+        self._item = WeakRef(item)
     }
 
     func onDurationChanged(seconds: Double) {
-        _item.withLock { $0 }?.handleDurationChanged(seconds)
+        _item.value?.handleDurationChanged(seconds)
     }
 
     func onBufferedDurationChanged(seconds: Double) {
-        _item.withLock { $0 }?.handleBufferedDurationChanged(seconds)
+        _item.value?.handleBufferedDurationChanged(seconds)
     }
 
     func onStatusChanged(statusCode: Int32) {
-        _item.withLock { $0 }?.handleStatusChanged(statusCode)
+        _item.value?.handleStatusChanged(statusCode)
     }
 
     func onError(code: Int32, message: String) {
-        _item.withLock { $0 }?.handleError(code: code, message: message)
+        _item.value?.handleError(code: code, message: message)
     }
 }

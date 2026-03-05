@@ -124,4 +124,19 @@ extension KitharaError {
             self = .internal(message)
         }
     }
+
+    /// Map observer callback error codes to ``KitharaError``.
+    ///
+    /// Codes match Rust `FfiError` variant order:
+    /// 1=NotReady, 2=ItemFailed, 3=SeekFailed, 4=EngineNotRunning, 5=InvalidArgument.
+    init(observerCode code: Int32, message: String) {
+        switch code {
+        case 1: self = .notReady
+        case 2: self = .itemFailed(message)
+        case 3: self = .seekFailed(message)
+        case 4: self = .engineNotRunning
+        case 5: self = .invalidArgument(message)
+        default: self = .internal(message)
+        }
+    }
 }
