@@ -24,6 +24,7 @@ members = [
     "crates/kithara-ui",
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
+    "crates/kithara-ffi",
     "tests",
     "examples",
 ]
@@ -148,6 +149,7 @@ kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
+kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-tui = { path = "crates/kithara-tui" }
 kithara-ui = { path = "crates/kithara-ui" }
 kithara-app = { path = "crates/kithara-app" }
@@ -234,6 +236,9 @@ sha2 = "0.10.9"
 tower = "0.5.3"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 tempfile = "3.26.0"
+
+# FFI
+uniffi = { version = "0.29.1" }
 
 # async traits
 async-trait = "0.1.89"
