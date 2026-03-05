@@ -84,6 +84,9 @@ thirtyfour = { workspace = true }
 # Performance monitoring (optional)
 hotpath = { workspace = true, optional = true }
 
+# RSS memory profiling
+memory-stats = { workspace = true }
+
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-assets = { workspace = true }
@@ -155,6 +158,10 @@ required-features = ["perf"]
 name = "storage"
 path = "perf/storage.rs"
 required-features = ["perf"]
+
+[[test]]
+name = "memory_rss"
+path = "perf/memory_rss.rs"
 
 [[bench]]
 name = "refactor_hotpaths"

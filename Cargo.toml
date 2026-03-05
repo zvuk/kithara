@@ -259,6 +259,8 @@ lru = "0.16"
 # memory profiling
 dhat = "0.3"
 memory-stats = "1.2"
+stats_alloc = "0.1"
+assert_no_alloc = "1.1"
 
 # performance monitoring
 hotpath = "0.10.1"

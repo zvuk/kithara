@@ -63,6 +63,7 @@ web-sys = { workspace = true, features = [
 
 [dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["internal"] }
+assert_no_alloc = { workspace = true }
 tokio-util = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
