@@ -243,6 +243,11 @@ thirtyfour = "0.36.1"
 delegate = "0.13"
 bitflags = "2.9"
 
+# proc macros
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "0.9", default-features = false }
