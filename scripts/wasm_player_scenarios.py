@@ -13,6 +13,8 @@ from typing import Any, Callable
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import JavascriptException, WebDriverException
 
@@ -25,25 +27,36 @@ class WasmPlayerScenario:
     def __init__(
         self,
         *,
+        browser: str,
         page_url: str,
         chromedriver_path: str,
+        geckodriver_path: str,
         headless: bool,
         switch_wait_seconds: int,
         timeout_seconds: int,
     ) -> None:
+        self.browser = browser
         self.page_url = page_url
         self.switch_wait_seconds = switch_wait_seconds
         self.timeout_seconds = timeout_seconds
 
-        opts = Options()
-        opts.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-        opts.add_argument("--enable-features=SharedArrayBuffer")
-        opts.add_argument("--autoplay-policy=no-user-gesture-required")
-        if headless:
-            opts.add_argument("--headless=new")
-
-        service = Service(chromedriver_path)
-        self.driver = webdriver.Chrome(service=service, options=opts)
+        if browser == "chrome":
+            opts = Options()
+            opts.set_capability("goog:loggingPrefs", {"browser": "ALL"})
+            opts.add_argument("--enable-features=SharedArrayBuffer")
+            opts.add_argument("--autoplay-policy=no-user-gesture-required")
+            if headless:
+                opts.add_argument("--headless=new")
+            service = Service(chromedriver_path)
+            self.driver = webdriver.Chrome(service=service, options=opts)
+        else:
+            opts = FirefoxOptions()
+            if headless:
+                opts.add_argument("-headless")
+            opts.set_preference("media.autoplay.default", 0)
+            opts.set_preference("dom.workers.requestAnimationFrame", True)
+            service = FirefoxService(geckodriver_path)
+            self.driver = webdriver.Firefox(service=service, options=opts)
         self.driver.set_page_load_timeout(60)
         self.driver.set_script_timeout(30)
 
@@ -337,6 +350,12 @@ class WasmPlayerScenario:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--browser",
+        choices=("chrome", "firefox"),
+        default="chrome",
+        help="Browser to run Selenium scenario in",
+    )
+    parser.add_argument(
         "--url",
         default="http://127.0.0.1:9092/",
         help="WASM demo URL",
@@ -345,6 +364,11 @@ def parse_args() -> argparse.Namespace:
         "--chromedriver",
         default="/opt/homebrew/bin/chromedriver",
         help="Path to chromedriver",
+    )
+    parser.add_argument(
+        "--geckodriver",
+        default="/opt/homebrew/bin/geckodriver",
+        help="Path to geckodriver",
     )
     parser.add_argument(
         "--switch-wait-seconds",
@@ -369,8 +393,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     scenario = WasmPlayerScenario(
+        browser=args.browser,
         page_url=args.url,
         chromedriver_path=args.chromedriver,
+        geckodriver_path=args.geckodriver,
         headless=args.headless,
         switch_wait_seconds=args.switch_wait_seconds,
         timeout_seconds=args.timeout_seconds,

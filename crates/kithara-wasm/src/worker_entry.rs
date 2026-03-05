@@ -1,16 +1,12 @@
 //! Engine Worker entry point.
 //!
 //! Spawned via [`kithara_platform::spawn`]. Owns [`PlayerImpl`] and processes
-//! commands from the main-thread bridge asynchronously.
-//!
-//! Session graph operations are transparently proxied to the main thread via
-//! the remote session channel (the Worker's [`SessionClient`] is in `Remote` mode).
+//! commands from the main-thread bridge.
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_platform::{Mutex, tokio, tokio::sync::broadcast::error::RecvError};
+use kithara_platform::{sync::mpsc, tokio};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
-use tracing::{info, warn};
 
 use crate::commands::WorkerCmd;
 
@@ -22,14 +18,8 @@ macro_rules! clog {
 
 const CROSSFADE_SECONDS: f32 = 5.0;
 
-/// Blocking entry called inside a Web Worker thread (via `kithara_platform::spawn`).
-///
-/// Sets up an async event loop via [`tokio::task::spawn`] and
-/// returns immediately — the Worker stays alive until the async task finishes.
-pub(crate) fn worker_main(
-    cmd_rx: kithara_platform::sync::mpsc::Receiver<WorkerCmd>,
-    event_log: Arc<Mutex<Vec<String>>>,
-) {
+/// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
+pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     clog!("[WORKER] engine worker started");
 
     tokio::task::spawn(async move {
@@ -40,81 +30,64 @@ pub(crate) fn worker_main(
         clog!("[WORKER] spawn: PlayerImpl created, entering command loop");
 
         loop {
-            let cmd = match cmd_rx.recv_async().await {
-                Ok(cmd) => cmd,
+            match cmd_rx.recv_async().await {
+                Ok(cmd) => {
+                    dispatch_cmd(cmd, &player).await;
+                }
                 Err(_) => {
                     clog!("[WORKER] command channel closed, shutting down");
-                    break;
-                }
-            };
-
-            match cmd {
-                WorkerCmd::SelectTrack { url, reply_tx } => {
-                    let p = Arc::clone(&player);
-                    let log = Arc::clone(&event_log);
-                    tokio::task::spawn(async move {
-                        let result = handle_select_track(&p, &url, &log).await;
-                        let _ = reply_tx.send(result);
-                    });
-                }
-                WorkerCmd::Play => {
-                    let p = Arc::clone(&player);
-                    tokio::task::spawn_blocking(move || p.play());
-                }
-                WorkerCmd::Pause => {
-                    player.pause();
-                }
-                WorkerCmd::Stop => {
-                    player.pause();
-                    let _ = player.seek_seconds(0.0);
-                }
-                WorkerCmd::Seek(ms) => {
-                    let _ = player.seek_seconds(ms.max(0.0) / 1000.0);
-                }
-                WorkerCmd::SetVolume(vol) => {
-                    let p = Arc::clone(&player);
-                    tokio::task::spawn_blocking(move || p.set_volume(vol));
-                }
-                WorkerCmd::SetCrossfade(secs) => {
-                    player.set_crossfade_duration(secs);
-                }
-                WorkerCmd::SetEqGain { band, gain_db } => {
-                    let p = Arc::clone(&player);
-                    tokio::task::spawn_blocking(move || {
-                        let _ = p.set_eq_gain(band as usize, gain_db);
-                    });
-                }
-                WorkerCmd::ResetEq => {
-                    let p = Arc::clone(&player);
-                    tokio::task::spawn_blocking(move || {
-                        let _ = p.reset_eq();
-                    });
-                }
-                WorkerCmd::SetDucking(mode) => {
-                    let mode = match mode {
-                        1 => SessionDuckingMode::Soft,
-                        2 => SessionDuckingMode::Hard,
-                        _ => SessionDuckingMode::Off,
-                    };
-                    let p = Arc::clone(&player);
-                    tokio::task::spawn_blocking(move || {
-                        let _ = p.set_session_ducking(mode);
-                    });
+                    return;
                 }
             }
         }
-
-        clog!("[WORKER] engine worker exiting");
     });
 }
 
-/// Load resource (async) and start playback (sync — via `spawn_blocking`).
-async fn handle_select_track(
-    player: &Arc<PlayerImpl>,
-    url: &str,
-    event_log: &Arc<Mutex<Vec<String>>>,
-) -> Result<(), String> {
-    clog!("[WORKER] select_track: loading resource url={url}");
+async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
+    match cmd {
+        WorkerCmd::SelectTrack { url, request_id } => {
+            let result = handle_select_track(player, &url).await;
+            crate::js_channel::send_reply(request_id, result);
+        }
+        WorkerCmd::Play => {
+            player.play();
+        }
+        WorkerCmd::Pause => {
+            player.pause();
+        }
+        WorkerCmd::Stop => {
+            player.pause();
+            let _ = player.seek_seconds(0.0);
+        }
+        WorkerCmd::Seek(ms) => {
+            let _ = player.seek_seconds(ms.max(0.0) / 1000.0);
+        }
+        WorkerCmd::SetVolume(vol) => {
+            player.set_volume(vol);
+        }
+        WorkerCmd::SetCrossfade(secs) => {
+            player.set_crossfade_duration(secs);
+        }
+        WorkerCmd::SetEqGain { band, gain_db } => {
+            let _ = player.set_eq_gain(band as usize, gain_db);
+        }
+        WorkerCmd::ResetEq => {
+            let _ = player.reset_eq();
+        }
+        WorkerCmd::SetDucking(mode) => {
+            let mode = match mode {
+                1 => SessionDuckingMode::Soft,
+                2 => SessionDuckingMode::Hard,
+                _ => SessionDuckingMode::Off,
+            };
+            let _ = player.set_session_ducking(mode);
+        }
+    }
+}
+
+/// Load resource (async) and start playback.
+async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), String> {
+    clog!("[WORKER] select_track: url={url}");
 
     let mut config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;
     // WASM always uses ephemeral storage. Increase LRU cache capacity for
@@ -124,72 +97,16 @@ async fn handle_select_track(
         config.store.cache_capacity = NonZeroUsize::new(64);
     }
 
-    let resource = Resource::new(config)
+    let mut resource = Resource::new(config)
         .await
         .map_err(|e| format!("resource load failed: {e:?}"))?;
 
-    clog!("[WORKER] select_track: resource loaded, subscribing events");
-    let events_rx = resource.subscribe();
-    let url_owned = url.to_owned();
-    let log = Arc::clone(event_log);
-    tokio::task::spawn(async move {
-        log_resource_events(events_rx, url_owned, log).await;
-    });
+    resource.preload().await;
 
-    clog!("[WORKER] select_track: calling play_resource via spawn_blocking");
-    let p = Arc::clone(player);
-    let play_result = tokio::task::spawn_blocking(move || {
-        clog!("[WORKER:blocking] play_resource: starting");
-        let result = p
-            .play_resource(resource)
-            .map_err(|e| format!("play_resource: {e}"));
-        clog!(
-            "[WORKER:blocking] play_resource: done, ok={}",
-            result.is_ok()
-        );
-        result
-    })
-    .await;
-    clog!(
-        "[WORKER] spawn_blocking returned: ok={}",
-        play_result.is_ok()
-    );
-    play_result.map_err(|e| format!("spawn_blocking: {e}"))??;
+    player
+        .play_resource(resource)
+        .map_err(|e| format!("play_resource: {e}"))?;
 
-    clog!("[WORKER] select_track: done");
+    clog!("[WORKER] select_track: playing");
     Ok(())
-}
-
-async fn log_resource_events<T>(
-    mut events_rx: tokio::sync::broadcast::Receiver<T>,
-    url: String,
-    event_log: Arc<Mutex<Vec<String>>>,
-) where
-    T: core::fmt::Debug + Clone + Send + 'static,
-{
-    loop {
-        match events_rx.recv().await {
-            Ok(ev) => {
-                let line = format!("resource src={url} event={ev:?}");
-                info!("{line}");
-                push_event(&event_log, line);
-            }
-            Err(RecvError::Lagged(n)) => {
-                let line = format!("resource src={url} events lagged n={n}");
-                warn!("{line}");
-                push_event(&event_log, line);
-            }
-            Err(RecvError::Closed) => break,
-        }
-    }
-}
-
-fn push_event(event_log: &Arc<Mutex<Vec<String>>>, line: String) {
-    let mut events = event_log.lock_sync();
-    events.push(line);
-    const MAX_EVENTS: usize = 1024;
-    if events.len() > MAX_EVENTS {
-        let keep_from = events.len() - MAX_EVENTS;
-        events.drain(0..keep_from);
-    }
 }

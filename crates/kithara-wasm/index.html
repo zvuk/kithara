@@ -8,38 +8,59 @@
     <link data-trunk rel="copy-file" href="_headers" />
     <link data-trunk rel="copy-file" href="coi-serviceworker.js" />
     <style>
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-panel: #222244;
+            --bg-panel-alt: #2a2a54;
+            --line: #3b3b67;
+            --text-main: #e6e6e6;
+            --text-muted: #888ca3;
+            --accent: #bb9442;
+            --accent-strong: #d6ad59;
+            --error: #e65b5b;
+            --ok: #58c27d;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            max-width: 860px;
-            margin: 24px auto;
+            font-family: "Avenir Next", "Fira Sans", "Trebuchet MS", sans-serif;
+            max-width: 900px;
+            margin: 22px auto;
             padding: 0 16px 24px;
-            background: #151a23;
-            color: #edf2f7;
+            background:
+                radial-gradient(1200px 420px at 20% -10%, rgba(187, 148, 66, 0.22), transparent 58%),
+                radial-gradient(900px 380px at 100% 0%, rgba(34, 34, 68, 0.55), transparent 60%),
+                var(--bg-dark);
+            color: var(--text-main);
         }
         .header {
             display: flex;
             gap: 14px;
             align-items: center;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
         }
         .logo {
             width: 64px;
             height: 64px;
             object-fit: contain;
             border-radius: 10px;
-            background: #0f141d;
-            border: 1px solid #2a3442;
+            background: rgba(34, 34, 68, 0.7);
+            border: 1px solid var(--line);
             padding: 8px;
         }
-        h1 { color: #ff5d5d; font-size: 26px; }
-        .subtitle { color: #97a5b8; font-size: 13px; }
+        h1 {
+            color: var(--accent);
+            font-size: 28px;
+            letter-spacing: 0.2px;
+            text-shadow: 0 0 26px rgba(187, 148, 66, 0.2);
+        }
+        .subtitle { color: var(--text-muted); font-size: 13px; }
         .card {
-            background: #0f141d;
-            border: 1px solid #2a3442;
-            border-radius: 10px;
-            padding: 12px;
+            background: linear-gradient(180deg, rgba(42, 42, 84, 0.92), rgba(34, 34, 68, 0.95));
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 13px;
             margin-bottom: 12px;
+            box-shadow: 0 18px 36px rgba(3, 3, 13, 0.28);
         }
         .row { display: flex; gap: 8px; align-items: center; }
         .row + .row { margin-top: 10px; }
@@ -47,64 +68,75 @@
             flex: 1;
             padding: 9px 12px;
             font-size: 14px;
-            background: #111a27;
-            border: 1px solid #2e3a4e;
-            color: #edf2f7;
+            background: rgba(21, 21, 42, 0.74);
+            border: 1px solid var(--line);
+            color: var(--text-main);
             border-radius: 6px;
             outline: none;
         }
-        input[type="text"]:focus { border-color: #ff5d5d; }
+        input[type="text"]:focus { border-color: var(--accent); }
         button {
             padding: 9px 14px;
-            border: none;
+            border: 1px solid #a88742;
             border-radius: 6px;
-            background: #ff5d5d;
-            color: #fff;
+            background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+            color: #1b1b2d;
             font-size: 13px;
+            font-weight: 600;
             cursor: pointer;
+            transition: background 100ms ease, transform 100ms ease;
         }
-        button:hover { background: #ef4b4b; }
-        button:disabled { background: #5b6370; cursor: not-allowed; }
+        button:hover {
+            background: linear-gradient(180deg, #e2b963, var(--accent-strong));
+            transform: translateY(-1px);
+        }
+        button:disabled {
+            background: rgba(66, 66, 98, 0.5);
+            border-color: rgba(90, 90, 120, 0.5);
+            color: rgba(200, 200, 200, 0.6);
+            cursor: not-allowed;
+            transform: none;
+        }
         #playlist {
             margin-top: 10px;
             list-style: none;
             display: flex;
             flex-direction: column;
             gap: 6px;
-            max-height: 220px;
+            max-height: 230px;
             overflow-y: auto;
         }
         #playlist li {
-            border: 1px solid #2a3442;
+            border: 1px solid var(--line);
             border-radius: 6px;
             padding: 8px 10px;
-            background: #111a27;
+            background: rgba(20, 20, 41, 0.66);
             cursor: pointer;
             font-size: 13px;
-            color: #dce3ee;
+            color: #dde0f3;
             word-break: break-all;
         }
         #playlist li.active {
-            border-color: #ff5d5d;
-            background: #2c1720;
+            border-color: var(--accent);
+            background: rgba(187, 148, 66, 0.18);
         }
-        #playlist li:hover { border-color: #ff8989; }
-        input[type="range"] { flex: 1; accent-color: #ff5d5d; }
+        #playlist li:hover { border-color: #8d8db8; }
+        input[type="range"] { flex: 1; accent-color: var(--accent); }
         .setting-label {
             min-width: 74px;
-            color: #9bb0c8;
+            color: var(--text-muted);
             font-size: 13px;
         }
         .setting-value {
             min-width: 64px;
-            color: #9bb0c8;
+            color: var(--text-muted);
             font-family: monospace;
             text-align: right;
         }
-        .time { min-width: 46px; color: #9bb0c8; font-family: monospace; }
+        .time { min-width: 46px; color: var(--text-muted); font-family: monospace; }
         #status {
             font-size: 13px;
-            color: #9bb0c8;
+            color: var(--text-muted);
             font-family: monospace;
             margin-bottom: 10px;
         }
@@ -115,37 +147,37 @@
             margin-top: 8px;
         }
         .eq-band {
-            border: 1px solid #2a3442;
+            border: 1px solid var(--line);
             border-radius: 8px;
             padding: 8px;
-            background: #111a27;
+            background: rgba(21, 21, 42, 0.74);
         }
         .eq-band label {
             display: block;
             font-size: 11px;
-            color: #9bb0c8;
+            color: var(--text-muted);
             margin-bottom: 6px;
         }
         .eq-band .gain {
             display: block;
             margin-top: 4px;
             font-size: 11px;
-            color: #f3f6fb;
+            color: var(--text-main);
             font-family: monospace;
         }
         #event-log {
-            background: #0b1018;
-            border: 1px solid #2a3442;
+            background: rgba(15, 15, 30, 0.84);
+            border: 1px solid var(--line);
             border-radius: 8px;
             padding: 10px;
             font-size: 12px;
             font-family: monospace;
-            color: #9fb0c6;
+            color: #aab0c6;
             max-height: 220px;
             overflow-y: auto;
         }
-        #event-log .error { color: #ff7f7f; }
-        #event-log .info { color: #65f0d3; }
+        #event-log .error { color: var(--error); }
+        #event-log .info { color: var(--ok); }
         @media (max-width: 740px) {
             .eq-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .header { align-items: flex-start; }
@@ -157,7 +189,7 @@
         <img class="logo" src="logo.svg" alt="Kithara logo" />
         <div>
             <h1>Kithara Play WASM</h1>
-            <p class="subtitle">Playlist + crossfade + EQ on top of kithara-play <span id="build-info" style="color:#6f7d90"></span></p>
+            <p class="subtitle">Playlist + crossfade + EQ on top of kithara-play <span id="build-info" style="color:var(--text-muted)"></span></p>
         </div>
     </div>
 
@@ -197,7 +229,7 @@
 
     <div class="card">
         <div class="row" style="justify-content: space-between;">
-            <strong style="font-size: 13px; color:#c9d4e5;">Equalizer</strong>
+            <strong style="font-size: 13px; color:var(--text-main);">Equalizer</strong>
             <button id="eq-reset-btn" disabled>Reset EQ</button>
         </div>
         <div class="eq-grid" id="eq-grid"></div>
@@ -213,8 +245,6 @@
             const s = Math.max(0, Math.floor(ms / 1000));
             return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
         };
-        const coiReloadKey = 'kithara_coi_wait_reloaded';
-
         function log(msg, cls = '') {
             const div = document.createElement('div');
             if (cls) div.className = cls;
@@ -228,57 +258,32 @@
                 $(id).disabled = !on;
         }
 
-        // --- COI runtime check (same logic as before) ---
-        function ensureRuntime() {
-            const d = {
-                crossOriginIsolated: self.crossOriginIsolated === true,
-                secureContext: self.isSecureContext === true,
-                sharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
-            };
-            if (d.crossOriginIsolated) sessionStorage.removeItem(coiReloadKey);
-            if (d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) return true;
+        // --- Init WASM ---
+        // Player class and checkRuntime() are auto-generated by post-build.sh
+        // and appended to kithara-wasm.js.
+        const wasm = await import('./kithara-wasm.js');
 
-            const waitingForCoiReload =
-                d.secureContext && !d.crossOriginIsolated &&
-                typeof navigator.serviceWorker !== 'undefined' &&
-                !navigator.serviceWorker.controller;
-            if (waitingForCoiReload) {
-                setControlsEnabled(false);
-                $('status').textContent = 'Waiting for cross-origin isolation (service worker reload)...';
-                log('Waiting for COI service worker to activate and reload the page.', 'info');
-                navigator.serviceWorker.ready.then(() => {
-                    if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
-                        sessionStorage.removeItem(coiReloadKey);
-                        return;
-                    }
-                    if (sessionStorage.getItem(coiReloadKey) === '1') {
-                        log('COI service worker is active but page is still uncontrolled. Reload manually.', 'error');
-                        return;
-                    }
-                    sessionStorage.setItem(coiReloadKey, '1');
-                    window.location.reload();
-                }).catch(err => log(`Service worker ready failed: ${err}`, 'error'));
-                return false;
-            }
-
+        const runtime = wasm.checkRuntime();
+        if (!runtime.ok) {
             setControlsEnabled(false);
-            $('status').textContent = 'Environment is not ready for WASM audio playback';
-            log(`Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer}`, 'error');
-            return false;
+            $('status').textContent = runtime.waitingForReload
+                ? 'Waiting for cross-origin isolation (service worker reload)...'
+                : 'Environment is not ready for WASM audio playback';
+            log(runtime.reason, runtime.waitingForReload ? 'info' : 'error');
+            throw new Error(runtime.reason);
         }
 
-        if (!ensureRuntime()) throw new Error('Runtime not ready');
-
-        // --- Init WASM (setup() runs automatically via #[wasm_bindgen(start)]) ---
-        const wasm = await import('./kithara-wasm.js');
         await wasm.default();
 
-        const player = new wasm.Player();
+        const player = typeof wasm.Player?.create === 'function'
+            ? await wasm.Player.create()
+            : new wasm.Player();
         window.__player = player;
+        window.__wasm = wasm;
 
         $('build-info').textContent = `(${wasm.build_info()})`;
 
-        // --- Playlist (JS-side state, NOT in WASM memory) ---
+        // --- Playlist ---
         const playlist = [
             { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
             { url: 'https://stream.silvercomet.top/hls/master.m3u8', label: 'HLS Stream' },
@@ -394,6 +399,7 @@
 
         // --- UI loop (requestAnimationFrame) ---
         function tick() {
+            if (!player) return;
             player.tick();
 
             const pos = player.get_position_ms();

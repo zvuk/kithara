@@ -22,6 +22,12 @@ use crate::{
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
+/// Default PCM queue depth in decoded chunks.
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
+
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
@@ -72,7 +78,7 @@ impl<T: StreamType> AudioConfig<T> {
             hint: None,
             host_sample_rate: None,
             media_info: None,
-            pcm_buffer_chunks: 10,
+            pcm_buffer_chunks: DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             prefer_hardware: false,
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,

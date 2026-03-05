@@ -409,6 +409,12 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
                         *state = Some(SessionState::new());
                     }
                 });
+                // Pre-warm BRIDGE_PLAYER_STATE: access the thread-local so
+                // that TLS destructor registration (which allocates via
+                // dlmalloc) happens now — before any Worker is spawned.
+                // Without this, the first access during tick_and_poll_remote()
+                // can deadlock with a Worker holding the dlmalloc spin lock.
+                BRIDGE_PLAYER_STATE.with(|_| {});
             }
 
             let client = Arc::new(SessionClient { local: is_local });
