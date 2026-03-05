@@ -21,65 +21,28 @@ test-doc:
 
 test-all: test test-doc
 
-semgrep-blocking:
-    SEMGREP_BIN="$(command -v semgrep || true)"; \
-    if [[ -z "$SEMGREP_BIN" ]]; then \
-      PY_USER_BASE="$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
-      CANDIDATE="$PY_USER_BASE/bin/semgrep"; \
-      if [[ -x "$CANDIDATE" ]]; then \
-        SEMGREP_BIN="$CANDIDATE"; \
-      fi; \
-    fi; \
-    if [[ -z "$SEMGREP_BIN" ]]; then \
-      echo "FAILED: semgrep is required but not installed."; \
+ast-grep-blocking:
+    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
+    if [[ -z "$AST_GREP_BIN" ]]; then \
+      echo "FAILED: ast-grep is required but not installed."; \
       exit 1; \
     fi; \
-    REPO_ROOT="$(pwd)"; \
-    XDG_DIR="$REPO_ROOT/.cache"; \
-    SEMGREP_DIR="$XDG_DIR/semgrep"; \
-    mkdir -p "$XDG_DIR" "$SEMGREP_DIR"; \
-    export XDG_CACHE_HOME="$XDG_DIR"; \
-    export XDG_CONFIG_HOME="$XDG_DIR"; \
-    export SEMGREP_LOG_FILE="$SEMGREP_DIR/semgrep.log"; \
-    export SEMGREP_SETTINGS_FILE="$SEMGREP_DIR/settings.yml"; \
-    export PATH="$(dirname "$SEMGREP_BIN")":$PATH; \
-    if [[ -z "${SSL_CERT_FILE:-}" ]]; then \
-      CERT_PATH="$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
-      if [[ -n "$CERT_PATH" && -f "$CERT_PATH" ]]; then \
-        export SSL_CERT_FILE="$CERT_PATH"; \
-      fi; \
-    fi; \
-    "$SEMGREP_BIN" --config semgrep.yml --severity ERROR --error
+    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short \
+      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper)$'
 
-semgrep-advisory:
-    SEMGREP_BIN="$(command -v semgrep || true)"; \
-    if [[ -z "$SEMGREP_BIN" ]]; then \
-      PY_USER_BASE="$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
-      CANDIDATE="$PY_USER_BASE/bin/semgrep"; \
-      if [[ -x "$CANDIDATE" ]]; then \
-        SEMGREP_BIN="$CANDIDATE"; \
-      fi; \
-    fi; \
-    if [[ -z "$SEMGREP_BIN" ]]; then \
-      echo "FAILED: semgrep is required but not installed."; \
+ast-grep-advisory:
+    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
+    if [[ -z "$AST_GREP_BIN" ]]; then \
+      echo "FAILED: ast-grep is required but not installed."; \
       exit 1; \
     fi; \
-    REPO_ROOT="$(pwd)"; \
-    XDG_DIR="$REPO_ROOT/.cache"; \
-    SEMGREP_DIR="$XDG_DIR/semgrep"; \
-    mkdir -p "$XDG_DIR" "$SEMGREP_DIR"; \
-    export XDG_CACHE_HOME="$XDG_DIR"; \
-    export XDG_CONFIG_HOME="$XDG_DIR"; \
-    export SEMGREP_LOG_FILE="$SEMGREP_DIR/semgrep.log"; \
-    export SEMGREP_SETTINGS_FILE="$SEMGREP_DIR/settings.yml"; \
-    export PATH="$(dirname "$SEMGREP_BIN")":$PATH; \
-    if [[ -z "${SSL_CERT_FILE:-}" ]]; then \
-      CERT_PATH="$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
-      if [[ -n "$CERT_PATH" && -f "$CERT_PATH" ]]; then \
-        export SSL_CERT_FILE="$CERT_PATH"; \
-      fi; \
-    fi; \
-    "$SEMGREP_BIN" --config semgrep.yml --severity WARNING
+    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short --warning
+
+toml-separator-check:
+    if rg -n --pcre2 '^\s*#.*[=─-]{3,}' Cargo.toml crates -g '*.toml'; then \
+      echo "FAILED: separator comments are not allowed in Cargo.toml files."; \
+      exit 1; \
+    fi
 
 arch:
     bash scripts/ci/check-arch.sh
@@ -105,7 +68,7 @@ trait-mock-audit:
 trait-mock-exceptions:
     bash scripts/ci/trait-mock-exceptions.sh
 
-lint-fast: fmt-check clippy semgrep-blocking semgrep-advisory arch
+lint-fast: fmt-check clippy ast-grep-blocking toml-separator-check arch
 
 lint-full: lint-fast perf-compare-selftest quality-report play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 

@@ -1,0 +1,10 @@
+id: rust.no-thin-async-wrapper
+message: Thin async wrappers with a single await are discouraged.
+severity: error
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  all:
+    - kind: function_item
+    - regex: '(?ms)^\s*(?:pub(?:\([^)]*\))?\s+)?async\s+fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*[^\n\{\};]+\.await;\s*\}$'

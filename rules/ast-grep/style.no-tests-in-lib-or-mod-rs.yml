@@ -1,0 +1,9 @@
+id: style.no-tests-in-lib-or-mod-rs
+message: Inline mod tests blocks are not allowed in lib.rs/mod.rs.
+severity: error
+language: Rust
+files:
+  - crates/**/src/lib.rs
+  - crates/**/src/**/mod.rs
+rule:
+  pattern: mod tests { ... }

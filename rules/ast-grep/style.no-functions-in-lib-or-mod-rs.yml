@@ -1,0 +1,9 @@
+id: style.no-functions-in-lib-or-mod-rs
+message: lib.rs/mod.rs should only contain module declarations and re-exports.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/lib.rs
+  - crates/**/src/**/mod.rs
+rule:
+  kind: function_item

@@ -1,0 +1,16 @@
+id: style.no-magic-numbers
+message: Magic number detected; extract it into a named constant.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  any:
+    - all:
+        - kind: integer_literal
+        - not:
+            regex: '^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$'
+    - all:
+        - kind: float_literal
+        - not:
+            regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)(?:f(?:32|64))?$'

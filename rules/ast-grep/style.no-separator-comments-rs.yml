@@ -1,0 +1,11 @@
+id: style.no-separator-comments-rs
+message: Separator comments are not allowed; use plain // section headers.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+rule:
+  all:
+    - kind: line_comment
+    - regex: "[=─-]{3,}"
