@@ -27,13 +27,6 @@ kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-url = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["full"] }
-tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
@@ -83,4 +76,6 @@ url = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rodio = { workspace = true, features = ["playback"] }
 
+[package.metadata.cargo-machete]
+ignored = ["rodio"]
 

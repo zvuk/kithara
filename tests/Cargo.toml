@@ -20,7 +20,6 @@ kithara-platform = { workspace = true }
 
 # Async runtime
 tokio-util = { workspace = true }
-tokio-stream = { workspace = true }
 
 # Channels/buffers
 bytes = { workspace = true }
@@ -28,11 +27,6 @@ bytes = { workspace = true }
 # HTTP/URL
 url = { workspace = true }
 
-# HLS parsing
-hls_m3u8 = { workspace = true }
-
-# Decoding
-symphonia = { workspace = true }
 rodio = { workspace = true }
 
 # Testing framework
@@ -54,10 +48,8 @@ aes = { workspace = true }
 cbc = { workspace = true }
 
 # Misc
-thiserror = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
-sha2 = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }

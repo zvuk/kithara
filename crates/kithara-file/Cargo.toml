@@ -26,7 +26,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
 crossbeam-queue = { workspace = true }
-dhat = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
@@ -49,4 +48,3 @@ rodio = { workspace = true, features = ["playback"] }
 tracing-subscriber = { workspace = true }
 memory-stats = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
-dhat = { workspace = true }

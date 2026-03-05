@@ -40,5 +40,5 @@ flowchart LR
 ## Integration
 
 - Consumed by `kithara-app` GUI binary.
-- Uses `kithara` (file/hls playback), `iced`, and `iced_aw`.
+- Uses `kithara` (file/hls playback) and `iced`.
 - Shares playback behavior with TUI/WASM because control operations are delegated to `PlayerImpl`.

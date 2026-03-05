@@ -21,7 +21,6 @@ kithara-storage = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
 

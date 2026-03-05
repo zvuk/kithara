@@ -17,7 +17,6 @@ internal = []
 
 [dependencies]
 derivative = { workspace = true }
-kithara-assets = { workspace = true }
 kithara-platform = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }

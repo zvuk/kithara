@@ -16,10 +16,8 @@ internal = []
 [dependencies]
 aes = { workspace = true }
 cbc = { workspace = true }
-bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 kithara-drm = { path = ".", default-features = false, features = ["internal"] }

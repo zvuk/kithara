@@ -19,15 +19,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
-name = "addr2line"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
-dependencies = [
- "gimli",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -546,21 +537,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "backtrace"
-version = "0.3.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb531853791a215d7c62a30daf0dde835f381ab5de4589cfe7c649d2cbe92bd6"
-dependencies = [
- "addr2line",
- "cfg-if",
- "libc",
- "miniz_oxide",
- "object",
- "rustc-demangle",
- "windows-link",
 ]
 
 [[package]]
@@ -1791,22 +1767,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dhat"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98cd11d84628e233de0ce467de10b8633f4ddaecafadefc86e13b84b8739b827"
-dependencies = [
- "backtrace",
- "lazy_static",
- "mintex",
- "parking_lot",
- "rustc-hash 1.1.0",
- "serde",
- "serde_json",
- "thousands",
-]
-
-[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2567,12 +2527,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gimli"
-version = "0.32.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
-
-[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3013,19 +2967,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced_aw"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e676b8d322a419c7eef29cac1aa78e8afda6a9d2d4597483d42de3e90378fe2"
-dependencies = [
- "cfg-if",
- "iced_core",
- "iced_fonts",
- "iced_widget",
- "web-time",
-]
-
-[[package]]
 name = "iced_core"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3052,29 +2993,6 @@ dependencies = [
  "iced_core",
  "iced_futures",
  "log",
-]
-
-[[package]]
-name = "iced_fonts"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "214cff7c8499e328774216690e58e315a1a5f8f6fdd1035aed6298e62ffc4c1d"
-dependencies = [
- "iced_core",
- "iced_fonts_macros",
- "iced_widget",
-]
-
-[[package]]
-name = "iced_fonts_macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef5125e110cb19cd1910a28298661c98c5d9ab02eef43594968352940e8752e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "ttf-parser",
 ]
 
 [[package]]
@@ -3536,8 +3454,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "rodio",
- "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -3576,7 +3492,6 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bitflags 2.11.0",
- "bytes",
  "delegate",
  "derive_setters",
  "hex",
@@ -3632,7 +3547,6 @@ dependencies = [
  "rubato 1.0.1",
  "smallvec",
  "tempfile",
- "thiserror 2.0.18",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -3647,7 +3561,6 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.1.0"
 dependencies = [
- "derivative",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
@@ -3680,13 +3593,11 @@ name = "kithara-drm"
 version = "0.1.0"
 dependencies = [
  "aes",
- "bytes",
  "cbc",
  "kithara-drm",
  "kithara-test-utils",
  "thiserror 2.0.18",
  "tracing",
- "url",
  "wasm-bindgen-test",
 ]
 
@@ -3709,8 +3620,6 @@ dependencies = [
  "kithara",
  "rodio",
  "tokio",
- "tracing",
- "tracing-subscriber",
  "url",
 ]
 
@@ -3723,7 +3632,6 @@ dependencies = [
  "crossbeam-queue",
  "derivative",
  "derive_setters",
- "dhat",
  "futures",
  "hotpath",
  "kithara-assets",
@@ -3759,14 +3667,12 @@ dependencies = [
 name = "kithara-hls"
 version = "0.1.0"
 dependencies = [
- "async-stream",
  "axum",
  "bytes",
  "crossbeam-queue",
  "derivative",
  "derive_setters",
  "futures",
- "hex",
  "hls_m3u8",
  "hotpath",
  "kithara-abr",
@@ -3807,7 +3713,6 @@ dependencies = [
  "futures",
  "gloo-timers",
  "hex",
- "hls_m3u8",
  "hotpath",
  "kithara",
  "kithara-assets",
@@ -3826,13 +3731,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "sha2",
- "symphonia 0.6.0",
  "tempfile",
  "thirtyfour",
- "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower",
  "tower-http",
@@ -3858,7 +3759,6 @@ dependencies = [
  "futures",
  "gloo-timers",
  "hotpath",
- "kithara-assets",
  "kithara-net",
  "kithara-platform",
  "kithara-test-macros",
@@ -3901,7 +3801,6 @@ dependencies = [
  "biquad",
  "derivative",
  "derive_setters",
- "fast-interleave",
  "firewheel",
  "firewheel-web-audio",
  "kithara-abr",
@@ -3920,7 +3819,6 @@ dependencies = [
  "portable-atomic",
  "ringbuf",
  "rodio",
- "smallvec",
  "thiserror 2.0.18",
  "thunderdome",
  "tokio-util",
@@ -3973,7 +3871,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "unimock",
- "url",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
@@ -4016,7 +3913,6 @@ name = "kithara-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
- "kithara",
  "ratatui",
  "tracing",
  "tracing-subscriber",
@@ -4027,7 +3923,6 @@ name = "kithara-ui"
 version = "0.1.0"
 dependencies = [
  "iced",
- "iced_aw",
  "kithara",
  "tokio",
  "tracing",
@@ -4055,7 +3950,6 @@ dependencies = [
 name = "kithara-wasm-macros"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
@@ -4362,12 +4256,6 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
-
-[[package]]
-name = "mintex"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c505b3e17ed6b70a7ed2e67fbb2c560ee327353556120d6e72f5232b6880d536"
 
 [[package]]
 name = "mio"
@@ -5018,15 +4906,6 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-core-location",
  "objc2-foundation 0.2.2",
-]
-
-[[package]]
-name = "object"
-version = "0.37.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -5872,12 +5751,6 @@ dependencies = [
  "visibility",
  "windowfunctions",
 ]
-
-[[package]]
-name = "rustc-demangle"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
 
 [[package]]
 name = "rustc-hash"
@@ -7101,12 +6974,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "thousands"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bf63baf9f5039dadc247375c29eb13706706cfde997d0330d05aa63a77d8820"
 
 [[package]]
 name = "thread_local"

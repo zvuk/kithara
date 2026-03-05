@@ -37,3 +37,6 @@ kithara-decode = { path = ".", default-features = false, features = ["internal"]
 kithara-test-utils = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["hotpath"]

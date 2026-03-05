@@ -10,6 +10,5 @@ workspace = true
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
 iced = { workspace = true }
-iced_aw = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
