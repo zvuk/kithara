@@ -1,0 +1,21 @@
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+
+repos:
+  - repo: local
+    hooks:
+      - id: lint-fast
+        name: lint-fast
+        entry: just lint-fast
+        language: system
+        pass_filenames: false
+        stages:
+          - pre-commit
+      - id: test-all
+        name: test-all
+        entry: just test-all
+        language: system
+        pass_filenames: false
+        stages:
+          - pre-push

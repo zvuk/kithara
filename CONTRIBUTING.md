@@ -27,9 +27,9 @@ Recommended local setup:
 ```bash
 cargo install just --locked
 cargo install cargo-nextest --locked
-# Install lefthook from the official instructions:
-# https://github.com/evilmartians/lefthook#install
-lefthook install
+# Install prek:
+# https://github.com/j178/prek
+prek install -f
 ```
 
 See [`AGENTS.md`](AGENTS.md) for the full coding rules.

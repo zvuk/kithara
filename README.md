@@ -80,9 +80,9 @@ cargo build --workspace
 # Install task runner + git hooks (recommended)
 cargo install just --locked
 cargo install cargo-nextest --locked
-# Install lefthook from the official instructions:
-# https://github.com/evilmartians/lefthook#install
-lefthook install
+# Install prek:
+# https://github.com/j178/prek
+prek install -f
 
 # Test (nextest + doctests)
 just test-all
