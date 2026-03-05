@@ -151,12 +151,20 @@
             border-radius: 8px;
             padding: 8px;
             background: rgba(21, 21, 42, 0.74);
+            overflow: hidden;
         }
         .eq-band label {
             display: block;
             font-size: 11px;
             color: var(--text-muted);
             margin-bottom: 6px;
+        }
+        .eq-band input[type="range"] {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            flex: 0 0 auto;
         }
         .eq-band .gain {
             display: block;
@@ -217,7 +225,7 @@
     <div class="card">
         <div class="row">
             <label class="setting-label" for="volume-slider">Volume</label>
-            <input type="range" id="volume-slider" min="0" max="1" value="0.05" step="0.01" disabled>
+            <input type="range" id="volume-slider" min="0" max="1" value="0.5" step="0.01" disabled>
             <span class="setting-value" id="volume-value">100%</span>
         </div>
         <div class="row">
