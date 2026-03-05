@@ -128,6 +128,18 @@ Environment knobs:
 - `KITHARA_SELENIUM_PAGE_URL=http://...` (use external trunk page instead of auto-start)
 - `KITHARA_SELENIUM_WEBDRIVER_URL=http://...` (use external webdriver instead of auto-start)
 
+### agent-browser status
+
+`vercel-labs/agent-browser` can be used for local exploratory browser debugging, but it is not part of the canonical test path in this project.
+
+Reasons:
+
+- current regression suite is Rust-native (`cargo test` + `thirtyfour`);
+- CI and hooks are Rust-first and deterministic around WebDriver runs;
+- adopting agent-browser as the main runner would add an extra Node.js daemon + Playwright stack in CI.
+
+Decision: keep `thirtyfour` Selenium integration tests as the required path, use `agent-browser` only as optional local tooling.
+
 ## Performance Tests (`tests/perf`)
 
 Performance tests use [hotpath-rs](https://github.com/pawurb/hotpath-rs), run only with `perf` feature, and are ignored by default.
