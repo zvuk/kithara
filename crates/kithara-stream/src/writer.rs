@@ -67,9 +67,8 @@ pub enum WriterItem {
 /// # use kithara_net::{Net, NetError};
 /// # use kithara_storage::StorageResource;
 /// # use tokio_util::sync::CancellationToken;
-/// # use url::Url;
 /// # async fn example(net: impl Net, res: StorageResource, cancel: CancellationToken) {
-/// let url = Url::parse("https://example.com/file.mp3").unwrap();
+/// let url = "https://example.com/file.mp3".parse().unwrap();
 /// let stream = net.stream(url, None).await.unwrap();
 /// let writer: Writer<NetError> = Writer::new(stream, res, cancel);
 /// # }
