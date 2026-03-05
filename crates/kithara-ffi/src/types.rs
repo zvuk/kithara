@@ -46,6 +46,7 @@ impl From<PlayError> for FfiError {
 }
 
 /// Convert seconds (`f64`) to [`Duration`], rejecting invalid values.
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 pub(crate) fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
     if seconds.is_nan() || seconds.is_infinite() {
         return Err(FfiError::InvalidArgument {
@@ -61,12 +62,14 @@ pub(crate) fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
 }
 
 /// Convert [`Duration`] to seconds (`f64`).
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[must_use]
 pub(crate) fn duration_to_seconds(d: Duration) -> f64 {
     d.as_secs_f64()
 }
 
 /// Parse a URL string, rejecting empty and invalid values.
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 pub(crate) fn parse_url(s: &str) -> FfiResult<url::Url> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -80,6 +83,7 @@ pub(crate) fn parse_url(s: &str) -> FfiResult<url::Url> {
 }
 
 /// FFI-friendly mirror of [`PlayerStatus`].
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FfiPlayerStatus {
     Unknown,
@@ -98,6 +102,7 @@ impl From<PlayerStatus> for FfiPlayerStatus {
 }
 
 /// FFI-friendly mirror of [`ItemStatus`].
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FfiItemStatus {
     Unknown,
@@ -116,6 +121,7 @@ impl From<ItemStatus> for FfiItemStatus {
 }
 
 /// FFI-friendly mirror of [`TimeControlStatus`].
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FfiTimeControlStatus {
     Paused,
@@ -134,6 +140,7 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 }
 
 /// FFI-friendly time range (seconds-based).
+#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct FfiTimeRange {
     pub start_seconds: f64,
