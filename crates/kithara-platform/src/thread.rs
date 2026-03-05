@@ -6,6 +6,9 @@
 
 pub use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[inline]
 pub fn yield_now() {
@@ -19,6 +22,58 @@ pub fn yield_now() {
     // and backpressure via ringbuf already throttles the decode loop.
     // The original `Atomics.wait(0.001ms)` FFI call on every decode
     // frame added unnecessary latency causing audio stuttering.
+}
+
+/// Returns `true` when running inside a Web Worker.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn is_worker_thread() -> bool {
+    js_sys::global()
+        .dyn_into::<web_sys::DedicatedWorkerGlobalScope>()
+        .is_ok()
+}
+
+/// Returns `true` when running on the browser main thread.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn is_main_thread() -> bool {
+    !is_worker_thread()
+}
+
+/// Returns `false` on native targets.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[must_use]
+pub fn is_worker_thread() -> bool {
+    false
+}
+
+/// Returns `true` on native targets.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[must_use]
+pub fn is_main_thread() -> bool {
+    true
+}
+
+/// Panic if called from a non-main thread on wasm32.
+#[inline]
+pub fn assert_main_thread(_label: &str) {
+    #[cfg(target_arch = "wasm32")]
+    if !is_main_thread() {
+        panic!("main-thread-only call executed on worker thread: {_label}");
+    }
+}
+
+/// Panic if called from the wasm main thread.
+#[inline]
+pub fn assert_not_main_thread(_label: &str) {
+    #[cfg(target_arch = "wasm32")]
+    if is_main_thread() {
+        panic!("worker-thread-only call executed on main thread: {_label}");
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -112,4 +167,20 @@ pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
 #[must_use]
 pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
     wasm_safe_thread::available_parallelism().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_thread_detectors_are_consistent() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            assert!(is_main_thread());
+            assert!(!is_worker_thread());
+            assert_main_thread("native-main");
+            assert_not_main_thread("native-main");
+        }
+    }
 }

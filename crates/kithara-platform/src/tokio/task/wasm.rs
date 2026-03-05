@@ -14,14 +14,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use wasm_bindgen::JsCast;
-
-fn is_worker_thread() -> bool {
-    js_sys::global()
-        .dyn_into::<web_sys::DedicatedWorkerGlobalScope>()
-        .is_ok()
-}
-
 /// Spawn an async task on the current thread's executor.
 ///
 /// On a Web Worker, wraps with `task_begin`/`task_finished` lifecycle hooks.
@@ -33,7 +25,7 @@ where
 {
     let (tx, rx) = futures::channel::oneshot::channel();
 
-    if is_worker_thread() {
+    if crate::thread::is_worker_thread() {
         wasm_safe_thread::task_begin();
         wasm_bindgen_futures::spawn_local(async move {
             let _ = tx.send(Ok(future.await));
@@ -67,7 +59,7 @@ where
 {
     let (tx, rx) = futures::channel::oneshot::channel();
 
-    if is_worker_thread() {
+    if crate::thread::is_worker_thread() {
         let _ = crate::thread::spawn(move || {
             let _ = tx.send(Ok(f()));
         });

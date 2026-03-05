@@ -19,6 +19,7 @@ macro_rules! clog {
 const CROSSFADE_SECONDS: f32 = 5.0;
 
 /// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
+#[kithara_wasm_macros::assert_not_main_thread]
 pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     clog!("[WORKER] engine worker started");
 

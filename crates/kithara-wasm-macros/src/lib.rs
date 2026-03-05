@@ -7,7 +7,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, ImplItem, ItemImpl, Pat, ReturnType, Type, parse_macro_input};
+use syn::{FnArg, ImplItem, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Type, parse_macro_input};
 
 /// Place on an `impl Player` block. Methods marked `#[export]` get
 /// corresponding `#[wasm_bindgen]` free functions generated automatically.
@@ -118,4 +118,19 @@ pub fn wasm_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+/// Inject a worker-thread assertion at function entry.
+///
+/// Intended for wasm worker entry points that must never run on the browser
+/// main thread.
+#[proc_macro_attribute]
+pub fn assert_not_main_thread(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(item as ItemFn);
+    let fn_name = LitStr::new(&input.sig.ident.to_string(), input.sig.ident.span());
+    let guard = syn::parse_quote! {
+        kithara_platform::thread::assert_not_main_thread(concat!(module_path!(), "::", #fn_name));
+    };
+    input.block.stmts.insert(0, guard);
+    quote!(#input).into()
 }
