@@ -1,70 +1,16 @@
-<div align="center">
-  <img src="../../logo.svg" alt="kithara" width="300">
-</div>
-
-<div align="center">
-
-[![Crates.io](https://img.shields.io/crates/v/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
-[![Downloads](https://img.shields.io/crates/d/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
-[![docs.rs](https://docs.rs/kithara-decode/badge.svg)](https://docs.rs/kithara-decode)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
-
-</div>
-
 # kithara-decode
 
-Audio decoding library with runtime backend selection. `DecoderFactory` creates synchronous `InnerDecoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just decoding.
+## Purpose
+Synchronous audio decoding with pluggable backend selection.
 
-## Usage
+## Owns
+- Decoder trait contracts
+- Backend adapters (for example Symphonia)
+- Conversion to workspace PCM types
 
-```rust
-use std::io::Cursor;
-use kithara_decode::{DecoderConfig, DecoderFactory};
+## Integrates with
+- `kithara-audio` pipeline
+- `kithara-stream` read path
 
-let reader = Cursor::new(wav_bytes);
-let mut decoder = DecoderFactory::create_with_probe(
-    reader,
-    Some("wav"),
-    DecoderConfig::default(),
-)?;
-
-let spec = decoder.spec(); // sample_rate, channels
-while let Ok(Some(chunk)) = decoder.next_chunk() {
-    play(&chunk.pcm);
-}
-```
-
-## Backends
-
-<table>
-<tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
-<tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
-<tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
-<tr><td>Android MediaCodec</td><td>Stub backend (returns unsupported)</td><td>Android</td></tr>
-</table>
-
-## Initialization Paths
-
-1. **Direct reader creation** (`container` specified): Creates format reader directly without probing. Used for HLS fMP4 where format is known but byte length is unknown. Seek is disabled during init to prevent `IsoMp4Reader` from seeking to end.
-2. **Probe** (`container` not specified): Uses Symphonia's auto-detection. Supports `probe_no_seek` for ABR variant switches where reported byte length may not match.
-
-## Decoder recreate strategy
-
-- `create_for_recreate` is used for seek-time decoder rebuild.
-- First attempt: create from `MediaInfo` hints (codec/container from stream metadata).
-- Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
-- If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
-
-## Feature Flags
-
-<table>
-<tr><th>Feature</th><th>Effect</th></tr>
-<tr><td><code>apple</code></td><td>Enables Apple AudioToolbox hardware decoder</td></tr>
-<tr><td><code>android</code></td><td>Enables Android MediaCodec stub backend</td></tr>
-<tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
-<tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
-</table>
-
-## Integration
-
-Consumed by `kithara-audio` which wraps it in a threaded pipeline with effects and resampling. Accepts any `R: Read + Seek + Send + Sync + 'static` -- works with `Stream<File>`, `Stream<Hls>`, `Cursor<Vec<u8>>`, or plain files.
+## Notes
+- Decoding is sync by design; scheduling is handled by higher layers.

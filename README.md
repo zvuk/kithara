@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo.svg" alt="kithara" width="400">
+  <img src="logo.svg" alt="kithara" width="360">
 </div>
 
 <div align="center">
@@ -7,131 +7,80 @@
 [![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
 [![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
-[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
 [![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 </div>
 
 # kithara
 
-> Built with AI, tested by a human. Vibe-coded -- but with care.
-> Contributions, reviews, and fresh eyes are welcome.
+Modular Rust audio stack for progressive HTTP and HLS playback, shared by desktop and wasm players.
 
-> **Status: early development.** Public API will be kept as stable as possible, but internal architecture is actively being simplified — expect significant refactoring of larger crates. Pin to an exact version if you depend on kithara today.
+Status: early-stage APIs with active internal refactoring. The architecture is not being "simplified" by removing layers; it is being improved by making crate boundaries clearer and contracts stricter.
 
-Modular audio engine in Rust. Streams, decodes, and plays audio from progressive HTTP and HLS sources with persistent caching and offline support. Designed as an open-source alternative to AVPlayer with DJ-grade mixing capabilities — multi-slot playback, crossfading, BPM sync, and per-channel EQ.
+## Workspace map
 
-Components are independent crates that can be used standalone or composed into a full player.
+Core runtime:
+- [`kithara`](crates/kithara/README.md) facade API
+- [`kithara-play`](crates/kithara-play/README.md) player engine
+- [`kithara-audio`](crates/kithara-audio/README.md) audio pipeline
+- [`kithara-decode`](crates/kithara-decode/README.md) decoders
+- [`kithara-stream`](crates/kithara-stream/README.md) async-to-sync bridge
+- [`kithara-storage`](crates/kithara-storage/README.md) storage resources
+- [`kithara-assets`](crates/kithara-assets/README.md) cache store
 
-## Features
+Protocol layer:
+- [`kithara-file`](crates/kithara-file/README.md) progressive download
+- [`kithara-hls`](crates/kithara-hls/README.md) HLS orchestration
+- [`kithara-abr`](crates/kithara-abr/README.md) ABR logic
+- [`kithara-drm`](crates/kithara-drm/README.md) segment decryption
+- [`kithara-net`](crates/kithara-net/README.md) HTTP/retry/timeout
 
-- **Player engine** — AVPlayer-style API with multi-slot arena, crossfading, BPM sync, and per-channel EQ (`kithara-play`)
-- **Progressive file download** — stream MP3, AAC, FLAC and other formats over HTTP with disk caching and gap filling
-- **HLS VOD** — adaptive bitrate streaming with variant switching, encrypted segments (AES-128-CBC), and offline support
-- **Multi-backend decoding** — Symphonia (software, cross-platform) and Apple AudioToolbox (hardware, macOS/iOS)
-- **Audio pipeline** — sample rate conversion via rubato, effects chain, OS-thread worker with backpressure
-- **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
-- **Zero-allocation hot paths** — sharded buffer pool for decode and I/O loops
-- **WASM support** — browser playback bindings with shared-memory threading
+Platform and infra:
+- [`kithara-platform`](crates/kithara-platform/README.md) cross-platform primitives
+- [`kithara-bufpool`](crates/kithara-bufpool/README.md) pooled buffers
+- [`kithara-events`](crates/kithara-events/README.md) event bus
+- [`kithara-hang-detector`](crates/kithara-hang-detector/README.md) watchdog guards
 
-## Architecture
+Apps and UIs:
+- [`kithara-app`](crates/kithara-app/README.md) app entrypoints and binaries
+- [`kithara-ui`](crates/kithara-ui/README.md) desktop GUI layer
+- [`kithara-tui`](crates/kithara-tui/README.md) terminal UI layer
+- [`kithara-wasm`](crates/kithara-wasm/README.md) browser player
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart LR
-    facade["Facade<br/>kithara + kithara-play"]
-    pipeline["Pipeline<br/>audio + decode + events"]
-    protocols["Protocols<br/>file + hls + abr + drm"]
-    io["I/O<br/>stream + net"]
-    storage["Storage<br/>assets + storage + bufpool + platform"]
-    wasm["Browser<br/>kithara-wasm"]
+Macros and tests:
+- [`kithara-wasm-macros`](crates/kithara-wasm-macros/README.md)
+- [`kithara-test-macros`](crates/kithara-test-macros/README.md)
+- [`kithara-test-utils`](crates/kithara-test-utils/README.md)
+- [`tests`](tests/README.md) integration/perf/e2e suites
 
-    facade --> pipeline --> protocols --> io --> storage
-    wasm --> pipeline
-
-    style facade fill:#4a6fa5,color:#fff
-    style pipeline fill:#6b8cae,color:#fff
-    style protocols fill:#7ea87e,color:#fff
-    style io fill:#c4a35a,color:#fff
-    style storage fill:#8b6b8b,color:#fff
-    style wasm fill:#5b8f8f,color:#fff
-```
-
-<table>
-<tr><th>Layer</th><th>Crates</th><th>Role</th></tr>
-<tr><td><b>Facade</b></td><td><a href="crates/kithara/README.md"><code>kithara</code></a></td><td>Unified <code>Resource</code> API with auto-detection (file / HLS)</td></tr>
-<tr><td><b>Player</b></td><td><a href="crates/kithara-play/README.md"><code>kithara-play</code></a></td><td>AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem</td></tr>
-<tr><td><b>Pipeline</b></td><td><a href="crates/kithara-audio/README.md"><code>kithara-audio</code></a><br/><a href="crates/kithara-decode/README.md"><code>kithara-decode</code></a><br/><a href="crates/kithara-events/README.md"><code>kithara-events</code></a></td><td>Threaded decode + effects + resampling, event bus</td></tr>
-<tr><td><b>Protocols</b></td><td><a href="crates/kithara-file/README.md"><code>kithara-file</code></a><br/><a href="crates/kithara-hls/README.md"><code>kithara-hls</code></a><br/><a href="crates/kithara-abr/README.md"><code>kithara-abr</code></a><br/><a href="crates/kithara-drm/README.md"><code>kithara-drm</code></a></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
-<tr><td><b>I/O</b></td><td><a href="crates/kithara-stream/README.md"><code>kithara-stream</code></a><br/><a href="crates/kithara-net/README.md"><code>kithara-net</code></a></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
-<tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
-<tr><td><b>Primitives</b></td><td><a href="crates/kithara-bufpool/README.md"><code>kithara-bufpool</code></a><br/><a href="crates/kithara-platform/README.md"><code>kithara-platform</code></a></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
-<tr><td><b>Testing</b></td><td><a href="crates/kithara-test-utils/README.md"><code>kithara-test-utils</code></a></td><td>Shared fixtures and helpers for workspace tests</td></tr>
-<tr><td><b>Browser</b></td><td><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>WASM bindings over the shared <code>kithara-play</code> pipeline</td></tr>
-</table>
-
-## Getting Started
+## Quick start
 
 ```bash
-# Build
 cargo build --workspace
-
-# Install task runner + git hooks (recommended)
 cargo install just --locked
-cargo install cargo-nextest --locked
-# Install prek:
-# https://github.com/j178/prek
-prek install -f
-
-# Optional: worktree workflow for parallel agents
-brew install worktrunk
-wt config shell install
-
-# Test (nextest + doctests)
-just test-all
-
-# Lint / policy checks
 just lint-fast
-just lint-full
+just test-all
 ```
 
-## Examples
+## Demo entrypoints
 
+Desktop:
 ```bash
-# Play a file with rodio
-cargo run -p kithara --example resource_rodio --features rodio -- <URL_OR_PATH>
+cargo run -p kithara-app --bin kithara-gui
+cargo run -p kithara-app --bin kithara-tui
+```
 
-# Play a progressive file (interactive)
-cargo run -p kithara --example file_audio --features rodio -- <URL>
-
-# Play HLS stream (interactive)
-cargo run -p kithara --example hls_audio --features rodio -- <MASTER_PLAYLIST_URL>
-
-# Play encrypted HLS
-cargo run -p kithara --example hls_drm_audio --features rodio -- <MASTER_PLAYLIST_URL>
-
-# Crossfade from file to HLS
-cargo run -p kithara --example player --features file,hls -- [FILE_URL] [HLS_URL]
+WASM player:
+```bash
+cd crates/kithara-wasm
+RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml
 ```
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding rules, and PR guidelines.
-
-## Rules
-
-See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
-
-## Minimum Supported Rust Version (MSRV)
-
-The current MSRV is **1.88** (Rust edition 2024). It is tested in CI and may be bumped in minor releases.
+- Development guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Workspace coding rules: [`AGENTS.md`](AGENTS.md)
 
 ## License
 
-Licensed under either of
-
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
+Dual-licensed under MIT or Apache-2.0.

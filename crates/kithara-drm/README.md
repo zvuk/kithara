@@ -1,62 +1,16 @@
-<div align="center">
-  <img src="../../logo.svg" alt="kithara" width="300">
-</div>
-
-<div align="center">
-
-[![Crates.io](https://img.shields.io/crates/v/kithara-drm.svg)](https://crates.io/crates/kithara-drm)
-[![Downloads](https://img.shields.io/crates/d/kithara-drm.svg)](https://crates.io/crates/kithara-drm)
-[![docs.rs](https://docs.rs/kithara-drm/badge.svg)](https://docs.rs/kithara-drm)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
-
-</div>
-
 # kithara-drm
 
-AES-128-CBC segment decryption for encrypted HLS streams. Provides a single processing function that integrates with `kithara-assets`' `ProcessingAssets` layer for transparent decryption on commit.
+## Purpose
+Segment decryption helpers for streaming workflows.
 
-## Usage
+## Owns
+- AES-128-CBC decryption path
+- Decrypt context and chunk processors
+- Extension points for key processing
 
-```rust
-use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
+## Integrates with
+- `kithara-hls` fetch/decrypt flow
+- `kithara-assets` cache write pipeline
 
-let key = [0u8; 16]; // AES-128 key from #EXT-X-KEY
-let iv = [0u8; 16];  // IV from playlist or derived from sequence number
-let mut ctx = DecryptContext::new(key, iv);
-
-let encrypted: &[u8] = &ciphertext;
-let mut output = vec![0u8; encrypted.len()];
-let len = aes128_cbc_process_chunk(encrypted, &mut output, &mut ctx, true)?;
-let decrypted = &output[..len];
-```
-
-## Key Types
-
-<table>
-<tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>DecryptContext</code></td><td>Holds 16-byte AES key and IV for a segment</td></tr>
-<tr><td><code>aes128_cbc_process_chunk()</code></td><td>Decrypts a chunk in-place; handles PKCS7 padding on final chunk</td></tr>
-</table>
-
-## How It Works
-
-The decryption function signature matches `ProcessChunkFn<DecryptContext>` from `kithara-assets`. When `ProcessingAssets::commit()` is called on an encrypted segment:
-
-1. The segment data is read from disk in 64 KB chunks.
-2. Each chunk is decrypted via `aes128_cbc_process_chunk()`.
-3. The decrypted data is written back to the same location.
-4. On the final chunk, PKCS7 padding is removed and the actual output length is returned.
-
-Input must be aligned to the 16-byte AES block size. All operations are in-place (no buffer allocation).
-
-## Key Derivation
-
-IV derivation happens in `kithara-hls`'s `KeyManager`:
-
-- If `#EXT-X-KEY` provides an explicit IV, it is used directly.
-- Otherwise, IV is derived from the segment sequence number: `[0u8; 8] || sequence.to_be_bytes()`.
-- Optional key unwrapping/processing for in-house DRM is also performed by `KeyManager` before building `DecryptContext`.
-
-## Integration
-
-Used by `kithara-hls` via `AssetStore<DecryptContext>`. The HLS crate sets up the processing callback when building the asset store, enabling transparent decryption of AES-128-CBC encrypted segments.
+## Notes
+- Keep protocol-independent crypto logic here, not in HLS orchestration.
