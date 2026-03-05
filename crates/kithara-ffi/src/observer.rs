@@ -4,7 +4,8 @@
 ///
 /// All methods are called on an arbitrary background thread.
 /// Swift implementations must dispatch to main actor as needed.
-pub(crate) trait PlayerObserver: Send + Sync {
+#[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
+pub trait PlayerObserver: Send + Sync {
     fn on_time_changed(&self, seconds: f64);
     fn on_rate_changed(&self, rate: f32);
     fn on_current_item_changed(&self);
@@ -15,7 +16,8 @@ pub(crate) trait PlayerObserver: Send + Sync {
 }
 
 /// Receives item-level state changes from Rust.
-pub(crate) trait ItemObserver: Send + Sync {
+#[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
+pub trait ItemObserver: Send + Sync {
     fn on_duration_changed(&self, seconds: f64);
     fn on_buffered_duration_changed(&self, seconds: f64);
     fn on_status_changed(&self, status_code: i32);
@@ -23,7 +25,8 @@ pub(crate) trait ItemObserver: Send + Sync {
 }
 
 /// Callback for seek completion.
-pub(crate) trait SeekCallback: Send + Sync {
+#[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
+pub trait SeekCallback: Send + Sync {
     fn on_complete(&self, finished: bool);
 }
 

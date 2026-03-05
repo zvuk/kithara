@@ -14,7 +14,8 @@ use crate::{
 };
 
 /// FFI-facing audio player item with UUID identity and lazy loading.
-pub(crate) struct AudioPlayerItem {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
+pub struct AudioPlayerItem {
     id: Uuid,
     url: String,
     headers: Option<HashMap<String, String>>,
@@ -24,12 +25,13 @@ pub(crate) struct AudioPlayerItem {
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
 }
 
+/// Methods exported across the FFI boundary.
+#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl AudioPlayerItem {
     /// Create a new item. Does not start loading — call [`load`] explicitly.
-    pub(crate) fn new(
-        url: String,
-        additional_headers: Option<HashMap<String, String>>,
-    ) -> Arc<Self> {
+    #[must_use]
+    #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
+    pub fn new(url: String, additional_headers: Option<HashMap<String, String>>) -> Arc<Self> {
         Arc::new(Self {
             id: Uuid::new_v4(),
             url,
@@ -41,36 +43,37 @@ impl AudioPlayerItem {
         })
     }
 
-    pub(crate) fn id(&self) -> Uuid {
-        self.id
+    /// String representation of the item's unique ID.
+    pub fn id(&self) -> String {
+        self.id.to_string()
     }
 
-    pub(crate) fn url(&self) -> &str {
-        &self.url
+    pub fn url(&self) -> String {
+        self.url.clone()
     }
 
-    pub(crate) fn preferred_peak_bitrate(&self) -> f64 {
+    pub fn preferred_peak_bitrate(&self) -> f64 {
         *self
             .preferred_peak_bitrate
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn set_preferred_peak_bitrate(&self, bitrate: f64) {
+    pub fn set_preferred_peak_bitrate(&self, bitrate: f64) {
         *self
             .preferred_peak_bitrate
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = bitrate;
     }
 
-    pub(crate) fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
+    pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
         *self
             .preferred_peak_bitrate_expensive
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64) {
+    pub fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64) {
         *self
             .preferred_peak_bitrate_expensive
             .lock()
@@ -78,7 +81,11 @@ impl AudioPlayerItem {
     }
 
     /// Asynchronously create the underlying [`Resource`].
-    pub(crate) async fn load(&self) -> FfiResult<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
+    pub async fn load(&self) -> Result<(), FfiError> {
         let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
             message: e.to_string(),
         })?;
@@ -102,6 +109,18 @@ impl AudioPlayerItem {
         Ok(())
     }
 
+    pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
+        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
+    }
+}
+
+/// Internal methods not exported across FFI.
+impl AudioPlayerItem {
+    /// UUID for internal comparisons (queue lookup, etc.).
+    pub(crate) fn uuid(&self) -> Uuid {
+        self.id
+    }
+
     /// Take the loaded resource for insertion into the player queue.
     pub(crate) fn take_resource(&self) -> FfiResult<Resource> {
         self.resource
@@ -111,10 +130,7 @@ impl AudioPlayerItem {
             .ok_or(FfiError::NotReady)
     }
 
-    pub(crate) fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
-        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
-    }
-
+    #[expect(dead_code, reason = "used when EventBridge dispatches item events")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
         self.observer
             .lock()

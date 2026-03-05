@@ -6,8 +6,8 @@ use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, Time
 
 /// FFI-friendly error type bridging [`PlayError`] and [`DecodeError`].
 #[derive(Clone, Debug, thiserror::Error)]
-#[non_exhaustive]
-pub(crate) enum FfiError {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Error))]
+pub enum FfiError {
     #[error("player not ready")]
     NotReady,
 
@@ -27,7 +27,7 @@ pub(crate) enum FfiError {
     Internal { message: String },
 }
 
-pub(crate) type FfiResult<T> = Result<T, FfiError>;
+pub type FfiResult<T> = Result<T, FfiError>;
 
 impl From<PlayError> for FfiError {
     fn from(err: PlayError) -> Self {
@@ -45,9 +45,19 @@ impl From<PlayError> for FfiError {
     }
 }
 
+#[cfg(feature = "backend-uniffi")]
+impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
+    fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Internal { message: e.reason }
+    }
+}
+
 /// Convert seconds (`f64`) to [`Duration`], rejecting invalid values.
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
-pub(crate) fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
+///
+/// # Errors
+///
+/// Returns [`FfiError::InvalidArgument`] for `NaN`, infinity, or negative values.
+pub fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
     if seconds.is_nan() || seconds.is_infinite() {
         return Err(FfiError::InvalidArgument {
             reason: format!("invalid seconds value: {seconds}"),
@@ -62,15 +72,17 @@ pub(crate) fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
 }
 
 /// Convert [`Duration`] to seconds (`f64`).
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[must_use]
-pub(crate) fn duration_to_seconds(d: Duration) -> f64 {
+pub fn duration_to_seconds(d: Duration) -> f64 {
     d.as_secs_f64()
 }
 
 /// Parse a URL string, rejecting empty and invalid values.
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
-pub(crate) fn parse_url(s: &str) -> FfiResult<url::Url> {
+///
+/// # Errors
+///
+/// Returns [`FfiError::InvalidArgument`] for empty or malformed URLs.
+pub fn parse_url(s: &str) -> FfiResult<url::Url> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err(FfiError::InvalidArgument {
@@ -83,9 +95,9 @@ pub(crate) fn parse_url(s: &str) -> FfiResult<url::Url> {
 }
 
 /// FFI-friendly mirror of [`PlayerStatus`].
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FfiPlayerStatus {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiPlayerStatus {
     Unknown,
     ReadyToPlay,
     Failed,
@@ -102,9 +114,9 @@ impl From<PlayerStatus> for FfiPlayerStatus {
 }
 
 /// FFI-friendly mirror of [`ItemStatus`].
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FfiItemStatus {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiItemStatus {
     Unknown,
     ReadyToPlay,
     Failed,
@@ -121,9 +133,9 @@ impl From<ItemStatus> for FfiItemStatus {
 }
 
 /// FFI-friendly mirror of [`TimeControlStatus`].
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FfiTimeControlStatus {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiTimeControlStatus {
     Paused,
     WaitingToPlay,
     Playing,
@@ -140,9 +152,9 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 }
 
 /// FFI-friendly time range (seconds-based).
-#[expect(dead_code, reason = "used in Phase 2 UniFFI integration")]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct FfiTimeRange {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiTimeRange {
     pub start_seconds: f64,
     pub duration_seconds: f64,
 }

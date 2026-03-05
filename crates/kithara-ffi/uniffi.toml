@@ -1,0 +1,5 @@
+[bindings.swift]
+module_name = "KitharaFFI"
+ffi_module_name = "KitharaFFIInternal"
+generate_module_map = true
+generate_immutable_records = true

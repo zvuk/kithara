@@ -4,43 +4,47 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use kithara::play::{PlayerConfig, PlayerImpl};
 
-use crate::{
-    item::AudioPlayerItem,
-    observer::PlayerObserver,
-    types::{FfiError, FfiResult},
-};
+use crate::{item::AudioPlayerItem, observer::PlayerObserver, types::FfiError};
 
 /// FFI-facing audio player with UUID-based queue management.
-pub(crate) struct AudioPlayer {
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
+pub struct AudioPlayer {
     inner: Mutex<PlayerImpl>,
     queue: Mutex<Vec<Arc<AudioPlayerItem>>>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
 }
 
+/// Methods exported across the FFI boundary.
+#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl AudioPlayer {
-    pub(crate) fn new() -> Self {
-        Self {
+    #[must_use]
+    #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
             inner: Mutex::new(PlayerImpl::new(PlayerConfig::default())),
             queue: Mutex::new(Vec::new()),
             observer: Mutex::new(None),
-        }
+        })
     }
 
-    pub(crate) fn play(&self) {
+    pub fn play(&self) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .play();
     }
 
-    pub(crate) fn pause(&self) {
+    pub fn pause(&self) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .pause();
     }
 
-    pub(crate) fn seek(&self, to_seconds: f64) -> FfiResult<()> {
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] if the seek position is invalid.
+    pub fn seek(&self, to_seconds: f64) -> Result<(), FfiError> {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -48,20 +52,26 @@ impl AudioPlayer {
             .map_err(FfiError::from)
     }
 
-    pub(crate) fn insert(
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] if `after` is not in the queue,
+    /// or [`FfiError::NotReady`] if the item has not been loaded.
+    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
+    pub fn insert(
         &self,
-        item: &Arc<AudioPlayerItem>,
-        after: Option<&Arc<AudioPlayerItem>>,
-    ) -> FfiResult<()> {
+        item: Arc<AudioPlayerItem>,
+        after: Option<Arc<AudioPlayerItem>>,
+    ) -> Result<(), FfiError> {
         // Lock queue first, validate `after`, then take_resource to avoid
         // consuming it before validation succeeds.
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
 
         let after_index = after
+            .as_ref()
             .map(|after_item| {
                 queue
                     .iter()
-                    .position(|i| i.id() == after_item.id())
+                    .position(|i| i.uuid() == after_item.uuid())
                     .ok_or_else(|| FfiError::InvalidArgument {
                         reason: format!("item {} not found in queue", after_item.id()),
                     })
@@ -77,20 +87,23 @@ impl AudioPlayer {
             .insert(resource, after_index);
 
         match after_index {
-            Some(idx) => queue.insert(idx + 1, Arc::clone(item)),
-            None => queue.push(Arc::clone(item)),
+            Some(idx) => queue.insert(idx + 1, item),
+            None => queue.push(item),
         }
         drop(queue);
 
         Ok(())
     }
 
-    pub(crate) fn remove(&self, item: &AudioPlayerItem) -> FfiResult<()> {
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] if the item is not in the queue.
+    pub fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
         // Hold both locks to keep inner and queue in sync.
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         let idx = queue
             .iter()
-            .position(|i| i.id() == item.id())
+            .position(|i| i.uuid() == item.uuid())
             .ok_or_else(|| FfiError::InvalidArgument {
                 reason: format!("item {} not found in queue", item.id()),
             })?;
@@ -105,7 +118,7 @@ impl AudioPlayer {
         Ok(())
     }
 
-    pub(crate) fn remove_all_items(&self) {
+    pub fn remove_all_items(&self) {
         // Hold both locks to keep inner and queue in sync.
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         self.inner
@@ -115,38 +128,42 @@ impl AudioPlayer {
         queue.clear();
     }
 
-    pub(crate) fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
+    pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         self.queue
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
-    pub(crate) fn default_rate(&self) -> f32 {
+    pub fn default_rate(&self) -> f32 {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .default_rate()
     }
 
-    pub(crate) fn set_default_rate(&self, rate: f32) {
+    pub fn set_default_rate(&self, rate: f32) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .set_default_rate(rate);
     }
 
-    pub(crate) fn rate(&self) -> f32 {
+    pub fn rate(&self) -> f32 {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rate()
     }
 
-    pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
+    pub fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
         *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
     }
+}
 
+/// Internal methods not exported across FFI.
+impl AudioPlayer {
+    #[expect(dead_code, reason = "used when EventBridge is wired to player")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
         self.observer
             .lock()
