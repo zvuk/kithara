@@ -3,15 +3,19 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kithara::play::{PlayerConfig, PlayerImpl};
+use tokio_util::sync::CancellationToken;
 
-use crate::{item::AudioPlayerItem, observer::PlayerObserver, types::FfiError};
+use crate::{
+    event_bridge::EventBridge, item::AudioPlayerItem, observer::PlayerObserver, types::FfiError,
+};
 
 /// FFI-facing audio player with UUID-based queue management.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
-    inner: Mutex<PlayerImpl>,
+    inner: Arc<Mutex<PlayerImpl>>,
     queue: Mutex<Vec<Arc<AudioPlayerItem>>>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    event_bridge: Mutex<Option<EventBridge>>,
 }
 
 /// Methods exported across the FFI boundary.
@@ -21,9 +25,10 @@ impl AudioPlayer {
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            inner: Mutex::new(PlayerImpl::new(PlayerConfig::default())),
+            inner: Arc::new(Mutex::new(PlayerImpl::new(PlayerConfig::default()))),
             queue: Mutex::new(Vec::new()),
             observer: Mutex::new(None),
+            event_bridge: Mutex::new(None),
         })
     }
 
@@ -157,13 +162,30 @@ impl AudioPlayer {
     }
 
     pub fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
+        let rx = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .subscribe();
+
+        let bridge = EventBridge::spawn(
+            rx,
+            Arc::clone(&observer),
+            Arc::clone(&self.inner),
+            CancellationToken::new(),
+        );
+
+        *self
+            .event_bridge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(bridge);
         *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
     }
 }
 
 /// Internal methods not exported across FFI.
 impl AudioPlayer {
-    #[expect(dead_code, reason = "used when EventBridge is wired to player")]
+    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
         self.observer
             .lock()
