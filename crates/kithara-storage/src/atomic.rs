@@ -9,7 +9,9 @@
 //! (via the `tempfile` crate), then atomically renames over the target path.
 //! For in-memory resources, `write_all()` delegates directly (no filesystem to protect).
 
-use std::{fs, io::Write, ops::Range, path::Path};
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+use std::{io::Write, ops::Range, path::Path};
 
 use crate::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 

@@ -237,6 +237,7 @@ tempfile = "3.25.0"
 
 # async traits
 async-trait = "0.1.89"
+thirtyfour = "0.36.1"
 
 # delegation
 delegate = "0.13"

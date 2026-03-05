@@ -104,6 +104,30 @@ The fixture server is configured via `.cargo/config.toml`:
 runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integration-tests", "--"]
 ```
 
+### Selenium E2E (`thirtyfour`)
+
+WASM player Selenium scenarios are implemented as ignored integration tests in:
+
+- `tests/tests/kithara_wasm/selenium.rs`
+
+Run them explicitly:
+
+```bash
+cargo test -p kithara-integration-tests --test integration selenium_hls_log_scenario -- --ignored --nocapture
+
+cargo test -p kithara-integration-tests --test integration selenium_player_scenarios -- --ignored --nocapture
+
+cargo test -p kithara-integration-tests --test integration selenium_diagnostic_suite -- --ignored --nocapture
+```
+
+Environment knobs:
+
+- `KITHARA_SELENIUM_BROWSER=chrome|firefox` (default: `chrome`)
+- `KITHARA_SELENIUM_HEADLESS=true|false` (default: `true`)
+- `KITHARA_SELENIUM_TOOLCHAIN=nightly` (default: `nightly`)
+- `KITHARA_SELENIUM_PAGE_URL=http://...` (use external trunk page instead of auto-start)
+- `KITHARA_SELENIUM_WEBDRIVER_URL=http://...` (use external webdriver instead of auto-start)
+
 ## Performance Tests (`tests/perf`)
 
 Performance tests use [hotpath-rs](https://github.com/pawurb/hotpath-rs), run only with `perf` feature, and are ignored by default.

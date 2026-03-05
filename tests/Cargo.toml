@@ -86,6 +86,9 @@ unimock = { workspace = true }
 # Storage
 mmap-io = { workspace = true }
 
+# WebDriver automation
+thirtyfour = { workspace = true }
+
 # Performance monitoring (optional)
 hotpath = { workspace = true, optional = true }
 
