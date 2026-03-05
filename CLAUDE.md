@@ -171,8 +171,9 @@ All async operations accept `tokio_util::sync::CancellationToken`, forwarded thr
 
 ### Style check
 ```bash
-semgrep --config semgrep.yml --severity ERROR --error
-semgrep --config semgrep.yml --severity WARNING
+ast-grep scan --config sgconfig.yml --report-style short \
+  --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper)$'
+ast-grep scan --config sgconfig.yml --report-style short --warning
 ```
 
 ## Adding new crates
