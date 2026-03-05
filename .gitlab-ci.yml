@@ -36,8 +36,8 @@ lint:
     QUALITY_MIN_BENCH_TARGETS: "1"
     QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev python3-pip
-    - python3 -m pip install --disable-pip-version-check --no-cache-dir semgrep
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/ast-grep" || cargo install ast-grep --locked
     - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - rustup component add clippy
     - rustup toolchain install nightly --component rustfmt
