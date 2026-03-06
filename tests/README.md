@@ -80,7 +80,7 @@ cargo nextest run -p kithara-integration-tests
 
 # Specific integration test target / filter
 cargo test -p kithara-integration-tests --test events
-cargo test -p kithara-integration-tests --test integration kithara_hls::basic_playback
+cargo test -p kithara-integration-tests --test kithara_hls_basic_playback
 ```
 
 `just` shortcuts (from repo root):
@@ -103,11 +103,15 @@ bash scripts/ci/wasm-test.sh
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
 ```
 
-Test categories on WASM:
+Test categories on `cargo +nightly test --target wasm32-unknown-unknown`:
 
-- **`kithara_wasm/`** — WASM player unit tests (AudioWorklet, threading)
 - **`kithara_hls/`** — HLS integration tests with `browser` flag (fixture server)
-- **`kithara_file/live_stress_real_mp3`** — live stream tests with `browser` flag
+
+`tests/tests/kithara_wasm/stress.rs` currently contains ignored regression specs:
+`Audio::new` stalls in the `wasm-bindgen-test` headless runner during bootstrap.
+`tests/tests/kithara_file/live_stress_real_mp3.rs` is also ignored on `wasm32`
+for the same reason.
+Active browser/player coverage lives in the Selenium suite below.
 
 The fixture server is configured via `.cargo/config.toml`:
 
@@ -118,7 +122,8 @@ runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integratio
 
 ### Selenium E2E (`thirtyfour`)
 
-WASM player Selenium scenarios are implemented as ignored integration tests in:
+Exported `kithara-wasm` player scenarios run through the real `kithara-wasm.js`
+page and are implemented as ignored integration tests in:
 
 - `tests/tests/kithara_wasm/selenium.rs`
 

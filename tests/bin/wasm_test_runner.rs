@@ -7,10 +7,12 @@
 //! forwarded. When the process exits, the fixture server dies with it.
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::{env, process, time::Instant};
+use std::{env, ffi::OsString, fs, path::PathBuf, process, time::Instant};
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::{Duration, sleep};
+#[cfg(not(target_arch = "wasm32"))]
+use tempfile::TempDir;
 
 // On wasm32, provide a no-op main.
 #[cfg(target_arch = "wasm32")]
@@ -18,10 +20,19 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> process::ExitStatus {
-    let mut child = process::Command::new("wasm-bindgen-test-runner")
+    let shim_dir = install_worker_shim_alias().expect("failed to prepare worker shim alias");
+    let mut runner = process::Command::new("wasm-bindgen-test-runner");
+    runner
+        .current_dir(shim_dir.path())
         .env("WASM_BINDGEN_USE_BROWSER", "1")
         .env_remove("WASM_BINDGEN_USE_NO_MODULE")
-        .args(args)
+        .args(args);
+    if env::var_os("CHROMEDRIVER").is_none()
+        && let Some(chromedriver) = find_in_path("chromedriver")
+    {
+        runner.env("CHROMEDRIVER", chromedriver);
+    }
+    let mut child = runner
         .spawn()
         .expect("wasm-bindgen-test-runner not found in PATH");
 
@@ -45,6 +56,33 @@ async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> p
         }
         sleep(Duration::from_millis(250)).await;
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_in_path(binary: &str) -> Option<OsString> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .map(|dir| dir.join(binary))
+        .find(|candidate| candidate.is_file())
+        .map(PathBuf::into_os_string)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_worker_shim_alias() -> Result<TempDir, std::io::Error> {
+    let dir = tempfile::tempdir()?;
+    let alias = dir.path().join("kithara-wasm.js");
+    fs::write(
+        alias,
+        "export * from './wasm-bindgen-test.js';\n\
+         export { default } from './wasm-bindgen-test.js';\n",
+    )?;
+
+    let webdriver_config = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
+    if webdriver_config.exists() {
+        fs::copy(&webdriver_config, dir.path().join("webdriver.json"))?;
+    }
+
+    Ok(dir)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

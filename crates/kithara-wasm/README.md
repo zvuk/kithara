@@ -107,12 +107,18 @@ bash scripts/ci/wasm-test.sh
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
 ```
 
-Test categories running on WASM:
+Test categories running on `cargo +nightly test --target wasm32-unknown-unknown`:
 
-- **`kithara_wasm/`** — WASM player unit tests (AudioWorklet, threading)
 - **`kithara_hls/`** — HLS integration tests marked `browser` (50+ tests via fixture server)
-- **`kithara_file/`** — live stream stress tests marked `browser`
 - **`kithara_hls/abr_integration`** — pure ABR logic tests marked `wasm`
+
+`tests/tests/kithara_wasm/stress.rs` currently holds ignored regression specs:
+`Audio::new` stalls in the `wasm-bindgen-test` headless runner during bootstrap.
+`tests/tests/kithara_file/live_stress_real_mp3.rs` is also ignored on `wasm32`
+for the same bootstrap limitation.
+
+Exported player scenarios that rely on the real `kithara-wasm.js` shim run in
+the ignored Selenium suite under [`tests/tests/kithara_wasm/selenium.rs`](../../tests/tests/kithara_wasm/selenium.rs).
 
 The fixture server provides dynamic HLS/ABR session management via HTTP API. On native, tests use in-process axum servers; on WASM, the same test code sends config to the external fixture server and gets back a `base_url`.
 

@@ -6,7 +6,9 @@ use kithara::{
     bufpool::byte_pool,
     storage::{ResourceExt, StorageError},
 };
-use kithara_platform::{thread, time::Duration};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -185,18 +187,18 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: Cancell
     );
 }
 
-#[kithara::test(native, browser, timeout(Duration::from_secs(5)))]
-fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let atomic = open_test_resource(&temp_dir, "concurrent.dat", cancel_token);
 
     let atomic_clone = atomic.clone();
-    let handle1 = thread::spawn(move || atomic_clone.write_all(b"data1"));
+    let handle1 = spawn_blocking(move || atomic_clone.write_all(b"data1"));
 
     let atomic_clone = atomic.clone();
-    let handle2 = thread::spawn(move || atomic_clone.write_all(b"data2"));
+    let handle2 = spawn_blocking(move || atomic_clone.write_all(b"data2"));
 
-    let result1 = handle1.join().unwrap();
-    let result2 = handle2.join().unwrap();
+    let result1 = handle1.await.unwrap();
+    let result2 = handle2.await.unwrap();
 
     // write_all = write_at + commit (two steps, not atomic).
     // When one thread commits first, the other's write_at may fail

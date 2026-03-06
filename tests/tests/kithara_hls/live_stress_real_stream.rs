@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_arch = "wasm32")]
+use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
@@ -15,19 +17,110 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::{Instant, sleep};
+use kithara_platform::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::time::sleep;
 use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
+use tracing_subscriber::EnvFilter;
+
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
+const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 20_000;
 const WARMUP_TIMEOUT_SECS: u64 = 16;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 32;
+const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
 const RANDOM_SEEK_OPS_MAX: usize = 1_400;
 /// Lowered from 220 to tolerate parallel test execution under CPU/net load.
 const MIN_RANDOM_SEEKS: usize = 100;
+const WASM_MIN_RANDOM_SEEKS: usize = 40;
 const CHUNKS_PER_RANDOM_SEEK: usize = 2;
 const FAST_SEEK_BURST: usize = 160;
+const WASM_FAST_SEEK_BURST: usize = 48;
 const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 120;
+const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
 const REVISIT_SEEKS: usize = 180;
+const WASM_REVISIT_SEEKS: usize = 48;
+const WASM_MAX_SEEK_SECS: f64 = 90.0;
+const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
+const WASM_SMALL_CACHE_WARMUP_CHUNKS: usize = 32;
+const SMALL_CACHE_SEEKS: usize = 10;
+const WASM_SMALL_CACHE_SEEKS: usize = 4;
+const SMALL_CACHE_CHUNKS_PER_SEEK: usize = 10;
+const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
+const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
+
+fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
+    if cfg!(target_arch = "wasm32") {
+        Duration::from_secs(wasm_secs)
+    } else {
+        Duration::from_secs(native_secs)
+    }
+}
+
+fn browser_u64(native: u64, wasm: u64) -> u64 {
+    if cfg!(target_arch = "wasm32") {
+        wasm
+    } else {
+        native
+    }
+}
+
+fn browser_usize(native: usize, wasm: usize) -> usize {
+    if cfg!(target_arch = "wasm32") {
+        wasm
+    } else {
+        native
+    }
+}
+
+fn next_chunk_timeout() -> Duration {
+    Duration::from_millis(browser_u64(
+        NEXT_CHUNK_TIMEOUT_MS,
+        WASM_NEXT_CHUNK_TIMEOUT_MS,
+    ))
+}
+
+fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
+    if cfg!(target_arch = "wasm32") {
+        max_seek_secs.min(wasm_cap)
+    } else {
+        max_seek_secs
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn wait_for_next_chunk() {
+    TimeoutFuture::new(10).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn wait_for_next_chunk() {
+    sleep(Duration::from_millis(5)).await;
+}
+
+#[kithara::fixture]
+fn live_hls_filter() -> EnvFilter {
+    EnvFilter::new(kithara_test_utils::rust_log_filter(
+        "kithara_audio=info,kithara_hls=info",
+    ))
+}
+
+#[kithara::fixture]
+fn live_hls_stream_filter() -> EnvFilter {
+    EnvFilter::new(kithara_test_utils::rust_log_filter(
+        "kithara_audio=info,kithara_hls=info,kithara_stream=info",
+    ))
+}
+
+#[kithara::fixture]
+fn live_hls_tracing_setup(live_hls_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(live_hls_filter);
+}
+
+#[kithara::fixture]
+fn live_hls_stream_tracing_setup(live_hls_stream_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(live_hls_stream_filter);
+}
 
 #[derive(Default)]
 struct LiveStats {
@@ -134,7 +227,8 @@ async fn next_chunk_with_timeout(
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        sleep(Duration::from_millis(5)).await;
+        audio.preload();
+        wait_for_next_chunk().await;
     }
 }
 
@@ -142,19 +236,21 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(180)),
+    timeout(browser_timeout(180, 240)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
-#[case::mmap(false)]
+#[cfg_attr(not(target_arch = "wasm32"), case::mmap(false))]
 #[case::ephemeral(true)]
-async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=info,kithara_hls=info",
-        ))
-        .try_init();
+async fn live_stress_real_stream_seek_read_cache(
+    _live_hls_tracing_setup: (),
+    #[case] ephemeral: bool,
+    temp_dir: TestTempDir,
+) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        info!("browser seek stress is covered by selenium/trunk tests");
+        return;
+    }
 
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
@@ -183,7 +279,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = tokio::spawn(async move {
+    let events_task = kithara_platform::tokio::task::spawn(async move {
         while let Ok(event) = events.recv().await {
             let Event::Hls(hls_event) = event else {
                 continue;
@@ -228,12 +324,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     info!(ephemeral, "Phase 1: warmup until ABR switch");
     let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-            "warmup",
-        )
-        .await;
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
@@ -245,7 +336,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     );
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = (duration_secs - 2.0).max(20.0);
+    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
     let mut seek_positions = Vec::with_capacity(RANDOM_SEEK_OPS_MAX);
     for _ in 0..RANDOM_SEEK_OPS_MAX {
@@ -258,7 +349,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         chunks_per_seek = CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
-    let random_deadline = Instant::now() + Duration::from_secs(RANDOM_PHASE_BUDGET_SECS);
+    let random_deadline =
+        Instant::now() + browser_timeout(RANDOM_PHASE_BUDGET_SECS, WASM_RANDOM_PHASE_BUDGET_SECS);
     let mut random_ops_done = 0usize;
     let mut chunks_read = 0usize;
     let mut variant_match_checks = 0usize;
@@ -276,12 +368,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         let expected_variant = current_variant(&stats);
         for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("random_seek_{idx}_chunk_{read_idx}");
-            let Some(chunk) = next_chunk_with_timeout(
-                &mut audio,
-                Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-                &stage,
-            )
-            .await
+            let Some(chunk) =
+                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
             else {
                 break;
             };
@@ -300,9 +388,9 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         }
     }
     assert!(
-        random_ops_done >= MIN_RANDOM_SEEKS,
+        random_ops_done >= browser_usize(MIN_RANDOM_SEEKS, WASM_MIN_RANDOM_SEEKS),
         "stress seek underflow: expected at least {} seek ops, got {}",
-        MIN_RANDOM_SEEKS,
+        browser_usize(MIN_RANDOM_SEEKS, WASM_MIN_RANDOM_SEEKS),
         random_ops_done
     );
     let min_chunks_by_ops = random_ops_done
@@ -318,8 +406,9 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         random_ops_done
     );
 
-    info!(seeks = FAST_SEEK_BURST, "Phase 3: fast seek burst");
-    for _ in 0..FAST_SEEK_BURST {
+    let fast_seek_burst = browser_usize(FAST_SEEK_BURST, WASM_FAST_SEEK_BURST);
+    info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
+    for _ in 0..fast_seek_burst {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
         audio
             .seek(Duration::from_secs_f64(pos_secs))
@@ -335,20 +424,22 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     audio.preload();
 
     info!(
-        sequential_chunks = SEQUENTIAL_CHUNKS_AFTER_BURST,
+        sequential_chunks = browser_usize(
+            SEQUENTIAL_CHUNKS_AFTER_BURST,
+            WASM_SEQUENTIAL_CHUNKS_AFTER_BURST
+        ),
         "Phase 4: sequential read after fast seeks"
     );
     let mut seq_epoch = None;
     let mut seq_end_frame = None;
-    for idx in 0..SEQUENTIAL_CHUNKS_AFTER_BURST {
+    for idx in 0..browser_usize(
+        SEQUENTIAL_CHUNKS_AFTER_BURST,
+        WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
+    ) {
         let stage = format!("sequential_after_burst_{idx}");
-        let chunk = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-            &stage,
-        )
-        .await
-        .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
+        let chunk = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            .await
+            .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
         if let Some(epoch) = seq_epoch {
             assert_eq!(
                 chunk.meta.epoch, epoch,
@@ -369,8 +460,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     }
 
     let before_revisit = snapshot(&stats);
-    info!(seeks = REVISIT_SEEKS, "Phase 5: revisit same positions");
-    let revisit_limit = REVISIT_SEEKS.min(random_ops_done);
+    let revisit_limit = browser_usize(REVISIT_SEEKS, WASM_REVISIT_SEEKS).min(random_ops_done);
+    info!(seeks = revisit_limit, "Phase 5: revisit same positions");
     assert!(
         revisit_limit > 0,
         "random phase completed without seek operations"
@@ -381,12 +472,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
             .expect("revisit seek must not fail");
         audio.preload();
         let stage = format!("revisit_{idx}");
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-            &stage,
-        )
-        .await;
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await;
     }
     let after_revisit = snapshot(&stats);
 
@@ -432,7 +518,7 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
         );
     }
 
-    events_task.abort();
+    drop(audio);
     let _ = events_task.await;
 }
 
@@ -448,18 +534,13 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(90)),
+    timeout(browser_timeout(90, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
-async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=info,kithara_hls=info,kithara_stream=info",
-        ))
-        .try_init();
-
+async fn live_ephemeral_small_cache_playback(
+    _live_hls_stream_tracing_setup: (),
+    temp_dir: TestTempDir,
+) {
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
     let store = StoreOptions::new(temp_dir.path())
@@ -481,12 +562,9 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     let mut chunks_read = 0usize;
 
     while Instant::now() < deadline {
-        let Some(_chunk) = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-            "ephemeral_small_cache",
-        )
-        .await
+        let Some(_chunk) =
+            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "ephemeral_small_cache")
+                .await
         else {
             break;
         };
@@ -512,17 +590,18 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(90)),
+    timeout(browser_timeout(90, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
-async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=info,kithara_hls=info,kithara_stream=info",
-        ))
-        .try_init();
+async fn live_ephemeral_small_cache_seek_stress(
+    _live_hls_stream_tracing_setup: (),
+    temp_dir: TestTempDir,
+) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        info!("browser seek stress is covered by selenium/trunk tests");
+        return;
+    }
 
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
@@ -542,28 +621,33 @@ async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
 
     // Warmup: read a few chunks so the stream is initialized
     info!("Warmup: reading initial chunks");
-    for i in 0..20 {
+    for i in 0..browser_usize(SMALL_CACHE_WARMUP_CHUNKS, WASM_SMALL_CACHE_WARMUP_CHUNKS) {
         let stage = format!("warmup_{i}");
-        if next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-            &stage,
-        )
-        .await
-        .is_none()
+        if next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            .await
+            .is_none()
         {
             break;
         }
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = (duration_secs - 2.0).max(10.0);
+    let max_seek_secs =
+        capped_seek_secs((duration_secs - 2.0).max(10.0), SMALL_CACHE_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
     let mut total_chunks = 0usize;
     let mut seeks_done = 0usize;
 
-    info!("Seek stress: 10 random seeks with reads after each");
-    for seek_idx in 0..10 {
+    let small_cache_seeks = browser_usize(SMALL_CACHE_SEEKS, WASM_SMALL_CACHE_SEEKS);
+    let chunks_per_seek = browser_usize(
+        SMALL_CACHE_CHUNKS_PER_SEEK,
+        WASM_SMALL_CACHE_CHUNKS_PER_SEEK,
+    );
+    info!(
+        small_cache_seeks,
+        chunks_per_seek, "Seek stress with reads after each"
+    );
+    for seek_idx in 0..small_cache_seeks {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
         info!(seek_idx, pos_secs, "seeking");
         audio
@@ -573,17 +657,14 @@ async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
         seeks_done += 1;
 
         // Read a few chunks after each seek
-        for chunk_idx in 0..10 {
+        for chunk_idx in 0..chunks_per_seek {
             let stage = format!("seek_{seek_idx}_chunk_{chunk_idx}");
-            let Some(_chunk) = next_chunk_with_timeout(
-                &mut audio,
-                Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
-                &stage,
-            )
-            .await
+            let Some(_chunk) =
+                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
             else {
                 break;
             };
+
             total_chunks += 1;
         }
     }

@@ -12,23 +12,34 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::{
+    audio_fixture::AudioTestServer,
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
 use kithara_platform::{
     time::Duration,
     tokio::task::{JoinHandle, spawn_blocking},
 };
-use kithara_test_utils::{TestTempDir, wav::create_test_wav};
+use kithara_test_utils::{TestTempDir, tracing_setup, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{
-    kithara_decode::fixture::AudioTestServer,
-    kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig},
-};
-
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_SIZE: usize = 200_000;
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_SIZE: usize = 32_000;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 10;
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_COUNT: usize = 4;
+#[cfg(target_arch = "wasm32")]
+const MAX_ZERO_READS: usize = 200;
+#[cfg(target_arch = "wasm32")]
+const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
 
 /// Result of one instance completing.
 #[derive(Debug)]
@@ -56,6 +67,42 @@ fn read_file_to_eof(audio: &mut Audio<Stream<File>>) -> u64 {
     total
 }
 
+#[cfg(target_arch = "wasm32")]
+fn read_file_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    let mut zero_reads = 0usize;
+
+    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
+        let n = audio.read(&mut buf);
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            zero_reads += 1;
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
+        zero_reads = 0;
+        for &sample in &buf[..n] {
+            assert!(sample.is_finite(), "non-finite sample at offset {total}");
+        }
+        total += n as u64;
+    }
+
+    assert!(
+        total >= MIN_SAMPLES_PER_INSTANCE,
+        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
+    );
+    total
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_file_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
+    read_file_to_eof(audio)
+}
+
 /// Read HLS audio to EOF in blocking context.
 fn read_hls_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
@@ -74,6 +121,42 @@ fn read_hls_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
     total
 }
 
+#[cfg(target_arch = "wasm32")]
+fn read_hls_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    let mut zero_reads = 0usize;
+
+    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
+        let n = audio.read(&mut buf);
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            zero_reads += 1;
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
+        zero_reads = 0;
+        for &sample in &buf[..n] {
+            assert!(sample.is_finite(), "non-finite sample at offset {total}");
+        }
+        total += n as u64;
+    }
+
+    assert!(
+        total >= MIN_SAMPLES_PER_INSTANCE,
+        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
+    );
+    total
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_hls_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    read_hls_to_eof(audio)
+}
+
 fn generate_wav_data() -> Arc<Vec<u8>> {
     let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
     let bytes_per_frame = CHANNELS as usize * 2;
@@ -83,13 +166,8 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 }
 
 /// 2 File + 2 HLS instances running concurrently.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
-async fn mixed_two_file_two_hls() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
@@ -113,7 +191,7 @@ async fn mixed_two_file_two_hls() {
 
         temps.push(temp);
         handles.push(spawn_blocking(move || {
-            let total = read_file_to_eof(&mut audio);
+            let total = read_file_for_concurrency_check(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
                 id: i,
@@ -156,7 +234,7 @@ async fn mixed_two_file_two_hls() {
         temps.push(temp);
         servers.push(server);
         handles.push(spawn_blocking(move || {
-            let total = read_hls_to_eof(&mut audio);
+            let total = read_hls_for_concurrency_check(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {
                 id: i,
@@ -185,13 +263,8 @@ async fn mixed_two_file_two_hls() {
 }
 
 /// 4 File + 4 HLS instances (8 total) running concurrently.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(180)))]
-async fn mixed_four_file_four_hls() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(180)))]
+async fn mixed_four_file_four_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
@@ -215,7 +288,7 @@ async fn mixed_four_file_four_hls() {
 
         temps.push(temp);
         handles.push(spawn_blocking(move || {
-            let total = read_file_to_eof(&mut audio);
+            let total = read_file_for_concurrency_check(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
                 id: i,
@@ -258,7 +331,7 @@ async fn mixed_four_file_four_hls() {
         temps.push(temp);
         servers.push(server);
         handles.push(spawn_blocking(move || {
-            let total = read_hls_to_eof(&mut audio);
+            let total = read_hls_for_concurrency_check(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {
                 id: i,

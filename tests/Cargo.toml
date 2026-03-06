@@ -14,7 +14,7 @@ workspace = true
 kithara = { workspace = true, features = ["full", "test-utils", "internal"] }
 kithara-audio = { workspace = true, features = ["internal"] }
 kithara-test-utils = { workspace = true }
-kithara-wasm = { workspace = true }
+kithara-wasm = { workspace = true, features = ["internal"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 
@@ -99,9 +99,11 @@ kithara-test-macros = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 
 # WASM-specific
+js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true }
 gloo-timers = { workspace = true }
 tracing-wasm = { workspace = true }
 console_error_panic_hook = { workspace = true }
@@ -162,6 +164,206 @@ required-features = ["perf"]
 [[test]]
 name = "memory_rss"
 path = "perf/memory_rss.rs"
+
+[[test]]
+name = "kithara_assets_eviction_bytes_integration"
+path = "tests/kithara_assets/eviction_bytes_integration.rs"
+
+[[test]]
+name = "kithara_assets_eviction_integration"
+path = "tests/kithara_assets/eviction_integration.rs"
+
+[[test]]
+name = "kithara_assets_integration_storage_assets"
+path = "tests/kithara_assets/integration_storage_assets.rs"
+
+[[test]]
+name = "kithara_assets_pins_index_integration"
+path = "tests/kithara_assets/pins_index_integration.rs"
+
+[[test]]
+name = "kithara_assets_processing_integration"
+path = "tests/kithara_assets/processing_integration.rs"
+
+[[test]]
+name = "kithara_assets_resource_path_test"
+path = "tests/kithara_assets/resource_path_test.rs"
+
+[[test]]
+name = "kithara_assets_streaming_resources_comprehensive"
+path = "tests/kithara_assets/streaming_resources_comprehensive.rs"
+
+[[test]]
+name = "kithara_audio_file_ephemeral_mp3"
+path = "tests/kithara_audio/file_ephemeral_mp3.rs"
+
+[[test]]
+name = "kithara_decode_decoder_seek_tests"
+path = "tests/kithara_decode/decoder_seek_tests.rs"
+
+[[test]]
+name = "kithara_decode_decoder_tests"
+path = "tests/kithara_decode/decoder_tests.rs"
+
+[[test]]
+name = "kithara_decode_fixture_integration"
+path = "tests/kithara_decode/fixture_integration.rs"
+
+[[test]]
+name = "kithara_decode_hls_abr_variant_switch"
+path = "tests/kithara_decode/hls_abr_variant_switch.rs"
+
+[[test]]
+name = "kithara_decode_stress_seek_random"
+path = "tests/kithara_decode/stress_seek_random.rs"
+
+[[test]]
+name = "kithara_decode_stress_timeline"
+path = "tests/kithara_decode/stress_timeline.rs"
+
+[[test]]
+name = "kithara_decode_timeline_tests"
+path = "tests/kithara_decode/timeline_tests.rs"
+
+[[test]]
+name = "kithara_file_early_stream_close"
+path = "tests/kithara_file/early_stream_close.rs"
+
+[[test]]
+name = "kithara_file_file_source"
+path = "tests/kithara_file/file_source.rs"
+
+[[test]]
+name = "kithara_file_live_stress_real_mp3"
+path = "tests/kithara_file/live_stress_real_mp3.rs"
+
+[[test]]
+name = "kithara_hls_abr_integration"
+path = "tests/kithara_hls/abr_integration.rs"
+
+[[test]]
+name = "kithara_hls_basic_playback"
+path = "tests/kithara_hls/basic_playback.rs"
+
+[[test]]
+name = "kithara_hls_deferred_abr"
+path = "tests/kithara_hls/deferred_abr.rs"
+
+[[test]]
+name = "kithara_hls_deferred_abr_debug"
+path = "tests/kithara_hls/deferred_abr_debug.rs"
+
+[[test]]
+name = "kithara_hls_driver_test"
+path = "tests/kithara_hls/driver_test.rs"
+
+[[test]]
+name = "kithara_hls_ephemeral"
+path = "tests/kithara_hls/ephemeral.rs"
+
+[[test]]
+name = "kithara_hls_keys_integration"
+path = "tests/kithara_hls/keys_integration.rs"
+
+[[test]]
+name = "kithara_hls_live_stress_real_stream"
+path = "tests/kithara_hls/live_stress_real_stream.rs"
+
+[[test]]
+name = "kithara_hls_playlist_integration"
+path = "tests/kithara_hls/playlist_integration.rs"
+
+[[test]]
+name = "kithara_hls_seek_past_eof"
+path = "tests/kithara_hls/seek_past_eof.rs"
+
+[[test]]
+name = "kithara_hls_seek_variant_switch_after_eof"
+path = "tests/kithara_hls/seek_variant_switch_after_eof.rs"
+
+[[test]]
+name = "kithara_hls_smoke_test"
+path = "tests/kithara_hls/smoke_test.rs"
+
+[[test]]
+name = "kithara_hls_source_seek"
+path = "tests/kithara_hls/source_seek.rs"
+
+[[test]]
+name = "kithara_hls_stress_chunk_integrity"
+path = "tests/kithara_hls/stress_chunk_integrity.rs"
+
+[[test]]
+name = "kithara_hls_stress_seek_abr"
+path = "tests/kithara_hls/stress_seek_abr.rs"
+
+[[test]]
+name = "kithara_hls_stress_seek_abr_audio"
+path = "tests/kithara_hls/stress_seek_abr_audio.rs"
+
+[[test]]
+name = "kithara_hls_stress_seek_audio"
+path = "tests/kithara_hls/stress_seek_audio.rs"
+
+[[test]]
+name = "kithara_hls_stress_seek_lifecycle"
+path = "tests/kithara_hls/stress_seek_lifecycle.rs"
+
+[[test]]
+name = "kithara_hls_stress_seek_random"
+path = "tests/kithara_hls/stress_seek_random.rs"
+
+[[test]]
+name = "kithara_hls_sync_reader_hls_test"
+path = "tests/kithara_hls/sync_reader_hls_test.rs"
+
+[[test]]
+name = "kithara_hls_wait_range_contract"
+path = "tests/kithara_hls/wait_range_contract.rs"
+
+[[test]]
+name = "kithara_net_http_client"
+path = "tests/kithara_net/http_client.rs"
+
+[[test]]
+name = "kithara_net_retry"
+path = "tests/kithara_net/retry.rs"
+
+[[test]]
+name = "kithara_net_timeout"
+path = "tests/kithara_net/timeout.rs"
+
+[[test]]
+name = "kithara_storage_atomic"
+path = "tests/kithara_storage/atomic.rs"
+
+[[test]]
+name = "kithara_storage_streaming"
+path = "tests/kithara_storage/streaming.rs"
+
+[[test]]
+name = "kithara_stream_source"
+path = "tests/kithara_stream/source.rs"
+
+[[test]]
+name = "kithara_stream_sync_reader_basic_test"
+path = "tests/kithara_stream/sync_reader_basic_test.rs"
+
+[[test]]
+name = "multi_instance_concurrent_file"
+path = "tests/multi_instance/concurrent_file.rs"
+
+[[test]]
+name = "multi_instance_concurrent_hls"
+path = "tests/multi_instance/concurrent_hls.rs"
+
+[[test]]
+name = "multi_instance_concurrent_mixed"
+path = "tests/multi_instance/concurrent_mixed.rs"
+
+[[test]]
+name = "multi_instance_failure_resilience"
+path = "tests/multi_instance/failure_resilience.rs"
 
 [[bench]]
 name = "refactor_hotpaths"

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Test: File with early stream close + seek via on-demand Range request.
 //!
 //! Scenario:

@@ -2,13 +2,13 @@
 
 use std::error::Error as StdError;
 
-use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::TestServer;
 use kithara_platform::{
     time::{Duration, sleep, timeout},
     tokio::{sync::oneshot, task::spawn},
@@ -17,8 +17,6 @@ use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-
-use super::fixture;
 
 // Test Cases
 

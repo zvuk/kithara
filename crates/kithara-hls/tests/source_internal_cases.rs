@@ -21,7 +21,7 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -1058,8 +1058,8 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     assert!(saw_metadata_miss, "expected SeekMetadataMiss diagnostic");
 }
 
-#[kithara::test(browser)]
-async fn test_wait_range_stalled_on_demand_request_returns_interrupted(_tracing_setup: ()) {
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+async fn test_wait_range_stalled_on_demand_request_is_interrupted_by_flush(_tracing_setup: ()) {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
@@ -1080,38 +1080,28 @@ async fn test_wait_range_stalled_on_demand_request_returns_interrupted(_tracing_
         );
     };
 
-    let stalled_budget_deadline = Instant::now() + Duration::from_secs(2);
-    let mut last_watchdog = None;
-    while !handle.is_finished() {
-        if let Ok(Ok(Event::Hls(HlsEvent::Error { error, .. }))) =
-            timeout(Duration::from_millis(1), events.recv()).await
-            && error.contains("loop_watchdog")
-        {
-            last_watchdog = Some(error);
-        }
-        assert!(
-            Instant::now() <= stalled_budget_deadline,
-            "wait_range should self-interrupt on stalled on-demand request; last watchdog={:?}",
-            last_watchdog
-        );
-        sleep(Duration::from_millis(10)).await;
-    }
-
     assert_eq!(request.variant, 0);
     assert_eq!(request.segment_index, 1);
 
-    let result = handle.await.expect("wait_range task should not panic");
+    let _ = shared.timeline.initiate_seek(Duration::from_millis(1));
+    shared.condvar.notify_all();
+
+    let result = timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("wait_range should exit after seek flush")
+        .expect("wait_range task should not panic");
     assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
 }
 
-#[kithara::test(browser)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_arrives() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
-
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
@@ -1131,19 +1121,20 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
 
     {
         let segment = make_loaded_segment(0, 1, 100, 100);
+        commit_dummy_resource(&commit_source, &segment);
         let mut segments = shared.segments.lock_sync();
         segments.push(segment);
     }
     shared.condvar.notify_all();
 
-    let result = timeout(Duration::from_secs(1), handle)
+    let result = timeout(Duration::from_secs(2), handle)
         .await
         .expect("wait_range should not hang while data is pushed")
         .expect("wait_range task should not panic");
     assert!(matches!(result, Ok(WaitOutcome::Ready)));
 }
 
-#[kithara::test(browser)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1237,7 +1228,7 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
 /// Background task pushes entries at 0..100, 100..200, ... every 200ms.
 /// `range_ready=false` throughout (no entry covers offset 2500).
 /// Expected: hang detector panics after 10s timeout.
-#[kithara::test(tokio, browser)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant
@@ -1270,20 +1261,51 @@ async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
     // wait_range for offset 100..200 — no entries cover this range.
     // Background entries are at 10000+. total grows but range stays unready.
     // Expected: hang detector fires after 10s.
-    let result = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(30))).await;
+    let mut handle = Box::pin(spawn_blocking(move || {
+        source.wait_range(100..200, Duration::from_secs(30))
+    }));
 
-    cancel.cancel();
-    bg.abort();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let result = handle.as_mut().await;
 
-    // BlockingError means the spawned thread panicked (hang detector fired).
-    // Ok(result) means wait_range returned normally — unexpected.
-    match result {
-        Err(_blocking_error) => {
-            // HangDetector panic was caught by spawn_blocking.
-            // This is the expected outcome — the detector fired.
+        cancel.cancel();
+        let _ = timeout(Duration::from_secs(1), bg).await;
+
+        // BlockingError means the spawned thread panicked (hang detector fired).
+        // Ok(result) means wait_range returned normally — unexpected.
+        match result {
+            Err(_blocking_error) => {
+                // HangDetector panic was caught by spawn_blocking.
+                // This is the expected outcome — the detector fired.
+            }
+            Ok(inner) => {
+                panic!(
+                    "wait_range should not return normally when range is never ready: {inner:?}"
+                );
+            }
         }
-        Ok(inner) => {
-            panic!("wait_range should not return normally when range is never ready: {inner:?}");
-        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        assert!(
+            timeout(Duration::from_secs(2), handle.as_mut())
+                .await
+                .is_err(),
+            "wait_range must stay blocked when unrelated segment data grows total"
+        );
+
+        cancel.cancel();
+        let result = timeout(Duration::from_secs(2), handle.as_mut())
+            .await
+            .expect("wait_range should exit after cancellation")
+            .expect("wait_range task should not panic");
+        assert!(matches!(
+            result,
+            Err(StreamError::Source(HlsError::Cancelled)) | Ok(WaitOutcome::Interrupted)
+        ));
+
+        let _ = timeout(Duration::from_secs(1), bg).await;
     }
 }

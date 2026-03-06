@@ -16,15 +16,14 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::{
+    TestServer,
+    abr::{AbrTestServer, master_playlist},
+};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture::{
-    TestServer,
-    abr::{AbrTestServer, master_playlist},
-};
 
 /// Driver-1: Verify that seek works AFTER all segments have been downloaded.
 ///
@@ -35,7 +34,7 @@ use super::fixture::{
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
 async fn test_driver_seek_after_playlist_finished(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -100,7 +99,7 @@ async fn test_driver_seek_after_playlist_finished(
 ///
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(30)))]
 async fn test_driver_abr_seek_backward(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -136,7 +135,7 @@ async fn test_driver_abr_seek_backward(
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let switches_clone = variant_switches.clone();
 
-    tokio::spawn(async move {
+    kithara_platform::tokio::task::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
                 Event::Hls(HlsEvent::VariantApplied {

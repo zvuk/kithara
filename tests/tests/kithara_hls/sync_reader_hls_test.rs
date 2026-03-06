@@ -16,11 +16,10 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
-
-use super::fixture::abr::{AbrTestServer, master_playlist};
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(30)))]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {

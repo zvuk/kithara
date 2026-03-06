@@ -17,6 +17,9 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::{
+    EncryptionConfig, HlsTestServer, HlsTestServerConfig,
+};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
@@ -25,8 +28,6 @@ use kithara_platform::{
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 
 /// Random seek+read cycles with exact byte verification on HLS stream.
 ///
@@ -38,7 +39,16 @@ use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(if cfg!(target_arch = "wasm32") {
+        Duration::from_secs(300)
+    } else {
+        Duration::from_secs(120)
+    })
+)]
 #[case::small(50_000, 20, 200, false, false)]
 #[case::medium(100_000, 50, 500, false, false)]
 #[case::large(200_000, 100, 1000, false, false)]
@@ -53,6 +63,22 @@ async fn stress_random_seek_read_hls(
     #[case] with_init: bool,
     #[case] with_encryption: bool,
 ) {
+    let segment_size = if cfg!(target_arch = "wasm32") {
+        segment_size.min(50_000)
+    } else {
+        segment_size
+    };
+    let segment_count = if cfg!(target_arch = "wasm32") {
+        segment_count.min(20)
+    } else {
+        segment_count
+    };
+    let seek_iterations = if cfg!(target_arch = "wasm32") {
+        seek_iterations.min(100)
+    } else {
+        seek_iterations
+    };
+
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)

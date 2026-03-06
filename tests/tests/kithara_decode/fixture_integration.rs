@@ -3,14 +3,13 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
+use kithara_integration_tests::audio_fixture::{AudioTestServer, EmbeddedAudio};
 use kithara_platform::time::Duration;
-
-use super::fixture;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn test_audio_test_server_starts() {
     // Test that the server can start and serve requests
-    let server = fixture::AudioTestServer::new().await;
+    let server = AudioTestServer::new().await;
 
     // Verify we can get URLs
     let wav_url = server.wav_url();
@@ -31,7 +30,7 @@ async fn test_audio_test_server_serves_format(
     #[case] content_type: &str,
     #[case] desc: &str,
 ) {
-    let server = fixture::AudioTestServer::new().await;
+    let server = AudioTestServer::new().await;
     let client = reqwest::Client::new();
 
     let url = match format {
@@ -69,7 +68,7 @@ async fn test_audio_test_server_serves_format(
 
 #[kithara::test]
 fn test_embedded_audio_contains_data() {
-    let audio = fixture::EmbeddedAudio::get();
+    let audio = EmbeddedAudio::get();
 
     // Verify WAV data exists
     let wav_data = audio.wav();

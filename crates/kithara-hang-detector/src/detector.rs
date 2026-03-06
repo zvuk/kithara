@@ -125,7 +125,6 @@ fn env_timeout() -> Option<Duration> {
     None
 }
 
-#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 #[must_use]
 fn parse_timeout_secs(value: &str) -> Option<Duration> {
     let secs = value.parse::<u64>().ok()?;
@@ -134,28 +133,32 @@ fn parse_timeout_secs(value: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use std::thread::sleep;
 
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn parse_timeout_secs_rejects_invalid() {
         assert_eq!(parse_timeout_secs(""), None);
         assert_eq!(parse_timeout_secs("abc"), None);
         assert_eq!(parse_timeout_secs("0"), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn parse_timeout_secs_accepts_positive_numbers() {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
     }
 
-    #[test]
+    #[kithara::test]
     fn fallback_timeout_is_ten_seconds() {
         assert_eq!(fallback_timeout(), Duration::from_secs(10));
     }
 
-    #[test]
+    #[kithara::test]
     fn tick_within_timeout_does_not_panic() {
         let mut detector = HangDetector::new("test", Duration::from_secs(5));
         for _ in 0..100 {
@@ -164,7 +167,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "disable-hang-detector"))]
-    #[test]
+    #[kithara::test(native)]
     #[should_panic(expected = "HangDetector")]
     fn tick_after_timeout_panics() {
         let mut detector = HangDetector::new("test.wait", Duration::from_millis(1));
@@ -173,7 +176,15 @@ mod tests {
     }
 
     #[cfg(not(feature = "disable-hang-detector"))]
-    #[test]
+    #[kithara::test(wasm)]
+    fn tick_after_timeout_does_not_panic_on_wasm() {
+        let mut detector = HangDetector::new("test.wait", Duration::from_millis(1));
+        sleep(Duration::from_millis(10));
+        detector.tick();
+    }
+
+    #[cfg(not(feature = "disable-hang-detector"))]
+    #[kithara::test]
     fn reset_extends_deadline() {
         let mut detector = HangDetector::new("test", Duration::from_millis(50));
         sleep(Duration::from_millis(30));

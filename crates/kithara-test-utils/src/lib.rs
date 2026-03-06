@@ -20,7 +20,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_server;
 pub mod fixture_client;
 pub mod fixture_protocol;
@@ -29,6 +28,7 @@ pub mod fixtures;
 pub mod http_server;
 pub mod memory_source;
 pub mod rng;
+pub mod server_url;
 pub mod wav;
 
 /// Re-export of `kithara_test_macros::test` under the `kithara` namespace.
@@ -39,12 +39,12 @@ pub mod kithara {
     pub use kithara_test_macros::{fixture, test};
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use asset_server::serve_assets;
+pub use asset_server::{AssetServer, serve_assets};
 pub use fixtures::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use http_server::TestHttpServer;
 pub use rng::*;
+pub use server_url::join_server_url;
 pub use wav::{create_saw_wav, create_test_wav};
 
 /// Get a `tracing` filter string for tests with wasm-safe fallback.

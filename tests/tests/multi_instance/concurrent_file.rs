@@ -11,11 +11,17 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::audio_fixture::AudioTestServer;
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::TestTempDir;
+use kithara_test_utils::{TestTempDir, tracing_setup};
 use tracing::info;
 
-use crate::kithara_decode::fixture::AudioTestServer;
+#[cfg(target_arch = "wasm32")]
+const MAX_ZERO_READS: usize = 200;
+#[cfg(target_arch = "wasm32")]
+const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
 
 /// Read all PCM data from an `Audio` instance to EOF.
 ///
@@ -36,6 +42,42 @@ fn read_to_eof(audio: &mut Audio<Stream<File>>) -> u64 {
     }
     assert!(audio.is_eof(), "expected EOF after reading all data");
     total
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    let mut zero_reads = 0usize;
+
+    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
+        let n = audio.read(&mut buf);
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            zero_reads += 1;
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
+        zero_reads = 0;
+        for &sample in &buf[..n] {
+            assert!(sample.is_finite(), "non-finite sample at offset {total}");
+        }
+        total += n as u64;
+    }
+
+    assert!(
+        total >= MIN_SAMPLES_PER_INSTANCE,
+        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
+    );
+    total
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
+    read_to_eof(audio)
 }
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
@@ -70,13 +112,8 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + audio_loop),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
-async fn two_file_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+async fn two_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 
     let mut handles = Vec::new();
@@ -87,7 +124,7 @@ async fn two_file_instances() {
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -103,17 +140,13 @@ async fn two_file_instances() {
     for (id, total) in &results {
         assert!(*total > 0, "instance {id} read 0 samples");
     }
+    #[cfg(not(target_arch = "wasm32"))]
     assert_consistent_counts(&results);
 }
 
 /// 4 concurrent File instances on a shared pool.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
-async fn four_file_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+async fn four_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 
     let mut handles = Vec::new();
@@ -124,7 +157,7 @@ async fn four_file_instances() {
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -140,17 +173,13 @@ async fn four_file_instances() {
     for (id, total) in &results {
         assert!(*total > 0, "instance {id} read 0 samples");
     }
+    #[cfg(not(target_arch = "wasm32"))]
     assert_consistent_counts(&results);
 }
 
 /// 8 concurrent File instances on a shared pool.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(180)))]
-async fn eight_file_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(180)))]
+async fn eight_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 
     let mut handles = Vec::new();
@@ -161,7 +190,7 @@ async fn eight_file_instances() {
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -177,5 +206,6 @@ async fn eight_file_instances() {
     for (id, total) in &results {
         assert!(*total > 0, "instance {id} read 0 samples");
     }
+    #[cfg(not(target_arch = "wasm32"))]
     assert_consistent_counts(&results);
 }

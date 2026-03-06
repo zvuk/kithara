@@ -12,17 +12,28 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, wav::create_test_wav};
+use kithara_test_utils::{TestTempDir, tracing_setup, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
-
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_SIZE: usize = 200_000;
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_SIZE: usize = 32_000;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
+#[cfg(target_arch = "wasm32")]
+const MAX_ZERO_READS: usize = 200;
+#[cfg(target_arch = "wasm32")]
+const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
 
 /// Read all PCM data from an `Audio<Stream<Hls>>` instance to EOF.
 ///
@@ -42,6 +53,42 @@ fn read_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
     }
     assert!(audio.is_eof(), "expected EOF after reading all data");
     total
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    let mut zero_reads = 0usize;
+
+    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
+        let n = audio.read(&mut buf);
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            zero_reads += 1;
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
+        zero_reads = 0;
+        for &sample in &buf[..n] {
+            assert!(sample.is_finite(), "non-finite sample at offset {total}");
+        }
+        total += n as u64;
+    }
+
+    assert!(
+        total >= MIN_SAMPLES_PER_INSTANCE,
+        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
+    );
+    total
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    read_to_eof(audio)
 }
 
 /// Create an HLS server with WAV segments.
@@ -130,13 +177,8 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 // Tests
 
 /// 2 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
-async fn two_hls_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+async fn two_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     // Each instance needs its own server (binds a random port) and cache dir.
@@ -150,7 +192,7 @@ async fn two_hls_instances() {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -168,13 +210,8 @@ async fn two_hls_instances() {
 }
 
 /// 4 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
-async fn four_hls_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+async fn four_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     let mut handles = Vec::new();
@@ -186,7 +223,7 @@ async fn four_hls_instances() {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -204,13 +241,8 @@ async fn four_hls_instances() {
 }
 
 /// 8 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
-async fn eight_hls_instances() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+async fn eight_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     let mut handles = Vec::new();
@@ -222,7 +254,7 @@ async fn eight_hls_instances() {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -240,13 +272,8 @@ async fn eight_hls_instances() {
 }
 
 /// 4 concurrent HLS instances with auto ABR (2 variants).
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
-async fn four_hls_instances_with_abr() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+async fn four_hls_instances_with_abr(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     let mut handles = Vec::new();
@@ -258,7 +285,7 @@ async fn four_hls_instances_with_abr() {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_to_eof(&mut audio);
+            let total = read_for_concurrency_check(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));

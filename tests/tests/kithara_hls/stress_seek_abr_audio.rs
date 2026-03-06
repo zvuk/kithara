@@ -18,12 +18,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;

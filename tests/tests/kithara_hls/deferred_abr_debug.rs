@@ -4,19 +4,17 @@
 
 use std::io::Read;
 
-use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::TestServer;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture;
 
 /// Diagnostic version with detailed logging and safety limits
 #[kithara::test(tokio, native, timeout(Duration::from_secs(15)))]

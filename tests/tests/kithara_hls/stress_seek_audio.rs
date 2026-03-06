@@ -19,12 +19,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::{TestTempDir, Xorshift64, tracing_setup, wav::create_saw_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
@@ -74,7 +73,7 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 2: continuity (consecutive frames follow pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(120)))]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]

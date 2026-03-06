@@ -3,6 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::EnvFilter;
+#[cfg(target_arch = "wasm32")]
+use tracing_subscriber::{layer, util};
 
 use crate::kithara;
 
@@ -84,47 +87,35 @@ pub fn cancel_token_cancelled() -> CancellationToken {
 
 #[kithara::fixture]
 pub fn tracing_setup() {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::default()
-                    .add_directive("warn".parse().expect("valid directive")),
-            )
-            .with_test_writer()
-            .try_init();
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        init_wasm_tracing();
-    }
+    init_tracing(EnvFilter::default().add_directive("warn".parse().expect("valid directive")));
 }
 
 #[kithara::fixture]
 pub fn debug_tracing_setup() {
+    init_tracing(
+        EnvFilter::default()
+            .add_directive("kithara_hls=debug".parse().expect("valid directive"))
+            .add_directive("kithara_stream=debug".parse().expect("valid directive"))
+            .add_directive("kithara_decode=debug".parse().expect("valid directive")),
+    );
+}
+
+pub fn init_tracing(filter: EnvFilter) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::default()
-                    .add_directive("kithara_hls=debug".parse().expect("valid directive"))
-                    .add_directive("kithara_stream=debug".parse().expect("valid directive"))
-                    .add_directive("kithara_decode=debug".parse().expect("valid directive")),
-            )
+            .with_env_filter(filter)
             .with_test_writer()
             .try_init();
     }
+
     #[cfg(target_arch = "wasm32")]
     {
-        init_wasm_tracing();
+        let mut config = tracing_wasm::WASMLayerConfigBuilder::new();
+        config.set_report_logs_in_timings(false);
+        let subscriber = layer::SubscriberExt::with(tracing_subscriber::registry(), filter);
+        let subscriber =
+            layer::SubscriberExt::with(subscriber, tracing_wasm::WASMLayer::new(config.build()));
+        let _ = util::SubscriberInitExt::try_init(subscriber);
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn init_wasm_tracing() {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        tracing_wasm::set_as_global_default();
-    });
 }

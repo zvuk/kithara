@@ -151,7 +151,7 @@ pub(crate) use native::AudioTestServer;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use kithara_test_utils::fixture_client;
+    use kithara_test_utils::{fixture_client, join_server_url};
     use url::Url;
 
     pub(crate) struct AudioTestServer {
@@ -173,11 +173,11 @@ mod wasm {
         }
 
         pub(crate) fn wav_url(&self) -> Url {
-            self.base_url.join("audio/silence.wav").unwrap()
+            join_server_url(&self.base_url, "audio/silence.wav")
         }
 
         pub(crate) fn mp3_url(&self) -> Url {
-            self.base_url.join("audio/test.mp3").unwrap()
+            join_server_url(&self.base_url, "audio/test.mp3")
         }
 
         #[allow(dead_code)]

@@ -68,7 +68,7 @@ mod server {
     use axum::{
         Router,
         body::Body,
-        extract::{Path, State},
+        extract::{DefaultBodyLimit, Path, State},
         http::{HeaderMap, Response, StatusCode, header},
         routing::{delete, get, post},
     };
@@ -1436,6 +1436,7 @@ seg/v{}_2.bin
             .nest_service("/drm", ServeDir::new(assets_dir().join("drm")))
             .nest_service("/track.mp3", ServeDir::new(assets_dir().join("track.mp3")))
             .with_state(state)
+            .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
             .layer(CorsLayer::permissive());
 
         let addr = format!("127.0.0.1:{port}");

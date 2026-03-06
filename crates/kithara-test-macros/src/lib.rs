@@ -777,7 +777,7 @@ fn emit_one_test(
     }
 }
 
-/// Emit a single browser test pair: WASM side (with `ensure_thread_pool`) and
+/// Emit a single browser test pair: WASM side (with `tokio::ensure_thread_pool`) and
 /// optional native side. Returns one or two `#[cfg]`-gated functions.
 #[allow(clippy::too_many_arguments)]
 fn emit_browser_test(
@@ -796,9 +796,9 @@ fn emit_browser_test(
 
     output.extend(make_dedicated_worker_config());
 
-    // WASM side: always async, with ensure_thread_pool init
+    // WASM side: always async, with tokio::ensure_thread_pool init
     let wasm_body = quote! {
-        kithara_platform::ensure_thread_pool().await;
+        kithara_platform::tokio::ensure_thread_pool().await;
         #preamble
         #(#body_stmts)*
     };
@@ -896,7 +896,7 @@ fn emit_browser_test(
 ///
 /// ## `browser`
 ///
-/// The `browser` flag injects `kithara_platform::ensure_thread_pool().await` on
+/// The `browser` flag injects `kithara_platform::tokio::ensure_thread_pool().await` on
 /// WASM to initialize Web Workers before running the test body.
 ///
 /// Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
@@ -1056,7 +1056,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         return Ok(tests);
     }
 
-    // browser: WASM with ensure_thread_pool init, optionally dual-platform
+    // browser: WASM with tokio::ensure_thread_pool init, optionally dual-platform
     //   browser alone      → wasm-only + init
     //   native, browser    → sync native + browser wasm
     //   tokio, browser     → async native + browser wasm

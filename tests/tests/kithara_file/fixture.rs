@@ -31,7 +31,9 @@ pub(crate) use native::FileTestServer;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use kithara_test_utils::{fixture_client, fixture_protocol::FileSessionConfig};
+    use kithara_test_utils::{
+        fixture_client, fixture_protocol::FileSessionConfig, join_server_url,
+    };
     use url::Url;
 
     #[allow(dead_code)]
@@ -53,7 +55,7 @@ mod wasm {
         pub(crate) fn url(&self, path: &str) -> Url {
             // Files served at /s/{id}/file/{filename}
             let file_path = format!("file{}", path);
-            self.base_url.join(&file_path).unwrap()
+            join_server_url(&self.base_url, &file_path)
         }
     }
 

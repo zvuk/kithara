@@ -17,6 +17,7 @@ use kithara::{
 use kithara_platform::time::Duration;
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 const SAMPLE_RATE: u32 = 44100;
 const DURATION_SECS: f64 = 10.0;
@@ -24,6 +25,18 @@ const SAMPLE_COUNT: usize = (SAMPLE_RATE as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 1000;
 
 // Stress Test
+
+#[kithara::fixture]
+fn debug_filter() -> EnvFilter {
+    EnvFilter::new(kithara_test_utils::rust_log_filter(
+        "kithara_audio=debug,kithara_decode=debug,kithara_stream=debug",
+    ))
+}
+
+#[kithara::fixture]
+fn tracing_setup(debug_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(debug_filter);
+}
 
 /// 1000 random seek+read cycles with data verification.
 ///
@@ -35,15 +48,9 @@ const SEEK_ITERATIONS: usize = 1000;
 /// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
 /// 6. For each: seek → read → verify data (valid range, L==R channels)
 /// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
-#[kithara::test(serial, timeout(Duration::from_secs(120)))]
-async fn stress_random_seek_read_synthetic_wav() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=debug,kithara_decode=debug,kithara_stream=debug",
-        ))
-        .try_init();
+#[kithara::test(native, serial, timeout(Duration::from_secs(120)))]
+async fn stress_random_seek_read_synthetic_wav(tracing_setup: ()) {
+    let _ = tracing_setup;
 
     // Step 1: Create synthetic WAV
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);

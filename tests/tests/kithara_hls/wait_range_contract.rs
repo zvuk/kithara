@@ -15,11 +15,10 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
-
-use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
 const SEGMENT_SIZE: usize = 50_000;
 const SEGMENT_COUNT: usize = 40;

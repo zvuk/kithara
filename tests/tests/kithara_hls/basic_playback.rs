@@ -2,35 +2,45 @@
 
 use std::{error::Error, io::Read, time::Duration};
 
-use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
+use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_platform::time::sleep;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-use super::fixture;
-
 // Fixtures
 
 #[kithara::fixture]
-fn tracing_setup() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::default()
-                .add_directive("kithara_hls=info".parse().unwrap())
-                .add_directive("kithara_stream=info".parse().unwrap())
-                .add_directive("warn".parse().unwrap()),
-        )
-        .with_test_writer()
-        .try_init();
+fn warn_filter() -> EnvFilter {
+    EnvFilter::default().add_directive("warn".parse().unwrap())
+}
+
+#[kithara::fixture]
+fn hls_info_filter() -> EnvFilter {
+    EnvFilter::default()
+        .add_directive("kithara_hls=info".parse().unwrap())
+        .add_directive("kithara_stream=info".parse().unwrap())
+        .add_directive("warn".parse().unwrap())
+}
+
+#[kithara::fixture]
+fn tracing_setup(hls_info_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(hls_info_filter);
+}
+
+#[kithara::fixture]
+fn warn_tracing_setup(warn_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(warn_filter);
 }
 
 // Test Cases
@@ -67,7 +77,7 @@ async fn test_basic_hls_playback(
     info!("HLS source opened successfully");
 
     // Start event monitor in background
-    let _events_handle = tokio::spawn(async move {
+    let _events_handle = kithara_platform::tokio::task::spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
             event_count += 1;
@@ -79,33 +89,40 @@ async fn test_basic_hls_playback(
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
-    let decoder_result = spawn_blocking(move || rodio::Decoder::new(stream)).await;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let decoder_result = spawn_blocking(move || rodio::Decoder::new(stream)).await;
 
-    match decoder_result {
-        Ok(_decoder) => {
-            info!("Rodio decoder created successfully");
-            Ok(())
+        match decoder_result {
+            Ok(_decoder) => {
+                info!("Rodio decoder created successfully");
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to create rodio decoder: {}", e);
+                // Test data is not valid audio, so decoder failure is expected
+                info!("Note: Rodio decoder failed, but HLS layer is functional");
+                Ok(())
+            }
         }
-        Err(e) => {
-            warn!("Failed to create rodio decoder: {}", e);
-            // Test data is not valid audio, so decoder failure is expected
-            info!("Note: Rodio decoder failed, but HLS layer is functional");
-            Ok(())
-        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = stream;
+        sleep(Duration::from_millis(50)).await;
+        info!("HLS stream opened successfully on wasm");
+        Ok(())
     }
 }
 
 /// Test that verifies HLS session creation without actual playback.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_hls_session_creation(
+    _warn_tracing_setup: (),
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
 
@@ -122,7 +139,7 @@ async fn test_hls_session_creation(
     let _stream = Stream::<Hls>::new(config).await?;
 
     // Spawn a task to consume events (prevent channel from filling up)
-    tokio::spawn(async move {
+    kithara_platform::tokio::task::spawn(async move {
         while events_rx.recv().await.is_ok() {
             // Just consume events
         }
@@ -135,14 +152,10 @@ async fn test_hls_session_creation(
 /// Test HLS with init segments.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_hls_with_init_segments(
+    _warn_tracing_setup: (),
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
     let server = TestServer::new().await;
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS with init segments: {}", url);
@@ -160,13 +173,9 @@ async fn test_hls_with_init_segments(
 /// Test HLS with different options configurations.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_hls_with_different_options(
+    _warn_tracing_setup: (),
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
@@ -188,15 +197,11 @@ async fn test_hls_with_different_options(
 #[case("not-a-valid-url")]
 #[case("")]
 async fn test_hls_invalid_url_handling(
+    _warn_tracing_setup: (),
     #[case] invalid_url: &str,
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
     let url_result = Url::parse(invalid_url);
 
     if let Ok(url) = url_result {
@@ -220,14 +225,10 @@ async fn test_hls_invalid_url_handling(
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
 async fn test_init_segment_at_stream_start(
+    _warn_tracing_setup: (),
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
     let server = TestServer::new().await;
     let url = server.url("/master-init.m3u8")?;
     info!("Testing INIT segment at stream start: {}", url);
@@ -245,8 +246,15 @@ async fn test_init_segment_at_stream_start(
     // Variant is ABR-dependent, so validate init marker generically.
     let mut buf = [0u8; 32];
 
+    #[cfg(not(target_arch = "wasm32"))]
     let n = spawn_blocking(move || stream.read(&mut buf).map(|n| (n, buf)))
         .await?
+        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+
+    #[cfg(target_arch = "wasm32")]
+    let n = stream
+        .read(&mut buf)
+        .map(|n| (n, buf))
         .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
 
     let (bytes_read, data) = n;
@@ -266,12 +274,10 @@ async fn test_init_segment_at_stream_start(
 
 /// Test HLS with limited cache.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
-async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-
+async fn test_hls_without_cache(
+    _warn_tracing_setup: (),
+    temp_dir: TestTempDir,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
 

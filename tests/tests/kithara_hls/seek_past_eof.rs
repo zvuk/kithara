@@ -14,17 +14,15 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
-
-use super::fixture;
 
 // Constants
 

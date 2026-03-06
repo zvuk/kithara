@@ -12,20 +12,29 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestTempDir, wav::create_test_wav};
+use kithara_test_utils::{TestTempDir, tracing_setup, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
-
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_SIZE: usize = 200_000;
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_SIZE: usize = 32_000;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 10;
+#[cfg(target_arch = "wasm32")]
+const SEGMENT_COUNT: usize = 4;
+#[cfg(target_arch = "wasm32")]
+const MAX_ZERO_READS: usize = 200;
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
     let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
@@ -47,6 +56,7 @@ struct Outcome {
 
 /// Read HLS audio until EOF or the stream stops producing data.
 /// Returns total samples read.
+#[cfg(not(target_arch = "wasm32"))]
 fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
@@ -57,6 +67,30 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
         }
         total += n as u64;
     }
+    total
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    let mut zero_reads = 0usize;
+
+    while zero_reads < MAX_ZERO_READS {
+        let n = audio.read(&mut buf);
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            zero_reads += 1;
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
+        zero_reads = 0;
+        total += n as u64;
+    }
+
     total
 }
 
@@ -102,13 +136,8 @@ async fn create_hls_audio(
 /// The cancelled instances have their `CancellationToken` fired after a
 /// short delay (simulating a network failure / user abort). The test verifies
 /// that the healthy instances still read to EOF, unaffected by the cancelled ones.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
-async fn healthy_instances_survive_cancelled_peers() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+async fn healthy_instances_survive_cancelled_peers(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
@@ -207,13 +236,8 @@ async fn healthy_instances_survive_cancelled_peers() {
 }
 
 /// 4 healthy + 4 cancelled HLS instances (8 total). Healthy ones must complete.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)))]
-async fn eight_instances_half_cancelled() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
+#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+async fn eight_instances_half_cancelled(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();

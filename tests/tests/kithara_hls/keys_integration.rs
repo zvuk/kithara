@@ -2,11 +2,9 @@
 
 use std::sync::Arc;
 
-use fixture::*;
 use kithara::{hls::HlsResult, internal::KeyManager};
+use kithara_integration_tests::hls_fixture::*;
 use kithara_platform::time::Duration;
-
-use super::fixture;
 
 // Test Cases
 

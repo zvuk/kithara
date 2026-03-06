@@ -20,6 +20,8 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
@@ -31,9 +33,6 @@ use kithara_test_utils::wav::create_saw_wav;
 use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
-
-#[cfg(not(target_arch = "wasm32"))]
-use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_backend_creates_mem_resource() {

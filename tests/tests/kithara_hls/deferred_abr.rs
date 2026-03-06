@@ -11,20 +11,26 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::TestServer;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::fixture;
-
 // Helper Functions
+
+fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
+    if cfg!(target_arch = "wasm32") {
+        Duration::from_secs(wasm_secs)
+    } else {
+        Duration::from_secs(native_secs)
+    }
+}
 
 /// Get variant from data by parsing prefix "V{n}-SEG-".
 fn variant_from_data(data: &[u8]) -> Option<usize> {
@@ -317,10 +323,10 @@ async fn multiple_seeks_maintain_correct_variant(
 
 /// Test: Seek to exact segment boundary reads correct segment prefix.
 /// Note: With 200KB segments, we only read the first 26 bytes to verify the segment.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(browser_timeout(10, 30)))]
 #[case(0)] // Start of segment 0
 #[case(200_000)] // Start of segment 1
-#[case(400_000)] // Start of segment 2
+#[cfg_attr(not(target_arch = "wasm32"), case(400_000))] // Start of segment 2
 async fn seek_to_segment_boundary_reads_correct_segment(
     _tracing_setup: (),
     temp_dir: TestTempDir,

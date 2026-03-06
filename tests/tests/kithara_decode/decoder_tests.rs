@@ -4,13 +4,11 @@
 
 use std::io::Cursor;
 
-use fixture::EmbeddedAudio;
 use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-
-use super::fixture;
+use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 
 fn test_config() -> DecoderConfig {
     DecoderConfig::default()

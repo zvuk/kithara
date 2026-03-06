@@ -991,10 +991,19 @@ async fn build_webdriver(config: &SeleniumConfig) -> Result<WebDriver, String> {
     let driver = match config.browser {
         BrowserKind::Chrome => {
             let mut caps = DesiredCapabilities::chrome();
-            caps.add_arg("--enable-features=SharedArrayBuffer")
-                .map_err(|err| format!("failed to set chrome args: {err}"))?;
-            caps.add_arg("--autoplay-policy=no-user-gesture-required")
-                .map_err(|err| format!("failed to set chrome args: {err}"))?;
+            for arg in [
+                "--disable-background-networking",
+                "--disable-extensions",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--enable-features=SharedArrayBuffer",
+                "--autoplay-policy=no-user-gesture-required",
+                "--js-flags=--experimental-wasm-threads",
+            ] {
+                caps.add_arg(arg)
+                    .map_err(|err| format!("failed to set chrome args: {err}"))?;
+            }
             if config.headless {
                 caps.add_arg("--headless=new")
                     .map_err(|err| format!("failed to set chrome headless: {err}"))?;

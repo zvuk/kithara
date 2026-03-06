@@ -20,12 +20,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-
-use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
@@ -192,7 +191,7 @@ async fn next_chunk_with_timeout(
 
 // Stress Test
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {

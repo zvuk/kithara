@@ -8,7 +8,7 @@ use std::{env, error::Error};
 
 use kithara::prelude::*;
 
-#[tokio::main(flavor = "current_thread")]
+#[kithara_platform::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url = env::args()
         .nth(1)
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = ResourceConfig::new(&url)?;
     let resource = Resource::new(config).await?;
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::tokio::task::spawn_blocking(move || {
         let stream = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream.mixer());
         sink.append(resource);

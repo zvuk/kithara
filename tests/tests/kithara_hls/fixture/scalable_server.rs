@@ -463,6 +463,7 @@ mod wasm {
     use kithara_test_utils::{
         fixture_client,
         fixture_protocol::{DataMode, HlsSessionConfig, InitMode},
+        join_server_url,
     };
     use url::Url;
 
@@ -537,7 +538,7 @@ mod wasm {
             reason = "test-only code, ergonomics over size"
         )]
         pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
-            Ok(self.base_url.join(path).unwrap())
+            Ok(join_server_url(&self.base_url, path))
         }
 
         pub(crate) fn init_len(&self) -> u64 {

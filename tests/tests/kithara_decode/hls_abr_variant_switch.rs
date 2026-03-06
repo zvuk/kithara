@@ -23,13 +23,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-// Import AbrTestServer from kithara-hls fixture
-use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 
 /// Test that ABR variant switch does not cause byte reading glitches.
 ///

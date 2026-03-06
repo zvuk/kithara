@@ -1,28 +1,44 @@
 //! Integration tests for Decoder seek operations.
 //!
 //! Tests `Decoder<Stream<File>>` seek forward/backward with real audio.
-//! All `decoder.read()`/`seek()` calls run in `spawn_blocking` because
-//! the internal ringbuf channel uses blocking `recv()`.
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, PcmReader},
     events::{AudioEvent, EventBus},
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_integration_tests::audio_fixture::AudioTestServer;
+use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{TestTempDir, temp_dir};
-
-use super::fixture::AudioTestServer;
 
 #[kithara::fixture]
 async fn server() -> AudioTestServer {
     AudioTestServer::new().await
 }
 
+async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        if PcmReader::next_chunk(audio).is_some() {
+            return;
+        }
+
+        assert!(!audio.is_eof(), "unexpected EOF while waiting for {stage}");
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for decoded PCM at stage={stage}",
+        );
+
+        audio.preload();
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Create Decoder<Stream<File>> and verify spec.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_creates_successfully(
     #[future] server: AudioTestServer,
     temp_dir: TestTempDir,
@@ -41,7 +57,7 @@ async fn decoder_file_creates_successfully(
 }
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -50,17 +66,11 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        let mut buf = [0.0f32; 1024];
-        let n = decoder.read(&mut buf);
-        assert!(n > 0, "should read samples");
-    })
-    .await
-    .unwrap();
+    next_chunk(&mut decoder, "initial read").await;
 }
 
 /// Seek to 0: read, seek to beginning, read again.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -69,23 +79,13 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        let mut buf = [0.0f32; 1024];
-
-        let n = decoder.read(&mut buf);
-        assert!(n > 0);
-
-        decoder.seek(Duration::from_secs(0)).unwrap();
-
-        let n2 = decoder.read(&mut buf);
-        assert!(n2 > 0, "should read after seek to 0");
-    })
-    .await
-    .unwrap();
+    next_chunk(&mut decoder, "before seek to zero").await;
+    decoder.seek(Duration::from_secs(0)).unwrap();
+    next_chunk(&mut decoder, "after seek to zero").await;
 }
 
 /// Decoder<Stream<File>> reads MP3 samples and can seek forward.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -98,32 +98,21 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        // Read initial samples.
-        let mut buf = [0.0f32; 1024];
-        let n1 = decoder.read(&mut buf);
-        assert!(n1 > 0, "should read initial samples");
-        assert!(!decoder.is_eof());
+    next_chunk(&mut decoder, "before seek forward").await;
+    assert!(!decoder.is_eof());
 
-        // Seek forward to 2 seconds.
-        decoder.seek(Duration::from_secs(2)).unwrap();
-        assert!(!decoder.is_eof(), "should not be EOF after seek forward");
+    decoder.seek(Duration::from_secs(2)).unwrap();
+    assert!(!decoder.is_eof(), "should not be EOF after seek forward");
 
-        // Read samples after seek.
-        let n2 = decoder.read(&mut buf);
-        assert!(n2 > 0, "should read samples after seek forward");
+    next_chunk(&mut decoder, "after seek forward").await;
 
-        // Spec should remain the same.
-        let spec_after = decoder.spec();
-        assert_eq!(spec.sample_rate, spec_after.sample_rate);
-        assert_eq!(spec.channels, spec_after.channels);
-    })
-    .await
-    .unwrap();
+    let spec_after = decoder.spec();
+    assert_eq!(spec.sample_rate, spec_after.sample_rate);
+    assert_eq!(spec.channels, spec_after.channels);
 }
 
 /// Decoder<Stream<File>> can seek backward to the beginning.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -132,39 +121,20 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        // Read some data to advance position.
-        let mut buf = [0.0f32; 4096];
-        let mut total = 0;
-        for _ in 0..10 {
-            let n = decoder.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            total += n;
-        }
-        assert!(total > 0, "should read some samples before seeking back");
+    for stage in 0..3 {
+        next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
+    }
 
-        // Seek forward first.
-        decoder.seek(Duration::from_secs(3)).unwrap();
-        let mut buf2 = [0.0f32; 1024];
-        let n_mid = decoder.read(&mut buf2);
-        assert!(n_mid > 0, "should read after seek forward");
+    decoder.seek(Duration::from_secs(3)).unwrap();
+    next_chunk(&mut decoder, "after seek forward").await;
 
-        // Seek backward to beginning.
-        decoder.seek(Duration::from_secs(0)).unwrap();
-        assert!(!decoder.is_eof(), "should not be EOF after seek to start");
-
-        // Read after seeking backward.
-        let n_start = decoder.read(&mut buf2);
-        assert!(n_start > 0, "should read samples after seek to start");
-    })
-    .await
-    .unwrap();
+    decoder.seek(Duration::from_secs(0)).unwrap();
+    assert!(!decoder.is_eof(), "should not be EOF after seek to start");
+    next_chunk(&mut decoder, "after seek backward").await;
 }
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -173,39 +143,23 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        let mut buf = [0.0f32; 512];
+    next_chunk(&mut decoder, "initial read").await;
 
-        // Read initial.
-        let n = decoder.read(&mut buf);
-        assert!(n > 0);
+    decoder.seek(Duration::from_secs(1)).unwrap();
+    next_chunk(&mut decoder, "after seek to 1s").await;
 
-        // Seek forward to 1s, read.
-        decoder.seek(Duration::from_secs(1)).unwrap();
-        let n = decoder.read(&mut buf);
-        assert!(n > 0, "should read after seek to 1s");
+    decoder.seek(Duration::from_secs(5)).unwrap();
+    next_chunk(&mut decoder, "after seek to 5s").await;
 
-        // Seek forward to 5s, read.
-        decoder.seek(Duration::from_secs(5)).unwrap();
-        let n = decoder.read(&mut buf);
-        assert!(n > 0, "should read after seek to 5s");
+    decoder.seek(Duration::from_secs(2)).unwrap();
+    next_chunk(&mut decoder, "after seek back to 2s").await;
 
-        // Seek backward to 2s, read.
-        decoder.seek(Duration::from_secs(2)).unwrap();
-        let n = decoder.read(&mut buf);
-        assert!(n > 0, "should read after seek back to 2s");
-
-        // Seek to beginning, read.
-        decoder.seek(Duration::from_secs(0)).unwrap();
-        let n = decoder.read(&mut buf);
-        assert!(n > 0, "should read after seek to 0s");
-    })
-    .await
-    .unwrap();
+    decoder.seek(Duration::from_secs(0)).unwrap();
+    next_chunk(&mut decoder, "after seek to 0s").await;
 }
 
 /// Decoder<Stream<File>> events are emitted on seek.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -219,32 +173,47 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
         .with_events(bus);
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    // Read + seek in blocking thread.
-    kithara_platform::tokio::task::spawn_blocking(move || {
-        let mut buf = [0.0f32; 1024];
+    next_chunk(&mut decoder, "before seek events").await;
+    decoder.seek(Duration::from_secs(2)).unwrap();
 
-        // Read to trigger FormatDetected.
-        let n = decoder.read(&mut buf);
-        assert!(n > 0);
-
-        // Seek and read again.
-        decoder.seek(Duration::from_secs(2)).unwrap();
-        let n = decoder.read(&mut buf);
-        assert!(n > 0);
-    })
-    .await
-    .unwrap();
-
-    // Collect events.
     let mut got_format = false;
     let mut got_seek = false;
-    while let Ok(ev) = events_rx.try_recv() {
-        match ev {
-            kithara::events::Event::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
-            kithara::events::Event::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
-            _ => {}
+    let mut buf = [0.0_f32; 1024];
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        while let Ok(ev) = events_rx.try_recv() {
+            match ev {
+                kithara::events::Event::Audio(AudioEvent::FormatDetected { .. }) => {
+                    got_format = true;
+                }
+                kithara::events::Event::Audio(AudioEvent::SeekComplete { .. }) => {
+                    got_seek = true;
+                }
+                _ => {}
+            }
+        }
+
+        if got_format && got_seek {
+            break;
+        }
+
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for FormatDetected/SeekComplete events",
+        );
+
+        let read = decoder.read(&mut buf);
+        if read == 0 {
+            assert!(
+                !decoder.is_eof(),
+                "unexpected EOF while waiting for seek events",
+            );
+            decoder.preload();
+            sleep(Duration::from_millis(10)).await;
         }
     }
+
     assert!(got_format, "should have received FormatDetected event");
     assert!(got_seek, "should have received SeekComplete event");
 }

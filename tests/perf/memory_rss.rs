@@ -10,6 +10,8 @@
 //!
 //! Run with: `cargo test --test memory_rss -- --test-threads=1 --nocapture`
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::time::Duration;
 
 use kithara::{

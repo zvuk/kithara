@@ -3736,8 +3736,8 @@ name = "kithara-examples"
 version = "0.1.0"
 dependencies = [
  "kithara",
+ "kithara-platform",
  "rodio",
- "tokio",
  "url",
 ]
 
@@ -3795,7 +3795,9 @@ name = "kithara-hang-detector"
 version = "0.1.0"
 dependencies = [
  "kithara-hang-detector",
+ "kithara-test-macros",
  "tracing",
+ "wasm-bindgen-test",
  "web-time",
 ]
 
@@ -3850,6 +3852,7 @@ dependencies = [
  "gloo-timers",
  "hex",
  "hotpath",
+ "js-sys",
  "kithara",
  "kithara-assets",
  "kithara-audio",
@@ -3884,6 +3887,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

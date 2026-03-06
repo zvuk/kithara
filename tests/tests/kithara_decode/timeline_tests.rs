@@ -3,8 +3,7 @@
 use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
-
-use super::fixture::EmbeddedAudio;
+use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
@@ -99,10 +98,9 @@ mod hls_timeline {
         hls::{AbrMode, AbrOptions, Hls, HlsConfig},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
+    use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
     use kithara_test_utils::wav::create_saw_wav;
     use tokio_util::sync::CancellationToken;
-
-    use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
 
     const SAMPLE_RATE: u32 = 44100;
     const CHANNELS: u16 = 2;

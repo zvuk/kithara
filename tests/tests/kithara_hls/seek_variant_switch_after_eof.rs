@@ -19,19 +19,17 @@ use std::{
     sync::atomic::Ordering,
 };
 
-use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     internal::source_variant_index_handle,
     stream::Stream,
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use super::fixture;
 
 /// Seek after ABR variant switch at EOF must not deadlock.
 ///

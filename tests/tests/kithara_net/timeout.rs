@@ -2,13 +2,12 @@
 
 use bytes::Bytes;
 use kithara::net::{Net, NetError, NetExt};
+use kithara_integration_tests::net_fixture::{
+    DelayedNet, assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
+};
 use kithara_net::mock::NetMock;
 use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
-
-use super::fixture::{
-    DelayedNet, assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
-};
 
 fn mock_error() -> NetError {
     NetError::Http("mock error".to_string())

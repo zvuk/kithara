@@ -130,7 +130,7 @@ mod native {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use kithara_test_utils::fixture_client;
+    use kithara_test_utils::{fixture_client, join_server_url};
     use url::Url;
 
     use super::super::HlsResult;
@@ -155,7 +155,7 @@ mod wasm {
             reason = "test-only code, ergonomics over size"
         )]
         pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
-            Ok(self.base_url.join(path).unwrap())
+            Ok(join_server_url(&self.base_url, path))
         }
     }
 

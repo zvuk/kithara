@@ -6,12 +6,14 @@
 
 use std::hint;
 
-use kithara_platform::{time::Duration, tokio::task::yield_now};
-use tokio::task::spawn_blocking;
+use kithara_platform::{
+    time::Duration,
+    tokio::task::{spawn_blocking, yield_now},
+};
 
 // ── Sync: infinite loop in a sync test ──────────────────────────────
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test(native, timeout(Duration::from_secs(2)))]
 #[should_panic(expected = "timed out")]
 fn sync_infinite_loop_is_killed_by_timeout() {
     loop {
@@ -22,7 +24,8 @@ fn sync_infinite_loop_is_killed_by_timeout() {
 // ── Async: infinite loop in an async test ───────────────────────────
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
-#[should_panic(expected = "timed out")]
+#[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
+#[cfg_attr(target_arch = "wasm32", should_panic)]
 async fn async_infinite_loop_is_killed_by_timeout() {
     loop {
         yield_now().await;
@@ -37,7 +40,8 @@ async fn async_infinite_loop_is_killed_by_timeout() {
 // prevents this.
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
-#[should_panic(expected = "timed out")]
+#[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
+#[cfg_attr(target_arch = "wasm32", should_panic)]
 async fn async_spawn_blocking_zombie_is_killed_by_timeout() {
     let _handle = spawn_blocking(|| {
         loop {

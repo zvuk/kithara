@@ -48,9 +48,7 @@ default-members = [
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-tui",
     "tests",
-    "examples",
 ]
 
 [workspace.lints.rust]

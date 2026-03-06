@@ -10,13 +10,12 @@ use std::{
 
 use bytes::Bytes;
 use kithara::net::{Net, NetError, NetExt, RetryPolicy};
+use kithara_integration_tests::net_fixture::{
+    assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
+};
 use kithara_net::mock::NetMock;
 use tokio_util::sync::CancellationToken;
 use unimock::{MockFn, Unimock, matching};
-
-use super::fixture::{
-    assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
-};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {
     attempts.fetch_add(1, Ordering::SeqCst) < failures_before_success
