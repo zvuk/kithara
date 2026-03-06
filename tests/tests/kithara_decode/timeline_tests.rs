@@ -102,11 +102,11 @@ mod hls_timeline {
     use kithara_test_utils::wav::create_saw_wav;
     use tokio_util::sync::CancellationToken;
 
-    const SAMPLE_RATE: u32 = 44100;
-    const CHANNELS: u16 = 2;
-    const SEGMENT_SIZE: usize = 200_000;
+    use crate::common::test_defaults::SawWav;
+
+    const D: SawWav = SawWav::DEFAULT;
     const SEGMENT_COUNT: usize = 10;
-    const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE; // 2 MB
+    const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size; // 2 MB
 
     /// Verify that HLS stream produces correct `PcmMeta` with segment tracking.
     #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
@@ -121,11 +121,12 @@ mod hls_timeline {
 
         // Generate WAV data served as HLS segments
         let wav_data = create_saw_wav(TOTAL_BYTES);
-        let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+        let segment_duration =
+            D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,
-            segment_size: SEGMENT_SIZE,
+            segment_size: D.segment_size,
             segment_duration_secs: segment_duration,
             custom_data: Some(Arc::new(wav_data)),
             ..Default::default()
@@ -167,8 +168,8 @@ mod hls_timeline {
             while let Ok(Some(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
-                assert_eq!(meta.spec.sample_rate, SAMPLE_RATE);
-                assert_eq!(meta.spec.channels, CHANNELS);
+                assert_eq!(meta.spec.sample_rate, D.sample_rate);
+                assert_eq!(meta.spec.channels, D.channels);
 
                 assert_eq!(
                     meta.frame_offset, prev_frame_end,

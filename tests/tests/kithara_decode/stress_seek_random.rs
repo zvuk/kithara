@@ -19,9 +19,11 @@ use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-const SAMPLE_RATE: u32 = 44100;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 const DURATION_SECS: f64 = 10.0;
-const SAMPLE_COUNT: usize = (SAMPLE_RATE as f64 * DURATION_SECS) as usize;
+const SAMPLE_COUNT: usize = (D.sample_rate as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 1000;
 
 // Stress Test

@@ -11,15 +11,17 @@ use std::{io::Cursor, time::Duration};
 use kithara::decode::{DecoderConfig, DecoderFactory};
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 
-const SAMPLE_RATE: u32 = 44100;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 const DURATION_SECS: f64 = 10.0;
-const SAMPLE_COUNT: usize = (SAMPLE_RATE as f64 * DURATION_SECS) as usize;
+const SAMPLE_COUNT: usize = (D.sample_rate as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 200;
 const CHUNKS_PER_BURST: usize = 5;
 
 #[kithara::test(timeout(Duration::from_secs(30)))]
 fn stress_seeks_preserve_timeline_integrity() {
-    let wav_data = create_test_wav(SAMPLE_COUNT, SAMPLE_RATE, 2);
+    let wav_data = create_test_wav(SAMPLE_COUNT, D.sample_rate, 2);
     let cursor = Cursor::new(wav_data);
 
     let mut decoder =
@@ -41,7 +43,7 @@ fn stress_seeks_preserve_timeline_integrity() {
             panic!("seek #{i} to {seek_secs:.4}s failed: {e}");
         });
 
-        let expected_frame = (seek_secs * SAMPLE_RATE as f64) as u64;
+        let expected_frame = (seek_secs * D.sample_rate as f64) as u64;
 
         // Read a burst of chunks and verify consistency
         let mut prev_frame_end: Option<u64> = None;
@@ -56,7 +58,7 @@ fn stress_seeks_preserve_timeline_integrity() {
             let meta = chunk.meta;
 
             // Spec correct
-            assert_eq!(meta.spec.sample_rate, SAMPLE_RATE);
+            assert_eq!(meta.spec.sample_rate, D.sample_rate);
             assert_eq!(meta.spec.channels, 2);
 
             // First chunk after seek: frame_offset should approximate seek target

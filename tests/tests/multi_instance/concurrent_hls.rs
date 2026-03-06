@@ -20,12 +20,9 @@ use kithara_test_utils::{TestTempDir, tracing_setup, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 2;
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_SIZE: usize = 200_000;
-#[cfg(target_arch = "wasm32")]
-const SEGMENT_SIZE: usize = 32_000;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 #[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
 #[cfg(target_arch = "wasm32")]
@@ -93,11 +90,11 @@ fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
 
 /// Create an HLS server with WAV segments.
 async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(wav_data),
         ..Default::default()
@@ -107,12 +104,12 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
 
 /// Create an HLS server with 2 ABR variants of different bandwidth.
 async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(wav_data),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
@@ -167,11 +164,11 @@ async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio
 
 /// Generate WAV data for the test (total size = segments * `segment_size`).
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
-    let bytes_per_frame = CHANNELS as usize * 2;
+    let total_bytes = SEGMENT_COUNT * D.segment_size;
+    let bytes_per_frame = D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, SAMPLE_RATE, CHANNELS))
+    Arc::new(create_test_wav(sample_count, D.sample_rate, D.channels))
 }
 
 // Tests

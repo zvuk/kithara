@@ -4,6 +4,8 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
+mod common;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_audio {
     mod alloc_free_hotpath;
