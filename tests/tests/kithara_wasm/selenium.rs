@@ -7,7 +7,6 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use serial_test::serial;
 use thirtyfour::{
     common::capabilities::{chromium::ChromiumLikeCapabilities, firefox::FirefoxPreferences},
     prelude::*,
@@ -1136,80 +1135,58 @@ async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
     Err(format!("timeout waiting for wasm page {url}"))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+/// Create a [`WasmPlayerSelenium`] session with its owning harness.
+///
+/// Returns both the harness (which keeps trunk/webdriver/fixture-server
+/// processes alive via [`ChildGuard`]) and the WebDriver session.
+/// The caller must keep the harness alive for the session's lifetime
+/// and drop it **after** the session is closed.
+async fn selenium_setup() -> (SeleniumHarness, WasmPlayerSelenium) {
+    let config = SeleniumConfig::from_env();
+    let harness = SeleniumHarness::start(config)
+        .await
+        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
+
+    let session = harness
+        .new_session()
+        .await
+        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
+
+    (harness, session)
+}
+
+/// Run a selenium scenario with screenshot-on-failure and session cleanup.
+///
+/// Takes ownership of the session to ensure `close()` is always called.
+/// The harness is dropped after cleanup, stopping child processes.
+async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Result<(), String>) {
+    if result.is_err() {
+        let path = format!("/tmp/wasm_{name}_failed.png");
+        session.save_screenshot(&path).await;
+    }
+    session.close().await;
+    if let Err(err) = result {
+        panic!("{name} failed: {err}");
+    }
+}
+
+#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
 async fn selenium_player_scenarios() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_player_scenarios().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_player_scenarios_failed.png")
-            .await;
-    }
-    session.close().await;
-
-    if let Err(err) = result {
-        panic!("selenium_player_scenarios failed: {err}");
-    }
+    selenium_teardown(session, "player_scenarios", result).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
 async fn selenium_diagnostic_suite() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_diagnostic_suite().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_diagnostic_suite_failed.png")
-            .await;
-    }
-    session.close().await;
-
-    if let Err(err) = result {
-        panic!("selenium_diagnostic_suite failed: {err}");
-    }
+    selenium_teardown(session, "diagnostic_suite", result).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
 async fn selenium_hls_log_scenario() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_hls_log_scenario().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_hls_log_scenario_failed.png")
-            .await;
-    }
-    session.close().await;
-
-    if let Err(err) = result {
-        panic!("selenium_hls_log_scenario failed: {err}");
-    }
+    selenium_teardown(session, "hls_log_scenario", result).await;
 }
