@@ -133,9 +133,7 @@ async fn fetch_manager_error_handling_invalid_url(
         .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
 
     let result = fetch_manager.master_playlist(&invalid_url).await;
-
-    // Should fail with network error (or succeed if somehow connects)
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_err(), "invalid URL should fail, got Ok");
 
     Ok(())
 }

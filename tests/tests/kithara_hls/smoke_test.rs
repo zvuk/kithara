@@ -158,8 +158,7 @@ async fn test_hls_invalid_url_handling(
             .with_cancel(CancellationToken::new());
 
         let result = Stream::<Hls>::new(config).await;
-        // Either Ok (if somehow connects) or Err (expected) is acceptable
-        assert!(result.is_ok() || result.is_err());
+        assert!(result.is_err(), "invalid URL should fail, got Ok");
     } else {
         // Invalid URL string - parse should fail
         assert!(url_result.is_err());
