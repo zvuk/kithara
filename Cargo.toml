@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-exclude = ["fuzz"]
 members = [
     "crates/kithara",
     "crates/kithara-abr",
@@ -27,6 +26,7 @@ members = [
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
     "tests",
+    "tests/fuzz",
     "examples",
 ]
 default-members = [
@@ -261,6 +261,10 @@ dashmap = "6.1.0"
 derivative = "2.2"
 derive_setters = "0.1"
 lru = "0.16"
+
+# fuzzing
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
 
 # memory profiling
 dhat = "0.3"

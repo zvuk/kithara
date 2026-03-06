@@ -8,22 +8,22 @@ fmt-check:
     cargo +nightly fmt --all --check
 
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --exclude kithara-fuzz -- -D warnings
 
 test:
-    cargo nextest run --workspace
+    cargo nextest run --workspace --exclude kithara-fuzz
 
 test-ci:
-    cargo nextest run --workspace --profile ci --no-fail-fast
+    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast
 
 test-doc:
-    cargo test --doc --workspace
+    cargo test --doc --workspace --exclude kithara-fuzz
 
 test-fast:
-    cargo nextest run --workspace --profile fast
+    cargo nextest run --workspace --exclude kithara-fuzz --profile fast
 
 test-stress:
-    cargo nextest run --workspace --profile stress -E 'binary(suite_heavy)'
+    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)'
 
 test-all: test test-doc
 
@@ -77,7 +77,7 @@ coverage:
     COVERAGE_MIN="${COVERAGE_MIN:-80}"; \
     mkdir -p "$OUTPUT_DIR"; \
     cargo llvm-cov nextest \
-      --workspace \
+      --workspace --exclude kithara-fuzz \
       --profile ci \
       --cobertura \
       --output-path "$OUTPUT_DIR/cobertura.xml" \

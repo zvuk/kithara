@@ -8,10 +8,10 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
-arbitrary = { version = "1", features = ["derive"] }
-kithara-drm = { path = "../crates/kithara-drm" }
-hls_m3u8 = "0.5.1"
+libfuzzer-sys = { workspace = true }
+arbitrary = { workspace = true }
+kithara-drm = { workspace = true }
+hls_m3u8 = { workspace = true }
 
 [[bin]]
 name = "aes_decrypt"

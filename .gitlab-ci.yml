@@ -82,14 +82,14 @@ test:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-nextest" || cargo install cargo-nextest --locked
   script:
-    - cargo nextest run --workspace
+    - cargo nextest run --workspace --exclude kithara-fuzz
 
 msrv:
   stage: test
   needs: [lint]
   image: rust:1.88
   script:
-    - cargo check --workspace
+    - cargo check --workspace --exclude kithara-fuzz
 
 wasm:
   stage: test
@@ -130,7 +130,7 @@ hack:
     - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
   script:
     - cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace
-      --exclude kithara-wasm
+      --exclude kithara-wasm --exclude kithara-fuzz
   allow_failure: true
 
 semver:
@@ -140,7 +140,7 @@ semver:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-semver-checks" || cargo install cargo-semver-checks --locked
   script:
-    - cargo semver-checks check-release --workspace
+    - cargo semver-checks check-release --workspace --exclude kithara-fuzz
   allow_failure: true
   rules:
     - changes:
