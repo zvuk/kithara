@@ -125,6 +125,7 @@ fn env_timeout() -> Option<Duration> {
     None
 }
 
+#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 #[must_use]
 fn parse_timeout_secs(value: &str) -> Option<Duration> {
     let secs = value.parse::<u64>().ok()?;
