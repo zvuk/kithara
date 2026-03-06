@@ -12,6 +12,8 @@
 .LSOverride
 Icon?
 ._*
+!crates/kithara-ui/assets/icons/
+!crates/kithara-ui/assets/icons/*.svg
 
 # JetBrains
 .idea/
