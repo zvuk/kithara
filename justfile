@@ -92,10 +92,14 @@ perf-test:
 
 bench-build:
     cargo bench -p kithara-abr --bench abr_estimator --no-run
+    cargo bench -p kithara-integration-tests --bench bufpool --no-run
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
 
 bench-run:
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt
+    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench bufpool -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
 
 bench-ci:
     just bench-build; \
@@ -108,6 +112,12 @@ bench-ci:
     cargo bench -p kithara-abr --bench abr_estimator \
       -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
       2>&1 | tee bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench bufpool \
+      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
+      2>&1 | tee -a bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths \
+      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
+      2>&1 | tee -a bench-results.txt; \
     if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then \
       if ! command -v critcmp >/dev/null 2>&1; then \
         echo "FAILED: critcmp is required when BENCH_COMPARE_BASELINE_NAME is set" | tee -a bench-results.txt; \
