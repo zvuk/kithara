@@ -8,15 +8,12 @@ use std::{
 };
 
 use kithara_platform::time::Duration;
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
-
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
     Timeline,
 };
+use kithara_test_utils::kithara;
 
 struct TimelineSource {
     data: Vec<u8>,

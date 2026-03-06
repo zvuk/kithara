@@ -32,10 +32,7 @@
 //!
 //! These tests document what the architecture SHOULD support.
 //! Implementation comes after we agree on contracts.
-
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
+use kithara_test_utils::kithara;
 
 #[kithara::test(wasm)]
 #[case::resource_status(

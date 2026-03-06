@@ -26,7 +26,3 @@ criterion = { workspace = true }
 
 [lints]
 workspace = true
-
-[[bench]]
-name = "abr_estimator"
-harness = false

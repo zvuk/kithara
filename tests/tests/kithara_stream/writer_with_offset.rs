@@ -2,16 +2,13 @@
 
 //! Tests for `Writer::with_offset()` — range-request resume path and `OffsetOverflow` error.
 
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
-
 use std::io;
 
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 
 /// Run a writer to completion, returning total bytes written.

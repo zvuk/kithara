@@ -1,8 +1,5 @@
 use kithara_bufpool::{BudgetExhausted, internal::*};
-
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
+use kithara_test_utils::kithara;
 
 // ── Tier 1: Pool-native memory budget tests ─────────────────────────────
 

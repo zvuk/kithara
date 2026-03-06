@@ -1,8 +1,5 @@
 use kithara_bufpool::internal::*;
-
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
+use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn test_reuse_trim_zero_preserves_capacity() {

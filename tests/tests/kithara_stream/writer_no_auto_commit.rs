@@ -5,16 +5,13 @@
 //! Writer yields `WriterItem::StreamEnded { total_bytes }` when the source stream ends.
 //! The resource must remain Active — caller decides whether to commit.
 
-mod kithara {
-    pub(crate) use kithara_test_macros::test;
-}
-
 use std::io;
 
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus};
 use kithara_stream::{Writer, WriterItem};
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 
 #[kithara::test(tokio)]

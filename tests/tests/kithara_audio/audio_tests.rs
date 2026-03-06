@@ -162,7 +162,6 @@ async fn test_audio_seek() {
     assert!(!audio.is_eof());
 }
 
-#[cfg(feature = "rodio")]
 #[kithara::test(tokio)]
 async fn test_rodio_source_try_seek() {
     let (_tmp, config) = test_wav_config(44100);
