@@ -11,12 +11,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use kithara::{
-    assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    stream::Stream,
-};
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
@@ -61,17 +56,10 @@ async fn manual_variant_returns_correct_data(
     #[case] variant: usize,
 ) {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(variant),
-            ..AbrOptions::default()
-        });
-
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = HlsStreamBuilder::new()
+        .variant(variant)
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     let result = spawn_blocking(move || {
         let mut buf = [0u8; 10];
@@ -105,18 +93,11 @@ async fn sequential_read_across_segments_maintains_variant(
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8").unwrap();
-
     // Fix to variant 1 to avoid any ABR switching
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        });
-
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = HlsStreamBuilder::new()
+        .variant(1)
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     // Read all three segments sequentially
     // Use 64KB buffer to avoid async lock overhead per small read
@@ -179,17 +160,10 @@ async fn after_seek_sequential_reads_maintain_variant(
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(2),
-            ..AbrOptions::default()
-        });
-
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = HlsStreamBuilder::new()
+        .variant(2)
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     let result = spawn_blocking(move || {
         // Seek to middle of segment 1 (200KB per segment)
@@ -236,17 +210,9 @@ async fn multiple_seeks_maintain_correct_variant(
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
-
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = HlsStreamBuilder::new()
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     let result = spawn_blocking(move || {
         // First, read all data to ensure all segments are fetched
@@ -334,17 +300,10 @@ async fn seek_to_segment_boundary_reads_correct_segment(
     #[case] position: u64,
 ) {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        });
-
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = HlsStreamBuilder::new()
+        .variant(1)
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     let result = spawn_blocking(move || {
         stream.seek(SeekFrom::Start(position)).unwrap();
