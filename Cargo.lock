@@ -3736,6 +3736,7 @@ dependencies = [
  "kithara",
  "kithara-platform",
  "rodio",
+ "tokio",
  "url",
 ]
 

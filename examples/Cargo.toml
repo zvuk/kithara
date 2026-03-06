@@ -14,6 +14,7 @@ url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rodio = { workspace = true, features = ["playback"] }
+tokio = { workspace = true }
 
 [[example]]
 name = "file_audio"
