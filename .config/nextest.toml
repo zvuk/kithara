@@ -5,3 +5,18 @@ test-threads = 4
 [profile.ci]
 fail-fast = false
 test-threads = 4
+
+# Fast-only profile: skip heavy/stress test binary entirely.
+[profile.fast]
+fail-fast = false
+test-threads = 4
+
+[[profile.fast.overrides]]
+filter = "binary(suite_heavy)"
+skip = true
+
+# Stress-only profile: run only the heavy test binary.
+[profile.stress]
+fail-fast = false
+test-threads = 1
+slow-timeout = { period = "60s", terminate-after = 5 }

@@ -19,6 +19,12 @@ test-ci:
 test-doc:
     cargo test --doc --workspace
 
+test-fast:
+    cargo nextest run --workspace --profile fast
+
+test-stress:
+    cargo nextest run --workspace --profile stress -E 'binary(suite_heavy)'
+
 test-all: test test-doc
 
 ast-grep-blocking:
