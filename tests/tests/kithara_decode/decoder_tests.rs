@@ -46,29 +46,13 @@ fn mp3_media_info() -> MediaInfo {
 // Basic Decode Tests
 
 #[kithara::test]
-fn decode_wav_with_probe(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.wav());
+#[case::wav(true, "wav")]
+#[case::mp3(false, "mp3")]
+fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &str) {
+    let data = if use_wav { audio.wav() } else { audio.mp3() };
+    let reader = Cursor::new(data);
 
-    let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
-    let spec = decoder.spec();
-
-    assert!(spec.sample_rate > 0);
-    assert!(spec.channels > 0);
-
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
-
-    let chunk = chunk.unwrap();
-    assert!(!chunk.pcm.is_empty());
-}
-
-#[kithara::test]
-fn decode_mp3_with_probe(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.mp3());
-
-    let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("mp3"), test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -105,11 +89,22 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
 // MediaInfo Creation Tests
 
 #[kithara::test]
-fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
-    let reader = Cursor::new(audio.wav());
+#[case::wav(true)]
+#[case::mp3(false)]
+fn from_media_info(
+    audio: EmbeddedAudio,
+    wav_media_info: MediaInfo,
+    mp3_media_info: MediaInfo,
+    #[case] use_wav: bool,
+) {
+    let (data, info) = if use_wav {
+        (audio.wav(), &wav_media_info)
+    } else {
+        (audio.mp3(), &mp3_media_info)
+    };
+    let reader = Cursor::new(data);
 
-    let mut decoder =
-        DecoderFactory::create_from_media_info(reader, &wav_media_info, test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -117,18 +112,6 @@ fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
 
     let chunk = decoder.next_chunk().unwrap();
     assert!(chunk.is_some());
-}
-
-#[kithara::test]
-fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
-    let reader = Cursor::new(audio.mp3());
-
-    let decoder =
-        DecoderFactory::create_from_media_info(reader, &mp3_media_info, test_config()).unwrap();
-    let spec = decoder.spec();
-
-    assert!(spec.sample_rate > 0);
-    assert!(spec.channels > 0);
 }
 
 // Spec Tests

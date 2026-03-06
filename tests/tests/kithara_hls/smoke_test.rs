@@ -66,41 +66,27 @@ async fn test_hls_session_creation(
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
-async fn test_hls_with_local_fixture(
+#[case::plain(false)]
+#[case::with_init(true)]
+async fn test_hls_stream_creation(
     _tracing_setup: (),
     temp_dir: TestTempDir,
+    #[case] with_init: bool,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
-    info!(
-        "Testing HLS with local fixture at: {}",
-        server.url("/master.m3u8")?
-    );
 
-    let _stream = HlsStreamBuilder::new()
+    let builder = HlsStreamBuilder::new();
+    let builder = if with_init {
+        builder.with_init()
+    } else {
+        builder
+    };
+
+    let _stream = builder
         .build(&server, temp_dir.path(), CancellationToken::new())
         .await;
 
-    info!("Local fixture test passed");
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
-async fn test_hls_session_with_init_segments(
-    _tracing_setup: (),
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
-    info!(
-        "Testing HLS session with init segments at URL: {}",
-        server.url("/master-init.m3u8")?
-    );
-
-    let _stream = HlsStreamBuilder::new()
-        .with_init()
-        .build(&server, temp_dir.path(), CancellationToken::new())
-        .await;
-
-    info!("HLS source with init segments opened successfully");
+    info!("HLS stream created successfully (init={})", with_init);
     Ok(())
 }
 
