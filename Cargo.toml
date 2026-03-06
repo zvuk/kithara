@@ -48,29 +48,6 @@ default-members = [
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "tests",
-    "examples",
-]
-default-members = [
-    "crates/kithara",
-    "crates/kithara-abr",
-    "crates/kithara-drm",
-    "crates/kithara-events",
-    "crates/kithara-net",
-    "crates/kithara-file",
-    "crates/kithara-hls",
-    "crates/kithara-audio",
-    "crates/kithara-decode",
-    "crates/kithara-stream",
-    "crates/kithara-storage",
-    "crates/kithara-assets",
-    "crates/kithara-bufpool",
-    "crates/kithara-wasm",
-    "crates/kithara-platform",
-    "crates/kithara-hang-detector",
-    "crates/kithara-play",
-    "crates/kithara-test-utils",
-    "crates/kithara-test-macros",
     "crates/kithara-tui",
     "tests",
     "examples",
@@ -270,11 +247,6 @@ thirtyfour = "0.36.1"
 # delegation
 delegate = "0.13"
 bitflags = "2.11"
-
-# proc macros
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
 
 # proc macros
 proc-macro2 = "1"
