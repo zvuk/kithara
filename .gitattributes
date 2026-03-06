@@ -1,7 +1,0 @@
-# Git LFS — test assets
-assets/**/*.mp3 filter=lfs diff=lfs merge=lfs -text
-assets/**/*.wav filter=lfs diff=lfs merge=lfs -text
-assets/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
-assets/**/*.m4s filter=lfs diff=lfs merge=lfs -text
-assets/**/*.m3u8 filter=lfs diff=lfs merge=lfs -text
-assets/**/*.key filter=lfs diff=lfs merge=lfs -text
