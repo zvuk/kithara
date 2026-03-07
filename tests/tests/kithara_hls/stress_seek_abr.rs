@@ -28,10 +28,16 @@ use tracing::info;
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(120)))]
-async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn stress_seek_during_abr_switch_real_decoder(
+    temp_dir: TestTempDir,
+    #[case] path: &str,
+    #[case] label: &str,
+) {
     let server = serve_assets().await;
-    let url = server.url("/hls/master.m3u8");
-    info!("Opening HLS stream: {}", url);
+    let url = server.url(path);
+    info!(label, path, "Opening real stream");
 
     // Create audio pipeline with ABR auto (start from cheapest variant)
     let hls_config = HlsConfig::new(url)
@@ -151,7 +157,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
     .await;
 
     match result {
-        Ok(()) => info!("Test passed"),
+        Ok(()) => info!(label, path, "Stress test passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }
@@ -161,9 +167,15 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(120)))]
-async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn seek_sequence_from_log_real_stream(
+    temp_dir: TestTempDir,
+    #[case] path: &str,
+    #[case] label: &str,
+) {
     let server = serve_assets().await;
-    let url = server.url("/hls/master.m3u8");
+    let url = server.url(path);
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
@@ -207,7 +219,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
     .await;
 
     match result {
-        Ok(()) => info!("seek_sequence_from_log_real_stream passed"),
+        Ok(()) => info!(label, path, "seek_sequence_from_log_real_stream passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

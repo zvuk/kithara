@@ -1025,6 +1025,17 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
             loop {
                 hang_tick!();
                 kithara_platform::thread::yield_now();
+
+                // Exit immediately when a seek is pending so the worker
+                // loop can call apply_pending_seek().  This guard is
+                // necessary because Symphonia silently retries
+                // io::ErrorKind::Interrupted (standard Rust convention),
+                // so a flushing signal sent from wait_range may never
+                // escape the decoder's internal read loop.
+                if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
+                    return Err(DecodeError::Interrupted);
+                }
+
                 self.detect_format_change();
 
                 match self.decoder_next_chunk_safe() {
@@ -1087,24 +1098,34 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             }
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
-        if let Ok(Some(chunk)) = FallibleIterator::next(self) {
-            if self.pending_decode_started_epoch == Some(current_epoch) {
-                let segment_range = self.shared_stream.current_segment_range();
-                self.emit_seek_lifecycle(
-                    SeekLifecycleStage::DecodeStarted,
-                    current_epoch,
-                    current_epoch,
-                    chunk.meta.variant_index,
-                    chunk.meta.segment_index,
-                    segment_range.as_ref().map(|range| range.start),
-                    segment_range.as_ref().map(|range| range.end),
-                );
-                self.pending_decode_started_epoch = None;
+        match FallibleIterator::next(self) {
+            Ok(Some(chunk)) => {
+                if self.pending_decode_started_epoch == Some(current_epoch) {
+                    let segment_range = self.shared_stream.current_segment_range();
+                    self.emit_seek_lifecycle(
+                        SeekLifecycleStage::DecodeStarted,
+                        current_epoch,
+                        current_epoch,
+                        chunk.meta.variant_index,
+                        chunk.meta.segment_index,
+                        segment_range.as_ref().map(|range| range.start),
+                        segment_range.as_ref().map(|range| range.end),
+                    );
+                    self.pending_decode_started_epoch = None;
+                }
+                Fetch::new(chunk, false, current_epoch)
             }
-            Fetch::new(chunk, false, current_epoch)
-        } else {
-            self.emit_event(AudioEvent::EndOfStream);
-            Fetch::new(PcmChunk::default(), true, current_epoch)
+            Err(e) if e.is_interrupted() => {
+                // Seek-pending exit from the decode loop guard.
+                // Return an empty non-EOF fetch; the worker loop will
+                // detect flushing via send_with_backpressure and call
+                // apply_pending_seek().
+                Fetch::new(PcmChunk::default(), false, current_epoch)
+            }
+            _ => {
+                self.emit_event(AudioEvent::EndOfStream);
+                Fetch::new(PcmChunk::default(), true, current_epoch)
+            }
         }
     }
 

@@ -1235,7 +1235,9 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let result = stream
         .read(&mut buf)
         .expect_err("read should be interrupted by flushing");
-    assert_eq!(result.kind(), io::ErrorKind::Interrupted);
+    // Uses `Other` (not `Interrupted`) so that Symphonia propagates
+    // the error instead of silently retrying.
+    assert_eq!(result.kind(), io::ErrorKind::Other);
     assert_eq!(result.to_string(), "seek pending");
 }
 

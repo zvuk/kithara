@@ -79,7 +79,7 @@ mod server {
         create_wav_init_header, eval_delay, generate_segment,
     };
     use tokio::{net::TcpListener, sync::RwLock};
-    use tower_http::{cors::CorsLayer, services::ServeDir};
+    use tower_http::{cors::CorsLayer, services::ServeDir, set_header::SetResponseHeaderLayer};
 
     // ── Session Types ──────────────────────────────────────────────
 
@@ -1437,7 +1437,11 @@ seg/v{}_2.bin
             .nest_service("/track.mp3", ServeDir::new(assets_dir().join("track.mp3")))
             .with_state(state)
             .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
-            .layer(CorsLayer::permissive());
+            .layer(CorsLayer::permissive())
+            .layer(SetResponseHeaderLayer::overriding(
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                header::HeaderValue::from_static("cross-origin"),
+            ));
 
         let addr = format!("127.0.0.1:{port}");
         let listener = TcpListener::bind(&addr)

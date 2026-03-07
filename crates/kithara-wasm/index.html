@@ -292,13 +292,16 @@
         $('build-info').textContent = `(${wasm.build_info()})`;
 
         // --- Playlist ---
-        const playlist = [
+        // Exposed on window so Selenium tests can manipulate the playlist.
+        const playlist = window.playlist = [
             { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
             { url: 'https://stream.silvercomet.top/hls/master.m3u8', label: 'HLS Stream' },
+            { url: 'https://stream.silvercomet.top/drm/master.m3u8', label: 'DRM Stream' },
         ];
         let currentIndex = -1;
         let selectingTrack = false;
 
+        window.renderPlaylist = renderPlaylist;
         function renderPlaylist() {
             const ul = $('playlist');
             ul.textContent = '';
