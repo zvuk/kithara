@@ -294,6 +294,11 @@ iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "t
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 
+# xtask tooling
+cargo_metadata = "0.19"
+anyhow = "1"
+regex = "1"
+
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
 

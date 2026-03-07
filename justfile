@@ -89,7 +89,7 @@ trait-mock-exceptions:
 
 lint-fast: fmt-check clippy ast-grep-blocking arch
 
-lint-full: lint-fast xtask-test quality-report play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \

@@ -25,7 +25,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run(profile: String) -> Result<()> {
+pub(crate) fn run(profile: crate::BuildProfile) -> Result<()> {
     // 1. Check cargo-swift is installed.
     match Command::new("cargo-swift")
         .arg("--version")
@@ -50,7 +50,7 @@ pub fn run(profile: String) -> Result<()> {
 
     let mut cmd = Command::new("cargo");
     cmd.args(["swift", "package", "-p", "ios", "macos", "-n", "KitharaFFI"]);
-    if profile == "release" {
+    if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
     }
     cmd.args([

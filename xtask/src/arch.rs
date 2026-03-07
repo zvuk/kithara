@@ -5,8 +5,10 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{DependencyKind, MetadataCommand};
 use regex::Regex;
+
+use crate::util::walk_rs_files;
 
 /// Canonical types that must have exactly one definition across `crates/`.
 const CANONICAL_TYPES: &[(&str, &str)] = &[
@@ -44,7 +46,7 @@ const MID_CRATES: &[&str] = &[
 /// The facade crate name.
 const FACADE_CRATE: &str = "kithara";
 
-pub fn run() -> Result<()> {
+pub(crate) fn run() -> Result<()> {
     let metadata = MetadataCommand::new().exec()?;
     let workspace_root = metadata.workspace_root.as_std_path();
 
@@ -52,8 +54,8 @@ pub fn run() -> Result<()> {
 
     errors += check_canonical_types(workspace_root)?;
     errors += check_duplicate_error_enums(workspace_root)?;
-    errors += check_dependency_direction(&metadata)?;
-    errors += check_facade_boundary(&metadata)?;
+    errors += check_dependency_direction(&metadata);
+    errors += check_facade_boundary(&metadata);
     errors += check_stray_rs_files(workspace_root)?;
 
     if errors > 0 {
@@ -63,34 +65,10 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// Walk all `.rs` files under `crates/` and return their paths.
-fn collect_rs_files(crates_dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut files = Vec::new();
-    walk_rs_files(crates_dir, &mut files)?;
-    Ok(files)
-}
-
-fn walk_rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_rs_files(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Check 1: Canonical types must have exactly one definition.
 fn check_canonical_types(workspace_root: &Path) -> Result<u32> {
     let crates_dir = workspace_root.join("crates");
-    let rs_files = collect_rs_files(&crates_dir)?;
+    let rs_files = walk_rs_files(&crates_dir)?;
     let mut errors = 0u32;
 
     for &(kind, name) in CANONICAL_TYPES {
@@ -138,7 +116,7 @@ fn check_canonical_types(workspace_root: &Path) -> Result<u32> {
 /// Check 2: Warn if any single crate defines `pub enum Error` more than once.
 fn check_duplicate_error_enums(workspace_root: &Path) -> Result<u32> {
     let crates_dir = workspace_root.join("crates");
-    let rs_files = collect_rs_files(&crates_dir)?;
+    let rs_files = walk_rs_files(&crates_dir)?;
     let pattern = Regex::new(r"\bpub\s+enum\s+Error\b")?;
     let mut crate_counts: HashMap<String, u32> = HashMap::new();
 
@@ -168,9 +146,8 @@ fn check_duplicate_error_enums(workspace_root: &Path) -> Result<u32> {
 
 /// Collect all transitive dependencies of a package by name, using the resolved graph.
 fn transitive_deps(pkg_name: &str, metadata: &cargo_metadata::Metadata) -> HashSet<String> {
-    let resolve = match &metadata.resolve {
-        Some(r) => r,
-        None => return HashSet::new(),
+    let Some(resolve) = &metadata.resolve else {
+        return HashSet::new();
     };
 
     // Build a map from package id to node for efficient lookup
@@ -199,6 +176,14 @@ fn transitive_deps(pkg_name: &str, metadata: &cargo_metadata::Metadata) -> HashS
     while let Some(current_id) = queue.pop_front() {
         if let Some(node) = node_map.get(current_id) {
             for dep in &node.deps {
+                // Only follow normal (non-dev, non-build) dependencies.
+                let is_normal = dep
+                    .dep_kinds
+                    .iter()
+                    .any(|dk| dk.kind == DependencyKind::Normal);
+                if !is_normal {
+                    continue;
+                }
                 let dep_id = dep.pkg.repr.as_str();
                 if visited.insert(dep_id.to_string()) {
                     queue.push_back(dep_id);
@@ -216,12 +201,12 @@ fn transitive_deps(pkg_name: &str, metadata: &cargo_metadata::Metadata) -> HashS
 
     visited
         .iter()
-        .filter_map(|id| id_to_name.get(id.as_str()).map(|n| n.to_string()))
+        .filter_map(|id| id_to_name.get(id.as_str()).map(ToString::to_string))
         .collect()
 }
 
 /// Check 3: Base crates must not depend (directly or transitively) on high-level crates.
-fn check_dependency_direction(metadata: &cargo_metadata::Metadata) -> Result<u32> {
+fn check_dependency_direction(metadata: &cargo_metadata::Metadata) -> u32 {
     let mut errors = 0u32;
     let high_set: HashSet<&str> = HIGH_CRATES.iter().copied().collect();
 
@@ -235,11 +220,11 @@ fn check_dependency_direction(metadata: &cargo_metadata::Metadata) -> Result<u32
         }
     }
 
-    Ok(errors)
+    errors
 }
 
 /// Check 4: Mid-level crates must not depend on the facade crate.
-fn check_facade_boundary(metadata: &cargo_metadata::Metadata) -> Result<u32> {
+fn check_facade_boundary(metadata: &cargo_metadata::Metadata) -> u32 {
     let mut errors = 0u32;
 
     for &mid in MID_CRATES {
@@ -250,7 +235,7 @@ fn check_facade_boundary(metadata: &cargo_metadata::Metadata) -> Result<u32> {
         }
     }
 
-    Ok(errors)
+    errors
 }
 
 /// Check 5: No `.rs` files at repository root.

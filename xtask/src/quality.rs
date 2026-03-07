@@ -9,8 +9,10 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-#[derive(Debug, Subcommand)]
-pub enum QualityCommand {
+use crate::util::walk_rs_files;
+
+#[derive(Clone, Copy, Debug, Subcommand)]
+pub(crate) enum QualityCommand {
     /// Generate a quality report.
     Report {
         #[arg(long)]
@@ -41,31 +43,6 @@ pub enum QualityCommand {
 fn workspace_root() -> Result<PathBuf> {
     let metadata = MetadataCommand::new().exec()?;
     Ok(metadata.workspace_root.into_std_path_buf())
-}
-
-/// Recursively collect all `.rs` files under `dir`.
-fn walk_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    walk_rs_files_inner(dir, &mut out)?;
-    out.sort();
-    Ok(out)
-}
-
-fn walk_rs_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_rs_files_inner(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// Count lines matching `pattern` across the given files.
@@ -160,7 +137,7 @@ fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub fn run(cmd: QualityCommand) -> Result<()> {
+pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
     match cmd {
         QualityCommand::Report {
             min_unimock_traits,
@@ -187,14 +164,14 @@ pub fn run(cmd: QualityCommand) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn gate_status(value: usize, threshold: Option<usize>, is_max: bool) -> String {
-    match threshold {
-        None => "off | pass".to_string(),
-        Some(t) => {
+    threshold.map_or_else(
+        || "off | pass".to_string(),
+        |t| {
             let pass = if is_max { value <= t } else { value >= t };
             let status = if pass { "pass" } else { "fail" };
             format!("{t} | {status}")
-        }
-    }
+        },
+    )
 }
 
 fn run_report(

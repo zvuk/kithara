@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::Path};
 
 use anyhow::{Result, bail};
 use regex::Regex;
@@ -15,9 +15,8 @@ use regex::Regex;
 /// Header rows (where the function column is "Function") and rows with unparseable avg times
 /// are skipped.
 fn extract_metrics(content: &str) -> Vec<(String, String)> {
-    let time_re = match Regex::new(r"^[0-9]+(\.[0-9]+)?(ns|us|ms|s)$") {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
+    let Ok(time_re) = Regex::new(r"^[0-9]+(\.[0-9]+)?(ns|us|ms|s)$") else {
+        return Vec::new();
     };
 
     let mut metrics = Vec::new();
@@ -72,7 +71,7 @@ fn to_nanoseconds(value: &str) -> Option<f64> {
     Some(num * factor)
 }
 
-pub fn run(current: PathBuf, baseline: PathBuf, threshold: u32) -> Result<()> {
+pub(crate) fn run(current: &Path, baseline: &Path, threshold: u32) -> Result<()> {
     if !current.exists() {
         bail!("current results file not found: {}", current.display());
     }
@@ -89,8 +88,8 @@ pub fn run(current: PathBuf, baseline: PathBuf, threshold: u32) -> Result<()> {
     println!("Threshold: {threshold}%");
     println!();
 
-    let current_content = fs::read_to_string(&current)?;
-    let baseline_content = fs::read_to_string(&baseline)?;
+    let current_content = fs::read_to_string(current)?;
+    let baseline_content = fs::read_to_string(baseline)?;
 
     let current_metrics = extract_metrics(&current_content);
     let baseline_metrics = extract_metrics(&baseline_content);
@@ -115,18 +114,15 @@ pub fn run(current: PathBuf, baseline: PathBuf, threshold: u32) -> Result<()> {
     let mut comparison_count = 0u32;
 
     for (name, current_time) in &current_metrics {
-        let baseline_time = match baseline_map.get(name.as_str()) {
-            Some(t) => t,
-            None => continue,
+        let Some(baseline_time) = baseline_map.get(name.as_str()) else {
+            continue;
         };
 
-        let current_ns = match to_nanoseconds(current_time) {
-            Some(v) => v,
-            None => continue,
+        let Some(current_ns) = to_nanoseconds(current_time) else {
+            continue;
         };
-        let baseline_ns = match to_nanoseconds(baseline_time) {
-            Some(v) => v,
-            None => continue,
+        let Some(baseline_ns) = to_nanoseconds(baseline_time) else {
+            continue;
         };
 
         if baseline_ns <= 0.0 {
@@ -152,8 +148,7 @@ pub fn run(current: PathBuf, baseline: PathBuf, threshold: u32) -> Result<()> {
     }
 
     if regression_found {
-        println!("Performance regression detected");
-        std::process::exit(1);
+        bail!("Performance regression detected");
     }
 
     println!("No significant regression detected");
@@ -215,16 +210,16 @@ mod tests {
                        | parse_header | 1000 | 190.00us | 240.00us | 0.19s | 50% |";
 
         let dir = std::env::temp_dir().join("perf_compare_test_no_regression");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
         let current_path = dir.join("current.txt");
         let baseline_path = dir.join("baseline.txt");
-        std::fs::write(&current_path, current).ok();
-        std::fs::write(&baseline_path, baseline).ok();
+        fs::write(&current_path, current).ok();
+        fs::write(&baseline_path, baseline).ok();
 
-        let result = run(current_path, baseline_path, 10);
+        let result = run(&current_path, &baseline_path, 10);
         assert!(result.is_ok());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -237,34 +232,22 @@ mod tests {
                        | decode_chunk | 1000 | 1.50ms | 1.90ms | 1.50s | 50% |\n\
                        | parse_header | 1000 | 205.00us | 250.00us | 0.21s | 50% |";
 
-        // We can't easily test process::exit(1), so test the internal logic instead.
-        let current_metrics = extract_metrics(current);
-        let baseline_metrics = extract_metrics(baseline);
+        let dir = std::env::temp_dir().join("perf_compare_test_regression");
+        let _ = fs::create_dir_all(&dir);
+        let current_path = dir.join("current.txt");
+        let baseline_path = dir.join("baseline.txt");
+        fs::write(&current_path, current).ok();
+        fs::write(&baseline_path, baseline).ok();
 
-        let baseline_map: std::collections::HashMap<&str, &str> = baseline_metrics
-            .iter()
-            .map(|(name, avg)| (name.as_str(), avg.as_str()))
-            .collect();
+        let result = run(&current_path, &baseline_path, 10);
+        assert!(result.is_err(), "expected regression to be detected");
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("Performance regression detected"),
+            "expected 'Performance regression detected' error, got: {err}"
+        );
 
-        let mut regression_found = false;
-        let threshold: u32 = 10;
-
-        for (name, current_time) in &current_metrics {
-            if let Some(baseline_time) = baseline_map.get(name.as_str()) {
-                if let (Some(c_ns), Some(b_ns)) =
-                    (to_nanoseconds(current_time), to_nanoseconds(baseline_time))
-                {
-                    if b_ns > 0.0 {
-                        let change = ((c_ns - b_ns) / b_ns) * 100.0;
-                        if change > f64::from(threshold) {
-                            regression_found = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        assert!(regression_found, "expected regression to be detected");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -276,13 +259,13 @@ mod tests {
                        | unrelated_fn | 1000 | 50.00us | 60.00us | 0.05s | 100% |";
 
         let dir = std::env::temp_dir().join("perf_compare_test_no_overlap");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
         let current_path = dir.join("current.txt");
         let baseline_path = dir.join("baseline.txt");
-        std::fs::write(&current_path, current).ok();
-        std::fs::write(&baseline_path, baseline).ok();
+        fs::write(&current_path, current).ok();
+        fs::write(&baseline_path, baseline).ok();
 
-        let result = run(current_path, baseline_path, 10);
+        let result = run(&current_path, &baseline_path, 10);
         assert!(result.is_err());
         let err = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(
@@ -290,22 +273,22 @@ mod tests {
             "expected 'no overlapping metrics' error, got: {err}"
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_missing_baseline_returns_ok() {
         let dir = std::env::temp_dir().join("perf_compare_test_missing_baseline");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
         let current_path = dir.join("current.txt");
         let baseline_path = dir.join("nonexistent_baseline.txt");
         let content = "| Function | Calls | Avg | P95 | Total | % Total |\n\
                        | decode_chunk | 1000 | 1.00ms | 1.20ms | 1.00s | 50% |";
-        std::fs::write(&current_path, content).ok();
+        fs::write(&current_path, content).ok();
 
-        let result = run(current_path, baseline_path, 10);
+        let result = run(&current_path, &baseline_path, 10);
         assert!(result.is_ok());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
