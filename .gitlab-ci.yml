@@ -89,7 +89,7 @@ msrv:
   needs: [lint]
   image: rust:1.88
   script:
-    - cargo check --workspace --exclude kithara-fuzz
+    - cargo check --workspace
 
 wasm:
   stage: test
@@ -130,7 +130,7 @@ hack:
     - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
   script:
     - cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace
-      --exclude kithara-wasm --exclude kithara-fuzz
+      --exclude kithara-wasm
   allow_failure: true
 
 semver:
@@ -212,6 +212,8 @@ bench-baseline:
     - if: '$CI_COMMIT_REF_NAME == "main"'
       changes:
         - crates/kithara-abr/**/*
+        - tests/benches/**/*
+        - justfile
         - Cargo.toml
         - Cargo.lock
 
@@ -242,5 +244,7 @@ bench:
     - if: '$CI_COMMIT_REF_NAME != "main"'
       changes:
         - crates/kithara-abr/**/*
+        - tests/benches/**/*
+        - justfile
         - Cargo.toml
         - Cargo.lock

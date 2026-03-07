@@ -101,7 +101,7 @@ impl HlsStreamBuilder {
         temp_path: &Path,
         cancel_token: CancellationToken,
     ) -> Stream<Hls> {
-        let url = server.url(self.master_path).unwrap();
+        let url = server.url(self.master_path).expect("fixture server URL");
 
         let store_path = match self.store_subdir {
             Some(sub) => temp_path.join(sub),
@@ -121,7 +121,9 @@ impl HlsStreamBuilder {
             .with_cancel(cancel_token)
             .with_abr(self.abr_options);
 
-        Stream::<Hls>::new(config).await.unwrap()
+        Stream::<Hls>::new(config)
+            .await
+            .expect("HLS stream creation")
     }
 }
 

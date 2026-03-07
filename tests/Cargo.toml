@@ -161,6 +161,7 @@ required-features = ["perf"]
 [[test]]
 name = "memory_rss"
 path = "perf/memory_rss.rs"
+required-features = ["perf"]
 
 [[bench]]
 name = "refactor_hotpaths"

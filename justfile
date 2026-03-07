@@ -8,7 +8,7 @@ fmt-check:
     cargo +nightly fmt --all --check
 
 clippy:
-    cargo clippy --workspace --exclude kithara-fuzz -- -D warnings
+    cargo clippy --workspace -- -D warnings
 
 test:
     cargo nextest run --workspace --exclude kithara-fuzz
@@ -20,7 +20,7 @@ test-doc:
     cargo test --doc --workspace --exclude kithara-fuzz
 
 test-fast:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile fast
+    cargo nextest run --workspace --exclude kithara-fuzz --profile fast -E 'not binary(suite_heavy)'
 
 test-stress:
     cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)'
