@@ -101,7 +101,7 @@ WASM tests run in headless Chrome via `wasm-bindgen-test`. The custom `wasm_test
 
 ```bash
 # Recommended entrypoint (handles everything)
-bash scripts/ci/wasm-test.sh
+just wasm-test
 
 # Manual run (fixture server starts automatically)
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
@@ -135,7 +135,7 @@ bash crates/kithara-wasm/build-wasm.sh
 Run the same check as CI:
 
 ```bash
-bash scripts/ci/wasm-slim-check.sh
+just wasm-size-check
 ```
 
 This check runs with nightly toolchain (`WASM_SLIM_TOOLCHAIN=nightly`) because `kithara-wasm` uses shared-memory wasm target features (`build-std` + atomics).

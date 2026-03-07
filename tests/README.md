@@ -114,7 +114,7 @@ WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner
 
 ```bash
 # Recommended entrypoint (handles everything)
-bash scripts/ci/wasm-test.sh
+just wasm-test
 
 # Manual run (wasm_test_runner auto-starts fixture server)
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
@@ -206,7 +206,7 @@ Local compare flow:
 
 ```bash
 just perf-test
-./scripts/ci/compare-perf.sh perf-results.txt saved-baseline.txt 10
+cargo xtask perf-compare perf-results.txt saved-baseline.txt --threshold 10
 ```
 
 ## Benchmarks (`tests/benches`)

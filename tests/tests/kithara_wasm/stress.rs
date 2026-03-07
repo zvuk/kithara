@@ -1,7 +1,7 @@
 //! WASM stress tests for the HLS audio pipeline.
 //!
 //! Runs in a dedicated Web Worker via `wasm-bindgen-test-runner` + headless Chrome.
-//! Requires the HLS fixture server to be running (see `scripts/ci/wasm-test.sh`).
+//! Requires the HLS fixture server to be running (see `just wasm-test`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
