@@ -7,7 +7,10 @@ use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    event_bridge::EventBridge, item::AudioPlayerItem, observer::PlayerObserver, types::FfiError,
+    event_bridge::EventBridge,
+    item::AudioPlayerItem,
+    observer::PlayerObserver,
+    types::{FfiError, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
 /// FFI-facing audio player with UUID-based queue management.
@@ -132,6 +135,22 @@ impl AudioPlayer {
 
     pub fn rate(&self) -> f32 {
         self.inner.lock_sync().rate()
+    }
+
+    /// Return a snapshot of the player's current state.
+    ///
+    /// Cheap synchronous read — Swift should use this instead of caching
+    /// state locally.
+    #[must_use]
+    pub fn snapshot(&self) -> FfiPlayerSnapshot {
+        let inner = self.inner.lock_sync();
+        FfiPlayerSnapshot {
+            status: FfiPlayerStatus::from(inner.status()),
+            current_time: inner.position_seconds(),
+            duration: inner.duration_seconds(),
+            rate: inner.rate(),
+            default_rate: inner.default_rate(),
+        }
     }
 
     pub fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {

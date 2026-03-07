@@ -80,7 +80,7 @@ impl<T: StreamType> AudioConfig<T> {
             media_info: None,
             pcm_buffer_chunks: DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
-            prefer_hardware: false,
+            prefer_hardware: cfg!(feature = "apple"),
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,

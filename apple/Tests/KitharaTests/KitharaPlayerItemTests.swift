@@ -11,24 +11,6 @@ struct KitharaPlayerItemTests {
         #expect(item.url == "https://example.com/song.mp3")
     }
 
-    @Test("initial status is unknown")
-    func initialStatusIsUnknown() {
-        let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-        #expect(item.status == .unknown)
-    }
-
-    @Test("initial duration is nil")
-    func initialDurationIsNil() {
-        let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-        #expect(item.duration == nil)
-    }
-
-    @Test("initial buffered duration is zero")
-    func initialBufferedDurationIsZero() {
-        let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-        #expect(item.bufferedDuration == 0)
-    }
-
     @Test("preferred bitrate defaults to zero")
     func preferredBitrateDefaults() {
         let item = KitharaPlayerItem(url: "https://example.com/song.mp3")

@@ -1,27 +1,24 @@
 //! Foreign observer traits for push-based property updates.
+//!
+//! Each observer has a single `on_event()` method receiving a typed enum
+//! variant. This keeps the FFI surface minimal — Swift needs only one
+//! callback bridge class per observer instead of one per property.
+
+use crate::types::{FfiItemEvent, FfiPlayerEvent};
 
 /// Receives player-level state changes from Rust.
 ///
-/// All methods are called on an arbitrary background thread.
-/// Swift implementations must dispatch to main actor as needed.
+/// All calls happen on an arbitrary background thread.
+/// Swift implementations must dispatch to the main actor as needed.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
-    fn on_time_changed(&self, seconds: f64);
-    fn on_rate_changed(&self, rate: f32);
-    fn on_current_item_changed(&self);
-    fn on_status_changed(&self, status_code: i32);
-    fn on_error(&self, code: i32, message: String);
-    fn on_duration_changed(&self, seconds: f64);
-    fn on_buffered_duration_changed(&self, seconds: f64);
+    fn on_event(&self, event: FfiPlayerEvent);
 }
 
 /// Receives item-level state changes from Rust.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait ItemObserver: Send + Sync {
-    fn on_duration_changed(&self, seconds: f64);
-    fn on_buffered_duration_changed(&self, seconds: f64);
-    fn on_status_changed(&self, status_code: i32);
-    fn on_error(&self, code: i32, message: String);
+    fn on_event(&self, event: FfiItemEvent);
 }
 
 /// Callback for seek completion.

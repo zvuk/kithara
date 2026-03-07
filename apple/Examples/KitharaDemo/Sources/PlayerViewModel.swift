@@ -18,32 +18,25 @@ final class PlayerViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     init() {
-        player.statusPublisher
+        player.eventPublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.status = $0 }
-            .store(in: &cancellables)
-
-        player.timePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in
-                guard let self, !self.isSeeking else { return }
-                self.currentTime = $0
+            .sink { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case let .timeChanged(seconds):
+                    if !self.isSeeking { self.currentTime = seconds }
+                case let .rateChanged(rate):
+                    self.isPlaying = rate > 0
+                case let .statusChanged(ffiStatus):
+                    self.status = PlayerStatus(ffi: ffiStatus)
+                case let .durationChanged(seconds):
+                    self.duration = seconds
+                case let .error(message):
+                    self.errorMessage = message
+                case .currentItemChanged, .timeControlStatusChanged, .bufferedDurationChanged:
+                    break
+                }
             }
-            .store(in: &cancellables)
-
-        player.durationPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.duration = $0 }
-            .store(in: &cancellables)
-
-        player.ratePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.isPlaying = $0 > 0 }
-            .store(in: &cancellables)
-
-        player.errorPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.errorMessage = "\($0)" }
             .store(in: &cancellables)
     }
 

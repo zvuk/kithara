@@ -8,9 +8,8 @@ struct KitharaPlayerTests {
     func initCreatesPlayerWithUnknownStatus() {
         let player = KitharaPlayer()
         #expect(player.status == .unknown)
-        #expect(player.currentTime == 0)
+        #expect(player.currentTime == nil)
         #expect(player.duration == nil)
-        #expect(player.error == nil)
     }
 
     @Test("default rate is 1.0")
@@ -30,5 +29,15 @@ struct KitharaPlayerTests {
         let player = KitharaPlayer()
         player.removeAllItems()
         #expect(player.items.isEmpty)
+    }
+
+    @Test("snapshot returns consistent state")
+    func snapshotReturnsConsistentState() {
+        let player = KitharaPlayer()
+        let snap = player.snapshot
+        #expect(snap.rate == 0.0)
+        #expect(snap.defaultRate == 1.0)
+        #expect(snap.currentTime == nil)
+        #expect(snap.duration == nil)
     }
 }

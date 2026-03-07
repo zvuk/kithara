@@ -59,6 +59,7 @@ backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
 rodio = ["dep:rodio", "kithara-audio/rodio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
+apple = ["kithara-audio/apple"]
 test-utils = ["unimock"]
 internal = []
 

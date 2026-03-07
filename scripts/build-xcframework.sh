@@ -40,7 +40,7 @@ cargo swift package \
     -n KitharaFFI \
     $PROFILE_FLAG \
     --lib-type static \
-    -F backend-uniffi \
+    -F backend-uniffi,apple \
     --swift-tools-version 6.0 \
     -y
 

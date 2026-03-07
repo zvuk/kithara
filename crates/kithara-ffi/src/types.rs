@@ -168,6 +168,51 @@ impl From<TimeRange> for FfiTimeRange {
     }
 }
 
+/// Typed player event dispatched through [`PlayerObserver::on_event`].
+///
+/// Replaces raw integer status codes with typed enums. Swift receives
+/// a single callback with a discriminated union instead of 7 separate methods.
+///
+/// **Concurrency**: events may arrive from multiple threads concurrently
+/// (async broadcast task + OS polling thread). Swift must handle
+/// thread-safe delivery internally.
+#[derive(Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiPlayerEvent {
+    TimeChanged { seconds: f64 },
+    RateChanged { rate: f32 },
+    CurrentItemChanged,
+    StatusChanged { status: FfiPlayerStatus },
+    TimeControlStatusChanged { status: FfiTimeControlStatus },
+    Error { error: String },
+    DurationChanged { seconds: f64 },
+    BufferedDurationChanged { seconds: f64 },
+}
+
+/// Typed item event dispatched through [`ItemObserver::on_event`].
+#[derive(Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiItemEvent {
+    DurationChanged { seconds: f64 },
+    BufferedDurationChanged { seconds: f64 },
+    StatusChanged { status: FfiItemStatus },
+    Error { error: String },
+}
+
+/// Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
+///
+/// Fields are `Option` when no current item is loaded — callers should
+/// not assume defaults.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiPlayerSnapshot {
+    pub status: FfiPlayerStatus,
+    pub current_time: Option<f64>,
+    pub duration: Option<f64>,
+    pub rate: f32,
+    pub default_rate: f32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

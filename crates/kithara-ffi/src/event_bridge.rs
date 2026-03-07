@@ -1,17 +1,18 @@
 //! Bridge between kithara broadcast events and FFI observer callbacks.
 //!
 //! Subscribes to [`PlayerEvent`] channels, translates events into
-//! [`PlayerObserver`] callback invocations on a dedicated tokio task.
-//! A secondary **OS thread** polls `position_seconds()` / `duration_seconds()`
-//! for periodic time updates — avoiding blocking `Mutex::lock_sync()` inside async.
+//! typed [`FfiPlayerEvent`] variants dispatched via a single
+//! [`PlayerObserver::on_event`] call. A secondary **OS thread** polls
+//! `position_seconds()` / `duration_seconds()` for periodic time
+//! updates — avoiding blocking `Mutex::lock_sync()` inside async.
 
 use std::sync::Arc;
 
-use kithara::play::{PlayerEvent, PlayerImpl, PlayerStatus};
+use kithara::play::{PlayerEvent, PlayerImpl};
 use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
-use crate::observer::PlayerObserver;
+use crate::{observer::PlayerObserver, types::FfiPlayerEvent};
 
 /// Forwards player events to an observer on background tasks.
 pub(crate) struct EventBridge {
@@ -82,7 +83,7 @@ impl EventBridge {
 
                 match time {
                     Some(t) if last_time.is_none_or(|prev| (prev - t).abs() > 0.01) => {
-                        observer.on_time_changed(t);
+                        observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
                         last_time = Some(t);
                     }
                     None if last_time.is_some() => {
@@ -93,7 +94,7 @@ impl EventBridge {
 
                 match duration {
                     Some(d) if last_duration.is_none_or(|prev| (prev - d).abs() > 0.01) => {
-                        observer.on_duration_changed(d);
+                        observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
                         last_duration = Some(d);
                     }
                     None if last_duration.is_some() => {
@@ -106,19 +107,20 @@ impl EventBridge {
     }
 
     fn dispatch(observer: &Arc<dyn PlayerObserver>, event: &PlayerEvent) {
-        match event {
-            PlayerEvent::RateChanged { rate } => observer.on_rate_changed(*rate),
-            PlayerEvent::StatusChanged { status } => {
-                let code = match status {
-                    PlayerStatus::ReadyToPlay => 1,
-                    PlayerStatus::Failed => 2,
-                    _ => 0,
-                };
-                observer.on_status_changed(code);
+        let ffi_event = match event {
+            PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
+            PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
+                status: (*status).into(),
+            },
+            PlayerEvent::TimeControlStatusChanged { status, .. } => {
+                FfiPlayerEvent::TimeControlStatusChanged {
+                    status: (*status).into(),
+                }
             }
-            PlayerEvent::CurrentItemChanged => observer.on_current_item_changed(),
-            _ => {}
-        }
+            PlayerEvent::CurrentItemChanged => FfiPlayerEvent::CurrentItemChanged,
+            _ => return,
+        };
+        observer.on_event(ffi_event);
     }
 }
 
