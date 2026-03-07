@@ -28,6 +28,7 @@ members = [
     "tests",
     "tests/fuzz",
     "examples",
+    "xtask",
 ]
 default-members = [
     "crates/kithara",
