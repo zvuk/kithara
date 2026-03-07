@@ -27,11 +27,13 @@ test-stress:
 
 test-all: test test-doc
 
-# Full project health check: lint + all tests + benchmarks build + doc tests.
+# Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
 test-ultimate:
     just lint-fast
     cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
     cargo test --doc --workspace --exclude kithara-fuzz
+    cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+    cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
     just bench-build
     cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
     echo "==> all checks passed"

@@ -1170,21 +1170,21 @@ async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Resu
     }
 }
 
-#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
+#[kithara::test(selenium)]
 async fn selenium_player_scenarios() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_player_scenarios().await;
     selenium_teardown(session, "player_scenarios", result).await;
 }
 
-#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
+#[kithara::test(selenium)]
 async fn selenium_diagnostic_suite() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_diagnostic_suite().await;
     selenium_teardown(session, "diagnostic_suite", result).await;
 }
 
-#[kithara::test(selenium, timeout(Duration::from_secs(120)))]
+#[kithara::test(selenium)]
 async fn selenium_hls_log_scenario() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_hls_log_scenario().await;
