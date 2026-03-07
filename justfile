@@ -27,6 +27,15 @@ test-stress:
 
 test-all: test test-doc
 
+# Full project health check: lint + all tests + benchmarks build + doc tests.
+test-ultimate:
+    just lint-fast
+    cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
+    cargo test --doc --workspace --exclude kithara-fuzz
+    just bench-build
+    cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
+    echo "==> all checks passed"
+
 ast-grep-blocking:
     AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
     if [[ -z "$AST_GREP_BIN" ]]; then \
@@ -91,13 +100,13 @@ perf-test:
       -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
 
 bench-build:
-    cargo bench -p kithara-abr --bench abr_estimator --no-run
+    cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
     cargo bench -p kithara-integration-tests --bench bufpool --no-run
     cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
 
 bench-run:
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt; \
     cargo bench -p kithara-integration-tests --bench bufpool -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt; \
     cargo bench -p kithara-integration-tests --bench refactor_hotpaths -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
 
@@ -109,7 +118,7 @@ bench-ci:
     fi; \
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
     candidate_name="${BENCH_CANDIDATE_NAME:-ci}"; \
-    cargo bench -p kithara-abr --bench abr_estimator \
+    cargo bench -p kithara-integration-tests --bench abr_estimator \
       -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
       2>&1 | tee bench-results.txt; \
     cargo bench -p kithara-integration-tests --bench bufpool \
