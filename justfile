@@ -56,32 +56,40 @@ ast-grep-advisory:
     "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short --warning
 
 arch:
-    bash scripts/ci/check-arch.sh
+    cargo xtask arch
 
 machete:
     cargo machete
 
-perf-compare-selftest:
-    bash scripts/ci/test-compare-perf.sh
+xtask-test:
+    cargo test -p xtask
 
-quality-report:
-    bash scripts/ci/quality-report.sh
+quality-report *ARGS:
+    cargo xtask quality report {{ARGS}}
+
+quality-report-ci:
+    cargo xtask quality report \
+        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}" \
+        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}" \
+        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}" \
+        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}" \
+        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
 
 play-unimock-check:
-    bash scripts/ci/check-play-traits-unimock.sh
+    cargo xtask quality unimock-check
 
 rstest-audit:
-    bash scripts/ci/rstest-audit.sh
+    cargo xtask quality rstest-audit
 
 trait-mock-audit:
-    bash scripts/ci/trait-mock-audit.sh
+    cargo xtask quality trait-mock-audit
 
 trait-mock-exceptions:
-    bash scripts/ci/trait-mock-exceptions.sh
+    cargo xtask quality trait-mock-exceptions
 
 lint-fast: fmt-check clippy ast-grep-blocking arch
 
-lint-full: lint-fast perf-compare-selftest quality-report play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
@@ -139,10 +147,43 @@ bench-ci:
     fi
 
 wasm-test:
-    bash scripts/ci/wasm-test.sh
+    CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
+    WASM_BINDGEN_TEST_TIMEOUT=300 \
+    WASM_BINDGEN_USE_BROWSER=1 \
+    cargo +nightly test --target wasm32-unknown-unknown \
+        -p kithara-integration-tests
 
 wasm-build:
     bash crates/kithara-wasm/build-wasm.sh
 
 wasm-size-check:
-    bash scripts/ci/wasm-slim-check.sh
+    @toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"; \
+    if command -v wasm-slim >/dev/null 2>&1; then \
+        slim_cmd="wasm-slim"; \
+    elif command -v cargo-wasm-slim >/dev/null 2>&1; then \
+        slim_cmd="cargo wasm-slim"; \
+    else \
+        echo "wasm-slim is not installed"; exit 2; \
+    fi; \
+    mkdir -p target; \
+    cd crates/kithara-wasm && \
+    RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json; \
+    echo "wasm-slim report: target/wasm-slim-result.json"
+
+memory-check:
+    @echo "=== Tier 1: Pool-native budget tests ==="
+    cargo test -p kithara-bufpool --test memory_budget
+    @echo ""
+    @echo "=== Tier 2: Allocation regression tests ==="
+    cargo test -p kithara-bufpool --test alloc_regression -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 3: Audio hot path zero-alloc ==="
+    cargo test -p kithara-audio --test alloc_free_hotpath -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 4: RSS budget (HLS playback) ==="
+    cargo test --test memory_rss -- --test-threads=1
+    @echo ""
+    @echo "All memory checks passed."
+
+xcframework *ARGS:
+    cargo xtask xcframework {{ARGS}}

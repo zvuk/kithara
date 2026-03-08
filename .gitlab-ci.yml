@@ -43,6 +43,7 @@ lint:
     - rustup toolchain install nightly --component rustfmt
   script:
     - just lint-full
+    - just quality-report-ci
   artifacts:
     paths:
       - target/quality-report.md
@@ -70,7 +71,7 @@ arch:
   stage: lint
   before_script: []
   script:
-    - bash scripts/ci/check-arch.sh
+    - cargo xtask arch
 
 # --- test stage ---
 
@@ -113,7 +114,7 @@ wasm-size:
     - rustup target add wasm32-unknown-unknown --toolchain nightly
     - test -f "$CARGO_HOME/bin/wasm-slim" || cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
   script:
-    - WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+    - WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
   artifacts:
     paths:
       - target/wasm-slim-result.json
