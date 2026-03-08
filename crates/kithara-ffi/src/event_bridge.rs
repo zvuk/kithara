@@ -6,13 +6,13 @@
 //! `position_seconds()` / `duration_seconds()` for periodic time
 //! updates — avoiding blocking `Mutex::lock_sync()` inside async.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use kithara::play::{PlayerEvent, PlayerImpl};
 use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
-use crate::{observer::PlayerObserver, types::FfiPlayerEvent};
+use crate::{observer::PlayerObserver, player::QueueEntry, types::FfiPlayerEvent};
 
 /// Forwards player events to an observer on background tasks.
 pub(crate) struct EventBridge {
@@ -27,9 +27,16 @@ impl EventBridge {
         rx: broadcast::Receiver<PlayerEvent>,
         observer: Arc<dyn PlayerObserver>,
         player: Arc<Mutex<PlayerImpl>>,
+        queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
         cancel: CancellationToken,
     ) -> Self {
-        Self::spawn_event_task(rx, Arc::clone(&observer), cancel.clone());
+        Self::spawn_event_task(
+            rx,
+            Arc::clone(&observer),
+            Arc::clone(&player),
+            queue,
+            cancel.clone(),
+        );
         let time_thread = Self::spawn_time_thread(player, observer, cancel.clone());
         Self {
             cancel,
@@ -41,6 +48,8 @@ impl EventBridge {
     fn spawn_event_task(
         mut rx: broadcast::Receiver<PlayerEvent>,
         observer: Arc<dyn PlayerObserver>,
+        player: Arc<Mutex<PlayerImpl>>,
+        queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
         cancel: CancellationToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
@@ -49,7 +58,7 @@ impl EventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(pe) => Self::dispatch(&observer, &pe),
+                            Ok(pe) => Self::dispatch(&observer, &pe, &player, &queue),
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,
                         }
@@ -106,7 +115,12 @@ impl EventBridge {
         })
     }
 
-    fn dispatch(observer: &Arc<dyn PlayerObserver>, event: &PlayerEvent) {
+    fn dispatch(
+        observer: &Arc<dyn PlayerObserver>,
+        event: &PlayerEvent,
+        player: &Arc<Mutex<PlayerImpl>>,
+        queue: &Arc<Mutex<Vec<Arc<QueueEntry>>>>,
+    ) {
         let ffi_event = match event {
             PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
             PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
@@ -117,7 +131,20 @@ impl EventBridge {
                     status: (*status).into(),
                 }
             }
-            PlayerEvent::CurrentItemChanged => FfiPlayerEvent::CurrentItemChanged,
+            PlayerEvent::CurrentItemChanged => {
+                let engine_idx = player.lock_sync().current_index();
+                let item_id = queue
+                    .lock_sync()
+                    .iter()
+                    .filter(|e| e.inserted_into_engine.load(Ordering::Acquire))
+                    .nth(engine_idx)
+                    .map(|e| e.item.id());
+                FfiPlayerEvent::CurrentItemChanged { item_id }
+            }
+            PlayerEvent::VolumeChanged { volume } => {
+                FfiPlayerEvent::VolumeChanged { volume: *volume }
+            }
+            PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
             _ => return,
         };
         observer.on_event(ffi_event);

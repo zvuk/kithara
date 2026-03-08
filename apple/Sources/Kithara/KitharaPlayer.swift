@@ -11,7 +11,7 @@ import KitharaFFI
 /// ```swift
 /// let player = KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-/// try await item.load()
+/// item.load()
 /// try player.insert(item)
 /// player.play()
 /// ```
@@ -61,6 +61,20 @@ public final class KitharaPlayer: @unchecked Sendable {
         set { _inner.setDefaultRate(rate: newValue) }
     }
 
+    // MARK: - Volume & Mute
+
+    /// Playback volume (0.0–1.0, clamped).
+    public var volume: Float {
+        get { _inner.volume() }
+        set { _inner.setVolume(volume: newValue) }
+    }
+
+    /// Whether the player is muted.
+    public var isMuted: Bool {
+        get { _inner.isMuted() }
+        set { _inner.setMuted(muted: newValue) }
+    }
+
     // MARK: - Init
 
     /// Create a new player instance.
@@ -85,14 +99,11 @@ public final class KitharaPlayer: @unchecked Sendable {
 
     /// Seek to a position in the current item.
     ///
-    /// - Parameter seconds: Target time in seconds.
-    /// - Throws: ``KitharaError`` if the seek position is invalid.
-    public func seek(to seconds: TimeInterval) throws {
-        do {
-            try _inner.seek(toSeconds: seconds)
-        } catch let ffiError as FfiError {
-            throw KitharaError(ffi: ffiError)
-        }
+    /// - Parameters:
+    ///   - seconds: Target time in seconds.
+    ///   - callback: Invoked with `true` if the seek was accepted, `false` otherwise.
+    public func seek(to seconds: TimeInterval, callback: SeekCallback) {
+        _inner.seek(toSeconds: seconds, callback: callback)
     }
 
     // MARK: - Queue management (delegated to Rust)
@@ -115,9 +126,9 @@ public final class KitharaPlayer: @unchecked Sendable {
     /// Insert an item into the queue.
     ///
     /// - Parameters:
-    ///   - item: The item to insert. Must have been ``KitharaPlayerItem/load()``-ed.
+    ///   - item: The item to insert. May be loaded or not yet loaded (auto-load).
     ///   - after: Insert after this item. If `nil`, appends to the end.
-    /// - Throws: ``KitharaError`` if `after` is not in the queue or item is not loaded.
+    /// - Throws: ``KitharaError`` if `after` is not in the queue.
     public func insert(_ item: KitharaPlayerItem, after: KitharaPlayerItem? = nil) throws {
         do {
             try _inner.insert(item: item._inner, after: after?._inner)

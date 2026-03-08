@@ -5,6 +5,7 @@ import KitharaFFI
 /// A single audio item that can be queued in ``KitharaPlayer``.
 ///
 /// Create with a URL, then call ``load()`` before inserting into the player.
+/// If inserted before loading completes, the player will auto-load the item.
 public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     /// Unique item identifier.
     public nonisolated let id: String
@@ -64,15 +65,13 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
 
     // MARK: - Loading
 
-    /// Asynchronously prepare the underlying resource.
+    /// Start loading the underlying resource (fire-and-forget).
     ///
-    /// Must be called before inserting into a ``KitharaPlayer``.
-    public func load() async throws {
-        do {
-            try await _inner.load()
-        } catch let ffiError as FfiError {
-            throw KitharaError(ffi: ffiError)
-        }
+    /// Errors are reported through ``eventPublisher`` as `.error` events.
+    /// Safe to call before inserting into a ``KitharaPlayer`` — the player
+    /// will also auto-load if the item is not yet ready.
+    public func load() {
+        _inner.load()
     }
 }
 

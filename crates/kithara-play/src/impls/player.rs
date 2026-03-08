@@ -133,10 +133,10 @@ impl PlayerImpl {
         }
     }
 
-    /// Append a resource at the end of the queue (or after a specific index).
-    pub fn insert(&self, resource: Resource, after_index: Option<usize>) {
+    /// Insert a resource at a specific position, or append to the end.
+    pub fn insert(&self, resource: Resource, at_position: Option<usize>) {
         let mut items = self.items.lock_sync();
-        let pos = after_index.map_or(items.len(), |i| (i + 1).min(items.len()));
+        let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
         items.insert(pos, Some(resource));
         debug!(count = items.len(), pos, "item inserted");
     }
@@ -516,6 +516,15 @@ impl PlayerImpl {
         self.engine.send_slot_cmd(slot_id, cmd)
     }
 
+    /// Load the item at `index` if it is the current item and a slot is active.
+    ///
+    /// Used by the FFI layer after a deferred (auto-load) insert completes.
+    pub fn try_load_if_current(&self, index: usize) {
+        if self.current_index() == index && self.current_slot.lock_sync().is_some() {
+            self.load_current_item();
+        }
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -567,7 +576,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum InsertScenario {
         AppendTwice,
-        InsertAfterIndex,
+        InsertAtPosition,
     }
 
     #[derive(Clone, Copy)]
@@ -707,7 +716,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     #[case(InsertScenario::AppendTwice, 2)]
-    #[case(InsertScenario::InsertAfterIndex, 3)]
+    #[case(InsertScenario::InsertAtPosition, 3)]
     async fn player_insert_scenarios(
         #[case] scenario: InsertScenario,
         #[case] expected_count: usize,
@@ -715,7 +724,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.insert(make_resource(1.0), None);
         player.insert(make_resource(2.0), None);
-        if matches!(scenario, InsertScenario::InsertAfterIndex) {
+        if matches!(scenario, InsertScenario::InsertAtPosition) {
             player.insert(make_resource(3.0), Some(0));
         }
         assert_eq!(player.item_count(), expected_count);

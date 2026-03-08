@@ -181,12 +181,14 @@ impl From<TimeRange> for FfiTimeRange {
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
-    CurrentItemChanged,
+    CurrentItemChanged { item_id: Option<String> },
     StatusChanged { status: FfiPlayerStatus },
     TimeControlStatusChanged { status: FfiTimeControlStatus },
     Error { error: String },
     DurationChanged { seconds: f64 },
     BufferedDurationChanged { seconds: f64 },
+    VolumeChanged { volume: f32 },
+    MuteChanged { muted: bool },
 }
 
 /// Typed item event dispatched through [`ItemObserver::on_event`].
@@ -211,6 +213,8 @@ pub struct FfiPlayerSnapshot {
     pub duration: Option<f64>,
     pub rate: f32,
     pub default_rate: f32,
+    pub volume: f32,
+    pub muted: bool,
 }
 
 #[cfg(test)]
