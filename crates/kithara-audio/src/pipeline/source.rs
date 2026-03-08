@@ -88,6 +88,15 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock_sync().timeline()
     }
 
+    /// Check whether all bytes in `range` are available for non-blocking read.
+    #[expect(
+        dead_code,
+        reason = "will be used by shared worker scheduler in Step 2"
+    )]
+    pub(crate) fn is_range_ready(&self, range: Range<u64>) -> bool {
+        self.inner.lock_sync().is_range_ready(range)
+    }
+
     /// Create a lock-free callback for waking blocked `wait_range()`.
     ///
     /// Called once during `Audio::new()` (before the worker starts),
@@ -1137,6 +1146,21 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn timeline(&self) -> &Timeline {
         &self.timeline
+    }
+
+    fn is_ready(&self) -> bool {
+        // During seek / flush the worker handles the seek phase separately.
+        if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
+            return true;
+        }
+        let pos = self.shared_stream.position();
+        // For HLS: check current segment range; for File: check next chunk-size bytes.
+        // 32KB fallback matches Symphonia's MediaSourceStream buffer size.
+        let check_end = self
+            .shared_stream
+            .current_segment_range()
+            .map_or_else(|| pos.saturating_add(32 * 1024), |seg| seg.end);
+        self.shared_stream.is_range_ready(pos..check_end)
     }
 
     fn apply_pending_seek(&mut self) -> bool {
