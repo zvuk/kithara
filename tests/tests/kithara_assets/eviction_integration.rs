@@ -68,10 +68,7 @@ fn eviction_max_assets_skips_pinned_assets(
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
-                && let Ok((pins_file, _)) = bincode::serde::decode_from_slice::<PinsIndexFile, _>(
-                    &pins_bytes,
-                    bincode::config::legacy(),
-                )
+                && let Ok(pins_file) = postcard::from_bytes::<PinsIndexFile>(&pins_bytes)
             {
                 assert!(
                     pins_file

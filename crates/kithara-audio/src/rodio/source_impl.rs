@@ -45,12 +45,12 @@ impl<S> ::rodio::Source for Audio<S> {
         None
     }
 
-    fn channels(&self) -> u16 {
-        self.spec.channels
+    fn channels(&self) -> std::num::NonZeroU16 {
+        std::num::NonZeroU16::new(self.spec.channels).unwrap_or(std::num::NonZeroU16::MIN)
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.spec.sample_rate
+    fn sample_rate(&self) -> std::num::NonZeroU32 {
+        std::num::NonZeroU32::new(self.spec.sample_rate).unwrap_or(std::num::NonZeroU32::MIN)
     }
 
     fn total_duration(&self) -> Option<kithara_platform::time::Duration> {
@@ -62,6 +62,6 @@ impl<S> ::rodio::Source for Audio<S> {
         pos: kithara_platform::time::Duration,
     ) -> Result<(), ::rodio::source::SeekError> {
         self.seek(pos)
-            .map_err(|err| ::rodio::source::SeekError::Other(Box::new(err)))
+            .map_err(|err| ::rodio::source::SeekError::Other(std::sync::Arc::new(err)))
     }
 }

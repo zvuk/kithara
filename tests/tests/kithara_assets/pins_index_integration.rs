@@ -181,7 +181,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
         "empty pins set should roundtrip correctly"
     );
 
-    // File format is an implementation detail (binary via bincode)
+    // File format is an implementation detail (binary via postcard)
     // No need to verify internal structure
 }
 

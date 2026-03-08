@@ -66,11 +66,10 @@ impl<R: ResourceExt> PinsIndex<R> {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile =
-            match bincode::serde::decode_from_slice(&buf, bincode::config::legacy()) {
-                Ok((file, _)) => file,
-                Err(_) => return Ok(HashSet::new()),
-            };
+        let file: PinsIndexFile = match postcard::from_bytes(&buf[..n]) {
+            Ok(file) => file,
+            Err(_) => return Ok(HashSet::new()),
+        };
 
         Ok(file.pinned.into_iter().collect())
     }
@@ -87,7 +86,7 @@ impl<R: ResourceExt> PinsIndex<R> {
             pinned: pins.iter().cloned().collect(),
         };
 
-        let bytes = bincode::serde::encode_to_vec(&file, bincode::config::legacy())?;
+        let bytes = postcard::to_allocvec(&file)?;
         self.res.write_all(&bytes)?;
         Ok(())
     }
@@ -227,11 +226,10 @@ mod tests {
         pins.insert("asset".to_string());
         index.store(&pins).unwrap();
 
-        // Read raw bytes and deserialize using bincode
+        // Read raw bytes and deserialize using postcard
         let mut buf = crate::byte_pool().get();
-        res.read_into(&mut buf).unwrap();
-        let (file, _): (PinsIndexFile, _) =
-            bincode::serde::decode_from_slice(&buf, bincode::config::legacy()).unwrap();
+        let n = res.read_into(&mut buf).unwrap();
+        let file: PinsIndexFile = postcard::from_bytes(&buf[..n]).unwrap();
 
         assert_eq!(file.version, 1);
         assert_eq!(file.pinned.len(), 1);
