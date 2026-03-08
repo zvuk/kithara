@@ -33,11 +33,14 @@ final class PlayerViewModel: ObservableObject {
                 case let .rateChanged(rate):
                     self.isPlaying = rate > 0
                 case let .statusChanged(ffiStatus):
-                    self.status = PlayerStatus(ffi: ffiStatus)
+                    if self.errorMessage == nil {
+                        self.status = PlayerStatus(ffi: ffiStatus)
+                    }
                 case let .durationChanged(seconds):
                     self.duration = seconds
                 case let .error(message):
                     self.errorMessage = message
+                    self.status = .failed
                 case let .currentItemChanged(itemId):
                     self.currentItemId = itemId
                 case let .volumeChanged(vol):
