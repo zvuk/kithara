@@ -139,6 +139,13 @@ impl<T: StreamType> Stream<T> {
         self.source.set_seek_epoch(seek_epoch);
     }
 
+    /// Check whether all bytes in `range` are available for non-blocking read.
+    ///
+    /// Delegates to `Source::is_range_ready()`.
+    pub fn is_range_ready(&self, range: Range<u64>) -> bool {
+        self.source.is_range_ready(range)
+    }
+
     /// Wake any blocked `wait_range()` calls.
     ///
     /// Called after `Timeline::initiate_seek()` for instant wakeup.

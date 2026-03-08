@@ -141,6 +141,20 @@ pub trait Source: Send + 'static {
     /// to previous seeks. Non-seek-aware sources keep the default no-op.
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
 
+    /// Check whether all bytes in `range` are available for non-blocking read.
+    ///
+    /// Used by the shared audio worker to decide whether `fetch_next()` can
+    /// proceed without blocking. Conservative: returning `false` when data
+    /// is actually available is safe (the track is simply skipped this
+    /// iteration), but returning `true` when data is missing would block
+    /// the shared worker thread.
+    ///
+    /// Default returns `false` (unknown sources are assumed not ready).
+    fn is_range_ready(&self, range: Range<u64>) -> bool {
+        let _ = range;
+        false
+    }
+
     /// Get shared playback timeline.
     ///
     /// Timeline is the single source of truth for playback state across all
@@ -180,5 +194,37 @@ mod tests {
         // Source is not object-safe due to associated types,
         // but we can verify it compiles with concrete types
         fn _accepts_source<S: Source>(_s: S) {}
+    }
+
+    #[kithara::test]
+    fn is_range_ready_default_returns_false() {
+        use kithara_storage::WaitOutcome;
+
+        struct StubSource;
+        impl Source for StubSource {
+            type Error = std::io::Error;
+            fn wait_range(
+                &mut self,
+                _range: Range<u64>,
+                _timeout: Duration,
+            ) -> StreamResult<WaitOutcome, Self::Error> {
+                Ok(WaitOutcome::Ready)
+            }
+            fn read_at(
+                &mut self,
+                _offset: u64,
+                _buf: &mut [u8],
+            ) -> StreamResult<ReadOutcome, Self::Error> {
+                Ok(ReadOutcome::Data(0))
+            }
+            fn len(&self) -> Option<u64> {
+                Some(100)
+            }
+            fn timeline(&self) -> Timeline {
+                Timeline::new()
+            }
+        }
+        let source = StubSource;
+        assert!(!source.is_range_ready(0..10));
     }
 }
