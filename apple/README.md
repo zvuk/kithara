@@ -15,13 +15,13 @@
 
 Swift package for iOS and macOS providing Kithara audio engine bindings. AVPlayer-style API with queue-based playback, volume/mute control, seek, and adaptive bitrate support.
 
-Built on top of the Rust core via UniFFI-generated bindings and distributed as a local Swift package with a pre-built XCFramework.
+Built on top of the Rust core via UniFFI-generated bindings and distributed as a Swift package with a pre-built XCFramework.
 
 ## Installation
 
-Add the `apple/` directory as a local Swift package dependency:
+Add Kithara as a Swift Package Manager dependency:
 
-**Xcode**: File → Add Package Dependencies → Add Local → select the `apple/` directory.
+**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → select "Up to Next Major Version" from `0.1.0`.
 
 **Package.swift**:
 
@@ -33,7 +33,7 @@ let package = Package(
     name: "MyApp",
     platforms: [.iOS(.v16), .macOS(.v13)],
     dependencies: [
-        .package(path: "../kithara/apple"),
+        .package(url: "https://github.com/zvuk/kithara", from: "0.1.0"),
     ],
     targets: [
         .executableTarget(
@@ -46,11 +46,15 @@ let package = Package(
 )
 ```
 
-> **Note**: The XCFramework must be built before first use:
-> ```bash
-> cargo xtask xcframework          # release build
-> cargo xtask xcframework --profile debug  # debug build
-> ```
+## Development
+
+For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
+
+```bash
+cargo xtask xcframework                    # build XCFramework (release)
+cargo xtask xcframework --profile debug    # build XCFramework (debug)
+KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
+```
 
 ## Quick Start
 

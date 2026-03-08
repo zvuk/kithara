@@ -67,3 +67,6 @@ apple/Examples/KitharaDemo/KitharaDemo.xcodeproj/
 crates/kithara-ffi/KitharaFFI/
 crates/kithara-ffi/generated/
 tests/fuzz/corpus
+
+# Node.js
+package-lock.json

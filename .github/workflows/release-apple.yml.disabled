@@ -1,0 +1,57 @@
+name: Release Apple
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-apple:
+    name: Build & Release XCFramework
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Install cargo-swift
+        run: cargo install cargo-swift --locked
+
+      - name: Build XCFramework and compute checksum
+        id: checksum
+        run: |
+          just release-apple | tee /tmp/release-apple.log
+          CHECKSUM=$(tail -1 /tmp/release-apple.log)
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "### XCFramework Checksum" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$CHECKSUM" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Update Package.swift checksum to: $CHECKSUM"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/KitharaFFIInternal.xcframework.zip
+          body: |
+            ## XCFramework Checksum
+            ```
+            ${{ steps.checksum.outputs.checksum }}
+            ```
+            Update `Package.swift` with this checksum after release.

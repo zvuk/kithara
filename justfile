@@ -259,3 +259,9 @@ xcframework *ARGS:
 apple-demo:
     just xcframework --profile debug
     cd apple && swift run KitharaDemo
+
+# Build XCFramework, zip, and compute checksum for SPM distribution.
+release-apple:
+    just xcframework
+    cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
+    swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip
