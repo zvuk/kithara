@@ -38,6 +38,13 @@ let package = Package(
             path: "Sources/Kithara"
         ),
 
+        // Demo app (macOS only, for quick testing).
+        .executableTarget(
+            name: "KitharaDemo",
+            dependencies: ["Kithara"],
+            path: "Examples/KitharaDemo/Sources"
+        ),
+
         .testTarget(
             name: "KitharaTests",
             dependencies: ["Kithara"],

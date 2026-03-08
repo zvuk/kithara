@@ -4,6 +4,7 @@ use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
+    sync::Arc,
 };
 
 use derive_setters::Setters;
@@ -15,6 +16,7 @@ use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::{Headers, NetOptions};
+use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -121,6 +123,11 @@ pub struct ResourceConfig {
     pub net: NetOptions,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
+    /// Shared playback rate atomic for the audio pipeline resampler.
+    ///
+    /// When set, propagated to `AudioConfig` so the resampler can dynamically
+    /// adjust its ratio based on the current playback rate.
+    pub playback_rate: Option<Arc<AtomicF32>>,
     /// Maximum peak bitrate in bits per second for ABR variant selection.
     ///
     /// When greater than zero, variants with bandwidth exceeding this value
@@ -204,6 +211,7 @@ impl ResourceConfig {
             #[cfg(any(feature = "file", feature = "hls"))]
             net: NetOptions::default(),
             pcm_pool: None,
+            playback_rate: None,
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_for_expensive_networks: 0.0,
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
@@ -287,6 +295,9 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        if let Some(rate) = self.playback_rate {
+            config = config.with_playback_rate(rate);
+        }
 
         config
     }
@@ -360,6 +371,9 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        if let Some(rate) = self.playback_rate {
+            config = config.with_playback_rate(rate);
+        }
 
         Ok(config)
     }

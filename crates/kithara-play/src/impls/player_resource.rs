@@ -194,6 +194,11 @@ impl PlayerResource {
     pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.resource.set_host_sample_rate(sample_rate);
     }
+
+    /// Set the playback rate for pitch-shifted speed control.
+    pub(crate) fn set_playback_rate(&self, rate: f32) {
+        self.resource.set_playback_rate(rate);
+    }
 }
 
 #[cfg(test)]

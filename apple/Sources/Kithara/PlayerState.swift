@@ -51,6 +51,9 @@ public typealias ItemEvent = FfiItemEvent
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
+/// Seek completion callback — use with ``KitharaPlayer/seek(to:callback:)``.
+public typealias SeekCallback = KitharaFFI.SeekCallback
+
 // MARK: - Internal conversions
 
 extension PlayerStatus {

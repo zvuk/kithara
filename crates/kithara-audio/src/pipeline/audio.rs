@@ -21,6 +21,7 @@ use kithara_platform::{
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
 };
+use portable_atomic::AtomicF32;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Split},
@@ -137,6 +138,9 @@ pub struct Audio<S> {
     /// Target sample rate of the audio host (shared for dynamic updates).
     /// 0 means "not set".
     host_sample_rate: Arc<AtomicU32>,
+
+    /// Shared playback rate for timeline scaling (1.0 = normal speed).
+    playback_rate: Arc<AtomicF32>,
 
     /// Notify for async preload (first chunk available).
     pub(crate) preload_notify: Arc<Notify>,
@@ -279,6 +283,25 @@ impl<S> Audio<S> {
         &self.metadata
     }
 
+    /// Advance the timeline accounting for playback rate.
+    ///
+    /// At rate > 1.0, position advances faster (fewer effective samples per second).
+    /// At rate < 1.0, position advances slower.
+    pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(0.01);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "audio rate always produces valid sample rate"
+        )]
+        let effective_sr = (f64::from(self.spec.sample_rate) / rate) as u32;
+        self.timeline.advance_committed_samples(
+            interleaved_samples,
+            effective_sr.max(1),
+            self.spec.channels,
+        );
+    }
+
     /// Read decoded PCM samples into buffer.
     ///
     /// Returns number of samples written (may be less than buffer size).
@@ -324,11 +347,7 @@ impl<S> Audio<S> {
         }
 
         if written > 0 {
-            self.timeline.advance_committed_samples(
-                written as u64,
-                self.spec.sample_rate,
-                self.spec.channels,
-            );
+            self.advance_timeline(written as u64);
             self.emit_post_seek_output_commit(last_output_meta);
             self.emit_playback_progress();
         }
@@ -659,6 +678,7 @@ where
             media_info: user_media_info,
             pcm_buffer_chunks,
             pcm_pool: mut pool,
+            playback_rate: config_playback_rate,
             prefer_hardware,
             preload_chunks,
             resampler_quality,
@@ -703,11 +723,13 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
+        let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
         let effects = create_effects(
             initial_spec,
             &host_sample_rate,
+            &playback_rate,
             resampler_quality,
             Some(pool.clone()),
             custom_effects,
@@ -766,6 +788,7 @@ where
             cancel: Some(cancel),
             pcm_pool: pool.clone(),
             host_sample_rate,
+            playback_rate,
             preload_notify,
             preloaded: false,
             notify_waiting,
@@ -863,6 +886,10 @@ impl<S: Send> PcmReader for Audio<S> {
             .store(sample_rate.get(), Ordering::Relaxed);
     }
 
+    fn set_playback_rate(&self, rate: f32) {
+        self.playback_rate.store(rate, Ordering::Relaxed);
+    }
+
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         Some(self.preload_notify.clone())
     }
@@ -883,11 +910,7 @@ impl<S: Send> PcmReader for Audio<S> {
 
         let chunk = chunk.or_else(|| self.recv_valid_chunk())?;
         self.spec = chunk.spec();
-        self.timeline.advance_committed_samples(
-            chunk.pcm.len() as u64,
-            self.spec.sample_rate,
-            self.spec.channels,
-        );
+        self.advance_timeline(chunk.pcm.len() as u64);
         Some(chunk)
     }
 }

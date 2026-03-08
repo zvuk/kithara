@@ -86,6 +86,8 @@ impl EventBridge {
                 sleep(interval);
 
                 let inner = player.lock_sync();
+                // Pump Firewheel graph updates (volume, etc.) on native.
+                let _ = inner.tick();
                 let time = inner.position_seconds();
                 let duration = inner.duration_seconds();
                 drop(inner);

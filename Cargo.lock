@@ -3677,6 +3677,7 @@ dependencies = [
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
+ "portable-atomic",
  "reqwest 0.13.2",
  "ringbuf",
  "rodio",

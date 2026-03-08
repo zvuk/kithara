@@ -1,14 +1,47 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+ast-grep-bin := "$(command -v ast-grep || command -v sg || true)"
+
 # Show available commands.
 default:
     @just --list
 
+# --- formatting ---
+
+# Auto-format all Rust code.
+fmt:
+    cargo +nightly fmt --all
+
+# Check formatting without modifying files.
 fmt-check:
     cargo +nightly fmt --all --check
 
+# --- checks ---
+
 clippy:
     cargo clippy --workspace -- -D warnings
+
+# Type-check the workspace (also used as MSRV gate in CI).
+check:
+    cargo check --workspace
+
+# Audit dependencies with cargo-deny.
+deny:
+    cargo deny check
+
+# Check unused dependencies.
+machete:
+    cargo machete
+
+# Validate workspace architecture.
+arch:
+    cargo xtask arch
+
+# Generate and open API docs.
+doc:
+    cargo doc --workspace --no-deps --open
+
+# --- tests ---
 
 test:
     cargo nextest run --workspace --exclude kithara-fuzz
@@ -31,38 +64,34 @@ test-all: test test-doc
 test-ultimate:
     just lint-fast
     cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
-    cargo test --doc --workspace --exclude kithara-fuzz
-    cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+    just test-doc
+    just wasm-test
     cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
     just bench-build
     cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
     echo "==> all checks passed"
 
+xtask-test:
+    cargo test -p xtask
+
+# --- ast-grep ---
+
 ast-grep-blocking:
-    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
-    if [[ -z "$AST_GREP_BIN" ]]; then \
+    @if [[ -z "{{ast-grep-bin}}" ]]; then \
       echo "FAILED: ast-grep is required but not installed."; \
       exit 1; \
     fi; \
-    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short \
+    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
       --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml)$'
 
 ast-grep-advisory:
-    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
-    if [[ -z "$AST_GREP_BIN" ]]; then \
+    @if [[ -z "{{ast-grep-bin}}" ]]; then \
       echo "FAILED: ast-grep is required but not installed."; \
       exit 1; \
     fi; \
-    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short --warning
+    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short --warning
 
-arch:
-    cargo xtask arch
-
-machete:
-    cargo machete
-
-xtask-test:
-    cargo test -p xtask
+# --- quality ---
 
 quality-report *ARGS:
     cargo xtask quality report {{ARGS}}
@@ -87,9 +116,22 @@ trait-mock-audit:
 trait-mock-exceptions:
     cargo xtask quality trait-mock-exceptions
 
+# Feature-powerset check (requires cargo-hack).
+hack:
+    cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
+      --exclude kithara-wasm
+
+# Semver compatibility check (requires cargo-semver-checks).
+semver:
+    cargo semver-checks check-release --workspace --exclude kithara-fuzz
+
+# --- lint composites ---
+
 lint-fast: fmt-check clippy ast-grep-blocking arch
 
 lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+
+# --- coverage ---
 
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
@@ -105,9 +147,15 @@ coverage:
     echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
     echo "==> line coverage threshold: $COVERAGE_MIN%"
 
+# --- perf & benchmarks ---
+
 perf-test:
     cargo test -p kithara-integration-tests --features perf --release \
       -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+
+# Compare perf results between baseline and candidate.
+perf-compare *ARGS:
+    cargo xtask perf-compare {{ARGS}}
 
 bench-build:
     cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
@@ -146,6 +194,36 @@ bench-ci:
       critcmp "$baseline_name" "$candidate_name" 2>&1 | tee -a bench-results.txt; \
     fi
 
+# --- memory ---
+
+memory-check:
+    @echo "=== Tier 1: Pool-native budget tests ==="
+    cargo test -p kithara-bufpool --test memory_budget
+    @echo ""
+    @echo "=== Tier 2: Allocation regression tests ==="
+    cargo test -p kithara-bufpool --test alloc_regression -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 3: Audio hot path zero-alloc ==="
+    cargo test -p kithara-audio --test alloc_free_hotpath -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 4: RSS budget (HLS playback) ==="
+    cargo test --test memory_rss -- --test-threads=1
+    @echo ""
+    @echo "All memory checks passed."
+
+# --- wasm ---
+
+# Check that key crates compile for wasm32 target.
+wasm-check:
+    cargo check -p kithara-wasm --target wasm32-unknown-unknown --no-default-features
+    cargo check -p kithara-storage --target wasm32-unknown-unknown
+    cargo check -p kithara-net --target wasm32-unknown-unknown
+    cargo check -p kithara-stream --target wasm32-unknown-unknown
+    cargo check -p kithara-assets --target wasm32-unknown-unknown
+    cargo check -p kithara-hls --target wasm32-unknown-unknown
+    cargo check -p kithara-decode --target wasm32-unknown-unknown
+
+# Run wasm integration tests in browser.
 wasm-test:
     CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
     WASM_BINDGEN_TEST_TIMEOUT=300 \
@@ -153,6 +231,7 @@ wasm-test:
     cargo +nightly test --target wasm32-unknown-unknown \
         -p kithara-integration-tests
 
+# Build wasm demo app.
 wasm-build:
     bash crates/kithara-wasm/build-wasm.sh
 
@@ -170,20 +249,13 @@ wasm-size-check:
     RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json; \
     echo "wasm-slim report: target/wasm-slim-result.json"
 
-memory-check:
-    @echo "=== Tier 1: Pool-native budget tests ==="
-    cargo test -p kithara-bufpool --test memory_budget
-    @echo ""
-    @echo "=== Tier 2: Allocation regression tests ==="
-    cargo test -p kithara-bufpool --test alloc_regression -- --test-threads=1
-    @echo ""
-    @echo "=== Tier 3: Audio hot path zero-alloc ==="
-    cargo test -p kithara-audio --test alloc_free_hotpath -- --test-threads=1
-    @echo ""
-    @echo "=== Tier 4: RSS budget (HLS playback) ==="
-    cargo test --test memory_rss -- --test-threads=1
-    @echo ""
-    @echo "All memory checks passed."
+# --- apple ---
 
+# Build XCFramework for Apple platforms.
 xcframework *ARGS:
     cargo xtask xcframework {{ARGS}}
+
+# Build XCFramework (debug) and run the Swift demo app.
+apple-demo:
+    just xcframework --profile debug
+    cd apple && swift run KitharaDemo

@@ -530,12 +530,20 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func defaultRate()  -> Float
     
     /**
+     * Insert an item into the queue.
+     *
+     * If the item's resource is already loaded, it is inserted into both
+     * the FFI queue and the engine immediately. If not yet loaded,
+     * the item is placed in the FFI queue and an async auto-load task
+     * is spawned; upon completion the resource is inserted into the engine.
+     *
      * # Errors
      *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue,
-     * or [`FfiError::NotReady`] if the item has not been loaded.
+     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue.
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws 
+    
+    func isMuted()  -> Bool
     
     func items()  -> [AudioPlayerItem]
     
@@ -555,15 +563,20 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems() 
     
     /**
-     * # Errors
+     * Seek to a position in the current item.
      *
-     * Returns [`FfiError`] if the seek position is invalid.
+     * The callback is invoked synchronously with `true` if the seek command
+     * was accepted, `false` otherwise (matches `AVPlayer` semantics).
      */
-    func seek(toSeconds: Double) throws 
+    func seek(toSeconds: Double, callback: SeekCallback) 
     
     func setDefaultRate(rate: Float) 
     
+    func setMuted(muted: Bool) 
+    
     func setObserver(observer: PlayerObserver) 
+    
+    func setVolume(volume: Float) 
     
     /**
      * Return a snapshot of the player's current state.
@@ -572,6 +585,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * state locally.
      */
     func snapshot()  -> FfiPlayerSnapshot
+    
+    func volume()  -> Float
     
 }
 /**
@@ -646,10 +661,16 @@ open func defaultRate() -> Float  {
 }
     
     /**
+     * Insert an item into the queue.
+     *
+     * If the item's resource is already loaded, it is inserted into both
+     * the FFI queue and the engine immediately. If not yet loaded,
+     * the item is placed in the FFI queue and an async auto-load task
+     * is spawned; upon completion the resource is inserted into the engine.
+     *
      * # Errors
      *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue,
-     * or [`FfiError::NotReady`] if the item has not been loaded.
+     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue.
      */
 open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_insert(
@@ -658,6 +679,14 @@ open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try ru
         FfiConverterOptionTypeAudioPlayerItem.lower(after),$0
     )
 }
+}
+    
+open func isMuted() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_is_muted(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
     
 open func items() -> [AudioPlayerItem]  {
@@ -711,14 +740,16 @@ open func removeAllItems()  {try! rustCall() {
 }
     
     /**
-     * # Errors
+     * Seek to a position in the current item.
      *
-     * Returns [`FfiError`] if the seek position is invalid.
+     * The callback is invoked synchronously with `true` if the seek command
+     * was accepted, `false` otherwise (matches `AVPlayer` semantics).
      */
-open func seek(toSeconds: Double)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_seek(
             self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(toSeconds),$0
+        FfiConverterDouble.lower(toSeconds),
+        FfiConverterTypeSeekCallback_lower(callback),$0
     )
 }
 }
@@ -731,10 +762,26 @@ open func setDefaultRate(rate: Float)  {try! rustCall() {
 }
 }
     
+open func setMuted(muted: Bool)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_muted(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(muted),$0
+    )
+}
+}
+    
 open func setObserver(observer: PlayerObserver)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_observer(
             self.uniffiCloneHandle(),
         FfiConverterTypePlayerObserver_lower(observer),$0
+    )
+}
+}
+    
+open func setVolume(volume: Float)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(volume),$0
     )
 }
 }
@@ -748,6 +795,14 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 open func snapshot() -> FfiPlayerSnapshot  {
     return try!  FfiConverterTypeFfiPlayerSnapshot_lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_snapshot(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func volume() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_volume(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -814,13 +869,13 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     func id()  -> String
     
     /**
-     * Asynchronously create the underlying [`Resource`].
+     * Synchronous fire-and-forget load.
      *
-     * # Errors
-     *
-     * Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
+     * Spawns resource creation on `FFI_RUNTIME`. Errors are reported
+     * through [`ItemObserver::on_event`] instead of being returned.
+     * Double-calls are ignored (idempotent).
      */
-    func load() async throws 
+    func load() 
     
     func preferredPeakBitrate()  -> Double
     
@@ -915,27 +970,17 @@ open func id() -> String  {
 }
     
     /**
-     * Asynchronously create the underlying [`Resource`].
+     * Synchronous fire-and-forget load.
      *
-     * # Errors
-     *
-     * Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
+     * Spawns resource creation on `FFI_RUNTIME`. Errors are reported
+     * through [`ItemObserver::on_event`] instead of being returned.
+     * Double-calls are ignored (idempotent).
      */
-open func load()async throws   {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_kithara_ffi_fn_method_audioplayeritem_load(
-                    self.uniffiCloneHandle()
-                    
-                )
-            },
-            pollFunc: ffi_kithara_ffi_rust_future_poll_void,
-            completeFunc: ffi_kithara_ffi_rust_future_complete_void,
-            freeFunc: ffi_kithara_ffi_rust_future_free_void,
-            liftFunc: { $0 },
-            errorHandler: FfiConverterTypeFfiError_lift
-        )
+open func load()  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_load(
+            self.uniffiCloneHandle(),$0
+    )
+}
 }
     
 open func preferredPeakBitrate() -> Double  {
@@ -1628,15 +1673,19 @@ public struct FfiPlayerSnapshot: Equatable, Hashable {
     public let duration: Double?
     public let rate: Float
     public let defaultRate: Float
+    public let volume: Float
+    public let muted: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, rate: Float, defaultRate: Float) {
+    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, rate: Float, defaultRate: Float, volume: Float, muted: Bool) {
         self.status = status
         self.currentTime = currentTime
         self.duration = duration
         self.rate = rate
         self.defaultRate = defaultRate
+        self.volume = volume
+        self.muted = muted
     }
 
     
@@ -1659,7 +1708,9 @@ public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
                 currentTime: FfiConverterOptionDouble.read(from: &buf), 
                 duration: FfiConverterOptionDouble.read(from: &buf), 
                 rate: FfiConverterFloat.read(from: &buf), 
-                defaultRate: FfiConverterFloat.read(from: &buf)
+                defaultRate: FfiConverterFloat.read(from: &buf), 
+                volume: FfiConverterFloat.read(from: &buf), 
+                muted: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1669,6 +1720,8 @@ public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
         FfiConverterOptionDouble.write(value.duration, into: &buf)
         FfiConverterFloat.write(value.rate, into: &buf)
         FfiConverterFloat.write(value.defaultRate, into: &buf)
+        FfiConverterFloat.write(value.volume, into: &buf)
+        FfiConverterBool.write(value.muted, into: &buf)
     }
 }
 
@@ -2055,7 +2108,8 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case rateChanged(rate: Float
     )
-    case currentItemChanged
+    case currentItemChanged(itemId: String?
+    )
     case statusChanged(status: FfiPlayerStatus
     )
     case timeControlStatusChanged(status: FfiTimeControlStatus
@@ -2065,6 +2119,10 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     case durationChanged(seconds: Double
     )
     case bufferedDurationChanged(seconds: Double
+    )
+    case volumeChanged(volume: Float
+    )
+    case muteChanged(muted: Bool
     )
 
 
@@ -2093,7 +2151,8 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case 2: return .rateChanged(rate: try FfiConverterFloat.read(from: &buf)
         )
         
-        case 3: return .currentItemChanged
+        case 3: return .currentItemChanged(itemId: try FfiConverterOptionString.read(from: &buf)
+        )
         
         case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
         )
@@ -2108,6 +2167,12 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         )
         
         case 8: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 9: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        )
+        
+        case 10: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2128,9 +2193,10 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             FfiConverterFloat.write(rate, into: &buf)
             
         
-        case .currentItemChanged:
+        case let .currentItemChanged(itemId):
             writeInt(&buf, Int32(3))
-        
+            FfiConverterOptionString.write(itemId, into: &buf)
+            
         
         case let .statusChanged(status):
             writeInt(&buf, Int32(4))
@@ -2155,6 +2221,16 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case let .bufferedDurationChanged(seconds):
             writeInt(&buf, Int32(8))
             FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .volumeChanged(volume):
+            writeInt(&buf, Int32(9))
+            FfiConverterFloat.write(volume, into: &buf)
+            
+        
+        case let .muteChanged(muted):
+            writeInt(&buf, Int32(10))
+            FfiConverterBool.write(muted, into: &buf)
             
         }
     }
@@ -2357,6 +2433,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer {
     typealias SwiftType = AudioPlayerItem?
 
@@ -2452,54 +2552,6 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
         return dict
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
-
-fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call the ensure init function since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureKitharaFfiInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                { handle, pollResult in
-                    uniffiFutureContinuationCallback(handle: handle, pollResult: pollResult)
-                },
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 
 private enum InitializationResult {
     case ok
@@ -2519,7 +2571,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_id() != 43480) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 24455) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 49002) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_preferred_peak_bitrate() != 37617) {
@@ -2552,7 +2604,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_default_rate() != 41174) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 35420) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 37914) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 23590) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 26264) {
@@ -2573,16 +2628,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 32344) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 13125) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 62537) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 50507) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 3831) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 4642) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 50155) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 50555) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 37818) {

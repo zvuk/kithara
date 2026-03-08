@@ -74,6 +74,8 @@ pub struct PlayerImpl {
     items: Mutex<Vec<Option<Resource>>>,
     muted: AtomicBool,
     pcm_pool: PcmPool,
+    /// Shared playback rate propagated to the audio pipeline resampler.
+    playback_rate_shared: Arc<AtomicF32>,
     rate: AtomicF32,
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
@@ -107,6 +109,7 @@ impl PlayerImpl {
             items: Mutex::new(Vec::new()),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
+            playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
             rate: AtomicF32::new(0.0), // starts paused
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
@@ -171,8 +174,9 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate();
+        let rate = self.default_rate().max(0.01);
         self.rate.store(rate, Ordering::Relaxed);
+        self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
         // Start engine and allocate slot if needed.
         if let Err(e) = self.ensure_engine_started() {
@@ -187,9 +191,11 @@ impl PlayerImpl {
         // Load current resource into slot and start playback.
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         self.load_current_item();
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.set_status(PlayerStatus::ReadyToPlay);
+        let _ = self.events_tx.send(PlayerEvent::CurrentItemChanged);
         let _ = self.events_tx.send(PlayerEvent::RateChanged { rate });
         debug!(rate, "play");
     }
@@ -208,9 +214,22 @@ impl PlayerImpl {
     }
 
     /// Set playback rate.
+    ///
+    /// Updates the local rate and propagates to the audio pipeline resampler
+    /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        self.rate.store(rate, Ordering::Relaxed);
-        let _ = self.events_tx.send(PlayerEvent::RateChanged { rate });
+        let clamped = rate.max(0.01);
+        self.rate.store(clamped, Ordering::Relaxed);
+        self.playback_rate_shared.store(clamped, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
+        let _ = self
+            .events_tx
+            .send(PlayerEvent::RateChanged { rate: clamped });
+    }
+
+    /// Get shared playback rate atomic for the audio pipeline.
+    pub fn playback_rate_shared(&self) -> &Arc<AtomicF32> {
+        &self.playback_rate_shared
     }
 
     /// Default playback rate used by `play()` and `select_item()`.
@@ -229,10 +248,14 @@ impl PlayerImpl {
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
+    ///
+    /// Applies to this player's slot only (per-instance volume).
     pub fn set_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         self.volume.store(clamped, Ordering::Relaxed);
-        self.engine.set_master_volume(clamped);
+        if !self.is_muted() {
+            self.apply_effective_volume(clamped);
+        }
         let _ = self
             .events_tx
             .send(PlayerEvent::VolumeChanged { volume: clamped });
@@ -254,8 +277,12 @@ impl PlayerImpl {
     }
 
     /// Set muted state.
+    ///
+    /// Applies to this player's slot only (per-instance mute).
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
+        let effective = if muted { 0.0 } else { self.volume() };
+        self.apply_effective_volume(effective);
         let _ = self.events_tx.send(PlayerEvent::MuteChanged { muted });
     }
 
@@ -505,8 +532,21 @@ impl PlayerImpl {
         let id = self.engine.allocate_slot()?;
         *slot = Some(id);
         drop(slot);
-        self.engine.set_slot_volume(id, 1.0)?;
+        let effective = if self.is_muted() { 0.0 } else { self.volume() };
+        self.engine.set_slot_volume(id, effective)?;
         Ok(id)
+    }
+
+    /// Apply effective volume to the current slot (per-instance).
+    fn apply_effective_volume(&self, volume: f32) {
+        if let Some(slot_id) = *self.current_slot.lock_sync() {
+            debug!(volume, ?slot_id, "applying effective volume to slot");
+            if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
+                warn!(?e, volume, "failed to set slot volume");
+            }
+        } else {
+            debug!(volume, "apply_effective_volume: no slot allocated yet");
+        }
     }
 
     /// Send a command to the current slot's processor.
@@ -540,6 +580,10 @@ impl PlayerImpl {
         let Some(resource) = items[index].take() else {
             return; // Already loaded
         };
+
+        // Propagate current playback rate to the resource's audio pipeline.
+        let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
+        resource.set_playback_rate(current_rate);
 
         let src = Arc::clone(resource.src());
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
@@ -645,10 +689,8 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_volume(2.0);
         assert!((player.volume() - 1.0).abs() < f32::EPSILON);
-        assert!((player.engine().master_volume() - 1.0).abs() < f32::EPSILON);
         player.set_volume(-1.0);
         assert!((player.volume() - 0.0).abs() < f32::EPSILON);
-        assert!((player.engine().master_volume() - 0.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -862,5 +904,24 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_crossfade_duration(-5.0);
         assert!((player.crossfade_duration() - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn set_rate_updates_shared_atomic() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player.set_rate(2.0);
+        let shared = player.playback_rate_shared();
+        assert!((shared.load(Ordering::Relaxed) - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn set_rate_clamps_invalid_values() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player.set_rate(0.0);
+        assert!(player.rate() >= 0.01);
+        assert!(player.playback_rate_shared().load(Ordering::Relaxed) >= 0.01);
+
+        player.set_rate(-1.0);
+        assert!(player.rate() >= 0.01);
     }
 }

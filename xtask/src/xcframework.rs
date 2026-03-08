@@ -27,8 +27,8 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 
 pub(crate) fn run(profile: crate::BuildProfile) -> Result<()> {
     // 1. Check cargo-swift is installed.
-    match Command::new("cargo-swift")
-        .arg("--version")
+    match Command::new("cargo")
+        .args(["swift", "--help"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()

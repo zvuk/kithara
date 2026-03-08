@@ -64,6 +64,8 @@ pub(crate) enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the crossfade curve.
     SetCrossfadeCurve(CrossfadeCurve),
+    /// Update the playback rate for all active tracks.
+    SetPlaybackRate(f32),
 }
 
 /// The realtime audio processor for the player node.
@@ -134,6 +136,13 @@ impl PlayerNodeProcessor {
                     let fade_curve = self.crossfade.fade_curve();
                     for (_, track) in &mut self.tracks {
                         track.set_fade_curve(fade_curve);
+                    }
+                }
+                PlayerCmd::SetPlaybackRate(rate) => {
+                    for (_, track) in &self.tracks {
+                        if let Ok(resource) = track.resource().try_lock() {
+                            resource.set_playback_rate(rate);
+                        }
                     }
                 }
             }
@@ -588,6 +597,13 @@ mod tests {
             seek_epoch: 1,
         })
         .ok();
+        processor.drain_commands();
+    }
+
+    #[kithara::test]
+    fn processor_set_playback_rate_without_tracks_does_not_panic() {
+        let (mut processor, mut tx) = make_processor();
+        tx.try_push(PlayerCmd::SetPlaybackRate(2.0)).ok();
         processor.drain_commands();
     }
 

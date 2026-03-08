@@ -15,6 +15,7 @@ use derive_setters::Setters;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use portable_atomic::AtomicF32;
 use rubato::{
     Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
     SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -150,6 +151,11 @@ pub struct ResamplerParams {
     pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
+    /// Shared atomic for dynamic playback rate (1.0 = normal speed).
+    ///
+    /// Affects the resampling ratio: `ratio = host_rate / (source_rate × playback_rate)`.
+    /// At rate=2.0, audio plays at double speed with pitch shift (vinyl effect).
+    pub playback_rate: Arc<AtomicF32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
@@ -165,6 +171,7 @@ impl ResamplerParams {
             channels,
             chunk_size: 4096,
             host_sample_rate,
+            playback_rate: Arc::new(AtomicF32::new(1.0)),
             pool: None,
             quality: ResamplerQuality::default(),
             source_sample_rate,
@@ -174,16 +181,21 @@ impl ResamplerParams {
 
 /// Audio resampler that converts between source and host sample rates.
 ///
-/// Monitors `host_sample_rate` (an `Arc<AtomicU32>`) for dynamic changes.
-/// When `host_sample_rate == 0` or equals `source_rate`, operates in passthrough mode.
+/// Monitors `host_sample_rate` (an `Arc<AtomicU32>`) and `playback_rate`
+/// (an `Arc<AtomicF32>`) for dynamic changes.
+/// When `host_sample_rate == 0` or equals `source_rate` and `playback_rate == 1.0`,
+/// operates in passthrough mode.
 pub struct ResamplerProcessor {
     channels: usize,
     chunk_size: usize,
+    current_playback_rate: f64,
     current_ratio: f64,
     host_sample_rate: Arc<AtomicU32>,
     /// Accumulated input buffer (planar format).
     input_buffer: SmallVec<[Vec<f32>; 8]>,
     output_spec: PcmSpec,
+    /// Shared atomic for dynamic playback rate tracking.
+    playback_rate: Arc<AtomicF32>,
     /// Pool for interleave output buffers.
     pool: PcmPool,
     quality: ResamplerQuality,
@@ -212,13 +224,17 @@ impl ResamplerProcessor {
             sample_rate: target_rate,
         };
 
+        let initial_playback_rate = f64::from(params.playback_rate.load(Ordering::Relaxed));
+
         let mut processor = Self {
             channels,
             chunk_size: params.chunk_size,
+            current_playback_rate: initial_playback_rate,
             current_ratio: 1.0,
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
+            playback_rate: params.playback_rate,
             pool: params.pool.unwrap_or_else(|| pcm_pool().clone()),
             quality: params.quality,
             resampler: None,
@@ -324,8 +340,8 @@ impl ResamplerProcessor {
         self.resampler.is_none()
     }
 
-    fn should_passthrough(source_rate: u32, target_rate: u32) -> bool {
-        source_rate == target_rate || target_rate == 0
+    fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
+        (source_rate == target_rate || target_rate == 0) && (playback_rate - 1.0).abs() < 0.0001
     }
 
     fn create_resampler(
@@ -340,7 +356,7 @@ impl ResamplerProcessor {
             ResamplerQuality::Fast => {
                 let poly = Async::new_poly(
                     ratio,
-                    2.0,
+                    8.0,
                     PolynomialDegree::Cubic,
                     chunk_size,
                     channels,
@@ -351,7 +367,7 @@ impl ResamplerProcessor {
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
                     ratio,
-                    2.0,
+                    8.0,
                     &quality.sinc_params(),
                     chunk_size,
                     channels,
@@ -376,22 +392,26 @@ impl ResamplerProcessor {
     fn update_resampler_if_needed(&mut self) {
         let target_rate = self.target_rate();
         self.output_spec.sample_rate = target_rate;
-        let should_pt = Self::should_passthrough(self.source_rate, target_rate);
+        let new_playback_rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(0.01);
+        let should_pt = Self::should_passthrough(self.source_rate, target_rate, new_playback_rate);
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
         let ratio_changed = (new_ratio - self.current_ratio).abs() > 0.0001;
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);
+            self.current_playback_rate = new_playback_rate;
             return;
         }
 
         if self.try_update_ratio(target_rate, new_ratio, currently_pt, ratio_changed) {
+            self.current_playback_rate = new_playback_rate;
             return;
         }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
             self.recreate_resampler(target_rate, new_ratio);
+            self.current_playback_rate = new_playback_rate;
         }
     }
 
@@ -405,10 +425,11 @@ impl ResamplerProcessor {
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(0.01);
         if self.source_rate > 0 {
-            f64::from(target_rate) / f64::from(self.source_rate)
+            f64::from(target_rate) / (f64::from(self.source_rate) * rate)
         } else {
-            1.0
+            1.0 / rate
         }
     }
 
@@ -440,6 +461,9 @@ impl ResamplerProcessor {
             return false;
         };
 
+        // rubato 1.0.1 panics with ramp=true on both sinc (neon) and poly
+        // backends. Use instant transition; chunk boundary (~93ms) provides
+        // sufficient smoothness for playback rate changes.
         match resampler.set_resample_ratio(new_ratio, false) {
             Ok(()) => {
                 debug!(
@@ -771,6 +795,15 @@ mod tests {
         ResamplerParams::new(host_sr, source_rate, channels)
     }
 
+    fn params_with_rate(
+        host_sr: Arc<AtomicU32>,
+        source_rate: u32,
+        channels: usize,
+        rate: Arc<AtomicF32>,
+    ) -> ResamplerParams {
+        ResamplerParams::new(host_sr, source_rate, channels).with_playback_rate(rate)
+    }
+
     fn params_with_quality(
         host_sr: Arc<AtomicU32>,
         source_rate: u32,
@@ -954,6 +987,81 @@ mod tests {
         // Test reset
         AudioEffect::reset(&mut processor);
         assert!(processor.input_buffer[0].is_empty());
+    }
+
+    // Playback rate tests
+
+    #[kithara::test]
+    fn test_playback_rate_2x_halves_output() {
+        let rate = Arc::new(AtomicF32::new(2.0));
+        let mut processor =
+            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
+        assert!(!processor.is_passthrough()); // rate!=1.0 → active
+        let chunk = test_chunk(
+            PcmSpec {
+                channels: 2,
+                sample_rate: 44100,
+            },
+            vec![0.1; 16384],
+        );
+        let result = processor.process(chunk);
+        assert!(result.is_some());
+        let output_frames = result.unwrap().frames();
+        // 2x speed → ~half output frames (input: 8192 frames → ~4096 output)
+        assert!(output_frames < 5000, "Expected ~4096, got {output_frames}");
+    }
+
+    #[kithara::test]
+    fn test_playback_rate_half_doubles_output() {
+        let rate = Arc::new(AtomicF32::new(0.5));
+        let mut processor =
+            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
+        assert!(!processor.is_passthrough());
+        let chunk = test_chunk(
+            PcmSpec {
+                channels: 2,
+                sample_rate: 44100,
+            },
+            vec![0.1; 16384],
+        );
+        let result = processor.process(chunk);
+        assert!(result.is_some());
+        let output_frames = result.unwrap().frames();
+        // 0.5x speed → ~double output frames (input: 8192 frames → ~16384 output)
+        assert!(
+            output_frames > 12000,
+            "Expected ~16384, got {output_frames}"
+        );
+    }
+
+    #[kithara::test]
+    fn test_playback_rate_1x_same_rate_passthrough() {
+        let rate = Arc::new(AtomicF32::new(1.0));
+        let processor =
+            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
+        assert!(processor.is_passthrough()); // rate=1.0 + source==host → passthrough
+    }
+
+    #[kithara::test]
+    fn test_playback_rate_dynamic_change() {
+        let rate = Arc::new(AtomicF32::new(1.0));
+        let mut processor = ResamplerProcessor::new(params_with_rate(
+            make_host_rate(44100),
+            44100,
+            2,
+            Arc::clone(&rate),
+        ));
+        assert!(processor.is_passthrough());
+        rate.store(2.0, Ordering::Relaxed);
+        let chunk = test_chunk(
+            PcmSpec {
+                channels: 2,
+                sample_rate: 44100,
+            },
+            vec![0.1; 16384],
+        );
+        let _ = processor.process(chunk);
+        assert!(!processor.is_passthrough()); // should activate
     }
 
     // Quality-specific tests
