@@ -363,7 +363,7 @@ fn run_shared_worker_loop(
 /// Drain global commands from the channel. Returns `true` if the loop should exit.
 #[expect(
     clippy::cognitive_complexity,
-    reason = "flat match structure, not deeply nested"
+    reason = "36/35 — flat match on WorkerCmd variants"
 )]
 fn drain_worker_commands(
     cmd_rx: &mpsc::Receiver<WorkerCmd>,

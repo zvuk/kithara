@@ -392,6 +392,11 @@ impl<S> Audio<S> {
             notify();
         }
 
+        // 5. Wake the shared worker for instant seek response
+        if let Some(ref worker) = self.worker {
+            worker.wake();
+        }
+
         // Reset preload flag — first read after seek will be blocking if needed
         self.preloaded = false;
 
