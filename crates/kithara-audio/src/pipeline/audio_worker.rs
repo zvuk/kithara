@@ -361,6 +361,10 @@ fn run_shared_worker_loop(
 }
 
 /// Drain global commands from the channel. Returns `true` if the loop should exit.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "flat match structure, not deeply nested"
+)]
 fn drain_worker_commands(
     cmd_rx: &mpsc::Receiver<WorkerCmd>,
     tracks: &mut Vec<TrackSlot>,
@@ -394,13 +398,15 @@ fn drain_worker_commands(
                 }
                 return true;
             }
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => {
-                trace!("shared worker: all handles dropped");
-                for slot in tracks.iter_mut() {
-                    slot.complete_preload();
+            Err(err) => {
+                if matches!(err, TryRecvError::Disconnected) {
+                    trace!("shared worker: all handles dropped");
+                    for slot in tracks.iter_mut() {
+                        slot.complete_preload();
+                    }
+                    return true;
                 }
-                return true;
+                break;
             }
         }
     }
