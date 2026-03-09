@@ -97,6 +97,8 @@ async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), 
     if config.store.cache_capacity.is_none() {
         config.store.cache_capacity = NonZeroUsize::new(64);
     }
+    // Share the engine's audio worker so all tracks decode on the same thread.
+    config = config.with_worker(player.worker().clone());
 
     let mut resource = Resource::new(config)
         .await

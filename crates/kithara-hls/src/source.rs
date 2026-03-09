@@ -622,6 +622,14 @@ impl Source for HlsSource {
         Ok(Some(anchor))
     }
 
+    fn is_range_ready(&self, range: Range<u64>) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+        let segments = self.shared.segments.lock_sync();
+        self.range_ready_from_segments(&segments, &range)
+    }
+
     fn timeline(&self) -> Timeline {
         self.shared.timeline.clone()
     }

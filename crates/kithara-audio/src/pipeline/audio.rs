@@ -15,7 +15,7 @@ use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 use kithara_platform::{
-    JoinHandle, tokio,
+    tokio,
     tokio::sync::{Notify, broadcast},
 };
 use kithara_stream::{
@@ -30,9 +30,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 use super::{
+    audio_worker::{AudioWorkerHandle, TrackRegistration},
     config::{AudioConfig, create_effects, expected_output_spec},
     source::{OffsetReader, SharedStream, StreamAudioSource},
-    worker::{AudioCommand, run_audio_loop},
+    worker::AudioCommand,
+    worker_types::{ServiceClass, TrackId},
 };
 use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
@@ -154,8 +156,15 @@ pub struct Audio<S> {
     /// Called from `seek()` after `initiate_seek()` for instant wakeup.
     notify_waiting: Option<Box<dyn Fn() + Send + Sync>>,
 
-    /// Worker thread handle (joined on drop after cancellation).
-    _worker: Option<JoinHandle<()>>,
+    /// Assigned track ID in the shared worker (used for unregister on drop).
+    track_id: Option<TrackId>,
+
+    /// Worker handle for unregistration and optional shutdown.
+    worker: Option<AudioWorkerHandle>,
+
+    /// Whether the worker was auto-created for this track (standalone mode).
+    /// Standalone workers are shut down when the track is dropped.
+    is_standalone_worker: bool,
 
     /// Marker for source type.
     _marker: PhantomData<S>,
@@ -383,6 +392,11 @@ impl<S> Audio<S> {
             notify();
         }
 
+        // 5. Wake the shared worker for instant seek response
+        if let Some(ref worker) = self.worker {
+            worker.wake();
+        }
+
         // Reset preload flag — first read after seek will be blocking if needed
         self.preloaded = false;
 
@@ -394,6 +408,13 @@ impl<S> Audio<S> {
     ///
     /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     /// Returns `None` on EOF or channel close.
+    /// Wake the shared worker so it can fill the freed ringbuf slot.
+    fn wake_worker(&self) {
+        if let Some(ref worker) = self.worker {
+            worker.wake();
+        }
+    }
+
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.eof {
             return None;
@@ -413,14 +434,15 @@ impl<S> Audio<S> {
 
     fn recv_outcome(&mut self) -> RecvOutcome {
         if self.use_nonblocking_recv() {
-            return self
-                .pcm_rx
-                .try_pop()
-                .map_or(RecvOutcome::Empty, RecvOutcome::Item);
+            return self.pcm_rx.try_pop().map_or(RecvOutcome::Empty, |fetch| {
+                self.wake_worker();
+                RecvOutcome::Item(fetch)
+            });
         }
 
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
+                self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
             if self
@@ -630,24 +652,25 @@ where
         })
     }
 
-    fn spawn_worker(
+    fn register_with_worker(
         audio_source: StreamAudioSource<T>,
         cmd_rx: HeapCons<AudioCommand>,
         data_tx: HeapProd<Fetch<PcmChunk>>,
         preload_notify: Arc<Notify>,
         preload_chunks: usize,
-        worker_cancel: CancellationToken,
-    ) -> JoinHandle<()> {
-        kithara_platform::spawn(move || {
-            run_audio_loop(
-                audio_source,
-                cmd_rx,
-                data_tx,
-                &preload_notify,
-                preload_chunks,
-                &worker_cancel,
-            );
-        })
+        cancel: CancellationToken,
+        worker: &AudioWorkerHandle,
+    ) -> TrackId {
+        let reg = TrackRegistration {
+            source: Box::new(audio_source),
+            data_tx,
+            cmd_rx,
+            preload_notify,
+            preload_chunks,
+            service_class: ServiceClass::default(),
+            cancel,
+        };
+        worker.register_track(reg)
     }
 
     /// Create audio pipeline from `AudioConfig`.
@@ -685,6 +708,7 @@ where
             stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
+            worker: config_worker,
         } = config;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
@@ -763,13 +787,19 @@ where
         .with_emit(emit);
 
         let preload_notify = Arc::new(Notify::new());
-        let worker = Self::spawn_worker(
+
+        // Get or create worker — standalone mode when no worker provided.
+        let (worker, is_standalone) =
+            config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
+
+        let track_id = Self::register_with_worker(
             audio_source,
             cmd_rx,
             data_tx,
             preload_notify.clone(),
             preload_chunks.get(),
             cancel.clone(),
+            &worker,
         );
 
         Ok(Self {
@@ -792,7 +822,9 @@ where
             preload_notify,
             preloaded: false,
             notify_waiting,
-            _worker: Some(worker),
+            track_id: Some(track_id),
+            worker: Some(worker),
+            is_standalone_worker: is_standalone,
             _marker: PhantomData,
         })
     }
@@ -819,9 +851,14 @@ impl<S> Drop for Audio<S> {
         if let Some(ref cancel) = self.cancel {
             cancel.cancel();
         }
-        // Channels will be dropped automatically, signaling worker to exit.
-        // The worker task on the thread pool will terminate when it detects
-        // closed channels or the cancellation token fires.
+
+        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id.take()) {
+            worker.unregister_track(track_id);
+
+            if self.is_standalone_worker {
+                worker.shutdown();
+            }
+        }
     }
 }
 
@@ -888,6 +925,12 @@ impl<S: Send> PcmReader for Audio<S> {
 
     fn set_playback_rate(&self, rate: f32) {
         self.playback_rate.store(rate, Ordering::Relaxed);
+    }
+
+    fn set_service_class(&self, class: ServiceClass) {
+        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id) {
+            worker.set_service_class(track_id, class);
+        }
     }
 
     fn preload_notify(&self) -> Option<Arc<Notify>> {

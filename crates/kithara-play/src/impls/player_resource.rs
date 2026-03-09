@@ -7,6 +7,7 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
 
+use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
@@ -198,6 +199,11 @@ impl PlayerResource {
     /// Set the playback rate for pitch-shifted speed control.
     pub(crate) fn set_playback_rate(&self, rate: f32) {
         self.resource.set_playback_rate(rate);
+    }
+
+    /// Update the scheduling priority hint for the shared worker.
+    pub(crate) fn set_service_class(&self, class: ServiceClass) {
+        self.resource.set_service_class(class);
     }
 }
 

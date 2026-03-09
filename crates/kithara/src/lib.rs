@@ -120,8 +120,8 @@ pub mod prelude {
     pub use kithara_hls::{Hls, HlsConfig};
     // Play
     pub use kithara_play::{
-        EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
-        SourceType,
+        AudioWorkerHandle, EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource,
+        ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     // Stream
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};

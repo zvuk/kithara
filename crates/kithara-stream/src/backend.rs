@@ -88,19 +88,21 @@ impl Backend {
         };
 
         #[cfg(target_arch = "wasm32")]
-        let worker = {
-            // Run downloader in a Web Worker to avoid blocking the main thread.
-            // thread::spawn creates a Worker; spawn_task queues the async task
-            // on the worker's JS event loop.
-            // task_begin/task_finished keep the Worker alive while async work runs.
-            kithara_platform::thread::spawn(move || {
-                tokio::task::spawn(Self::run_downloader(downloader, task_cancel));
-            })
+        let _worker = {
+            // On WASM, spawn the downloader as an async task on the current
+            // Worker's tokio runtime instead of creating a dedicated Web Worker.
+            // The engine command worker already has a tokio runtime; downloads
+            // (fetch API) are fully async and non-blocking.
+            tokio::task::spawn(Self::run_downloader(downloader, task_cancel));
+            None
         };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let _worker = Some(worker);
 
         Self {
             cancel: child_cancel,
-            _worker: Some(worker),
+            _worker,
         }
     }
 

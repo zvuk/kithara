@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
-use kithara_audio::{Audio, AudioConfig, PcmReader};
+use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
 use kithara_platform::{tokio, tokio::sync::broadcast};
@@ -233,6 +233,11 @@ impl Resource {
     /// Rate > 1.0 speeds up playback, rate < 1.0 slows it down.
     pub fn set_playback_rate(&self, rate: f32) {
         self.inner.set_playback_rate(rate);
+    }
+
+    /// Update the scheduling priority hint for the shared worker.
+    pub fn set_service_class(&self, class: ServiceClass) {
+        self.inner.set_service_class(class);
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.

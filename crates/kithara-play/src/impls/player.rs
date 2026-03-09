@@ -11,6 +11,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
+use kithara_audio::AudioWorkerHandle;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
@@ -63,7 +64,6 @@ pub struct PlayerConfig {
 /// [`PlayerResource`], and sent to the processor via `PlayerCmd::LoadTrack`.
 pub struct PlayerImpl {
     config: PlayerConfig,
-    engine: EngineImpl,
 
     action_at_item_end: Mutex<ActionAtItemEnd>,
     crossfade_duration: AtomicF32,
@@ -71,6 +71,8 @@ pub struct PlayerImpl {
     current_slot: Mutex<Option<SlotId>>,
     default_rate: AtomicF32,
     events_tx: broadcast::Sender<PlayerEvent>,
+    /// Items drop before engine — Audio tracks unregister from worker
+    /// while it is still alive.
     items: Mutex<Vec<Option<Resource>>>,
     muted: AtomicBool,
     pcm_pool: PcmPool,
@@ -79,6 +81,9 @@ pub struct PlayerImpl {
     rate: AtomicF32,
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
+
+    /// Engine drops last — worker shutdown happens after all tracks unregister.
+    engine: EngineImpl,
 }
 
 impl PlayerImpl {
@@ -116,6 +121,15 @@ impl PlayerImpl {
             engine,
             config,
         }
+    }
+
+    /// Shared audio worker handle for this player's engine.
+    ///
+    /// Clone and pass to [`ResourceConfig::with_worker`] so resources
+    /// loaded into this player share a single decode thread.
+    #[must_use]
+    pub fn worker(&self) -> &AudioWorkerHandle {
+        self.engine.worker()
     }
 
     /// Get the number of items in the queue (including consumed items).
@@ -923,5 +937,13 @@ mod tests {
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);
+    }
+
+    #[kithara::test]
+    fn player_exposes_worker() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        let _w = player.worker();
+        // Worker should be accessible and clonable.
+        let _w2 = player.worker().clone();
     }
 }
