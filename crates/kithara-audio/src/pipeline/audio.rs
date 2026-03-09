@@ -408,6 +408,13 @@ impl<S> Audio<S> {
     ///
     /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     /// Returns `None` on EOF or channel close.
+    /// Wake the shared worker so it can fill the freed ringbuf slot.
+    fn wake_worker(&self) {
+        if let Some(ref worker) = self.worker {
+            worker.wake();
+        }
+    }
+
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.eof {
             return None;
@@ -427,14 +434,15 @@ impl<S> Audio<S> {
 
     fn recv_outcome(&mut self) -> RecvOutcome {
         if self.use_nonblocking_recv() {
-            return self
-                .pcm_rx
-                .try_pop()
-                .map_or(RecvOutcome::Empty, RecvOutcome::Item);
+            return self.pcm_rx.try_pop().map_or(RecvOutcome::Empty, |fetch| {
+                self.wake_worker();
+                RecvOutcome::Item(fetch)
+            });
         }
 
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
+                self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
             if self
