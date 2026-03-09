@@ -5,6 +5,7 @@ mod config;
 pub(crate) mod source;
 pub(crate) mod worker;
 pub(crate) mod worker_types;
+pub(crate) mod worker_wake;
 
 pub use audio::Audio;
 pub use config::AudioConfig;
