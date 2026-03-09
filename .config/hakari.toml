@@ -1,0 +1,30 @@
+# This file contains settings for `cargo hakari`.
+# See https://docs.rs/cargo-hakari/latest/cargo_hakari/config for a full list of options.
+
+hakari-package = "kithara-workspace-hack"
+
+# Format version 2: includes version field in dependency lines,
+# required for publishing to crates.io.
+dep-format-version = "2"
+
+# Workspace resolver v2 (edition 2021+).
+resolver = "2"
+
+# Target platforms for feature unification.
+platforms = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+# Exclude test-only and non-publishable crates from traversal.
+[traversal-excludes]
+workspace-members = [
+    "kithara-integration-tests",
+    "kithara-examples",
+    "kithara-ffi",
+    "kithara-wasm",
+    "kithara-app",
+    "kithara-ui",
+    "kithara-tui",
+]

@@ -27,6 +27,7 @@ url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { workspace = true, features = ["rustls", "stream"] }

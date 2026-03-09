@@ -25,6 +25,7 @@ members = [
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
+    "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
     "examples",
@@ -155,6 +156,7 @@ kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-tui = { path = "crates/kithara-tui" }
 kithara-ui = { path = "crates/kithara-ui" }
 kithara-app = { path = "crates/kithara-app" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }

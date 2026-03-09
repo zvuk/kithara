@@ -46,6 +46,7 @@ rodio = { workspace = true, optional = true }
 
 # Testing
 unimock = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy_platform = { workspace = true }

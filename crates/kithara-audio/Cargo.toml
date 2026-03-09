@@ -32,6 +32,7 @@ portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = []

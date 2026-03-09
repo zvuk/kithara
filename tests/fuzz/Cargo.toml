@@ -12,6 +12,7 @@ libfuzzer-sys = { workspace = true }
 arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
 hls_m3u8 = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../../crates/kithara-workspace-hack" }
 
 [[bin]]
 name = "aes_decrypt"
