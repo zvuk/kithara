@@ -28,10 +28,10 @@ pub(crate) enum ServiceClass {
     #[default]
     Idle,
     /// Preloading or about to play. Medium priority.
-    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
+    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     Warm,
     /// Currently audible. Highest priority.
-    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
+    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     Audible,
 }
 

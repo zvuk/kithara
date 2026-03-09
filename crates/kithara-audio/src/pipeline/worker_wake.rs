@@ -60,7 +60,7 @@ impl WorkerWake {
     }
 
     /// Non-blocking check: returns `true` if woken, clears the flag.
-    #[expect(dead_code, reason = "public API for scheduler, used in Step 4")]
+    #[expect(dead_code, reason = "reserved for advanced scheduler strategies")]
     pub(crate) fn try_consume(&self) -> bool {
         let mut guard = self.woken.lock_sync();
         let was_woken = *guard;

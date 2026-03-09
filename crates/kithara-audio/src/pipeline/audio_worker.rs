@@ -112,7 +112,7 @@ impl AudioWorkerHandle {
     }
 
     /// Update scheduling priority for a track.
-    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
+    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         let _ = self
             .cmd_tx
