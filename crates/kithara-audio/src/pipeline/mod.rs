@@ -4,6 +4,7 @@ pub(crate) mod audio;
 mod config;
 pub(crate) mod source;
 pub(crate) mod worker;
+pub(crate) mod worker_types;
 
 pub use audio::Audio;
 pub use config::AudioConfig;
