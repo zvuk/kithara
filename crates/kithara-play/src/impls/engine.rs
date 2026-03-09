@@ -12,7 +12,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara_audio::AudioWorkerHandle;
+use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
@@ -40,9 +40,9 @@ pub struct EngineConfig {
     /// Number of output channels. Default: 2 (stereo).
     #[derivative(Default(value = "2"))]
     pub channels: u16,
-    /// Number of EQ bands per player. Default: 10.
-    #[derivative(Default(value = "10"))]
-    pub eq_bands: usize,
+    /// EQ band layout per player. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
     /// Maximum number of concurrent player slots. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
@@ -157,7 +157,7 @@ impl EngineImpl {
 
         let id = self
             .session
-            .register_player(self.config.eq_bands, self.pcm_pool.clone())?;
+            .register_player(self.config.eq_layout.clone(), self.pcm_pool.clone())?;
         *player_id = Some(id);
         drop(player_id);
         Ok(id)

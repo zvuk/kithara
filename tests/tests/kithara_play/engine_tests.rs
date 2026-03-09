@@ -31,7 +31,7 @@ enum NotRunningErrorScenario {
 fn engine_config_defaults() {
     let config = EngineConfig::default();
     assert_eq!(config.channels, 2);
-    assert_eq!(config.eq_bands, 10);
+    assert_eq!(config.eq_layout.len(), 10);
     assert_eq!(config.max_slots, 4);
     assert_eq!(config.sample_rate, 44100);
 }
@@ -42,11 +42,11 @@ fn engine_config_builder() {
         .with_max_slots(8)
         .with_sample_rate(48000)
         .with_channels(1)
-        .with_eq_bands(5);
+        .with_eq_layout(kithara_audio::generate_log_spaced_bands(5));
     assert_eq!(config.max_slots, 8);
     assert_eq!(config.sample_rate, 48000);
     assert_eq!(config.channels, 1);
-    assert_eq!(config.eq_bands, 5);
+    assert_eq!(config.eq_layout.len(), 5);
 }
 
 #[kithara::test]

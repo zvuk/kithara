@@ -5,7 +5,7 @@ use crate::error::PlayError;
 /// Master N-band equalizer.
 ///
 /// Provides read/write access to per-band gains by index. The number of bands
-/// is fixed at player construction time via [`PlayerConfig::eq_bands`].
+/// is fixed at player construction time via [`PlayerConfig::eq_layout`].
 #[cfg_attr(
     any(test, feature = "test-utils"),
     unimock::unimock(api = EqualizerMock)

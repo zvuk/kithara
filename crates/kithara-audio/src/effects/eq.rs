@@ -110,7 +110,8 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 }
 
 /// Compute biquad coefficients for a band with the given gain.
-fn compute_coefficients(
+#[must_use]
+pub fn compute_coefficients(
     band: &EqBandConfig,
     gain_db: f32,
     sample_rate: biquad::Hertz<f32>,
