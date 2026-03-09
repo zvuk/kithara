@@ -28,8 +28,10 @@ pub(crate) enum ServiceClass {
     #[default]
     Idle,
     /// Preloading or about to play. Medium priority.
+    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
     Warm,
     /// Currently audible. Highest priority.
+    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
     Audible,
 }
 

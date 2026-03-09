@@ -61,7 +61,7 @@ pub(crate) struct TrackRegistration {
 /// Multiple [`Audio`](crate::Audio) handles can share one worker by cloning
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 #[derive(Clone)]
-pub(crate) struct AudioWorkerHandle {
+pub struct AudioWorkerHandle {
     cmd_tx: mpsc::Sender<WorkerCmd>,
     wake: Arc<WorkerWake>,
     id_gen: Arc<TrackIdGen>,
@@ -70,7 +70,8 @@ pub(crate) struct AudioWorkerHandle {
 
 impl AudioWorkerHandle {
     /// Spawn a new shared worker thread and return a handle.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Arc::new(WorkerWake::new());
         let cancel = CancellationToken::new();
@@ -105,6 +106,7 @@ impl AudioWorkerHandle {
     }
 
     /// Update scheduling priority for a track.
+    #[expect(dead_code, reason = "used in Step 4 when kithara-play sets priorities")]
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         let _ = self
             .cmd_tx
@@ -113,15 +115,21 @@ impl AudioWorkerHandle {
     }
 
     /// Wake the worker (e.g. when new data arrives from downloader).
-    pub(crate) fn wake(&self) {
+    pub fn wake(&self) {
         self.wake.wake();
     }
 
     /// Request graceful shutdown and cancel the worker.
-    pub(crate) fn shutdown(&self) {
+    pub fn shutdown(&self) {
         let _ = self.cmd_tx.send_sync(WorkerCmd::Shutdown);
         self.cancel.cancel();
         self.wake.wake();
+    }
+}
+
+impl Default for AudioWorkerHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -192,8 +200,9 @@ impl TrackSlot {
             }
             TrackPhase::PendingReset => {
                 if self.source.is_ready() {
-                    self.source.apply_pending_seek();
-                    self.phase = TrackPhase::Decoding;
+                    if self.source.apply_pending_seek() {
+                        self.phase = TrackPhase::Decoding;
+                    }
                     return StepResult::Progress;
                 }
                 return StepResult::NoProgress;
