@@ -24,7 +24,4 @@ workspace-members = [
     "kithara-examples",
     "kithara-ffi",
     "kithara-wasm",
-    "kithara-app",
-    "kithara-ui",
-    "kithara-tui",
 ]

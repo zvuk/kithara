@@ -20,8 +20,6 @@ members = [
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-tui",
-    "crates/kithara-ui",
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
@@ -51,7 +49,6 @@ default-members = [
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-tui",
     "tests",
     "examples",
 ]
@@ -153,8 +150,6 @@ kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
-kithara-tui = { path = "crates/kithara-tui" }
-kithara-ui = { path = "crates/kithara-ui" }
 kithara-app = { path = "crates/kithara-app" }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }

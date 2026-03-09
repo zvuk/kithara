@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Clear, Paragraph, Widget},
 };
 
-use crate::Dashboard;
+use super::dashboard::Dashboard;
 
 const CURSOR_GUARD_LINES: u16 = 2;
 

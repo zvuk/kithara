@@ -3,10 +3,12 @@ use std::time::Duration;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Clear, Paragraph},
 };
+
+use crate::theme::tui::TuiPalette;
 
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
@@ -16,6 +18,7 @@ const NOTE_MAX_CHARS: usize = 26;
 /// Renders playlist, progress bar, volume, and status information
 /// using ratatui inline viewport.
 pub struct Dashboard {
+    colors: TuiPalette,
     crossfade_progress: Option<f32>,
     current_index: usize,
     item_count: usize,
@@ -29,8 +32,9 @@ pub struct Dashboard {
 
 impl Dashboard {
     #[must_use]
-    pub fn new(tracks: Vec<String>) -> Self {
+    pub fn new(tracks: Vec<String>, palette: TuiPalette) -> Self {
         Self {
+            colors: palette,
             crossfade_progress: None,
             current_index: 0,
             item_count: 0,
@@ -93,18 +97,16 @@ impl Dashboard {
     }
 
     fn render_playlist(&self, frame: &mut Frame, area: Rect) {
-        let bg = Color::Rgb(20, 24, 30);
-        let active_bg = Color::Rgb(40, 44, 55);
-
+        let c = &self.colors;
         for (i, track) in self.tracks.iter().enumerate() {
             let is_active = i == self.current_index;
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
             let text = format!(" {marker} {number}  {track}");
             let style = if is_active {
-                Style::default().fg(Color::White).bg(active_bg)
+                Style::default().fg(c.accent).bg(c.bg_panel)
             } else {
-                Style::default().fg(Color::DarkGray).bg(bg)
+                Style::default().fg(c.muted).bg(c.bg)
             };
             #[expect(clippy::cast_possible_truncation)]
             let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
@@ -114,6 +116,7 @@ impl Dashboard {
     }
 
     fn render_bar(&self, frame: &mut Frame, area: Rect) {
+        let c = &self.colors;
         let chunks = Layout::horizontal([
             Constraint::Percentage(25),
             Constraint::Percentage(25),
@@ -156,7 +159,7 @@ impl Dashboard {
             clamp_text(self.last_note.as_deref().unwrap_or("-"), NOTE_MAX_CHARS),
         ];
 
-        let style = Style::default().fg(Color::White).bg(Color::Rgb(20, 24, 30));
+        let style = Style::default().fg(c.text).bg(c.bg);
         for (index, chunk) in chunks.iter().enumerate() {
             let text = fit_cell(&segments[index], usize::from(chunk.width));
             let widget = Paragraph::new(Line::raw(text)).style(style);

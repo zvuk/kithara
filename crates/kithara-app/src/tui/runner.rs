@@ -1,52 +1,98 @@
 use std::{
-    sync::{
-        Arc,
-        mpsc::{self, TryRecvError},
-    },
+    sync::mpsc::{self, TryRecvError},
     time::Duration,
 };
 
-use crossterm::event::{self, Event as TermEvent, KeyEventKind};
+use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
-    play::{EngineEvent, PlayerEvent},
+    play::{Engine, EngineEvent, PlayerEvent},
     prelude::{PlayerImpl, Resource, ResourceConfig},
 };
-use kithara_tui::{Dashboard, UiSession};
 use tokio::sync::broadcast::error::RecvError;
 
+use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
-    AppResult,
-    controller::{ControlOutcome, handle_key},
+    controls::{AppController, PlayerControls},
     crossfade::{CrossfadeClock, ProgressLog},
-    events::{UiMsg, is_progress_event, source_note},
+    events::{UiMsg, format_seconds, is_progress_event, source_note},
+    theme::tui::TuiPalette,
 };
 
 const CONTROL_POLL_MS: u64 = 100;
-const SEEK_STEP_SECONDS: i64 = 5;
+const SEEK_STEP_SECONDS_F64: f64 = 5.0;
 const VOLUME_STEP: f32 = 0.05;
 
+type RunnerResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+enum ControlOutcome {
+    Continue(Option<String>),
+    SwitchTrack(usize),
+    Quit,
+}
+
+/// Run the TUI event loop.
+///
 /// # Errors
 /// Returns an error if the TUI event loop fails.
-pub async fn run_tui(
-    player: &Arc<PlayerImpl>,
+pub(super) async fn run_tui(
+    controller: &mut AppController,
     urls: Vec<String>,
     track_names: Vec<String>,
-    ui_tx: mpsc::Sender<UiMsg>,
-    ui_rx: mpsc::Receiver<UiMsg>,
-    stop_tx: mpsc::Sender<()>,
-    stop_rx: mpsc::Receiver<()>,
-) -> AppResult {
-    let player_for_ui = Arc::clone(player);
-    let ui_tx_for_loop = ui_tx.clone();
+    palette: TuiPalette,
+) -> RunnerResult {
+    let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
+    let player = controller.player().clone();
+
+    let mut forwarders = vec![
+        forward_player_events(player.subscribe(), ui_tx.clone()),
+        forward_engine_events(player.engine().subscribe(), ui_tx.clone()),
+    ];
+
+    // Load tracks.
+    for (i, url) in urls.iter().enumerate() {
+        let config = match ResourceConfig::new(url) {
+            Ok(c) => c,
+            Err(err) => {
+                tracing::warn!(?err, url, "invalid URL, skipping");
+                continue;
+            }
+        };
+        match Resource::new(config).await {
+            Ok(resource) => {
+                let source_events = resource.subscribe();
+                player.insert(resource, None);
+                let label = format!("src{}", i + 1);
+                forwarders.push(forward_source_events(source_events, label, ui_tx.clone()));
+                let _ = ui_tx.send(UiMsg::Note(format!("loaded #{}: {url}", i + 1)));
+            }
+            Err(err) => {
+                tracing::warn!(?err, url, "failed to load resource, skipping");
+                let _ = ui_tx.send(UiMsg::Note(format!("skip #{}: {err}", i + 1)));
+            }
+        }
+    }
+
+    if track_names.is_empty() {
+        return Err("no tracks loaded".into());
+    }
+
+    controller.play();
+
+    // Run blocking UI loop in a separate thread.
+    let player_for_ui = player.clone();
+    let ui_tx_for_loop = ui_tx.clone();
+    let urls_for_loop = urls.clone();
     let mut ui_handle = tokio::task::spawn_blocking(move || {
         run_ui_loop(
             &player_for_ui,
-            &urls,
+            &urls_for_loop,
             track_names,
             &ui_tx_for_loop,
             &ui_rx,
             &stop_rx,
+            palette,
         )
     });
 
@@ -68,6 +114,13 @@ pub async fn run_tui(
         ui_handle.await??;
     }
 
+    controller.pause();
+
+    for forwarder in forwarders {
+        forwarder.abort();
+        let _ = forwarder.await;
+    }
+
     Ok(())
 }
 
@@ -78,14 +131,14 @@ fn run_ui_loop(
     ui_tx: &mpsc::Sender<UiMsg>,
     ui_rx: &mpsc::Receiver<UiMsg>,
     stop_rx: &mpsc::Receiver<()>,
-) -> AppResult {
+    palette: TuiPalette,
+) -> RunnerResult {
     let track_count = track_names.len();
-    let dashboard = Dashboard::new(track_names);
+    let dashboard = Dashboard::new(track_names, palette);
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
-        "controls: 1-{} select track, Left/Right seek {}s, Up/Down vol {:+.0}%",
+        "controls: 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
         track_count.min(9),
-        SEEK_STEP_SECONDS,
         VOLUME_STEP * 100.0
     ))?;
     ui.log_line("auto-advances to next track with crossfade near end of each track")?;
@@ -242,6 +295,63 @@ fn run_ui_loop(
     Ok(())
 }
 
+fn handle_key(
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    player: &PlayerImpl,
+    dashboard: &mut Dashboard,
+) -> ControlOutcome {
+    if modifiers.contains(KeyModifiers::CONTROL) && matches!(key, KeyCode::Char('c')) {
+        return ControlOutcome::Quit;
+    }
+    match key {
+        KeyCode::Left => {
+            ControlOutcome::Continue(Some(apply_seek(player, -SEEK_STEP_SECONDS_F64, dashboard)))
+        }
+        KeyCode::Right => {
+            ControlOutcome::Continue(Some(apply_seek(player, SEEK_STEP_SECONDS_F64, dashboard)))
+        }
+        KeyCode::Up => {
+            apply_volume(player, VOLUME_STEP, dashboard);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Down => {
+            apply_volume(player, -VOLUME_STEP, dashboard);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Char('q') => ControlOutcome::Quit,
+        KeyCode::Char(c @ '1'..='9') => {
+            let index = (c as usize) - ('1' as usize);
+            ControlOutcome::SwitchTrack(index)
+        }
+        _ => ControlOutcome::Continue(None),
+    }
+}
+
+fn apply_seek(player: &PlayerImpl, delta_seconds: f64, dashboard: &mut Dashboard) -> String {
+    let current = player.position_seconds().unwrap_or(0.0).max(0.0);
+    let target = (current + delta_seconds).max(0.0);
+    match player.seek_seconds(target) {
+        Ok(()) => {
+            dashboard.set_note(format!("seek {}", format_seconds(target)));
+            dashboard.set_position(Duration::from_secs_f64(target));
+            format!("seek target={}", format_seconds(target))
+        }
+        Err(err) => {
+            let line = format!("seek failed target={} err={err}", format_seconds(target));
+            dashboard.set_note(line.clone());
+            line
+        }
+    }
+}
+
+fn apply_volume(player: &PlayerImpl, delta: f32, dashboard: &mut Dashboard) {
+    let volume = (player.volume() + delta).clamp(0.0, 1.0);
+    player.set_volume(volume);
+    dashboard.set_volume(volume);
+    dashboard.set_note(format!("volume {:.0}%", volume * 100.0));
+}
+
 fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
     dashboard.set_playing(player.is_playing());
     dashboard.set_queue(player.current_index(), player.item_count());
@@ -271,7 +381,7 @@ fn switch_track(
     ui: &mut UiSession,
     crossfade_clock: &mut Option<CrossfadeClock>,
     auto_advanced_index: &mut Option<usize>,
-) -> AppResult {
+) -> RunnerResult {
     let handle = tokio::runtime::Handle::current();
     let url = &urls[index];
     let resource = handle.block_on(async {
@@ -324,4 +434,89 @@ fn switch_track(
         }
     }
     Ok(())
+}
+
+fn forward_player_events(
+    mut rx: tokio::sync::broadcast::Receiver<PlayerEvent>,
+    tx: mpsc::Sender<UiMsg>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if tx.send(UiMsg::Player(event)).is_err() {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    if tx
+                        .send(UiMsg::Note(format!("player events lagged n={n}")))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+fn forward_engine_events(
+    mut rx: tokio::sync::broadcast::Receiver<EngineEvent>,
+    tx: mpsc::Sender<UiMsg>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if tx.send(UiMsg::Engine(event)).is_err() {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    if tx
+                        .send(UiMsg::Note(format!("engine events lagged n={n}")))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+fn forward_source_events(
+    mut rx: tokio::sync::broadcast::Receiver<kithara::prelude::Event>,
+    source: String,
+    tx: mpsc::Sender<UiMsg>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if tx
+                        .send(UiMsg::Source {
+                            event,
+                            source: source.clone(),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    if tx
+                        .send(UiMsg::Note(format!("{source} events lagged n={n}")))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
 }

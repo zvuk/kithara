@@ -1,4 +1,4 @@
-/// All UI events flow through this enum.
+/// All GUI events flow through this enum.
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     /// Toggle play / pause.

@@ -8,16 +8,17 @@ use kithara::{
 use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 
-use crate::{
+use super::{
     message::{Message, Tab},
-    playlist::Playlist,
     theme,
 };
+use crate::{playlist::Playlist, theme::gui::GuiPalette};
 
-/// Main application state.
+/// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) player: Arc<PlayerImpl>,
     pub(crate) playlist: Arc<Playlist>,
+    pub(crate) palette: GuiPalette,
 
     // Playback state (synced from player on each tick).
     pub(crate) playing: bool,
@@ -52,6 +53,7 @@ impl Kithara {
         player: Arc<PlayerImpl>,
         tracks: Vec<String>,
         autoplay: bool,
+        palette: GuiPalette,
     ) -> (Self, Task<Message>) {
         let playlist = Arc::new(Playlist::new(tracks));
         let volume = player.volume();
@@ -60,6 +62,7 @@ impl Kithara {
         let mut state = Self {
             player,
             playlist,
+            palette,
             playing: false,
             position: 0.0,
             duration: 0.0,
@@ -93,9 +96,8 @@ impl Kithara {
     }
 
     /// The dark + gold theme.
-    #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
     pub(crate) fn theme(&self) -> Theme {
-        theme::kithara_theme()
+        theme::kithara_theme(&self.palette)
     }
 
     /// 100 ms tick subscription for player state sync.

@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
-use crate::session::TuiResult;
+use super::session::TuiResult;
 
 /// A `Write` adapter that converts lone `\n` into `\r\n`.
 ///

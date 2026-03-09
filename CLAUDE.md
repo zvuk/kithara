@@ -44,6 +44,10 @@ cargo doc --workspace --no-deps --open
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart TD
+    subgraph app["Application"]
+        kithara-app["kithara-app<br/>(tui | gui features)"]
+    end
+
     subgraph facade["Facade"]
         kithara["kithara"]
         play["kithara-play"]
@@ -74,8 +78,9 @@ flowchart TD
         platform["kithara-platform"]
     end
 
-    facade --> pipeline --> protocols --> io --> storage
+    app --> facade --> pipeline --> protocols --> io --> storage
 
+    style app fill:#3a5a8a,color:#fff
     style facade fill:#4a6fa5,color:#fff
     style pipeline fill:#6b8cae,color:#fff
     style protocols fill:#7ea87e,color:#fff
@@ -86,6 +91,14 @@ flowchart TD
 Dependencies flow downward. Each layer depends only on layers below it.
 
 ### Crate roles
+
+**`kithara-app`** — Example application (publish=false) with feature-gated frontends
+- `Frontend` trait: lifecycle contract (new, start, run_loop, shutdown)
+- `PlayerControls` trait: player control contract for UI frontends
+- `AppController`: implements `PlayerControls`, wraps `PlayerImpl` + `Playlist`
+- `tui` feature: ratatui terminal UI (dashboard, session, keyboard controls)
+- `gui` feature: iced graphical UI (Elm architecture, SVG icons, dark+gold theme)
+- Single binary `kithara` with `--mode auto|tui|gui`
 
 **`kithara`** — Facade: unified `Resource` API with auto-detection (file / HLS)
 

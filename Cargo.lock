@@ -3729,11 +3729,13 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "crossterm",
+ "iced",
  "kithara",
- "kithara-tui",
- "kithara-ui",
+ "kithara-workspace-hack",
+ "ratatui",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4222,26 +4224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "ratatui",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "kithara-ui"
-version = "0.1.0"
-dependencies = [
- "iced",
- "kithara",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
@@ -4273,43 +4255,55 @@ name = "kithara-workspace-hack"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.11.0",
+ "bytemuck",
  "byteorder",
  "clap",
  "clap_builder",
  "cpal",
  "crossbeam-utils",
  "crypto-common",
+ "errno",
  "firewheel",
  "firewheel-cpal",
  "foldhash 0.2.0",
  "form_urlencoded",
+ "futures",
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-io",
  "futures-sink",
  "futures-util",
+ "half",
+ "hashbrown 0.15.5",
  "hashbrown 0.16.1",
  "hotpath",
  "hotpath-macros",
  "hyper",
  "hyper-util",
+ "indexmap",
  "js-sys",
  "libc",
+ "linux-raw-sys 0.12.1",
  "log",
  "memchr",
+ "mio",
  "nu-ansi-term",
  "num-integer",
  "num-rational",
  "num-traits",
+ "parking_lot",
  "percent-encoding",
  "portable-atomic",
  "proc-macro2",
+ "quote",
  "regex",
  "regex-automata",
  "regex-syntax",
  "ringbuf",
  "rodio",
  "rustfft",
+ "rustix 1.1.4",
  "semver",
  "serde",
  "serde_core",

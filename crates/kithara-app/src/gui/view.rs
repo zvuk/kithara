@@ -16,23 +16,18 @@ use iced::{
     },
 };
 
-use crate::{
-    icons::{GOLD, Icon, LIGHT, MUTED},
+use super::{
+    app::Kithara,
+    icons::Icon,
     message::{Message, Tab},
-    state::Kithara,
-    theme::{BG_DARK, BG_PANEL},
 };
+use crate::theme::gui::GuiPalette;
 
 const OUTER_PADDING: u16 = 18;
 const SECTION_PADDING: u16 = 12;
-const TITLE_COLOR: Color = Color {
-    r: 0.9,
-    g: 0.9,
-    b: 0.9,
-    a: 1.0,
-};
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let content = column![
         view_header(state),
         view_now_playing(state),
@@ -44,7 +39,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(SECTION_PADDING)
-            .style(panel_style)
+            .style(panel_style(p))
     ]
     .width(Length::Fill)
     .height(Length::Fill)
@@ -54,14 +49,14 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(Padding::from(OUTER_PADDING))
-        .style(root_style)
+        .style(root_style(p))
         .into()
 }
 
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "clamped positive f32 → u32"
+    reason = "clamped positive f32 -> u32"
 )]
 fn format_time(seconds: f32) -> String {
     let total = seconds.max(0.0).floor() as u32;
@@ -71,28 +66,30 @@ fn format_time(seconds: f32) -> String {
 }
 
 fn view_header(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let logo = svg::Svg::new(svg::Handle::from_memory(
-        include_bytes!("../assets/logo.svg") as &[u8],
+        include_bytes!("../../assets/logo.svg") as &[u8],
     ))
     .width(Length::Fixed(48.0))
     .height(Length::Fixed(48.0));
 
-    let title_color = if state.playing { GOLD } else { TITLE_COLOR };
+    let title_color = if state.playing { p.accent } else { p.text };
 
     let title = column![
         text("Kithara").size(28).color(title_color),
-        text("Player").size(12).color(MUTED)
+        text("Player").size(12).color(p.muted)
     ]
     .spacing(2);
 
     container(row![logo, title,].align_y(Alignment::Center).spacing(12))
         .width(Length::Fill)
         .padding(SECTION_PADDING)
-        .style(panel_style)
+        .style(panel_style(p))
         .into()
 }
 
 fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let track_name = if state.track_name.trim().is_empty() {
         "No track loaded".to_string()
     } else {
@@ -104,22 +101,23 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     container(
         column![
             row![
-                Icon::MusicNote.gold(20.0),
-                text(track_name).size(22).color(LIGHT)
+                Icon::MusicNote.view(20.0, p.accent),
+                text(track_name).size(22).color(p.text)
             ]
             .spacing(10)
             .align_y(Alignment::Center),
-            text(subtitle).size(14).color(MUTED)
+            text(subtitle).size(14).color(p.muted)
         ]
         .spacing(6),
     )
     .width(Length::Fill)
     .padding(SECTION_PADDING)
-    .style(section_style)
+    .style(section_style(p))
     .into()
 }
 
 fn view_seek(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let duration = state.duration.max(0.0);
     let slider_max = duration.max(1.0);
     let progress = if state.is_seeking {
@@ -132,14 +130,14 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
     let seek = slider(0.0..=slider_max, progress, Message::SeekChanged)
         .step(0.1)
         .on_release(Message::SeekReleased)
-        .style(slider_style)
+        .style(slider_style(p))
         .width(Length::Fill);
 
     container(
         row![
-            text(format_time(progress)).size(13).color(MUTED),
+            text(format_time(progress)).size(13).color(p.muted),
             seek,
-            text(format_time(duration)).size(13).color(MUTED)
+            text(format_time(duration)).size(13).color(p.muted)
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -150,6 +148,7 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_transport(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let play_icon = if state.playing {
         Icon::Pause
     } else {
@@ -157,15 +156,23 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
     };
 
     let transport_row = row![
-        icon_button(Icon::SkipPrev, 30.0, LIGHT, 8, Message::Prev),
-        main_transport_button(play_icon, Message::TogglePlayPause),
-        icon_button(Icon::SkipNext, 30.0, LIGHT, 8, Message::Next),
+        icon_button(Icon::SkipPrev, 30.0, p.text, 8, Message::Prev),
+        main_transport_button(play_icon, Message::TogglePlayPause, p),
+        icon_button(Icon::SkipNext, 30.0, p.text, 8, Message::Next),
     ]
     .spacing(20)
     .align_y(Alignment::Center);
 
-    let shuffle_color = if state.shuffle_enabled { GOLD } else { MUTED };
-    let repeat_color = if state.repeat_enabled { GOLD } else { MUTED };
+    let shuffle_color = if state.shuffle_enabled {
+        p.accent
+    } else {
+        p.muted
+    };
+    let repeat_color = if state.repeat_enabled {
+        p.accent
+    } else {
+        p.muted
+    };
     let repeat_icon = if state.repeat_enabled {
         Icon::RepeatOnce
     } else {
@@ -197,6 +204,7 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_volume(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let volume_icon = if state.volume <= 0.01 {
         Icon::VolumeMute
     } else if state.volume < 0.5 {
@@ -213,14 +221,14 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
         Message::VolumeChanged,
     )
     .step(0.01)
-    .style(slider_style)
+    .style(slider_style(p))
     .width(Length::Fill);
 
     container(
         row![
-            volume_icon.light(20.0),
+            volume_icon.view(20.0, p.text),
             slider,
-            text(volume_pct).size(13).color(MUTED)
+            text(volume_pct).size(13).color(p.muted)
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -231,6 +239,7 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_tabs(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let tabs = row![
         tab_button(state, Tab::Playlist, Icon::Playlist, "Playlist"),
         tab_button(state, Tab::Dj, Icon::Dj, "DJ"),
@@ -243,7 +252,7 @@ fn view_tabs(state: &Kithara) -> Element<'_, Message> {
     container(tabs)
         .width(Length::Fill)
         .padding([4, 0])
-        .style(section_style)
+        .style(section_style(p))
         .into()
 }
 
@@ -257,8 +266,9 @@ fn view_tab_content(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_playlist(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     if state.playlist.is_empty() {
-        return container(text("No tracks in playlist").size(14).color(MUTED))
+        return container(text("No tracks in playlist").size(14).color(p.muted))
             .width(Length::Fill)
             .height(Length::Fill)
             .center_x(Length::Fill)
@@ -270,8 +280,8 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for index in 0..state.playlist.len() {
         let is_current = state.current_track_index == Some(index);
-        let text_color = if is_current { GOLD } else { LIGHT };
-        let index_color = if is_current { GOLD } else { MUTED };
+        let text_color = if is_current { p.accent } else { p.text };
+        let index_color = if is_current { p.accent } else { p.muted };
         let track_name = truncate_name(&state.playlist.track_name(index), 40);
 
         let item = button(
@@ -286,7 +296,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         )
         .width(Length::Fill)
         .padding([8, 10])
-        .style(move |_theme, status| playlist_item_style(is_current, status))
+        .style(move |_theme, status| playlist_item_style(p, is_current, status))
         .on_press(Message::SelectTrack(index));
 
         tracks = tracks.push(item);
@@ -296,12 +306,17 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let labels = ["Low", "Mid", "High"];
     let mut bands_row = row![].spacing(26).align_y(Alignment::End);
 
     for (index, label) in labels.iter().enumerate() {
         let value = state.eq_bands[index].clamp(-24.0, 6.0);
-        let value_color = if value.abs() < 0.05 { MUTED } else { GOLD };
+        let value_color = if value.abs() < 0.05 {
+            p.muted
+        } else {
+            p.accent
+        };
 
         let band = column![
             text(format!("{value:+.1} dB")).size(13).color(value_color),
@@ -310,11 +325,11 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
             ))
             .step(0.5)
             .height(Length::Fixed(190.0))
-            .style(slider_style),
-            text(*label).size(14).color(LIGHT),
-            button(text("Reset").size(12).color(MUTED))
+            .style(slider_style(p)),
+            text(*label).size(14).color(p.text),
+            button(text("Reset").size(12).color(p.muted))
                 .padding([4, 8])
-                .style(ghost_button_style)
+                .style(ghost_button_style(p))
                 .on_press(Message::EqBandReset(index))
         ]
         .spacing(8)
@@ -325,7 +340,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
 
     container(
         column![
-            text("3-Band Equalizer").size(16).color(LIGHT),
+            text("3-Band Equalizer").size(16).color(p.text),
             container(bands_row)
                 .width(Length::Fill)
                 .center_x(Length::Fill)
@@ -338,23 +353,24 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_dj(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     let secs = state.crossfade.clamp(0.0, 30.0);
 
     let header = row![
-        text("Crossfade").size(16).color(LIGHT),
+        text("Crossfade").size(16).color(p.text),
         Space::new().width(Length::Fill),
-        text(format!("{secs:.1}s")).size(16).color(GOLD),
+        text(format!("{secs:.1}s")).size(16).color(p.accent),
     ]
     .align_y(Alignment::Center);
 
     let slider = slider(0.0..=30.0, secs, Message::CrossfadeChanged)
         .step(0.5)
-        .style(slider_style);
+        .style(slider_style(p));
 
     let labels = row![
-        text("Track A").size(13).color(MUTED),
+        text("Track A").size(13).color(p.muted),
         Space::new().width(Length::Fill),
-        text("Track B").size(13).color(MUTED),
+        text("Track B").size(13).color(p.muted),
     ]
     .align_y(Alignment::Center);
 
@@ -366,7 +382,7 @@ fn view_dj(state: &Kithara) -> Element<'_, Message> {
             Space::new().height(Length::Fixed(8.0)),
             text("Blend outgoing and incoming tracks with a smooth DJ transition.")
                 .size(13)
-                .color(MUTED)
+                .color(p.muted)
         ]
         .spacing(10),
     )
@@ -375,13 +391,14 @@ fn view_dj(state: &Kithara) -> Element<'_, Message> {
     .into()
 }
 
-fn view_settings(_state: &Kithara) -> Element<'_, Message> {
+fn view_settings(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
     container(
         column![
-            text("Settings").size(16).color(LIGHT),
+            text("Settings").size(16).color(p.text),
             text("Playback and appearance options will be added here.")
                 .size(13)
-                .color(MUTED),
+                .color(p.muted),
         ]
         .spacing(8),
     )
@@ -406,31 +423,32 @@ fn icon_button(
     padding: u16,
     message: Message,
 ) -> Element<'static, Message> {
+    let p = GuiPalette::from(crate::theme::Palette::default());
     button(icon.view(size, color))
         .padding(padding)
-        .style(ghost_button_style)
+        .style(ghost_button_style(p))
         .on_press(message)
         .into()
 }
 
-fn main_transport_button(icon: Icon, message: Message) -> Element<'static, Message> {
-    button(icon.view(35.0, BG_DARK))
+fn main_transport_button(icon: Icon, message: Message, p: GuiPalette) -> Element<'static, Message> {
+    button(icon.view(35.0, p.bg))
         .padding(14)
-        .style(|_theme, status| {
+        .style(move |_theme, status| {
             let background = match status {
-                ButtonStatus::Hovered => with_alpha(GOLD, 0.95),
-                ButtonStatus::Pressed => with_alpha(GOLD, 0.75),
-                ButtonStatus::Active => GOLD,
-                ButtonStatus::Disabled => with_alpha(GOLD, 0.4),
+                ButtonStatus::Hovered => with_alpha(p.accent, 0.95),
+                ButtonStatus::Pressed => with_alpha(p.accent, 0.75),
+                ButtonStatus::Active => p.accent,
+                ButtonStatus::Disabled => with_alpha(p.accent, 0.4),
             };
 
             ButtonStyle {
                 background: Some(Background::Color(background)),
-                text_color: LIGHT,
+                text_color: p.text,
                 border: Border::default()
                     .rounded(100.0)
                     .width(1.0)
-                    .color(with_alpha(LIGHT, 0.2)),
+                    .color(with_alpha(p.text, 0.2)),
                 ..ButtonStyle::default()
             }
         })
@@ -439,10 +457,11 @@ fn main_transport_button(icon: Icon, message: Message) -> Element<'static, Messa
 }
 
 fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'static, Message> {
+    let p = state.palette;
     let active = state.active_tab == tab;
-    let icon_color = if active { GOLD } else { MUTED };
-    let label_color = if active { LIGHT } else { MUTED };
-    let underline_color = if active { GOLD } else { Color::TRANSPARENT };
+    let icon_color = if active { p.accent } else { p.muted };
+    let label_color = if active { p.text } else { p.muted };
+    let underline_color = if active { p.accent } else { Color::TRANSPARENT };
 
     let content = column![
         row![
@@ -460,147 +479,157 @@ fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'st
     button(content)
         .width(Length::FillPortion(1))
         .padding([8, 8])
-        .style(move |_theme, status| tab_button_style(active, status))
+        .style(move |_theme, status| tab_button_style(p, active, status))
         .on_press(Message::TabSelected(tab))
         .into()
 }
 
-fn root_style(_theme: &Theme) -> ContainerStyle {
-    ContainerStyle::default()
-        .background(BG_DARK)
-        .color(TITLE_COLOR)
+// ---------------------------------------------------------------------------
+// Style helpers — all take GuiPalette and return closures
+// ---------------------------------------------------------------------------
+
+fn root_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| ContainerStyle::default().background(p.bg).color(p.text)
 }
 
-fn panel_style(_theme: &Theme) -> ContainerStyle {
-    ContainerStyle::default()
-        .background(BG_PANEL)
-        .color(TITLE_COLOR)
-        .border(
-            Border::default()
-                .rounded(12.0)
-                .width(1.0)
-                .color(with_alpha(GOLD, 0.25)),
-        )
-}
-
-fn section_style(_theme: &Theme) -> ContainerStyle {
-    ContainerStyle::default()
-        .background(with_alpha(BG_PANEL, 0.45))
-        .color(TITLE_COLOR)
-        .border(
-            Border::default()
-                .rounded(10.0)
-                .width(1.0)
-                .color(with_alpha(MUTED, 0.2)),
-        )
-}
-
-fn ghost_button_style(_theme: &Theme, status: ButtonStatus) -> ButtonStyle {
-    let background = match status {
-        ButtonStatus::Active => None,
-        ButtonStatus::Hovered => Some(Background::Color(with_alpha(BG_PANEL, 0.85))),
-        ButtonStatus::Pressed => Some(Background::Color(with_alpha(GOLD, 0.2))),
-        ButtonStatus::Disabled => Some(Background::Color(with_alpha(BG_PANEL, 0.3))),
-    };
-
-    ButtonStyle {
-        background,
-        text_color: LIGHT,
-        border: Border::default().rounded(8.0),
-        ..ButtonStyle::default()
+fn panel_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(p.bg_panel)
+            .color(p.text)
+            .border(
+                Border::default()
+                    .rounded(12.0)
+                    .width(1.0)
+                    .color(with_alpha(p.accent, 0.25)),
+            )
     }
 }
 
-fn tab_button_style(active: bool, status: ButtonStatus) -> ButtonStyle {
+fn section_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(with_alpha(p.bg_panel, 0.45))
+            .color(p.text)
+            .border(
+                Border::default()
+                    .rounded(10.0)
+                    .width(1.0)
+                    .color(with_alpha(p.muted, 0.2)),
+            )
+    }
+}
+
+fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+    move |_theme, status| {
+        let background = match status {
+            ButtonStatus::Active => None,
+            ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel, 0.85))),
+            ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.accent, 0.2))),
+            ButtonStatus::Disabled => Some(Background::Color(with_alpha(p.bg_panel, 0.3))),
+        };
+
+        ButtonStyle {
+            background,
+            text_color: p.text,
+            border: Border::default().rounded(8.0),
+            ..ButtonStyle::default()
+        }
+    }
+}
+
+fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> ButtonStyle {
     let base_bg = if active {
-        with_alpha(GOLD, 0.12)
+        with_alpha(p.accent, 0.12)
     } else {
         Color::TRANSPARENT
     };
 
     let hover_bg = if active {
-        with_alpha(GOLD, 0.2)
+        with_alpha(p.accent, 0.2)
     } else {
-        with_alpha(BG_PANEL, 0.8)
+        with_alpha(p.bg_panel, 0.8)
     };
 
     let pressed_bg = if active {
-        with_alpha(GOLD, 0.28)
+        with_alpha(p.accent, 0.28)
     } else {
-        with_alpha(GOLD, 0.12)
+        with_alpha(p.accent, 0.12)
     };
 
     let background = match status {
         ButtonStatus::Active => Some(Background::Color(base_bg)),
         ButtonStatus::Hovered => Some(Background::Color(hover_bg)),
         ButtonStatus::Pressed => Some(Background::Color(pressed_bg)),
-        ButtonStatus::Disabled => Some(Background::Color(with_alpha(BG_PANEL, 0.2))),
+        ButtonStatus::Disabled => Some(Background::Color(with_alpha(p.bg_panel, 0.2))),
     };
 
     ButtonStyle {
         background,
-        text_color: LIGHT,
+        text_color: p.text,
         border: Border::default().rounded(8.0),
         ..ButtonStyle::default()
     }
 }
 
-fn playlist_item_style(current: bool, status: ButtonStatus) -> ButtonStyle {
+fn playlist_item_style(p: GuiPalette, current: bool, status: ButtonStatus) -> ButtonStyle {
     let active_bg = if current {
-        with_alpha(GOLD, 0.18)
+        with_alpha(p.accent, 0.18)
     } else {
         Color::TRANSPARENT
     };
 
     let hover_bg = if current {
-        with_alpha(GOLD, 0.24)
+        with_alpha(p.accent, 0.24)
     } else {
-        with_alpha(BG_PANEL, 0.75)
+        with_alpha(p.bg_panel, 0.75)
     };
 
     let pressed_bg = if current {
-        with_alpha(GOLD, 0.32)
+        with_alpha(p.accent, 0.32)
     } else {
-        with_alpha(GOLD, 0.14)
+        with_alpha(p.accent, 0.14)
     };
 
     let background = match status {
         ButtonStatus::Active => Some(Background::Color(active_bg)),
         ButtonStatus::Hovered => Some(Background::Color(hover_bg)),
         ButtonStatus::Pressed => Some(Background::Color(pressed_bg)),
-        ButtonStatus::Disabled => Some(Background::Color(with_alpha(BG_PANEL, 0.25))),
+        ButtonStatus::Disabled => Some(Background::Color(with_alpha(p.bg_panel, 0.25))),
     };
 
     ButtonStyle {
         background,
-        text_color: LIGHT,
+        text_color: p.text,
         border: Border::default().rounded(8.0),
         ..ButtonStyle::default()
     }
 }
 
-fn slider_style(_theme: &Theme, status: SliderStatus) -> SliderStyle {
-    let active = match status {
-        SliderStatus::Active => GOLD,
-        SliderStatus::Hovered => with_alpha(GOLD, 0.95),
-        SliderStatus::Dragged => with_alpha(GOLD, 0.85),
-    };
+fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
+    move |_theme, status| {
+        let active = match status {
+            SliderStatus::Active => p.accent,
+            SliderStatus::Hovered => with_alpha(p.accent, 0.95),
+            SliderStatus::Dragged => with_alpha(p.accent, 0.85),
+        };
 
-    SliderStyle {
-        rail: SliderRail {
-            backgrounds: (
-                Background::Color(active),
-                Background::Color(with_alpha(MUTED, 0.35)),
-            ),
-            width: 4.0,
-            border: Border::default().rounded(4.0),
-        },
-        handle: SliderHandle {
-            shape: SliderHandleShape::Circle { radius: 7.0 },
-            background: Background::Color(LIGHT),
-            border_width: 1.0,
-            border_color: with_alpha(BG_DARK, 0.65),
-        },
+        SliderStyle {
+            rail: SliderRail {
+                backgrounds: (
+                    Background::Color(active),
+                    Background::Color(with_alpha(p.muted, 0.35)),
+                ),
+                width: 4.0,
+                border: Border::default().rounded(4.0),
+            },
+            handle: SliderHandle {
+                shape: SliderHandleShape::Circle { radius: 7.0 },
+                background: Background::Color(p.text),
+                border_width: 1.0,
+                border_color: with_alpha(p.bg, 0.65),
+            },
+        }
     }
 }
 

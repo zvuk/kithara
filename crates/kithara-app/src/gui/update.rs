@@ -1,7 +1,7 @@
 use iced::Task;
 use tracing::error;
 
-use crate::{message::Message, state::Kithara};
+use super::{app::Kithara, message::Message};
 
 /// Handle all messages (Elm `update` function).
 #[expect(
@@ -113,7 +113,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             state.playing = state.player.is_playing();
             #[expect(
                 clippy::cast_possible_truncation,
-                reason = "f64 duration → f32 is fine for UI"
+                reason = "f64 duration -> f32 is fine for UI"
             )]
             {
                 state.duration = state.player.duration_seconds().unwrap_or(0.0) as f32;
@@ -122,7 +122,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             if !state.is_seeking {
                 #[expect(
                     clippy::cast_possible_truncation,
-                    reason = "f64 position → f32 is fine for UI"
+                    reason = "f64 position -> f32 is fine for UI"
                 )]
                 {
                     state.position = state.player.position_seconds().unwrap_or(0.0) as f32;
