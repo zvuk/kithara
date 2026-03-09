@@ -23,15 +23,13 @@ impl TrackIdGen {
 /// Tracks with higher service class are served first when the scheduler
 /// selects which track to decode next.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(crate) enum ServiceClass {
+pub enum ServiceClass {
     /// Not playing, not needed soon. Lowest priority.
     #[default]
     Idle,
     /// Preloading or about to play. Medium priority.
-    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     Warm,
     /// Currently audible. Highest priority.
-    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     Audible,
 }
 

@@ -112,7 +112,6 @@ impl AudioWorkerHandle {
     }
 
     /// Update scheduling priority for a track.
-    #[expect(dead_code, reason = "ServiceClass bridge deferred — scheduling only")]
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         let _ = self
             .cmd_tx
@@ -390,6 +389,9 @@ fn drain_worker_commands(
                 if let Some(slot) = tracks.iter_mut().find(|s| s.track_id == id) {
                     slot.service_class = class;
                 }
+                // Re-sort so Audible tracks are processed before Idle.
+                tracks.sort_by(|a, b| b.service_class.cmp(&a.service_class));
+                *cursor = 0;
             }
             Ok(WorkerCmd::Shutdown) => {
                 trace!("shared worker shutdown");
@@ -726,6 +728,55 @@ mod tests {
         // No more chunks should arrive.
         kithara_platform::thread::sleep(Duration::from_millis(50));
         assert!(rx.try_pop().is_none(), "no chunks after unregister");
+
+        handle.shutdown();
+    }
+
+    #[kithara::test]
+    fn worker_service_class_prioritises_audible() {
+        let handle = AudioWorkerHandle::new();
+
+        // Track A: Idle, large supply (but low priority).
+        let (reg_a, mut rx_a, _, _ca) = make_registration(MockSource::new(100), 4, 0);
+        let id_a = handle.register_track(reg_a);
+
+        // Track B: will be promoted to Audible.
+        let (reg_b, mut rx_b, _, _cb) = make_registration(MockSource::new(100), 4, 0);
+        let id_b = handle.register_track(reg_b);
+
+        // Let both tracks start decoding (both default to Audible from registration).
+        kithara_platform::thread::sleep(Duration::from_millis(30));
+
+        // Drain both to make room.
+        while rx_a.try_pop().is_some() {}
+        while rx_b.try_pop().is_some() {}
+
+        // Demote A to Idle, keep B as Audible.
+        handle.set_service_class(id_a, ServiceClass::Idle);
+        handle.set_service_class(id_b, ServiceClass::Audible);
+
+        // Wait a bit for scheduling to take effect.
+        kithara_platform::thread::sleep(Duration::from_millis(50));
+
+        // B (Audible) should have at least as many chunks as A (Idle).
+        let got_a = {
+            let mut n = 0;
+            while rx_a.try_pop().is_some() {
+                n += 1;
+            }
+            n
+        };
+        let got_b = {
+            let mut n = 0;
+            while rx_b.try_pop().is_some() {
+                n += 1;
+            }
+            n
+        };
+        assert!(
+            got_b >= got_a,
+            "Audible track should get at least as many chunks: A={got_a}, B={got_b}"
+        );
 
         handle.shutdown();
     }

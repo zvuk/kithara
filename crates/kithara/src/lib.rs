@@ -121,7 +121,7 @@ pub mod prelude {
     // Play
     pub use kithara_play::{
         AudioWorkerHandle, EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc, SourceType,
+        ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     // Stream
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};

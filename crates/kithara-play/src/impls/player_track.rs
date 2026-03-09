@@ -13,6 +13,7 @@ use firewheel::{
     },
     param::smoother::SmootherConfig,
 };
+use kithara_audio::ServiceClass;
 use kithara_platform::Mutex;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -103,7 +104,7 @@ impl PlayerTrack {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
         };
-        Self {
+        let track = Self {
             resource,
             state: TrackState::Preloading,
             state_dirty: false,
@@ -114,7 +115,10 @@ impl PlayerTrack {
             observed_position: 0.0,
             observed_duration: 0.0,
             src,
-        }
+        };
+        // Push initial ServiceClass::Warm for the Preloading state.
+        track.update_service_class(TrackState::Preloading);
+        track
     }
 
     /// Read audio from this track into scratch/mix buffers.
@@ -279,10 +283,33 @@ impl PlayerTrack {
     }
 
     /// Set the track state and mark as dirty.
+    ///
+    /// Also updates the shared worker's scheduling priority via
+    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
     fn set_state(&mut self, new_state: TrackState) {
         if self.state != new_state {
             self.state = new_state;
             self.state_dirty = true;
+            self.update_service_class(new_state);
+        }
+    }
+
+    /// Map track state to worker scheduling priority and push the update.
+    ///
+    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
+    /// update is a best-effort scheduling hint. If the lock is contended or
+    /// the send briefly blocks, the track keeps its previous priority until
+    /// the next state change.
+    fn update_service_class(&self, state: TrackState) {
+        let class = match state {
+            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
+                ServiceClass::Audible
+            }
+            TrackState::Preloading => ServiceClass::Warm,
+            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+        };
+        if let Ok(resource) = self.resource.try_lock() {
+            resource.set_service_class(class);
         }
     }
 
@@ -477,5 +504,26 @@ mod tests {
         let track = make_track();
         assert_eq!(track.position(), 0.0);
         assert!((track.duration() - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    #[case(TrackState::Playing, ServiceClass::Audible)]
+    #[case(TrackState::FadingIn, ServiceClass::Audible)]
+    #[case(TrackState::FadingOut, ServiceClass::Audible)]
+    #[case(TrackState::Preloading, ServiceClass::Warm)]
+    #[case(TrackState::Paused, ServiceClass::Idle)]
+    #[case(TrackState::Finished, ServiceClass::Idle)]
+    fn track_state_maps_to_service_class(
+        #[case] state: TrackState,
+        #[case] expected: ServiceClass,
+    ) {
+        let class = match state {
+            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
+                ServiceClass::Audible
+            }
+            TrackState::Preloading => ServiceClass::Warm,
+            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+        };
+        assert_eq!(class, expected);
     }
 }

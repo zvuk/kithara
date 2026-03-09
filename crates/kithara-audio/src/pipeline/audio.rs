@@ -919,6 +919,12 @@ impl<S: Send> PcmReader for Audio<S> {
         self.playback_rate.store(rate, Ordering::Relaxed);
     }
 
+    fn set_service_class(&self, class: ServiceClass) {
+        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id) {
+            worker.set_service_class(track_id, class);
+        }
+    }
+
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         Some(self.preload_notify.clone())
     }

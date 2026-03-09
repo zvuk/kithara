@@ -11,3 +11,4 @@ pub(crate) mod worker_wake;
 pub use audio::Audio;
 pub use audio_worker::AudioWorkerHandle;
 pub use config::AudioConfig;
+pub use worker_types::ServiceClass;
