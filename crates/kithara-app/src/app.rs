@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{events, tui_runner};
 
 pub(crate) const CROSSFADE_SECONDS: f32 = 5.0;
-pub(crate) const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3https://stream.silvercomet.top/track.mp3https://stream.silvercomet.top/track.mp3";
+pub(crate) const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
 pub(crate) const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 pub(crate) const DRM_URL_DEFAULT: &str = "https://stream.silvercomet.top/drm/master.m3u8";
 
