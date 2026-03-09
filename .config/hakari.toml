@@ -3,9 +3,9 @@
 
 hakari-package = "kithara-workspace-hack"
 
-# Format version 2: includes version field in dependency lines,
-# required for publishing to crates.io.
-dep-format-version = "2"
+# Format version 4 (latest). Version field in dependency lines not needed
+# since we use variant A publishing: cargo hakari disable → publish → generate.
+dep-format-version = "4"
 
 # Workspace resolver v2 (edition 2021+).
 resolver = "2"
