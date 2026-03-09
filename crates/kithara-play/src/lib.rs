@@ -52,7 +52,7 @@ pub use traits::{
         bpm::{BeatGrid, BpmAnalyzer, BpmInfo, BpmSync},
         crossfade::{CrossfadeConfig, CrossfadeController, CrossfadeCurve},
         effects::{DjEffect, DjEffectKind},
-        eq::{EqConfig, Equalizer},
+        eq::Equalizer,
     },
     engine::Engine,
     item::PlayerItem,
@@ -65,6 +65,6 @@ pub use traits::{
     },
 };
 pub use types::{
-    ActionAtItemEnd, EqBand, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
+    ActionAtItemEnd, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
     TimeControlStatus, TimeRange, WaitingReason,
 };

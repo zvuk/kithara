@@ -613,6 +613,24 @@ impl PlayerImpl {
     }
 }
 
+impl crate::traits::dj::eq::Equalizer for PlayerImpl {
+    fn band_count(&self) -> usize {
+        self.eq_band_count()
+    }
+
+    fn gain(&self, band: usize) -> Option<f32> {
+        self.eq_gain(band)
+    }
+
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        self.set_eq_gain(band, gain_db)
+    }
+
+    fn reset(&self) -> Result<(), PlayError> {
+        self.reset_eq()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_audio::mock::TestPcmReader;

@@ -1,9 +1,6 @@
 use kithara_platform::{MaybeSend, MaybeSync};
 
-use crate::{
-    error::PlayError,
-    types::{EqBand, SlotId},
-};
+use crate::{error::PlayError, types::SlotId};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),
@@ -44,13 +41,11 @@ pub trait Mixer: MaybeSend + MaybeSync + 'static {
 
     // -- per-channel EQ --
 
-    fn eq_gain(&self, slot: SlotId, band: EqBand) -> Option<f32>;
+    fn eq_band_count(&self) -> usize;
 
-    fn set_eq_gain(&self, slot: SlotId, band: EqBand, db: f32) -> Result<(), PlayError>;
+    fn eq_gain(&self, slot: SlotId, band: usize) -> Option<f32>;
 
-    fn eq_kill(&self, slot: SlotId, band: EqBand) -> Option<bool>;
-
-    fn set_eq_kill(&self, slot: SlotId, band: EqBand, kill: bool) -> Result<(), PlayError>;
+    fn set_eq_gain(&self, slot: SlotId, band: usize, db: f32) -> Result<(), PlayError>;
 
     fn reset_eq(&self, slot: SlotId) -> Result<(), PlayError>;
 

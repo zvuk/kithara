@@ -93,7 +93,7 @@ flowchart TD
 <table>
 <tr><th>Trait</th><th>Role</th></tr>
 <tr><td><code>Engine</code></td><td>Singleton lifecycle, arena slot management, master output, crossfade delegation</td></tr>
-<tr><td><code>Mixer</code></td><td>Per-channel gain/pan/mute/solo, master bus, per-channel 3-band EQ, hardware crossfader</td></tr>
+<tr><td><code>Mixer</code></td><td>Per-channel gain/pan/mute/solo, master bus, per-channel N-band EQ, hardware crossfader</td></tr>
 </table>
 
 ### DJ subsystem
@@ -103,7 +103,7 @@ flowchart TD
 <tr><td><code>CrossfadeController</code></td><td>Start/cancel crossfade between two slots, curve control, progress</td></tr>
 <tr><td><code>BpmAnalyzer</code></td><td>BPM detection, beat grid, tap tempo</td></tr>
 <tr><td><code>BpmSync</code></td><td>Sync follower to leader BPM, phase offset, nudge, quantize</td></tr>
-<tr><td><code>Equalizer</code></td><td>Per-slot 3-band EQ with kill switches, configurable frequencies</td></tr>
+<tr><td><code>Equalizer</code></td><td>N-band parametric EQ with per-band gain control</td></tr>
 <tr><td><code>DjEffect</code></td><td>Pluggable effects (filter, echo, reverb, flanger, brake, etc.)</td></tr>
 </table>
 
@@ -137,8 +137,7 @@ flowchart TD
 - `CrossfadeConfig` -- duration, curve, beat-aligned flag, cut points
 - `BpmInfo` -- detected BPM, confidence, first beat offset
 - `BeatGrid` -- BPM, offset, beats per bar
-- `EqBand` -- `Low | Mid | High`
-- `EqConfig` -- frequency and Q per band
+- `EqBandConfig` -- frequency, Q, kind (low-shelf / peaking / high-shelf) per band
 - `DjEffectKind` -- `Filter | Echo | Reverb | Flanger | Phaser | Brake | Spinback | Backspin | Gate | BitCrusher`
 
 ## Event System
@@ -189,7 +188,7 @@ gantt
 1. Analyze both tracks: `BpmAnalyzer::analyze(slot_a)`, `BpmAnalyzer::analyze(slot_b)`
 2. Sync tempos: `BpmSync::sync(follower: slot_b, leader: slot_a)`
 3. Adjust phase: `BpmSync::set_phase_offset(slot_b, 0.0)` (align downbeats)
-4. Shape sound: `Equalizer::set_gain(slot_b, EqBand::Low, -24.0)` (cut bass on incoming)
+4. Shape sound: `Equalizer::set_gain(0, -24.0)` (cut bass on incoming)
 5. Crossfade: `CrossfadeController::start(slot_a, slot_b, config)`
 6. During transition: gradually restore bass on incoming, cut bass on outgoing
 7. Cleanup: `BpmSync::unsync(slot_b)`, release slot A
