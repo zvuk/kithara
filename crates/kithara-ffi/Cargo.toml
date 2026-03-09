@@ -5,11 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Swift FFI adapter for kithara audio player (UniFFI / BoltFFI)"
+description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
 [lib]
-crate-type = ["lib", "staticlib"]
+crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -41,3 +41,7 @@ backend-uniffi = ["dep:uniffi"]
 futures = { workspace = true }
 kithara = { workspace = true, features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+rustls-platform-verifier = { workspace = true }

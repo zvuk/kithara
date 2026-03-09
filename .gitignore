@@ -66,3 +66,8 @@ apple/KitharaFFIInternal.xcframework/
 apple/Examples/KitharaDemo/KitharaDemo.xcodeproj/
 crates/kithara-ffi/KitharaFFI/
 crates/kithara-ffi/generated/
+
+# Android / Gradle
+android/.gradle/
+android/**/build/
+android/local.properties

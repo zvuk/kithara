@@ -1,7 +1,7 @@
-//! Swift FFI adapter for the kithara audio player.
+//! Cross-platform FFI adapter for the kithara audio player.
 //!
-//! Wraps `kithara-play` types behind an FFI-friendly API using
-//! cfg-switchable backends (`UniFFI` or `BoltFFI`).
+//! Wraps `kithara-play` types behind an FFI-friendly API and lets UniFFI
+//! generate platform bindings such as Swift and Kotlin.
 
 use std::sync::LazyLock;
 
@@ -10,13 +10,17 @@ use kithara_platform::tokio::runtime;
 #[cfg(feature = "backend-uniffi")]
 uniffi::setup_scaffolding!();
 
+pub(crate) mod config;
 pub(crate) mod event_bridge;
+#[cfg(target_os = "android")]
+pub(crate) mod android;
 pub mod item;
+pub(crate) mod item_bridge;
 pub mod observer;
 pub mod player;
 pub mod types;
 
-/// Shared tokio runtime handle for FFI background tasks (event bridge, time polling).
+/// Shared tokio runtime handle for FFI background tasks (event bridges, polling).
 ///
 /// Runs a single-threaded tokio runtime on a dedicated OS thread.
 /// Only requires the `rt` feature (no `rt-multi-thread`), compatible with iOS.

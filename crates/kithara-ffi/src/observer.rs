@@ -3,7 +3,7 @@
 /// Receives player-level state changes from Rust.
 ///
 /// All methods are called on an arbitrary background thread.
-/// Swift implementations must dispatch to main actor as needed.
+/// Platform bindings must hop to the UI thread as needed.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
     fn on_time_changed(&self, seconds: f64);

@@ -27,6 +27,23 @@ This directory keeps CI and developer helper scripts that are not easily express
 - `wasm-slim-check.sh`: wasm size-budget gate (`wasm-slim`).
 - `wasm-test.sh`: wasm integration test entrypoint with required env knobs.
 
+## Platform build scripts
+
+- `build-xcframework.sh`: builds the Apple `KitharaFFIInternal.xcframework` plus generated Swift bindings from `crates/kithara-ffi`.
+  - Usage: `./scripts/build-xcframework.sh [--release]`
+  - Prerequisites: `cargo-swift`, Xcode CLI tools, Rust Apple targets
+  - Outputs copied into `apple/`:
+    - `apple/KitharaFFIInternal.xcframework`
+    - `apple/Sources/KitharaFFI/KitharaFFI.swift`
+
+- `build-android-bindings.sh`: builds Android `.so` libraries plus generated Kotlin bindings from `crates/kithara-ffi`.
+  - Usage: `./scripts/build-android-bindings.sh [--release]`
+  - Prerequisites: `cargo-ndk`, Android SDK/NDK, Rust Android targets
+  - Outputs generated under `android/lib/build/generated/`:
+    - `android/lib/build/generated/jniLibs`
+    - `android/lib/build/generated/uniffi/kotlin`
+  - These outputs are consumed by the Gradle configuration of `android/lib`; no manual copy step into versioned source directories is required.
+
 ## Removed wrappers
 
 The following scripts were removed because they were shell pass-through wrappers over existing `just`/Cargo commands and added maintenance noise:

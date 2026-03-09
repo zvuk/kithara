@@ -4,9 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use kithara::play::{Resource, ResourceConfig};
 use kithara_platform::Mutex;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-
 use crate::{
+    config,
+    item_bridge::ItemEventBridge,
     observer::ItemObserver,
     types::{FfiError, FfiResult},
 };
@@ -20,6 +22,7 @@ pub struct AudioPlayerItem {
     preferred_peak_bitrate: Mutex<f64>,
     preferred_peak_bitrate_expensive: Mutex<f64>,
     resource: Mutex<Option<Resource>>,
+    event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
 }
 
@@ -37,6 +40,7 @@ impl AudioPlayerItem {
             preferred_peak_bitrate: Mutex::new(0.0),
             preferred_peak_bitrate_expensive: Mutex::new(0.0),
             resource: Mutex::new(None),
+            event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
         })
     }
@@ -73,8 +77,10 @@ impl AudioPlayerItem {
     /// Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
     pub async fn load(&self) -> Result<(), FfiError> {
         let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
-            message: e.to_string(),
+            description: e.to_string(),
         })?;
+
+        config::configure_resource(&mut config);
 
         let bitrate = self.preferred_peak_bitrate();
         if bitrate > 0.0 {
@@ -90,19 +96,29 @@ impl AudioPlayerItem {
         let resource = crate::FFI_RUNTIME
             .spawn(Resource::new(config))
             .await
-            .map_err(|e| FfiError::Internal {
-                message: e.to_string(),
+            .map_err(|e| {
+                let error = FfiError::Internal {
+                    description: e.to_string(),
+                };
+                self.notify_load_error(&error);
+                error
             })?
-            .map_err(|e| FfiError::Internal {
-                message: e.to_string(),
+            .map_err(|e| {
+                let error = FfiError::Internal {
+                    description: e.to_string(),
+                };
+                self.notify_load_error(&error);
+                error
             })?;
 
         *self.resource.lock_sync() = Some(resource);
+        self.restart_bridge();
         Ok(())
     }
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
         *self.observer.lock_sync() = Some(observer);
+        self.restart_bridge();
     }
 }
 
@@ -118,9 +134,37 @@ impl AudioPlayerItem {
         self.resource.lock_sync().take().ok_or(FfiError::NotReady)
     }
 
-    #[expect(dead_code, reason = "used when EventBridge dispatches item events")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
         self.observer.lock_sync().clone()
+    }
+
+    fn notify_load_error(&self, error: &FfiError) {
+        if let Some(observer) = self.observer() {
+            observer.on_status_changed(2);
+            observer.on_error(error.observer_code(), error.to_string());
+        }
+    }
+
+    fn restart_bridge(&self) {
+        let observer = self.observer();
+        let Some(observer) = observer else {
+            *self.event_bridge.lock_sync() = None;
+            return;
+        };
+
+        let resource = self.resource.lock_sync();
+        let Some(resource) = resource.as_ref() else {
+            *self.event_bridge.lock_sync() = None;
+            return;
+        };
+
+        let bridge = ItemEventBridge::spawn(
+            resource.subscribe(),
+            observer,
+            resource.duration().map(|duration| duration.as_secs_f64()),
+            CancellationToken::new(),
+        );
+        *self.event_bridge.lock_sync() = Some(bridge);
     }
 }
 
