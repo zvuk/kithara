@@ -89,10 +89,6 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     /// Check whether all bytes in `range` are available for non-blocking read.
-    #[expect(
-        dead_code,
-        reason = "will be used by shared worker scheduler in Step 2"
-    )]
     pub(crate) fn is_range_ready(&self, range: Range<u64>) -> bool {
         self.inner.lock_sync().is_range_ready(range)
     }

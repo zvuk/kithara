@@ -19,7 +19,6 @@ pub(crate) struct WorkerWake {
     condvar: Condvar,
 }
 
-#[expect(dead_code, reason = "will be used by AudioWorker in Step 2.3")]
 impl WorkerWake {
     /// Create a new wake in the "not woken" state.
     pub(crate) fn new() -> Self {

@@ -49,10 +49,6 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
     /// Used by the shared worker scheduler to decide whether to call
     /// `fetch_next()` on this track. Returns `true` when the underlying
     /// stream has data ready for the current read position.
-    #[expect(
-        dead_code,
-        reason = "will be used by shared worker scheduler in Step 2"
-    )]
     fn is_ready(&self) -> bool;
 }
 

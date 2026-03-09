@@ -8,7 +8,6 @@ pub(crate) type TrackId = u64;
 /// Monotonic counter for generating unique [`TrackId`] values.
 pub(crate) struct TrackIdGen(AtomicU64);
 
-#[expect(dead_code, reason = "will be used by AudioWorker in Step 2.3")]
 impl TrackIdGen {
     pub(crate) fn new() -> Self {
         Self(AtomicU64::new(1))
@@ -23,7 +22,6 @@ impl TrackIdGen {
 ///
 /// Tracks with higher service class are served first when the scheduler
 /// selects which track to decode next.
-#[expect(dead_code, reason = "will be used by AudioWorker in Step 2.3")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub(crate) enum ServiceClass {
     /// Not playing, not needed soon. Lowest priority.
@@ -51,7 +49,6 @@ pub(crate) enum ServiceClass {
 ///     AtEof ── seek ──► PendingReset
 ///     Failed ── terminal, track will be removed
 /// ```
-#[expect(dead_code, reason = "will be used by AudioWorker in Step 2.3")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum TrackPhase {
     /// Normal decoding — `fetch_next()` when ready.
@@ -66,7 +63,6 @@ pub(crate) enum TrackPhase {
 }
 
 /// Result of a single worker step for one track.
-#[expect(dead_code, reason = "will be used by AudioWorker in Step 2.3")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StepResult {
     /// Track made progress (decoded chunk, applied seek, pushed pending).
