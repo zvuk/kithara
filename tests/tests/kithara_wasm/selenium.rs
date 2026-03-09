@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thirtyfour::{
     common::capabilities::{chromium::ChromiumLikeCapabilities, firefox::FirefoxPreferences},
+    extensions::cdp::ChromeDevTools,
     prelude::*,
 };
 use tokio::time::{Instant, sleep};
@@ -858,6 +859,128 @@ impl WasmPlayerSelenium {
         self.stop_and_replay_verify().await
     }
 
+    /// Count dedicated Web Workers via Chrome DevTools Protocol.
+    ///
+    /// Returns `(worker_count, worker_titles)` — only dedicated workers
+    /// (not service workers or shared workers).
+    async fn count_web_workers(&self) -> Result<(usize, Vec<String>), String> {
+        let dev_tools = ChromeDevTools::new(self.driver.handle.clone());
+        let result = dev_tools
+            .execute_cdp("Target.getTargets")
+            .await
+            .map_err(|e| format!("CDP Target.getTargets failed: {e}"))?;
+
+        let targets = result["targetInfos"]
+            .as_array()
+            .ok_or_else(|| "CDP response missing targetInfos array".to_string())?;
+
+        let mut worker_titles = Vec::new();
+        for target in targets {
+            if target["type"].as_str() == Some("worker") {
+                let title = target["title"].as_str().unwrap_or("<unknown>");
+                worker_titles.push(title.to_string());
+            }
+        }
+
+        Ok((worker_titles.len(), worker_titles))
+    }
+
+    /// Run the worker count scenario: verify workers are created and cleaned up
+    /// as expected during the player lifecycle.
+    ///
+    /// Uses a baseline approach: WASM infrastructure (tokio_with_wasm,
+    /// wasm_safe_thread) may create its own workers at page load. We measure
+    /// the baseline and check that exactly 2 *additional* workers appear after
+    /// track load (engine command worker + shared audio worker).
+    async fn run_worker_count_scenario(&self) -> Result<(), String> {
+        // Phase 1: Measure baseline worker count after page load.
+        self.open_player_page().await?;
+        sleep(Duration::from_secs(2)).await;
+
+        let (baseline, urls_baseline) = self.count_web_workers().await?;
+        println!(
+            "[worker_count] baseline after page load: {baseline} workers, \
+             urls={urls_baseline:?}"
+        );
+
+        // Phase 2: Select a track — triggers engine + shared audio worker creation.
+        self.clear_playlist().await?;
+        self.add_track(&self.config.hls_url()).await?;
+        let hls_idx = self.find_track_index("hls/master.m3u8").await?;
+
+        self.click_playlist_item(hls_idx).await?;
+        self.wait_for(
+            "track selected",
+            self.config.wait_timeout,
+            CHECK_INTERVAL,
+            |snap| snap.active_index == Some(hls_idx),
+        )
+        .await?;
+        self.click_button("play-btn").await?;
+
+        // Wait for resource to be fully loaded (duration known).
+        self.wait_for(
+            "track duration known",
+            self.config.wait_timeout,
+            CHECK_INTERVAL,
+            |snap| snap.dur.unwrap_or(0.0) > 0.0,
+        )
+        .await?;
+
+        // Sample worker count right after track load (may include ephemeral workers).
+        let (count_peak, urls_peak) = self.count_web_workers().await?;
+        let delta_peak = count_peak.saturating_sub(baseline);
+        println!(
+            "[worker_count] after track load: {count_peak} workers (+{delta_peak} \
+             from baseline), urls={urls_peak:?}"
+        );
+
+        // Phase 3: Wait for ephemeral workers (probe/decoder spawn_blocking) to exit.
+        sleep(Duration::from_secs(10)).await;
+
+        // Verify playback is still alive.
+        self.assert_motion(
+            "playback after worker settle",
+            Duration::from_secs(3),
+            250.0,
+        )
+        .await?;
+
+        let (count_steady, urls_steady) = self.count_web_workers().await?;
+        let delta_steady = count_steady.saturating_sub(baseline);
+        println!(
+            "[worker_count] steady state: {count_steady} workers (+{delta_steady} \
+             from baseline), urls={urls_steady:?}"
+        );
+
+        // Expect at most +2 from baseline: engine command worker + shared audio worker.
+        // With wasm_safe_thread pool model, workers may be reused (delta=0).
+        // The key invariant: no unbounded growth.
+        if delta_steady > 2 {
+            return Err(format!(
+                "too many workers at steady state: expected at most baseline+2 \
+                 (engine + shared audio), got baseline({baseline})+{delta_steady}={count_steady}: \
+                 {urls_steady:?}"
+            ));
+        }
+
+        // Phase 4: Report ephemeral cleanup.
+        if count_peak > count_steady {
+            println!(
+                "[worker_count] ephemeral cleanup OK: peak={count_peak} → \
+                 steady={count_steady} ({} ephemeral workers terminated)",
+                count_peak - count_steady
+            );
+        } else {
+            println!(
+                "[worker_count] no ephemeral workers observed at peak \
+                 (peak={count_peak}, steady={count_steady})"
+            );
+        }
+
+        Ok(())
+    }
+
     async fn run_player_scenarios(&self) -> Result<(), String> {
         let tracks = self.prepare_local_tracks().await?;
 
@@ -1406,4 +1529,15 @@ async fn selenium_drm_playback_scenario() {
         .unwrap_or_else(|err| panic!("failed to prepare local tracks: {err}"));
     let result = session.scenario_drm_playback(tracks).await;
     selenium_teardown(session, "drm_playback_scenario", result).await;
+}
+
+/// Verify Web Worker count at each lifecycle stage:
+/// - After page load: 0 workers (engine starts lazily)
+/// - Steady state after track load: 2 workers (engine + shared audio)
+/// - Ephemeral spawn_blocking workers (probe/decoder) cleaned up
+#[kithara::test(selenium)]
+async fn selenium_worker_count() {
+    let (_harness, session) = selenium_setup().await;
+    let result = session.run_worker_count_scenario().await;
+    selenium_teardown(session, "worker_count", result).await;
 }

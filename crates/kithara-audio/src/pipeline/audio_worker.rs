@@ -349,7 +349,9 @@ fn run_shared_worker_loop(
                 hang_reset!();
                 kithara_platform::thread::yield_now();
             } else if tracks.is_empty() {
-                hang_tick!();
+                // No tracks registered — the worker is legitimately idle,
+                // not hung. Reset the watchdog to avoid false positives.
+                hang_reset!();
                 wake.wait_timeout(EMPTY_TIMEOUT);
             } else {
                 hang_tick!();
