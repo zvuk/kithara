@@ -92,9 +92,15 @@ impl AudioWorkerHandle {
     }
 
     /// Register a track. Returns the assigned [`TrackId`].
+    ///
+    /// If the worker thread has already exited (e.g. after shutdown), the
+    /// registration is silently lost and the returned track will produce no
+    /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
         let id = self.id_gen.next();
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Register(id, reg));
+        if self.cmd_tx.send_sync(WorkerCmd::Register(id, reg)).is_err() {
+            warn!(track_id = id, "register_track: worker channel closed");
+        }
         self.wake.wake();
         id
     }

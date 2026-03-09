@@ -12,6 +12,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
+use kithara_audio::AudioWorkerHandle;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
@@ -92,6 +93,11 @@ pub struct EngineImpl {
 
     /// Per-slot command channels and shared state.
     slot_handles: Mutex<Vec<SlotHandle>>,
+
+    /// Shared audio worker for cooperative multi-track decoding.
+    ///
+    /// All tracks loaded by this engine share this single worker thread.
+    worker: AudioWorkerHandle,
 }
 
 impl EngineImpl {
@@ -118,6 +124,7 @@ impl EngineImpl {
             running: AtomicBool::new(false),
             session,
             slot_handles: Mutex::new(Vec::new()),
+            worker: AudioWorkerHandle::new(),
         }
     }
 
@@ -187,6 +194,15 @@ impl EngineImpl {
             .map(|h| Arc::clone(&h.shared_state))
     }
 
+    /// Shared audio worker handle for this engine.
+    ///
+    /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks
+    /// loaded through this engine share a single decode thread.
+    #[must_use]
+    pub fn worker(&self) -> &AudioWorkerHandle {
+        &self.worker
+    }
+
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
     }
@@ -205,6 +221,8 @@ impl EngineImpl {
 
 impl Drop for EngineImpl {
     fn drop(&mut self) {
+        // Unregister player first — detaches the graph so the audio thread
+        // stops reading from PlayerResources before the worker is killed.
         let player_id = *self.player_id.lock_sync();
         if let Some(player_id) = player_id
             && let Err(err) = self.session.unregister_player(player_id)
@@ -214,6 +232,8 @@ impl Drop for EngineImpl {
                 player_id, "failed to unregister player from shared session"
             );
         }
+
+        self.worker.shutdown();
     }
 }
 
@@ -386,4 +406,37 @@ pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
     use std::sync::OnceLock;
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn engine_creates_worker() {
+        let engine = EngineImpl::new(EngineConfig::default());
+        // Worker accessor should return a valid handle.
+        let _w = engine.worker();
+    }
+
+    #[kithara::test]
+    fn engine_worker_is_clonable() {
+        let engine = EngineImpl::new(EngineConfig::default());
+        let w1 = engine.worker().clone();
+        let w2 = engine.worker().clone();
+        // Both clones should be usable (same underlying worker).
+        w1.wake();
+        w2.wake();
+    }
+
+    #[kithara::test]
+    fn engine_drop_shuts_down_worker() {
+        let engine = EngineImpl::new(EngineConfig::default());
+        let worker_clone = engine.worker().clone();
+        drop(engine);
+        // Worker should be shut down — wake() is harmless on a dead worker.
+        worker_clone.wake();
+    }
 }
