@@ -6,6 +6,7 @@ use kithara::play::{Resource, ResourceConfig};
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
 use crate::{
     config,
     item_bridge::ItemEventBridge,
@@ -152,18 +153,21 @@ impl AudioPlayerItem {
             return;
         };
 
-        let resource = self.resource.lock_sync();
-        let Some(resource) = resource.as_ref() else {
+        let Some((rx, duration_seconds)) = ({
+            let resource = self.resource.lock_sync();
+            resource.as_ref().map(|resource| {
+                (
+                    resource.subscribe(),
+                    resource.duration().map(|duration| duration.as_secs_f64()),
+                )
+            })
+        }) else {
             *self.event_bridge.lock_sync() = None;
             return;
         };
 
-        let bridge = ItemEventBridge::spawn(
-            resource.subscribe(),
-            observer,
-            resource.duration().map(|duration| duration.as_secs_f64()),
-            CancellationToken::new(),
-        );
+        let bridge =
+            ItemEventBridge::spawn(rx, observer, duration_seconds, CancellationToken::new());
         *self.event_bridge.lock_sync() = Some(bridge);
     }
 }
