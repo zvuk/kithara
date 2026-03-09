@@ -307,16 +307,18 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let labels = ["Low", "Mid", "High"];
+    let band_count = state.eq_bands.len();
     let mut bands_row = row![].spacing(26).align_y(Alignment::End);
 
-    for (index, label) in labels.iter().enumerate() {
+    for index in 0..band_count {
         let value = state.eq_bands[index].clamp(-24.0, 6.0);
         let value_color = if value.abs() < 0.05 {
             p.muted
         } else {
             p.accent
         };
+
+        let label = eq_band_label(index, band_count);
 
         let band = column![
             text(format!("{value:+.1} dB")).size(13).color(value_color),
@@ -326,7 +328,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
             .step(0.5)
             .height(Length::Fixed(190.0))
             .style(slider_style(p)),
-            text(*label).size(14).color(p.text),
+            text(label).size(14).color(p.text),
             button(text("Reset").size(12).color(p.muted))
                 .padding([4, 8])
                 .style(ghost_button_style(p))
@@ -338,9 +340,10 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
         bands_row = bands_row.push(band);
     }
 
+    let title = format!("{band_count}-Band Equalizer");
     container(
         column![
-            text("3-Band Equalizer").size(16).color(p.text),
+            text(title).size(16).color(p.text),
             container(bands_row)
                 .width(Length::Fill)
                 .center_x(Length::Fill)
@@ -350,6 +353,18 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// Generate a short label for an EQ band by index.
+fn eq_band_label(index: usize, total: usize) -> String {
+    if total <= 3 {
+        return match index {
+            0 => "Low".to_string(),
+            i if i == total - 1 => "High".to_string(),
+            _ => "Mid".to_string(),
+        };
+    }
+    format!("{}", index + 1)
 }
 
 fn view_dj(state: &Kithara) -> Element<'_, Message> {

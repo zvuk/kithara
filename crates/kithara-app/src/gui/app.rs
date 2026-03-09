@@ -30,8 +30,8 @@ pub(crate) struct Kithara {
     pub(crate) seek_position: f32,
     pub(crate) is_seeking: bool,
 
-    // EQ bands (Low / Mid / High), in dB.
-    pub(crate) eq_bands: [f32; 3],
+    // EQ band gains in dB (one per band from eq_layout).
+    pub(crate) eq_bands: Vec<f32>,
 
     // Crossfade duration in seconds.
     pub(crate) crossfade: f32,
@@ -58,6 +58,7 @@ impl Kithara {
         let playlist = Arc::new(Playlist::new(tracks));
         let volume = player.volume();
         let crossfade = player.crossfade_duration();
+        let eq_band_count = player.eq_band_count();
 
         let mut state = Self {
             player,
@@ -69,7 +70,7 @@ impl Kithara {
             volume,
             seek_position: 0.0,
             is_seeking: false,
-            eq_bands: [0.0; 3],
+            eq_bands: vec![0.0; eq_band_count],
             crossfade,
             current_track_index: None,
             track_name: String::new(),
