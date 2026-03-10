@@ -1,32 +1,49 @@
 package com.kithara
 
-import com.kithara.ffi.AudioPlayerItem
-import com.kithara.ffi.FfiException
+import com.kithara.ffi.AudioPlayerItem as FfiAudioPlayerItem
+import com.kithara.ffi.FfiItemEvent
+import com.kithara.ffi.FfiItemStatus
 import com.kithara.ffi.ItemObserver
+import com.kithara.ffi.StoreOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * Queue item wrapper around the raw UniFFI `AudioPlayerItem`.
+ * A single audio item that can be queued in [KitharaPlayer].
  *
- * Create an item, call [load], then insert it into [KitharaPlayer].
+ * Call [load] to start preparing the resource, then insert the item into a player queue.
+ * Errors during load are delivered via [state] as [ItemState.error].
+ * Call [Kithara.initialize] before creating any instance.
  *
- * @param url Source URL for the item.
- * @param additionalHeaders Optional request headers sent when loading the item.
+ * ```kotlin
+ * val item = KitharaPlayerItem("https://example.com/audio.mp3")
+ * item.load()
+ * player.insert(item)
+ * player.play()
+ * ```
+ *
+ * @param url The audio source URL.
+ * @param additionalHeaders Optional HTTP headers included in all requests for this item.
  */
 class KitharaPlayerItem(
-    /**
-     * Source URL for the item.
-     */
-    val url: String,
+    url: String,
     additionalHeaders: Map<String, String>? = null,
 ) {
-    internal val inner = AudioPlayerItem(url, additionalHeaders)
+    internal val inner: FfiAudioPlayerItem = FfiAudioPlayerItem(url, additionalHeaders)
+
+    init {
+        inner.setStoreOptions(StoreOptions(cacheDir = Kithara.cacheDir))
+    }
 
     /**
-     * Stable identifier for the item instance.
+     * Source URL for this item.
+     */
+    val url: String = inner.url()
+
+    /**
+     * Stable identifier for this item instance.
      */
     val id: String = inner.id()
 
@@ -38,18 +55,18 @@ class KitharaPlayerItem(
     }
 
     /**
-     * Item state as a single observable snapshot.
+     * Full item state as a single observable snapshot.
      */
     val state: StateFlow<ItemState> = stateFlow.asStateFlow()
 
     /**
-     * Current item status.
+     * Current loading state of the item.
      */
     val status: ItemStatus
         get() = state.value.status
 
     /**
-     * Current duration in seconds, if known.
+     * Duration in seconds, or `null` if unknown.
      */
     val duration: Double?
         get() = state.value.duration
@@ -76,7 +93,7 @@ class KitharaPlayerItem(
         }
 
     /**
-     * Preferred peak bitrate for expensive networks. Zero means no limit.
+     * Preferred peak bitrate for expensive networks in bits per second. Zero means no limit.
      */
     var preferredPeakBitrateForExpensiveNetworks: Double
         get() = inner.preferredPeakBitrateForExpensiveNetworks()
@@ -85,57 +102,49 @@ class KitharaPlayerItem(
         }
 
     /**
-     * Asynchronously prepares the underlying Rust resource.
+     * Starts loading the underlying resource (fire-and-forget).
      *
-     * Must complete successfully before the item is inserted into a player queue.
+     * Safe to call before inserting into a [KitharaPlayer] — the call is idempotent.
+     * Errors are reported through [state] as [ItemState.error].
      */
-    suspend fun load() {
-        try {
-            inner.load()
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
-        }
+    fun load() {
+        inner.load()
     }
 
     private fun updateState(update: (ItemState) -> ItemState) {
         stateFlow.update(update)
     }
 
-    private fun handleStatusChanged(code: Int) {
-        updateState { current -> current.copy(status = itemStatusFromCode(code)) }
-    }
+    private fun handleEvent(event: FfiItemEvent) {
+        when (event) {
+            is FfiItemEvent.DurationChanged ->
+                updateState { it.copy(duration = event.seconds) }
 
-    private fun handleDurationChanged(seconds: Double) {
-        updateState { current -> current.copy(duration = seconds) }
-    }
+            is FfiItemEvent.BufferedDurationChanged ->
+                updateState { it.copy(bufferedDuration = event.seconds) }
 
-    private fun handleBufferedDurationChanged(seconds: Double) {
-        updateState { current -> current.copy(bufferedDuration = seconds) }
-    }
+            is FfiItemEvent.StatusChanged ->
+                updateState { it.copy(status = event.status.toItemStatus()) }
 
-    private fun handleError(code: Int, message: String) {
-        updateState { current ->
-            current.copy(error = KitharaError.fromObserverCode(code, message))
+            is FfiItemEvent.Error ->
+                updateState { it.copy(
+                    error = KitharaError.ItemFailed(event.error),
+                    status = ItemStatus.Failed,
+                ) }
         }
     }
 
     private class ItemObserverBridge(
         private val item: KitharaPlayerItem,
     ) : ItemObserver {
-        override fun onDurationChanged(seconds: Double) {
-            item.handleDurationChanged(seconds)
-        }
-
-        override fun onBufferedDurationChanged(seconds: Double) {
-            item.handleBufferedDurationChanged(seconds)
-        }
-
-        override fun onStatusChanged(statusCode: Int) {
-            item.handleStatusChanged(statusCode)
-        }
-
-        override fun onError(code: Int, message: String) {
-            item.handleError(code, message)
+        override fun onEvent(event: FfiItemEvent) {
+            item.handleEvent(event)
         }
     }
+}
+
+private fun FfiItemStatus.toItemStatus(): ItemStatus = when (this) {
+    FfiItemStatus.READY_TO_PLAY -> ItemStatus.ReadyToPlay
+    FfiItemStatus.FAILED -> ItemStatus.Failed
+    FfiItemStatus.UNKNOWN -> ItemStatus.Unknown
 }

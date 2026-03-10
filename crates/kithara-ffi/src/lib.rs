@@ -12,7 +12,7 @@ uniffi::setup_scaffolding!();
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
-pub(crate) mod config;
+pub mod config;
 pub(crate) mod event_bridge;
 pub mod item;
 pub(crate) mod item_bridge;

@@ -15,7 +15,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    config,
+    config::{self, StoreOptions},
     item_bridge::ItemEventBridge,
     observer::ItemObserver,
     types::{FfiError, FfiItemEvent, FfiResult},
@@ -30,6 +30,7 @@ pub struct AudioPlayerItem {
     preferred_peak_bitrate: Mutex<f64>,
     preferred_peak_bitrate_expensive: Mutex<f64>,
     resource: Mutex<Option<Resource>>,
+    store: Mutex<StoreOptions>,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     loading: AtomicBool,
@@ -55,6 +56,7 @@ impl AudioPlayerItem {
             preferred_peak_bitrate: Mutex::new(0.0),
             preferred_peak_bitrate_expensive: Mutex::new(0.0),
             resource: Mutex::new(None),
+            store: Mutex::new(StoreOptions::default()),
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             loading: AtomicBool::new(false),
@@ -123,6 +125,10 @@ impl AudioPlayerItem {
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
         *self.observer.lock_sync() = Some(observer);
         self.restart_bridge();
+    }
+
+    pub fn set_store_options(&self, store: StoreOptions) {
+        *self.store.lock_sync() = store;
     }
 }
 
@@ -197,7 +203,7 @@ impl AudioPlayerItem {
             description: e.to_string(),
         })?;
 
-        config::configure_resource(&mut config);
+        config::configure_resource(&mut config, &self.store.lock_sync());
 
         let bitrate = self.preferred_peak_bitrate();
         if bitrate > 0.0 {

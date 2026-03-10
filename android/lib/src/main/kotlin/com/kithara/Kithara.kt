@@ -3,18 +3,18 @@ package com.kithara
 import android.content.Context
 
 /**
- * Entry point for initializing the Android bindings.
+ * Entry point for the Kithara audio engine.
  *
- * Example:
+ * Call [initialize] once before using any Kithara API — typically in
+ * `Application.onCreate`. After that, create players and items directly:
+ *
  * ```kotlin
- * import androidx.lifecycle.lifecycleScope
- * import kotlinx.coroutines.launch
- *
+ * // In Application.onCreate:
  * Kithara.initialize(applicationContext)
  *
+ * // Anywhere in the app:
  * val player = KitharaPlayer()
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
- *
  * lifecycleScope.launch {
  *     item.load()
  *     player.insert(item)
@@ -23,43 +23,37 @@ import android.content.Context
  * ```
  */
 object Kithara {
+    /**
+     * Cache directory path used by all items created after [initialize].
+     * Empty string if [initialize] has not been called yet.
+     */
     @Volatile
-    private var initialized = false
+    internal var cacheDir: String = ""
+        private set
+
+    @Volatile
+    private var ready = false
 
     /**
-     * Loads the native library and configures shared runtime state.
+     * Initialize the native Kithara library.
      *
-     * Safe to call multiple times; repeated calls after the first one are ignored.
+     * Must be called once before creating any [KitharaPlayer] or [KitharaPlayerItem].
+     * Safe to call multiple times — subsequent calls are no-ops.
      *
-     * @param context Android context used to resolve application directories.
-     * @param config Android-side configuration forwarded to the native layer.
+     * @param context Any [Context]; the application context is used internally.
      */
-    fun initialize(
-        context: Context,
-        config: KitharaConfig = KitharaConfig(),
-    ) {
-        if (initialized) {
-            return
-        }
-
+    fun initialize(context: Context) {
+        if (ready) return
         synchronized(this) {
-            if (initialized) {
-                return
-            }
-
+            if (ready) return
             System.loadLibrary("kithara_ffi")
-            nativeSetStoreOptions(
-                config.store.copy(
-                    cacheDir = config.store.cacheDir ?: context.cacheDir.absolutePath,
-                ),
-            )
             nativeInitRustlsPlatformVerifier(context.applicationContext)
-            initialized = true
+            cacheDir = context.applicationContext.cacheDir
+                .resolve("kithara")
+                .absolutePath
+            ready = true
         }
     }
-
-    @JvmStatic
-    private external fun nativeSetStoreOptions(store: KitharaStoreOptions)
 
     @JvmStatic
     private external fun nativeInitRustlsPlatformVerifier(context: Context)

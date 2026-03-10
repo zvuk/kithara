@@ -1,14 +1,27 @@
 package com.kithara
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class KitharaPlayerTest {
+
+    companion object {
+        @JvmStatic
+        @BeforeClass
+        fun setUpClass() {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            Kithara.initialize(context)
+        }
+    }
+
     @Test
     fun initCreatesPlayerWithUnknownStatus() {
         val player = KitharaPlayer()

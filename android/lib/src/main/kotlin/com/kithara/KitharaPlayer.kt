@@ -1,8 +1,11 @@
 package com.kithara
 
-import com.kithara.ffi.AudioPlayer
+import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiPlayerEvent
+import com.kithara.ffi.FfiPlayerStatus
 import com.kithara.ffi.PlayerObserver
+import com.kithara.ffi.SeekCallback
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -12,15 +15,23 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * Queue-based Android player facade over the raw `AudioPlayer`.
+ * Queue-based audio player.
  *
- * Public consumers can either observe the aggregated [state] or read the
- * convenience accessors for the latest snapshot.
+ * Observe [state] for reactive updates, or read convenience accessors for the
+ * latest snapshot. Call [Kithara.initialize] before creating any instance.
+ *
+ * ```kotlin
+ * val player = KitharaPlayer()
+ * val item = KitharaPlayerItem("https://example.com/audio.mp3")
+ * item.load()
+ * player.insert(item)
+ * player.play()
+ * ```
  */
-class KitharaPlayer {
-    private val inner = AudioPlayer()
+class KitharaPlayer() {
+    private val inner: FfiAudioPlayer = FfiAudioPlayer()
     private val observer = PlayerObserverBridge(this)
-    private val currentItemChangesFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val currentItemChangesFlow = MutableSharedFlow<String?>(extraBufferCapacity = 1)
     private val stateFlow = MutableStateFlow(PlayerState())
 
     init {
@@ -33,9 +44,9 @@ class KitharaPlayer {
     val state: StateFlow<PlayerState> = stateFlow.asStateFlow()
 
     /**
-     * One-shot event emitted when the current item changes.
+     * Emits the new current item ID (or null) whenever the current item changes.
      */
-    val currentItemChanges: SharedFlow<Unit> = currentItemChangesFlow.asSharedFlow()
+    val currentItemChanges: SharedFlow<String?> = currentItemChangesFlow.asSharedFlow()
 
     /**
      * Current playback time in seconds.
@@ -105,24 +116,19 @@ class KitharaPlayer {
     /**
      * Seeks the current item to the given position in seconds.
      *
+     * Result is delivered asynchronously via [onComplete].
+     *
      * @param seconds Target playback position in seconds from the item start.
-     * @throws KitharaError If the native seek request fails.
+     * @param onComplete Called with `true` if seek succeeded, `false` otherwise.
      */
-    @Throws(KitharaError::class)
-    fun seek(seconds: Double) {
-        try {
-            inner.seek(seconds)
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
-        }
+    fun seek(seconds: Double, onComplete: (Boolean) -> Unit) {
+        inner.seek(seconds, SeekCallbackAdapter(onComplete))
     }
 
     /**
      * Inserts an item into the queue.
      *
-     * The item must already be prepared via [KitharaPlayerItem.load].
-     *
-     * @param item Prepared item to insert.
+     * @param item Item to insert.
      * @param after Optional queue item after which the new item should be inserted.
      * @throws KitharaError If the native insert request fails.
      */
@@ -168,67 +174,56 @@ class KitharaPlayer {
         stateFlow.update(update)
     }
 
-    private fun handleTimeChanged(seconds: Double) {
-        updateState { current -> current.copy(currentTime = seconds) }
-    }
+    private fun handleEvent(event: FfiPlayerEvent) {
+        when (event) {
+            is FfiPlayerEvent.TimeChanged ->
+                updateState { it.copy(currentTime = event.seconds) }
 
-    private fun handleRateChanged(rate: Float) {
-        updateState { current -> current.copy(rate = rate) }
-    }
+            is FfiPlayerEvent.RateChanged ->
+                updateState { it.copy(rate = event.rate) }
 
-    private fun handleCurrentItemChanged() {
-        currentItemChangesFlow.tryEmit(Unit)
-    }
+            is FfiPlayerEvent.DurationChanged ->
+                updateState { it.copy(duration = event.seconds) }
 
-    private fun handleStatusChanged(code: Int) {
-        updateState { current -> current.copy(status = playerStatusFromCode(code)) }
-    }
+            is FfiPlayerEvent.BufferedDurationChanged ->
+                updateState { it.copy(bufferedDuration = event.seconds) }
 
-    private fun handleError(code: Int, message: String) {
-        updateState { current ->
-            current.copy(error = KitharaError.fromObserverCode(code, message))
+            is FfiPlayerEvent.StatusChanged ->
+                updateState { it.copy(status = event.status.toPlayerStatus()) }
+
+            is FfiPlayerEvent.Error ->
+                updateState { it.copy(error = KitharaError.Internal(event.error)) }
+
+            is FfiPlayerEvent.CurrentItemChanged ->
+                currentItemChangesFlow.tryEmit(event.itemId)
+
+            is FfiPlayerEvent.TimeControlStatusChanged,
+            is FfiPlayerEvent.VolumeChanged,
+            is FfiPlayerEvent.MuteChanged -> Unit
         }
-    }
-
-    private fun handleDurationChanged(seconds: Double) {
-        updateState { current -> current.copy(duration = seconds) }
-    }
-
-    private fun handleBufferedDurationChanged(seconds: Double) {
-        updateState { current -> current.copy(bufferedDuration = seconds) }
     }
 
     private class PlayerObserverBridge(
         private val player: KitharaPlayer,
     ) : PlayerObserver {
-        override fun onTimeChanged(seconds: Double) {
-            player.handleTimeChanged(seconds)
-        }
-
-        override fun onRateChanged(rate: Float) {
-            player.handleRateChanged(rate)
-        }
-
-        override fun onCurrentItemChanged() {
-            player.handleCurrentItemChanged()
-        }
-
-        override fun onStatusChanged(statusCode: Int) {
-            player.handleStatusChanged(statusCode)
-        }
-
-        override fun onError(code: Int, message: String) {
-            player.handleError(code, message)
-        }
-
-        override fun onDurationChanged(seconds: Double) {
-            player.handleDurationChanged(seconds)
-        }
-
-        override fun onBufferedDurationChanged(seconds: Double) {
-            player.handleBufferedDurationChanged(seconds)
+        override fun onEvent(event: FfiPlayerEvent) {
+            player.handleEvent(event)
         }
     }
+
+    private class SeekCallbackAdapter(
+        private val callback: (Boolean) -> Unit,
+    ) : SeekCallback {
+        override fun onComplete(finished: Boolean) {
+            callback(finished)
+        }
+    }
+}
+
+private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
+    FfiPlayerStatus.READY_TO_PLAY -> PlayerStatus.ReadyToPlay
+    FfiPlayerStatus.FAILED -> PlayerStatus.Failed
+    FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
 }
 
 private fun List<KitharaPlayerItem>.inserted(

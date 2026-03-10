@@ -1,15 +1,28 @@
 package com.kithara
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class KitharaPlayerItemTest {
+
+    companion object {
+        @JvmStatic
+        @BeforeClass
+        fun setUpClass() {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            Kithara.initialize(context)
+        }
+    }
+
     @Test
     fun initSetsIdAndUrl() {
         val item = KitharaPlayerItem("https://example.com/song.mp3")

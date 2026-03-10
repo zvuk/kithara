@@ -5,8 +5,11 @@ import KitharaFFI
 
 /// Playback readiness state of the player.
 public enum PlayerStatus: Sendable {
+    /// The player has not yet reported a stable readiness state.
     case unknown
+    /// The player is ready to start or continue playback.
     case readyToPlay
+    /// The player entered a failed state and cannot continue without recovery.
     case failed
 }
 
@@ -14,8 +17,11 @@ public enum PlayerStatus: Sendable {
 
 /// Loading state of a player item.
 public enum ItemStatus: Sendable {
+    /// The item has not yet reported a stable readiness state.
     case unknown
+    /// The item is ready for playback.
     case readyToPlay
+    /// Item loading or preparation failed.
     case failed
 }
 
@@ -23,8 +29,11 @@ public enum ItemStatus: Sendable {
 
 /// Whether playback is actively producing audio.
 public enum TimeControlStatus: Sendable {
+    /// Playback is paused.
     case paused
+    /// The player is waiting to accumulate enough data before playing.
     case waitingToPlay
+    /// Playback is in progress and producing audio.
     case playing
 }
 
@@ -32,11 +41,17 @@ public enum TimeControlStatus: Sendable {
 
 /// Public error type surfaced by the Kithara Swift layer.
 public enum KitharaError: Error, Sendable {
+    /// Operation requires a prepared item or a ready player state.
     case notReady
+    /// Item playback or loading failed. The associated value is a human-readable reason.
     case itemFailed(String)
+    /// Seek request failed. The associated value is a human-readable reason.
     case seekFailed(String)
+    /// The audio engine is not running.
     case engineNotRunning
+    /// Supplied argument is invalid. The associated value is a human-readable reason.
     case invalidArgument(String)
+    /// Unexpected internal failure propagated from the native layer.
     case `internal`(String)
 }
 

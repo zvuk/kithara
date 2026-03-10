@@ -54,13 +54,5 @@ sealed class KitharaError(message: String) : Exception(message) {
             is FfiException.Internal -> Internal(error.description)
         }
 
-        internal fun fromObserverCode(code: Int, message: String): KitharaError = when (code) {
-            1 -> NotReady
-            2 -> ItemFailed(message)
-            3 -> SeekFailed(message)
-            4 -> EngineNotRunning
-            5 -> InvalidArgument(message)
-            else -> Internal(message)
-        }
     }
 }

@@ -3771,6 +3771,7 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-play",
+ "ndk-context",
  "rustls-platform-verifier",
  "thiserror 2.0.18",
  "tokio",

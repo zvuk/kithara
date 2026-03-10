@@ -14,13 +14,9 @@ val generateKitharaFfi by tasks.registering(Exec::class) {
     inputs.dir(repoRoot.resolve("crates"))
     inputs.file(repoRoot.resolve("Cargo.toml"))
     inputs.file(repoRoot.resolve("Cargo.lock"))
-    inputs.file(repoRoot.resolve("scripts/build-android-bindings.sh"))
-    commandLine(
-        "bash",
-        repoRoot.resolve("scripts/build-android-bindings.sh").absolutePath,
-    )
+    commandLine("cargo", "xtask", "android")
     if (releaseBuild.get()) {
-        args("--release")
+        args("--profile", "release")
     }
     outputs.dir(generatedKotlinDir)
     outputs.dir(generatedJniDir)

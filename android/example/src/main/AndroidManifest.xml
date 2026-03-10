@@ -4,8 +4,8 @@
 
     <application
         android:allowBackup="true"
-        android:label="KitharaDemo"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:label="@string/app_name"
+        android:theme="@style/Theme.KitharaDemo">
         <activity
             android:name=".MainActivity"
             android:exported="true">

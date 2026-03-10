@@ -63,15 +63,3 @@ data class ItemState(
     val error: KitharaError? = null,
     val status: ItemStatus = ItemStatus.Unknown,
 )
-
-internal fun playerStatusFromCode(code: Int): PlayerStatus = when (code) {
-    1 -> PlayerStatus.ReadyToPlay
-    2 -> PlayerStatus.Failed
-    else -> PlayerStatus.Unknown
-}
-
-internal fun itemStatusFromCode(code: Int): ItemStatus = when (code) {
-    1 -> ItemStatus.ReadyToPlay
-    2 -> ItemStatus.Failed
-    else -> ItemStatus.Unknown
-}
