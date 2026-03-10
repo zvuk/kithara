@@ -1,3 +1,4 @@
+pub(crate) mod arena_registry;
 pub mod config;
 pub(crate) mod crossfade;
 pub mod engine;
