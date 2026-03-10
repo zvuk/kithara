@@ -23,7 +23,11 @@ fn asset_store_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetStore
 
 // AssetResource Path Tests
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("metadata.json");
@@ -51,7 +55,11 @@ fn asset_resource_path_method(temp_dir: TestTempDir) {
     assert!(asset_path.file_name().unwrap() == "metadata.json");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("media.bin");
@@ -82,7 +90,11 @@ fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
     assert!(asset_path.file_name().unwrap() == "media.bin");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("data.bin");
@@ -104,7 +116,11 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
@@ -130,7 +146,11 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     assert!(relative_path.ends_with(resource_name));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
     let asset_store = asset_store_with_root(&temp_dir, asset_root);

@@ -19,7 +19,7 @@ const SAMPLE_COUNT: usize = (D.sample_rate as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 200;
 const CHUNKS_PER_BURST: usize = 5;
 
-#[kithara::test(timeout(Duration::from_secs(30)))]
+#[kithara::test(timeout(Duration::from_secs(30)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn stress_seeks_preserve_timeline_integrity() {
     let wav_data = create_test_wav(SAMPLE_COUNT, D.sample_rate, 2);
     let cursor = Cursor::new(wav_data);

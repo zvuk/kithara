@@ -1059,7 +1059,12 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     assert!(saw_metadata_miss, "expected SeekMetadataMiss diagnostic");
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_wait_range_stalled_on_demand_request_is_interrupted_by_flush(_tracing_setup: ()) {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1094,7 +1099,12 @@ async fn test_wait_range_stalled_on_demand_request_is_interrupted_by_flush(_trac
     assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_arrives() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1135,7 +1145,12 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     assert!(matches!(result, Ok(WaitOutcome::Ready)));
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1229,7 +1244,13 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
 /// Background task pushes entries at 0..100, 100..200, ... every 200ms.
 /// `range_ready=false` throughout (no entry covers offset 2500).
 /// Expected: hang detector panics after 10s timeout.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(15)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(15)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant

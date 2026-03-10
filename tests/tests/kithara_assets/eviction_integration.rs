@@ -43,7 +43,11 @@ fn asset_store_with_root(
         .build()
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(2, 3)]
 #[case(3, 4)]
 #[case(5, 6)]
@@ -113,7 +117,11 @@ fn eviction_max_assets_skips_pinned_assets(
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1)]
 #[case(2)]
 #[case(3)]
@@ -148,7 +156,11 @@ fn eviction_ignores_missing_index(
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -177,7 +189,11 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1, 3, 1)] // max_assets=1, create 3 assets, keep 1 newest pinned
 #[case(2, 4, 1)] // max_assets=2, create 4 assets, keep 1 newest pinned
 #[case(3, 6, 2)] // max_assets=3, create 6 assets, keep 2 newest pinned

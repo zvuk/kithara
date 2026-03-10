@@ -23,8 +23,8 @@ use crate::downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 const DEFAULT_YIELD_INTERVAL: usize = 8;
 
 enum LoopControl {
+    Continue { made_progress: bool },
     Exit,
-    Proceed,
     Restart,
 }
 
@@ -118,12 +118,15 @@ impl Backend {
                     return;
                 }
 
-                if Self::wait_while_throttled(&mut dl, &cancel).await.is_err() {
-                    return;
-                }
-                if Self::drain_demand_requests(&mut dl, &cancel).await.is_err() {
-                    return;
-                }
+                let mut made_progress = match Self::wait_while_throttled(&mut dl, &cancel).await {
+                    Ok(value) => value,
+                    Err(()) => return,
+                };
+                let demand_progress = match Self::drain_demand_requests(&mut dl, &cancel).await {
+                    Ok(value) => value,
+                    Err(()) => return,
+                };
+                made_progress |= demand_progress;
 
                 hang_tick!();
                 kithara_platform::thread::yield_now();
@@ -143,16 +146,32 @@ impl Backend {
 
                 match control {
                     LoopControl::Exit => return,
-                    LoopControl::Restart => continue,
-                    LoopControl::Proceed => {
+                    LoopControl::Restart => {
+                        if made_progress {
+                            hang_reset!();
+                            steps_since_yield += 1;
+                        } else {
+                            steps_since_yield = 0;
+                        }
+                        continue;
+                    }
+                    LoopControl::Continue {
+                        made_progress: loop_progress,
+                    } => {
+                        made_progress |= loop_progress;
+                    }
+                }
+
+                if made_progress {
                         hang_reset!();
                         steps_since_yield += 1;
-                    }
+                } else {
+                    steps_since_yield = 0;
                 }
 
                 // 4. Periodic yield (only when not throttled — backpressure loop
                 //    already yields to runtime via wait_ready).
-                if !dl.should_throttle() && steps_since_yield >= yield_interval {
+                if made_progress && !dl.should_throttle() && steps_since_yield >= yield_interval {
                     tokio::task::yield_now().await;
                     steps_since_yield = 0;
                 }
@@ -163,7 +182,8 @@ impl Backend {
     async fn wait_while_throttled<D: Downloader>(
         dl: &mut D,
         cancel: &CancellationToken,
-    ) -> Result<(), ()> {
+    ) -> Result<bool, ()> {
+        let mut made_progress = false;
         while dl.should_throttle() {
             tokio::select! {
                 biased;
@@ -177,27 +197,34 @@ impl Backend {
             if let Some(plan) = Self::try_poll_demand(dl, cancel).await
                 && Self::fetch_and_commit_demand(dl, plan, cancel)
                     .await
+                    .map(|progress| {
+                        made_progress |= progress;
+                    })
                     .is_err()
             {
                 return Err(());
             }
         }
-        Ok(())
+        Ok(made_progress)
     }
 
     async fn drain_demand_requests<D: Downloader>(
         dl: &mut D,
         cancel: &CancellationToken,
-    ) -> Result<(), ()> {
+    ) -> Result<bool, ()> {
+        let mut made_progress = false;
         while let Some(plan) = Self::try_poll_demand(dl, cancel).await {
             if Self::fetch_and_commit_demand(dl, plan, cancel)
                 .await
+                .map(|progress| {
+                    made_progress |= progress;
+                })
                 .is_err()
             {
                 return Err(());
             }
         }
-        Ok(())
+        Ok(made_progress)
     }
 
     async fn plan_next<D: Downloader>(
@@ -221,7 +248,7 @@ impl Backend {
             () = dl.wait_for_work() => {
                 // Yield to let other tasks run (e.g. TUI updates).
                 tokio::task::yield_now().await;
-                LoopControl::Proceed
+                LoopControl::Continue { made_progress: false }
             }
         }
     }
@@ -254,22 +281,29 @@ impl Backend {
             results = futures::future::join_all(futures) => results,
         };
 
+        let mut made_progress = false;
         for result in results {
             match result {
-                Ok(fetch) => dl.commit(fetch),
+                Ok(fetch) => {
+                    dl.commit(fetch);
+                    made_progress = true;
+                }
                 Err(e) => debug!(?e, "batch fetch error"),
             }
 
             if let Some(plan) = Self::try_poll_demand(dl, cancel).await
                 && Self::fetch_and_commit_demand(dl, plan, cancel)
                     .await
+                    .map(|progress| {
+                        made_progress |= progress;
+                    })
                     .is_err()
             {
                 return LoopControl::Exit;
             }
         }
 
-        LoopControl::Proceed
+        LoopControl::Continue { made_progress }
     }
 
     async fn handle_step<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
@@ -288,7 +322,9 @@ impl Backend {
         match result {
             Ok(StepResult::Item(fetch)) => {
                 dl.commit(fetch);
-                LoopControl::Proceed
+                LoopControl::Continue {
+                    made_progress: true,
+                }
             }
             Ok(StepResult::PhaseChange) => LoopControl::Restart,
             Err(e) => {
@@ -320,7 +356,7 @@ impl Backend {
         dl: &mut D,
         plan: D::Plan,
         cancel: &CancellationToken,
-    ) -> Result<(), ()> {
+    ) -> Result<bool, ()> {
         let io = dl.io().clone();
         let result = tokio::select! {
             biased;
@@ -334,12 +370,12 @@ impl Backend {
         match result {
             Ok(fetch) => {
                 dl.commit(fetch);
-                Ok(())
+                Ok(true)
             }
             Err(e) => {
                 debug!(?e, "demand fetch error");
                 // Demand errors are not fatal — reader will retry or timeout.
-                Ok(())
+                Ok(false)
             }
         }
     }
@@ -484,5 +520,82 @@ mod tests {
 
         // Must resolve promptly — if step() blocks demand, the 2s timeout fires.
         demand_fetched.notified().await;
+    }
+
+    struct IdleWakeDownloader {
+        io: MockIo,
+        wake_notify: Arc<Notify>,
+    }
+
+    impl Downloader for IdleWakeDownloader {
+        type Plan = u64;
+        type Fetch = u64;
+        type Error = MockError;
+        type Io = MockIo;
+
+        fn io(&self) -> &MockIo {
+            &self.io
+        }
+
+        async fn poll_demand(&mut self) -> Option<u64> {
+            None
+        }
+
+        async fn plan(&mut self) -> PlanOutcome<u64> {
+            PlanOutcome::Idle
+        }
+
+        fn commit(&mut self, _fetch: u64) {}
+
+        fn should_throttle(&self) -> bool {
+            false
+        }
+
+        fn wait_ready(&self) -> impl Future<Output = ()> {
+            future::pending()
+        }
+
+        fn wait_for_work(&self) -> impl Future<Output = ()> {
+            let notify = Arc::clone(&self.wake_notify);
+            async move {
+                notify.notified().await;
+            }
+        }
+    }
+
+    #[kithara::test(
+        tokio,
+        timeout(Duration::from_secs(3)),
+        env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    )]
+    async fn idle_wakeups_without_commits_trigger_hang_detector() {
+        let wake_notify = Arc::new(Notify::new());
+        let downloader = IdleWakeDownloader {
+            io: MockIo {
+                demand_fetched: Arc::new(Notify::new()),
+            },
+            wake_notify: Arc::clone(&wake_notify),
+        };
+        let cancel = CancellationToken::new();
+        let wake_cancel = cancel.clone();
+        let wake_task = tokio::spawn({
+            let wake_notify = Arc::clone(&wake_notify);
+            async move {
+                while !wake_cancel.is_cancelled() {
+                    wake_notify.notify_one();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        });
+        let handle = tokio::spawn(Backend::run_downloader(downloader, cancel.clone()));
+
+        let join = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("downloader should fail fast instead of looping forever");
+        cancel.cancel();
+        wake_task.abort();
+
+        let err = join.expect_err("downloader must panic via hang detector");
+        assert!(err.is_panic(), "expected hang detector panic, got: {err}");
     }
 }

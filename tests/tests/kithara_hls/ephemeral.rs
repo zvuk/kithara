@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn ephemeral_backend_creates_mem_resource() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -51,7 +51,11 @@ fn ephemeral_backend_creates_mem_resource() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn disk_backend_creates_mmap_resource() {
     let temp = TestTempDir::new();
     let backend = AssetStoreBuilder::new()
@@ -99,7 +103,13 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
-#[kithara::test(native, tokio, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

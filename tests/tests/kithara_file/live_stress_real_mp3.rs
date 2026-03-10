@@ -96,7 +96,13 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[cfg_attr(
     target_arch = "wasm32",
     ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"

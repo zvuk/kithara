@@ -94,7 +94,7 @@ fn assert_wait_finishes<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
     panic!("wait_range did not wake within expected timeout");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -130,7 +130,7 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellat
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let resource = open_test_resource(&temp_dir, "stream.dat", cancel_token);
 
@@ -138,7 +138,7 @@ fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: C
     assert_eq!(resource.status(), ResourceStatus::Active);
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_open_existing_is_committed(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -196,7 +196,7 @@ fn streaming_resource_open_existing_is_committed(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_range_write_wait_read(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -211,7 +211,7 @@ fn streaming_resource_range_write_wait_read(
     assert_eq!(&data, b"Hello, World!");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_sparse_file_behavior() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -231,7 +231,7 @@ fn streaming_resource_sparse_file_behavior() {
     assert_eq!(&*read_bytes(&resource, 10000, 3), b"end");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_overlapping_writes() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -246,7 +246,7 @@ fn streaming_resource_overlapping_writes() {
     assert_eq!(&data, b"Hello Kithara!");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_zero_length_commit() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -265,7 +265,7 @@ fn streaming_resource_zero_length_commit() {
     assert!(data.is_empty());
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_edge_case_ranges() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -286,7 +286,7 @@ fn streaming_resource_edge_case_ranges() {
     assert_eq!(&data, b"X");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_concurrent_wait_and_write() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -314,7 +314,7 @@ fn streaming_resource_concurrent_wait_and_write() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_persists_across_reopen() {
     let _temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -365,7 +365,7 @@ fn streaming_resource_persists_across_reopen() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_wait_after_reopen() {
     let _temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -419,7 +419,7 @@ fn streaming_resource_wait_after_reopen() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_wait_range_partial_coverage() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -442,7 +442,7 @@ fn streaming_resource_wait_range_partial_coverage() {
     resource.wait_range(0..13).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let resource = open_test_resource(&temp_dir, "commit.dat", cancel_token);
 
@@ -460,7 +460,7 @@ fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: Cancel
     assert!(data.is_empty());
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_commit_without_final_len() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -480,7 +480,7 @@ fn streaming_resource_commit_without_final_len() {
     assert_eq!(&data, b"Hello");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_sealed_after_commit() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -500,7 +500,7 @@ fn streaming_resource_sealed_after_commit() {
     assert_eq!(&data, b"data");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_cancel_during_wait() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -528,7 +528,7 @@ fn streaming_resource_cancel_during_wait() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_fail_wakes_waiters() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -553,7 +553,7 @@ fn streaming_resource_fail_wakes_waiters() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_concurrent_operations() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -600,7 +600,7 @@ fn streaming_resource_concurrent_operations() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_invalid_ranges() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -623,7 +623,7 @@ fn streaming_resource_invalid_ranges() {
     assert!(result.is_err());
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_whole_object_operations() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -646,7 +646,7 @@ fn streaming_resource_whole_object_operations() {
     assert_eq!(&data, b"Hello, World!");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_empty_operations() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -666,7 +666,7 @@ fn streaming_resource_empty_operations() {
     assert!(data.is_empty());
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_complex_range_scenario() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
@@ -696,7 +696,7 @@ fn streaming_resource_complex_range_scenario() {
     assert_eq!(outcome, WaitOutcome::Eof);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_initial_len_hint() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();

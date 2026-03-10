@@ -308,7 +308,7 @@ fn aac_variant_info(variant_index: u32) -> MediaInfo {
 /// so `current_segment_range()` would return segment 20 (no init data).
 /// Using `format_change_segment_range()` returns segment 19 where
 /// ftyp/moov lives, allowing decoder to be recreated correctly.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn apply_format_change_must_use_first_new_format_segment_offset() {
     // Use production-like offsets from the log
     const V3_SEGMENT_19_START: u64 = 964431;
@@ -370,7 +370,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn basic_decode_to_eof() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v0_spec(), 1024); 3];
@@ -388,7 +388,7 @@ fn basic_decode_to_eof() {
     assert!(fetch.is_eof);
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn format_change_recreates_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 2];
@@ -466,7 +466,7 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -539,7 +539,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_anchor_recreates_decoder_when_codec_changes() {
     let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
 
@@ -599,7 +599,7 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
     let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
 
@@ -651,7 +651,7 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
     assert_eq!(created_offsets.as_slice(), &[500]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
 
@@ -711,7 +711,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -775,7 +775,7 @@ fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -817,7 +817,7 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
     let (shared, state) = make_shared_stream(vec![0u8; 1024], Some(30_000_000));
 
@@ -871,7 +871,7 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
     assert_eq!(seeks.as_slice(), &[Duration::from_secs(174)]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_recovery_prefers_init_bearing_offset_when_available() {
     let (shared, state) = make_shared_stream(vec![0u8; 1024], Some(30_000_000));
 
@@ -925,7 +925,7 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
     assert_eq!(seeks.as_slice(), &[Duration::from_secs(174)]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_clears_variant_fence() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -968,7 +968,7 @@ fn seek_clears_variant_fence() {
 /// 6. Seek position is lost — V3 decoder never receives it
 ///
 /// Expected: pending format change is applied, seek retried on V3 decoder.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_during_pending_format_change_retries_on_new_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -1050,7 +1050,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 /// Audio dies permanently — every subsequent `fetch_next` returns EOF.
 ///
 /// 30-second timeout catches deadlocks.
-#[kithara::test(timeout(Duration::from_secs(30)))]
+#[kithara::test(timeout(Duration::from_secs(30)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
     const V3_SEGMENT_19_START: u64 = 964431;
     const V3_SEGMENT_20_START: u64 = 1732515;
@@ -1170,7 +1170,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 /// - First read in V0 → fence auto-detects V0
 /// - Seek to V3 offset → read returns Err(Interrupted) (variant change fence)
 /// - `clear_variant_fence()` → read V3 → fence auto-detects V3
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn source_variant_fence_blocks_cross_variant_reads() {
     let mut data = vec![0xAA; 2000];
     data[1000..].fill(0xBB);
@@ -1214,7 +1214,7 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     assert!(buf[..n].iter().all(|&b| b == 0xBB), "Should be V3 data");
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let source = TestSource::new(vec![0u8; 200], Some(200));
     let total_bytes = 200u64;
@@ -1787,7 +1787,7 @@ fn v1_info() -> MediaInfo {
 ///   Grand total: 768000 bytes, 76800 samples
 ///
 /// Catches: wrong `base_offset`, forgotten seek, cross-variant data, sample gaps.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn abr_switch_must_not_lose_samples() {
     let spv = SEGMENTS_PER_VARIANT;
     let sps = SAMPLES_PER_SEGMENT;
@@ -1906,7 +1906,7 @@ fn abr_switch_must_not_lose_samples() {
 /// 5. Subsequent `fetch_next()` returns data (not stuck)
 ///
 /// 10-second timeout catches deadlocks.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_during_active_decode_completes_without_hang() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = v0_spec();
@@ -1957,7 +1957,7 @@ fn seek_during_active_decode_completes_without_hang() {
 ///
 /// Simulates rapid slider scrubbing: 10 seeks in a row, each followed
 /// by apply_pending_seek + a few decode cycles. None should hang.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn rapid_seeks_via_timeline_all_complete() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = v0_spec();
@@ -1987,7 +1987,7 @@ fn rapid_seeks_via_timeline_all_complete() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = PcmSpec {
@@ -2041,7 +2041,7 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn repeated_seek_after_eof_must_not_stop_on_transient_eof_after_seek() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = PcmSpec {
@@ -2095,7 +2095,7 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_eof_after_seek() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = PcmSpec {
@@ -2159,7 +2159,7 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1024], Some(1024));
     let decoder: Box<dyn InnerDecoder> = Box::new(PanicOnNextChunkDecoder::new(v0_spec()));
@@ -2185,7 +2185,7 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = PcmSpec {
@@ -2237,7 +2237,7 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = PcmSpec {
@@ -2286,7 +2286,7 @@ fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn stress_variant_only_seeks_do_not_recreate_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
 

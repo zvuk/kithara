@@ -90,7 +90,11 @@ async fn test_server() -> TestHttpServer {
 
 // Stream<File> Seek Tests
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(0, b"ID3\x04\x00")]
 #[case(5, b"\x00\x00\x00\x00T")]
 #[case(10, b"estAu")]
@@ -131,7 +135,11 @@ async fn stream_file_seek_start_reads_correct_bytes(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stream_file_seek_current_works(
     #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
@@ -163,7 +171,11 @@ async fn stream_file_seek_current_works(
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TestTempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
@@ -187,7 +199,11 @@ async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stream_file_seek_past_eof_fails(
     #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
@@ -208,7 +224,11 @@ async fn stream_file_seek_past_eof_fails(
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stream_file_multiple_seeks_work(
     #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,

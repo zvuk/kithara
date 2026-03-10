@@ -49,7 +49,12 @@ const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_00
 /// - HEAD total: `597_600` (3 x `199_200`)
 /// - Actual total: `600_000` (3 x `200_000`)
 /// - Seek to `598_000` is valid but fails if `expected_total_length` = HEAD total.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(15)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn seek_beyond_head_total_within_actual_total(
     _debug_tracing_setup: (),
     temp_dir: TestTempDir,

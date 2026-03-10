@@ -47,7 +47,8 @@ use tracing::info;
         Duration::from_secs(300)
     } else {
         Duration::from_secs(120)
-    })
+    }),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 #[case::small(50_000, 20, 200, false, false)]
 #[case::medium(100_000, 50, 500, false, false)]

@@ -42,7 +42,7 @@ fn asset_store_with_root(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(1024, 512, 0)] // Small write
 #[case(4096, 2048, 8192)] // Medium write with offset
 #[case(16384, 8192, 32768)] // Large write with offset
@@ -77,7 +77,11 @@ fn streaming_resource_complex_write_patterns(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1, 100)] // Single concurrent write
 #[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
 fn streaming_resource_concurrent_writes(
@@ -118,7 +122,7 @@ fn streaming_resource_concurrent_writes(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(0, 1024)] // Read from start
 #[case(2048, 1024)] // Read from middle
 #[case(4096, 512)] // Read from end
@@ -156,7 +160,7 @@ fn streaming_resource_edge_case_reads(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(vec![(0, 1024), (2048, 1024)])] // Non-overlapping
 #[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
 fn streaming_resource_multiple_range_operations(
@@ -193,7 +197,7 @@ fn streaming_resource_multiple_range_operations(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(false)] // Without explicit commit
 #[case(true)] // With explicit commit
 fn streaming_resource_commit_behavior(
@@ -234,7 +238,7 @@ fn streaming_resource_commit_behavior(
     assert_eq!(final_read, data);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(1024)]
 #[case(4096)]
 #[case(16384)]

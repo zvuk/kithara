@@ -6,7 +6,11 @@
 use kithara_integration_tests::audio_fixture::{AudioTestServer, EmbeddedAudio};
 use kithara_platform::time::Duration;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_audio_test_server_starts() {
     // Test that the server can start and serve requests
     let server = AudioTestServer::new().await;
@@ -21,7 +25,12 @@ async fn test_audio_test_server_starts() {
     assert!(mp3_url.as_str().ends_with("/test.mp3"));
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("wav", "/silence.wav", "audio/wav", "WAV file")]
 #[case("mp3", "/test.mp3", "audio/mpeg", "MP3 file")]
 async fn test_audio_test_server_serves_format(

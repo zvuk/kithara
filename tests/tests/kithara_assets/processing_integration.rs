@@ -93,7 +93,7 @@ fn build_test_store_no_processing(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -133,7 +133,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
     assert_eq!(buf, expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -179,7 +179,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -222,7 +222,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -253,7 +253,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     assert_eq!(n, 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
     // Build store WITHOUT custom process_fn (uses default pass-through).
     let store = build_test_store_no_processing(&temp_dir, "no-processing");

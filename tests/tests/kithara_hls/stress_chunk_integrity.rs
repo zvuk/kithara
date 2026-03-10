@@ -190,7 +190,12 @@ async fn next_chunk_with_timeout(
 
 // Stress Test
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(TEST_TIMEOUT_SECS)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
