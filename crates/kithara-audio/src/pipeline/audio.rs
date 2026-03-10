@@ -440,19 +440,28 @@ impl<S> Audio<S> {
             });
         }
 
-        loop {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
+        self.recv_outcome_blocking()
+    }
+
+    fn recv_outcome_blocking(&mut self) -> RecvOutcome {
+        kithara_platform::hang_watchdog! {
+            thread: "audio.recv_chunk";
+            loop {
+                if let Some(fetch) = self.pcm_rx.try_pop() {
+                    hang_reset!();
+                    self.wake_worker();
+                    return RecvOutcome::Item(fetch);
+                }
+                if self
+                    .cancel
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+                {
+                    return RecvOutcome::Closed;
+                }
+                hang_tick!();
+                kithara_platform::thread::sleep(RECV_BACKOFF);
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
-                return RecvOutcome::Closed;
-            }
-            kithara_platform::thread::sleep(RECV_BACKOFF);
         }
     }
 
@@ -955,5 +964,79 @@ impl<S: Send> PcmReader for Audio<S> {
         self.spec = chunk.spec();
         self.advance_timeline(chunk.pcm.len() as u64);
         Some(chunk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        marker::PhantomData,
+        sync::{
+            Arc,
+            atomic::{AtomicU32, AtomicU64},
+        },
+    };
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn empty_audio() -> Audio<()> {
+        let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
+        let (_data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(1).split();
+        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
+
+        Audio {
+            cmd_tx,
+            pcm_rx,
+            _epoch: Arc::new(AtomicU64::new(0)),
+            validator: EpochValidator::new(),
+            spec: PcmSpec::default(),
+            current_chunk: None,
+            chunk_offset: 0,
+            eof: false,
+            timeline: Timeline::new(),
+            metadata: TrackMetadata::default(),
+            audio_events_tx,
+            bus: EventBus::new(16),
+            cancel: None,
+            pcm_pool: pcm_pool().clone(),
+            host_sample_rate: Arc::new(AtomicU32::new(0)),
+            playback_rate: Arc::new(AtomicF32::new(1.0)),
+            preload_notify: Arc::new(Notify::new()),
+            preloaded: false,
+            notify_waiting: None,
+            track_id: None,
+            worker: None,
+            is_standalone_worker: false,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
+    #[kithara::test(env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+    #[should_panic(expected = "audio.recv_chunk")]
+    fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
+        let mut audio = empty_audio();
+        let _ = audio.recv_outcome();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn blocking_recv_returns_closed_after_cancel() {
+        let mut audio = empty_audio();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        audio.cancel = Some(cancel);
+
+        assert!(matches!(audio.recv_outcome(), RecvOutcome::Closed));
+    }
+
+    #[kithara::test]
+    fn preloaded_recv_is_nonblocking() {
+        let mut audio = empty_audio();
+        audio.preloaded = true;
+
+        assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
     }
 }
