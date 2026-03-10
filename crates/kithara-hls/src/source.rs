@@ -326,6 +326,117 @@ impl HlsSource {
     }
 }
 
+/// Seek classification: whether the committed byte layout is preserved or reset.
+enum SeekLayout {
+    /// Same variant — keep `DownloadState`, byte layout unchanged.
+    Preserve,
+    /// Different variant — clear `DownloadState`, rebuild layout.
+    Reset,
+}
+
+impl HlsSource {
+    /// Returns the variant of the current committed byte layout.
+    ///
+    /// Priority: committed segment at reader position → last committed segment
+    /// → `variant_fence` → `None` (forces Reset).
+    ///
+    /// Does NOT fall back to ABR hint — ABR hint is the *target*, not the
+    /// *current* layout. Using it would misclassify cross-variant seeks as
+    /// Preserve when `variant_fence` was cleared before `seek_time_anchor()`.
+    fn current_layout_variant(&self) -> Option<usize> {
+        let pos = self.shared.timeline.byte_position();
+        let segments = self.shared.segments.lock_sync();
+        if let Some(seg) = segments.find_at_offset(pos) {
+            return Some(seg.variant);
+        }
+        if let Some(seg) = segments.last() {
+            return Some(seg.variant);
+        }
+        drop(segments);
+        self.variant_fence
+    }
+
+    /// Classify a seek as Preserve (keep segments) or Reset (clear segments).
+    fn classify_seek(&self, anchor: &SourceSeekAnchor) -> SeekLayout {
+        let target_variant = anchor.variant_index.unwrap_or(0);
+        match self.current_layout_variant() {
+            Some(current) if current == target_variant => SeekLayout::Preserve,
+            _ => SeekLayout::Reset,
+        }
+    }
+
+    /// Apply the seek plan: update positions, optionally clear segments.
+    fn apply_seek_plan(&mut self, anchor: &SourceSeekAnchor, layout: &SeekLayout) {
+        let variant = anchor.variant_index.unwrap_or(0);
+        let segment_index = anchor.segment_index.unwrap_or(0) as usize;
+        let seek_epoch = self.shared.timeline.seek_epoch();
+        let previous_hint = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
+
+        // Always: drain stale requests and queue the target segment
+        while self.shared.segment_requests.pop().is_some() {}
+        self.shared.segment_requests.push(SegmentRequest {
+            segment_index,
+            variant,
+            seek_epoch,
+        });
+
+        match *layout {
+            SeekLayout::Preserve => {
+                // Keep segments — byte layout valid, Symphonia tables remain correct.
+                debug!(
+                    seek_epoch,
+                    variant,
+                    segment_index,
+                    byte_offset = anchor.byte_offset,
+                    "seek plan: Preserve — keeping DownloadState"
+                );
+            }
+            SeekLayout::Reset => {
+                // Clear segments — layout changes, decoder will be recreated.
+                let mut segments = self.shared.segments.lock_sync();
+                segments.clear();
+                drop(segments);
+                self.shared.timeline.set_download_position(0);
+                debug!(
+                    seek_epoch,
+                    variant,
+                    segment_index,
+                    byte_offset = anchor.byte_offset,
+                    "seek plan: Reset — cleared DownloadState"
+                );
+            }
+        }
+
+        // Always update reader position to target
+        self.shared.timeline.set_byte_position(anchor.byte_offset);
+        self.shared
+            .current_segment_index
+            .store(anchor.segment_index.unwrap_or(0), Ordering::Relaxed);
+        self.shared.reader_advanced.notify_one();
+        self.shared.condvar.notify_all();
+
+        if previous_hint != segment_index {
+            self.bus.publish(HlsEvent::Seek {
+                stage: "seek_anchor_set_hint",
+                seek_epoch,
+                variant,
+                offset: anchor.byte_offset,
+                from_segment_index: previous_hint,
+                to_segment_index: segment_index,
+            });
+        }
+
+        debug!(
+            seek_epoch,
+            target_ms = ?anchor.segment_start,
+            variant,
+            segment_index,
+            byte_offset = anchor.byte_offset,
+            "seek_time_anchor: resolved and queued on-demand segment"
+        );
+    }
+}
+
 impl Source for HlsSource {
     type Error = HlsError;
 
@@ -556,20 +667,14 @@ impl Source for HlsSource {
     }
 
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
-        // seek_epoch is now managed by Timeline.initiate_seek()
+        // Non-destructive: does NOT clear DownloadState or download_position.
+        // seek_time_anchor → classify_seek → apply_seek_plan handles that
+        // conditionally based on SeekLayout (Preserve vs Reset).
         self.shared.timeline.set_eof(false);
-        self.shared.timeline.set_download_position(0);
         self.shared
             .had_midstream_switch
             .store(false, Ordering::Release);
         while self.shared.segment_requests.pop().is_some() {}
-        {
-            let mut segments = self.shared.segments.lock_sync();
-            segments.clear();
-        }
-        self.shared
-            .current_segment_index
-            .store(0, Ordering::Release);
         self.shared.reader_advanced.notify_one();
         self.shared.condvar.notify_all();
     }
@@ -581,44 +686,8 @@ impl Source for HlsSource {
         let anchor = self
             .resolve_seek_anchor(position)
             .map_err(StreamError::Source)?;
-        let variant = anchor.variant_index.unwrap_or(0);
-        let segment_index = anchor.segment_index.unwrap_or(0) as usize;
-        let seek_epoch = self.shared.timeline.seek_epoch();
-        let previous_hint = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
-
-        while self.shared.segment_requests.pop().is_some() {}
-        self.shared.segment_requests.push(SegmentRequest {
-            segment_index,
-            variant,
-            seek_epoch,
-        });
-
-        self.shared.timeline.set_byte_position(anchor.byte_offset);
-        self.shared.reader_advanced.notify_one();
-        self.shared.condvar.notify_all();
-        self.shared
-            .current_segment_index
-            .store(anchor.segment_index.unwrap_or(0), Ordering::Relaxed);
-        if previous_hint != segment_index {
-            self.bus.publish(HlsEvent::Seek {
-                stage: "seek_anchor_set_hint",
-                seek_epoch,
-                variant,
-                offset: anchor.byte_offset,
-                from_segment_index: previous_hint,
-                to_segment_index: segment_index,
-            });
-        }
-
-        debug!(
-            seek_epoch,
-            target_ms = position.as_millis(),
-            variant,
-            segment_index,
-            byte_offset = anchor.byte_offset,
-            "seek_time_anchor: resolved and queued on-demand segment"
-        );
-
+        let layout = self.classify_seek(&anchor);
+        self.apply_seek_plan(&anchor, &layout);
         Ok(Some(anchor))
     }
 
@@ -720,5 +789,191 @@ impl HlsSource {
     /// Handle to current variant index atomic.
     pub(crate) fn variant_index_handle(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.shared.abr_variant_index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    use kithara_drm::DecryptContext;
+    use kithara_events::EventBus;
+    use kithara_net::{HttpClient, NetOptions};
+    use kithara_test_utils::kithara;
+    use tokio::time::{Duration as TokioDuration, timeout};
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        config::HlsConfig,
+        download_state::LoadedSegment,
+        fetch::{DefaultFetchManager, FetchManager},
+        parsing::{VariantId, VariantStream},
+        playlist::{PlaylistState, SegmentState, VariantState},
+    };
+
+    fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+        let noop_drm: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(cancel.clone())
+            .process_fn(noop_drm)
+            .build();
+        let net = HttpClient::new(NetOptions::default());
+        Arc::new(FetchManager::new(backend, net, cancel))
+    }
+
+    fn parsed_variants(count: usize) -> Vec<VariantStream> {
+        (0..count)
+            .map(|index| VariantStream {
+                id: VariantId(index),
+                uri: format!("v{index}.m3u8"),
+                bandwidth: Some(128_000),
+                name: None,
+                codec: None,
+            })
+            .collect()
+    }
+
+    fn make_variant_state(id: usize) -> VariantState {
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        VariantState {
+            id,
+            uri: base
+                .join(&format!("v{id}.m3u8"))
+                .expect("valid playlist URL"),
+            bandwidth: Some(128_000),
+            codec: None,
+            container: None,
+            init_url: None,
+            segments: vec![SegmentState {
+                index: 0,
+                url: base
+                    .join(&format!("seg-{id}-0.m4s"))
+                    .expect("valid segment URL"),
+                duration: Duration::from_secs(4),
+                key: None,
+            }],
+            size_map: None,
+        }
+    }
+
+    fn build_test_source(num_variants: usize) -> HlsSource {
+        let cancel = CancellationToken::new();
+        let variants: Vec<VariantState> = (0..num_variants).map(make_variant_state).collect();
+        let playlist_state = Arc::new(PlaylistState::new(variants));
+        let parsed = parsed_variants(num_variants);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let (_downloader, source) =
+            build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+        source
+    }
+
+    fn push_segment(shared: &SharedSegments, variant: usize, index: usize, offset: u64, len: u64) {
+        let seg = LoadedSegment {
+            variant,
+            segment_index: index,
+            byte_offset: offset,
+            init_len: 0,
+            media_len: len,
+            init_url: None,
+            media_url: Url::parse(&format!("https://example.com/seg-{variant}-{index}.m4s"))
+                .expect("valid segment URL"),
+        };
+        shared.segments.lock_sync().push(seg);
+    }
+
+    fn make_anchor(variant: usize, segment: usize, offset: u64) -> SourceSeekAnchor {
+        SourceSeekAnchor {
+            byte_offset: offset,
+            segment_start: Duration::ZERO,
+            segment_end: None,
+            variant_index: Some(variant),
+            segment_index: Some(segment as u32),
+        }
+    }
+
+    #[kithara::test]
+    fn same_variant_seek_preserves_segments() {
+        let source = build_test_source(1);
+        push_segment(&source.shared, 0, 0, 0, 100);
+        push_segment(&source.shared, 0, 1, 100, 100);
+
+        let anchor = make_anchor(0, 0, 0);
+        let layout = source.classify_seek(&anchor);
+        assert!(matches!(layout, SeekLayout::Preserve));
+    }
+
+    #[kithara::test]
+    fn cross_variant_seek_clears_segments() {
+        let source = build_test_source(2);
+        push_segment(&source.shared, 0, 0, 0, 100);
+
+        let anchor = make_anchor(1, 0, 0);
+        let layout = source.classify_seek(&anchor);
+        assert!(matches!(layout, SeekLayout::Reset));
+    }
+
+    #[kithara::test]
+    fn same_codec_different_variant_seek_clears_segments() {
+        let source = build_test_source(2);
+        push_segment(&source.shared, 0, 0, 0, 100);
+
+        // Different variant index even with same codec → Reset
+        let anchor = make_anchor(1, 0, 0);
+        let layout = source.classify_seek(&anchor);
+        assert!(matches!(layout, SeekLayout::Reset));
+    }
+
+    #[kithara::test(tokio)]
+    async fn on_demand_request_notifies_downloader_once() {
+        let source = build_test_source(1);
+        let wake = source.shared.reader_advanced.notified();
+        let mut state = WaitRangeState::default();
+
+        source
+            .request_on_demand_if_needed(0, 7, &mut state)
+            .expect("request should succeed");
+
+        let req = source
+            .shared
+            .segment_requests
+            .pop()
+            .expect("request must be queued");
+        assert_eq!(req.variant, 0);
+        assert_eq!(req.segment_index, 0);
+        assert_eq!(req.seek_epoch, 7);
+
+        timeout(TokioDuration::from_millis(10), wake)
+            .await
+            .expect("initial on-demand request must wake downloader");
+    }
+
+    #[kithara::test(tokio)]
+    async fn pending_on_demand_request_does_not_rewake_downloader() {
+        let source = build_test_source(1);
+        let wake = source.shared.reader_advanced.notified();
+        let mut state = WaitRangeState::default();
+        state.mark_on_demand_requested(7);
+
+        source
+            .request_on_demand_if_needed(0, 7, &mut state)
+            .expect("pending request check should succeed");
+
+        assert!(
+            source.shared.segment_requests.pop().is_none(),
+            "pending request must not enqueue a duplicate segment"
+        );
+        assert!(
+            timeout(TokioDuration::from_millis(10), wake).await.is_err(),
+            "pending request must not re-wake downloader without new work"
+        );
     }
 }

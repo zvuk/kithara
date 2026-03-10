@@ -370,7 +370,7 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
 }
 
 #[kithara::test]
-fn set_seek_epoch_flushes_playback_segments() {
+fn set_seek_epoch_is_non_destructive() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_codecs(None, None);
     let shared = Arc::new(SharedSegments::new(
@@ -395,12 +395,13 @@ fn set_seek_epoch_flushes_playback_segments() {
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     Source::set_seek_epoch(&mut source, 4);
 
-    assert_eq!(shared.timeline.seek_epoch(), 3); // epoch stays 3, set_seek_epoch no longer writes it
+    // Non-destructive: segments and download_position are NOT cleared.
+    // Only eof and had_midstream_switch are reset.
+    assert_eq!(shared.timeline.seek_epoch(), 3);
     assert!(!shared.timeline.eof());
-    assert_eq!(shared.timeline.download_position(), 0);
-    assert_eq!(shared.current_segment_index.load(Ordering::Acquire), 0);
+    assert_eq!(shared.timeline.download_position(), 200);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
-    assert_eq!(shared.segments.lock_sync().num_entries(), 0);
+    assert_eq!(shared.segments.lock_sync().num_entries(), 2);
 }
 
 #[kithara::test]

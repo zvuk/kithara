@@ -195,6 +195,12 @@ impl DownloadState {
             .find(|seg| seg.variant == variant && seg.init_len > 0)
     }
 
+    /// Last committed segment for a specific variant (by byte offset order).
+    #[must_use]
+    pub fn last_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
+        self.entries.values().rev().find(|s| s.variant == variant)
+    }
+
     /// Number of loaded segments.
     #[must_use]
     pub fn num_entries(&self) -> usize {
@@ -646,5 +652,26 @@ mod tests {
         assert_eq!(seg.total_len(), 250);
         assert_eq!(seg.end_offset(), 350);
         assert_eq!(seg.contains(offset), contains);
+    }
+
+    #[kithara::test]
+    fn test_last_of_variant() {
+        let mut state = DownloadState::new();
+
+        // V0 at offsets 0, 100; V3 at offsets 200, 300
+        state.push(make_segment(0, 0, 0, 0, 100));
+        state.push(make_segment(0, 1, 100, 0, 100));
+        state.push(make_segment(3, 5, 200, 0, 100));
+        state.push(make_segment(3, 6, 300, 0, 100));
+
+        let last_v0 = state.last_of_variant(0).expect("v0 must exist");
+        assert_eq!(last_v0.segment_index, 1);
+        assert_eq!(last_v0.byte_offset, 100);
+
+        let last_v3 = state.last_of_variant(3).expect("v3 must exist");
+        assert_eq!(last_v3.segment_index, 6);
+        assert_eq!(last_v3.byte_offset, 300);
+
+        assert!(state.last_of_variant(99).is_none());
     }
 }

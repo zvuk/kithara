@@ -151,7 +151,6 @@ impl HlsSource {
         state: &mut WaitRangeState,
     ) -> StreamResult<(), HlsError> {
         if state.on_demand_pending(seek_epoch) {
-            self.shared.reader_advanced.notify_one();
             return Ok(());
         }
 
@@ -171,6 +170,35 @@ impl HlsSource {
         clippy::result_large_err,
         reason = "Stream source APIs use StreamResult<_, HlsError> consistently"
     )]
+    /// Check committed `DownloadState` for the segment covering `range_start`.
+    /// Returns `Some(segment_index)` if a request should be issued.
+    fn committed_segment_for_offset(&self, range_start: u64, variant: usize) -> Option<usize> {
+        let segments = self.shared.segments.lock_sync();
+
+        if let Some(seg) = segments.find_at_offset(range_start) {
+            return Some(seg.segment_index);
+        }
+
+        if let Some(last) = segments.last_of_variant(variant)
+            && range_start >= last.end_offset()
+        {
+            let next_idx = last.segment_index + 1;
+            drop(segments);
+            if let Some(num) = self.playlist_state.num_segments(variant)
+                && next_idx < num
+            {
+                return Some(next_idx);
+            }
+            return None;
+        }
+
+        None
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "Stream source APIs use StreamResult<_, HlsError> consistently"
+    )]
     pub(super) fn request_on_demand_segment(
         &self,
         range_start: u64,
@@ -179,6 +207,23 @@ impl HlsSource {
         max_metadata_miss_spins: usize,
     ) -> StreamResult<bool, HlsError> {
         let current_variant = self.resolve_current_variant();
+
+        // Step 1: Check committed data — authoritative for DRM-reconciled offsets.
+        if let Some(idx) = self.committed_segment_for_offset(range_start, current_variant) {
+            *metadata_miss_count = 0;
+            debug!(
+                variant = current_variant,
+                segment_index = idx,
+                offset = range_start,
+                "wait_range: committed on-demand segment load"
+            );
+            self.push_segment_request(current_variant, idx, seek_epoch);
+            return Ok(true);
+        }
+
+        // Step 2: Fall back to metadata lookup.
+        // Safe for empty `DownloadState` (after Reset seek): reader position was
+        // also set from metadata in `seek_time_anchor`, so same-space lookup.
         if let Some(segment_index) = self
             .playlist_state
             .find_segment_at_offset(current_variant, range_start)
@@ -188,7 +233,7 @@ impl HlsSource {
                 variant = current_variant,
                 segment_index,
                 offset = range_start,
-                "wait_range: requesting on-demand segment load"
+                "wait_range: metadata on-demand segment load"
             );
             self.push_segment_request(current_variant, segment_index, seek_epoch);
             return Ok(true);

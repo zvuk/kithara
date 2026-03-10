@@ -197,10 +197,8 @@ impl HlsDownloader {
         segment_index: usize,
     ) {
         let previous_variant = self.last_committed_variant;
-        let download_position = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .unwrap_or(0);
+        let is_same_variant = previous_variant.is_some_and(|prev| prev == variant);
+
         self.active_seek_epoch = seek_epoch;
         self.shared.timeline.set_eof(false);
         self.shared
@@ -208,23 +206,46 @@ impl HlsDownloader {
             .store(false, Ordering::Release);
         self.current_segment_index = segment_index;
         self.gap_scan_start_segment = segment_index;
+
         self.force_init_for_seek = previous_variant
             .and_then(|index| self.playlist_state.variant_codec(index))
             .zip(self.playlist_state.variant_codec(variant))
             .is_some_and(|(from, to)| from != to);
+
         // Seek establishes a new baseline in the target variant timeline.
         // Treat the target as committed so non-zero seek segments do not
         // go through synthetic variant-switch init insertion.
         self.last_committed_variant = Some(variant);
+
         // Update total_bytes for the target variant. If metadata isn't available
         // yet, preserve existing value to avoid transient None in wait_range.
         let variant_total = self.playlist_state.total_variant_size(variant);
         self.shared
             .timeline
             .set_total_bytes(variant_total.or_else(|| self.shared.timeline.total_bytes()));
-        self.shared
-            .timeline
-            .set_download_position(download_position);
+
+        if is_same_variant {
+            // Same variant: keep download_position at committed watermark.
+            // Segments are still in DownloadState — downloader will check
+            // segment_loaded_for_demand() and skip already-loaded segments.
+            let watermark = self.shared.timeline.download_position();
+            let target_offset = self
+                .playlist_state
+                .segment_byte_offset(variant, segment_index)
+                .unwrap_or(0);
+            self.shared
+                .timeline
+                .set_download_position(watermark.max(target_offset));
+        } else {
+            // Different variant: full reset from metadata offset.
+            let download_position = self
+                .playlist_state
+                .segment_byte_offset(variant, segment_index)
+                .unwrap_or(0);
+            self.shared
+                .timeline
+                .set_download_position(download_position);
+        }
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -2132,6 +2153,152 @@ mod tests {
             downloader.shared.timeline.total_bytes().is_some(),
             "total_bytes must not be None after seek reset — \
              source relies on it for EOF detection in wait_range"
+        );
+    }
+
+    fn make_variant_state_with_size_map(
+        id: usize,
+        codec: Option<AudioCodec>,
+        segment_count: usize,
+        seg_size: u64,
+    ) -> VariantState {
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        let offsets: Vec<u64> = (0..segment_count).map(|i| i as u64 * seg_size).collect();
+        let total = segment_count as u64 * seg_size;
+        VariantState {
+            id,
+            uri: base
+                .join(&format!("v{id}.m3u8"))
+                .expect("valid playlist URL"),
+            bandwidth: Some(128_000),
+            codec,
+            container: None,
+            init_url: None,
+            segments: (0..segment_count)
+                .map(|index| SegmentState {
+                    index,
+                    url: base
+                        .join(&format!("seg-{id}-{index}.m4s"))
+                        .expect("valid segment URL"),
+                    duration: Duration::from_secs(4),
+                    key: None,
+                })
+                .collect(),
+            size_map: Some(VariantSizeMap {
+                init_size: 0,
+                segment_sizes: vec![seg_size; segment_count],
+                offsets,
+                total,
+            }),
+        }
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_same_variant_keeps_watermark() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+            seg_size,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.shared.timeline.set_download_position(5000);
+
+        downloader.reset_for_seek_epoch(1, 0, 2);
+
+        assert_eq!(
+            downloader.shared.timeline.download_position(),
+            5000,
+            "same-variant seek must keep download_position at committed watermark"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_same_variant_forward_raises_watermark() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+            seg_size,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.shared.timeline.set_download_position(5000);
+
+        downloader.reset_for_seek_epoch(1, 0, 7);
+
+        assert_eq!(
+            downloader.shared.timeline.download_position(),
+            7000,
+            "forward same-variant seek must raise download_position to target"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_cross_variant_resets_position() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_size_map(0, Some(AudioCodec::AacLc), 10, seg_size),
+            make_variant_state_with_size_map(1, Some(AudioCodec::Flac), 10, seg_size),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.shared.timeline.set_download_position(5000);
+
+        downloader.reset_for_seek_epoch(2, 1, 3);
+
+        assert_eq!(
+            downloader.shared.timeline.download_position(),
+            3000,
+            "cross-variant seek must reset download_position to target metadata offset"
         );
     }
 

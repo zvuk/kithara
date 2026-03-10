@@ -1202,12 +1202,18 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         self.shared_stream.clear_variant_fence();
         self.pending_seek_skip = None;
 
-        // Decoder alignment may read from the stream (decoder recreate path).
-        // Complete flush first so wait_range can block and request data.
-        // seek_pending stays true until the seek is fully applied.
+        // Resolve seek anchor BEFORE completing flush. seek_time_anchor()
+        // classifies the seek (Preserve/Reset) and applies the plan while
+        // flushing is still true — this prevents the downloader from
+        // processing stale state between complete_seek and plan application.
+        let anchor_result = self.shared_stream.seek_time_anchor(position);
+
+        // Complete flush after seek plan is applied but before decoder
+        // alignment. Decoder alignment may read from the stream via
+        // wait_range, which needs flushing to be cleared.
         self.timeline.complete_seek(epoch);
 
-        let applied = match self.shared_stream.seek_time_anchor(position) {
+        let applied = match anchor_result {
             Ok(Some(anchor)) => self.apply_anchor_seek_with_fallback(epoch, position, anchor),
             Ok(None) => self.apply_seek_from_decoder(epoch, position, None, true),
             Err(err) => {
