@@ -6,7 +6,7 @@
 //! Firewheel output buffers.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     num::NonZeroU32,
     sync::{Arc, atomic::Ordering},
 };
@@ -23,10 +23,11 @@ use ringbuf::{
     HeapCons,
     traits::{Consumer, Producer},
 };
-use thunderdome::{Arena, Index};
+use thunderdome::Index;
 use tracing::warn;
 
 use super::{
+    arena_registry::ArenaRegistry,
     crossfade::CrossfadeSettings,
     player_notification::PlayerNotification,
     player_resource::PlayerResource,
@@ -78,71 +79,8 @@ pub(crate) struct PlayerNodeProcessor {
     sample_rate: NonZeroU32,
     scratch_bufs: [PcmBuf; 4],
     shared_state: Arc<SharedPlayerState>,
-    tracks: TrackRegistry,
+    tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     tracks_transitions: VecDeque<TrackTransition>,
-}
-
-struct TrackRegistry {
-    tracks: Arena<PlayerTrack>,
-    tracks_index: HashMap<Arc<str>, Index>,
-}
-
-impl TrackRegistry {
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            tracks: Arena::with_capacity(cap),
-            tracks_index: HashMap::with_capacity(cap),
-        }
-    }
-
-    fn get(&self, src: &Arc<str>) -> Option<&PlayerTrack> {
-        let idx = *self.tracks_index.get(src)?;
-        self.tracks.get(idx)
-    }
-
-    fn get_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack> {
-        let idx = *self.tracks_index.get(src)?;
-        self.tracks.get_mut(idx)
-    }
-
-    fn get_by_index(&self, idx: Index) -> Option<&PlayerTrack> {
-        self.tracks.get(idx)
-    }
-
-    fn insert(&mut self, src: Arc<str>, track: PlayerTrack) {
-        let idx = self.tracks.insert(track);
-        self.tracks_index.insert(src, idx);
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (Index, &PlayerTrack)> {
-        self.tracks.iter()
-    }
-
-    fn iter_index(&self) -> impl Iterator<Item = (&Arc<str>, &Index)> {
-        self.tracks_index.iter()
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = (Index, &mut PlayerTrack)> {
-        self.tracks.iter_mut()
-    }
-
-    fn len(&self) -> usize {
-        self.tracks_index.len()
-    }
-
-    fn remove(&mut self, src: &Arc<str>) -> Option<PlayerTrack> {
-        let idx = self.tracks_index.remove(src)?;
-        self.tracks.remove(idx)
-    }
-
-    fn remove_by_index(&mut self, idx: Index) -> Option<PlayerTrack> {
-        self.tracks_index.retain(|_, v| *v != idx);
-        self.tracks.remove(idx)
-    }
-
-    fn contains_key(&self, src: &str) -> bool {
-        self.tracks_index.contains_key(src)
-    }
 }
 
 impl PlayerNodeProcessor {
@@ -161,7 +99,7 @@ impl PlayerNodeProcessor {
             sample_rate,
             scratch_bufs,
             shared_state,
-            tracks: TrackRegistry::with_capacity(MAX_TRACKS),
+            tracks: ArenaRegistry::with_capacity(MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(MAX_TRACKS),
         }
     }
@@ -260,7 +198,7 @@ impl PlayerNodeProcessor {
             self.tracks_transitions.clear();
 
             // Find current leading track for automatic fade-out
-            let maybe_old = self.tracks.iter_index().find_map(|(key, idx)| {
+            let maybe_old = self.tracks.iter_keys().find_map(|(key, idx)| {
                 self.tracks
                     .get_by_index(*idx)
                     .filter(|t| t.state().is_leading())
@@ -324,7 +262,7 @@ impl PlayerNodeProcessor {
         while self.tracks.len() >= MAX_TRACKS {
             let eviction_candidate = self
                 .tracks
-                .iter_index()
+                .iter_keys()
                 .min_by_key(|(_, idx)| {
                     self.tracks
                         .get_by_index(**idx)

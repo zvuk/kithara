@@ -5,12 +5,9 @@
 //! PlayerNode[slotN] -> VolPanNode[slotN] -> PlayerEqNode -> PlayerVolPanNode -> SessionDucking -> GraphOut
 //! ```
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use derivative::Derivative;
@@ -20,10 +17,10 @@ use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
-use thunderdome::{Arena, Index};
 use tracing::{debug, info, warn};
 
 use super::{
+    arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
     session_engine::{PlayerId, SessionClient, session_client},
     shared_eq::SharedEq,
@@ -66,45 +63,6 @@ pub(crate) struct SlotHandle {
     pub(crate) shared_state: Arc<SharedPlayerState>,
 }
 
-struct SlotRegistry {
-    handles: Arena<SlotHandle>,
-    index: HashMap<SlotId, Index>,
-}
-
-impl SlotRegistry {
-    fn new() -> Self {
-        Self {
-            handles: Arena::new(),
-            index: HashMap::new(),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.handles.clear();
-        self.index.clear();
-    }
-
-    fn get(&self, slot: SlotId) -> Option<&SlotHandle> {
-        let idx = *self.index.get(&slot)?;
-        self.handles.get(idx)
-    }
-
-    fn get_mut(&mut self, slot: SlotId) -> Option<&mut SlotHandle> {
-        let idx = *self.index.get(&slot)?;
-        self.handles.get_mut(idx)
-    }
-
-    fn insert(&mut self, slot: SlotId, handle: SlotHandle) {
-        let idx = self.handles.insert(handle);
-        self.index.insert(slot, idx);
-    }
-
-    fn remove(&mut self, slot: SlotId) -> Option<SlotHandle> {
-        let idx = self.index.remove(&slot)?;
-        self.handles.remove(idx)
-    }
-}
-
 /// Concrete [`Engine`] implementation backed by a process-wide session.
 ///
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
@@ -134,7 +92,7 @@ pub struct EngineImpl {
     session: Arc<SessionClient>,
 
     /// Per-slot command channels and shared state.
-    slot_registry: Mutex<SlotRegistry>,
+    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
 
     /// Shared audio worker for cooperative multi-track decoding.
     ///
@@ -165,7 +123,7 @@ impl EngineImpl {
             player_id: Mutex::new(None),
             running: AtomicBool::new(false),
             session,
-            slot_registry: Mutex::new(SlotRegistry::new()),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(config.max_slots)),
             worker: AudioWorkerHandle::new(),
         }
     }
@@ -368,7 +326,7 @@ impl Engine for EngineImpl {
         self.session.release_slot(player_id, slot)?;
 
         self.active_slots.lock_sync().retain(|s| *s != slot);
-        let _ = self.slot_registry.lock_sync().remove(slot);
+        let _ = self.slot_registry.lock_sync().remove(&slot);
 
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
