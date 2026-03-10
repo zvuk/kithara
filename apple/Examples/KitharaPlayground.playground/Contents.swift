@@ -3,11 +3,10 @@ import Kithara
 import PlaygroundSupport
 import SwiftUI
 
-@MainActor
 final class SeekHandler: SeekCallback, @unchecked Sendable {
-    private let onDone: (Bool) -> Void
+    private let onDone: @Sendable (Bool) -> Void
 
-    init(onDone: @escaping (Bool) -> Void) {
+    init(onDone: @escaping @Sendable (Bool) -> Void) {
         self.onDone = onDone
     }
 
@@ -89,7 +88,9 @@ final class PlaygroundModel: ObservableObject {
     func seek() {
         let target = currentTime
         player.seek(to: target, callback: SeekHandler { [weak self] done in
-            self?.log = done ? "Seek done: \(Int(target))s" : "Seek failed"
+            Task { @MainActor in
+                self?.log = done ? "Seek done: \(Int(target))s" : "Seek failed"
+            }
         })
     }
 
