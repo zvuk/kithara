@@ -3940,9 +3940,18 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "hls_m3u8",
+ "kithara-assets",
  "kithara-drm",
+ "kithara-file",
+ "kithara-hls",
+ "kithara-play",
+ "kithara-storage",
+ "kithara-stream",
  "kithara-workspace-hack",
  "libfuzzer-sys",
+ "tempfile",
+ "tokio-util",
+ "url",
 ]
 
 [[package]]
