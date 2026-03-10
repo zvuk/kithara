@@ -108,6 +108,7 @@ impl EngineImpl {
     #[must_use]
     pub fn new(config: EngineConfig) -> Self {
         let (events_tx, _) = broadcast::channel(64);
+        let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool
             .clone()
@@ -123,7 +124,7 @@ impl EngineImpl {
             player_id: Mutex::new(None),
             running: AtomicBool::new(false),
             session,
-            slot_registry: Mutex::new(ArenaRegistry::with_capacity(config.max_slots)),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::new(),
         }
     }
@@ -169,7 +170,7 @@ impl EngineImpl {
     )]
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slot_registry = self.slot_registry.lock_sync();
-        let Some(handle) = slot_registry.get_mut(slot) else {
+        let Some(handle) = slot_registry.get_mut(&slot) else {
             return Err(PlayError::Internal("slot handle not found".into()));
         };
         handle
@@ -181,14 +182,14 @@ impl EngineImpl {
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
         self.slot_registry
             .lock_sync()
-            .get(slot)
+            .get(&slot)
             .map(|h| h.eq.clone())
     }
 
     pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
         self.slot_registry
             .lock_sync()
-            .get(slot)
+            .get(&slot)
             .map(|h| Arc::clone(&h.shared_state))
     }
 

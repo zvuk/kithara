@@ -91,11 +91,4 @@ where
         self.values.remove(idx)
     }
 
-    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        self.by_key.contains_key(key)
-    }
 }
