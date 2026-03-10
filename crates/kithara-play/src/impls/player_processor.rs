@@ -561,7 +561,7 @@ mod tests {
 
         assert_eq!(processor.tracks.len(), expected_tracks);
         assert_eq!(
-            processor.tracks.contains_key("track1.mp3"),
+            processor.tracks.get("track1.mp3").is_some(),
             should_contain_track
         );
 

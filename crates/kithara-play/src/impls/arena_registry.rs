@@ -90,5 +90,4 @@ where
         self.by_key.remove(&key);
         self.values.remove(idx)
     }
-
 }
