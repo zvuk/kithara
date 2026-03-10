@@ -11,6 +11,7 @@ use std::{sync::OnceLock, time::Duration};
 use firewheel::{
     FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
+use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
 use kithara_platform::{Mutex, sync::mpsc};
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,7 +49,7 @@ struct SlotNodes {
 }
 
 struct PlayerState {
-    eq_bands: usize,
+    eq_layout: Vec<EqBandConfig>,
     master_eq_memo: Option<Memo<MasterEqNode>>,
     master_eq_node_id: Option<NodeID>,
     master_volume: f32,
@@ -63,9 +64,10 @@ struct PlayerState {
 }
 
 impl PlayerState {
-    fn new(player_id: PlayerId, eq_bands: usize, pcm_pool: PcmPool) -> Self {
+    fn new(player_id: PlayerId, eq_layout: Vec<EqBandConfig>, pcm_pool: PcmPool) -> Self {
+        let band_count = eq_layout.len();
         Self {
-            eq_bands,
+            eq_layout,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
@@ -74,7 +76,7 @@ impl PlayerState {
             next_slot_id: 1,
             pcm_pool,
             player_id,
-            shared_eq: SharedEq::new(eq_bands),
+            shared_eq: SharedEq::new(band_count),
             slots: Vec::new(),
             started: false,
         }
@@ -107,7 +109,7 @@ impl SessionState {
 
 enum Cmd {
     RegisterPlayer {
-        eq_bands: usize,
+        eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
     },
     UnregisterPlayer {
@@ -277,10 +279,13 @@ impl SessionClient {
 
     pub(crate) fn register_player(
         &self,
-        eq_bands: usize,
+        eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
     ) -> Result<PlayerId, PlayError> {
-        match self.call_ok(Cmd::RegisterPlayer { eq_bands, pcm_pool })? {
+        match self.call_ok(Cmd::RegisterPlayer {
+            eq_layout,
+            pcm_pool,
+        })? {
             Reply::PlayerRegistered(id) => Ok(id),
             _ => Err(PlayError::Internal(
                 "unexpected reply for session player registration".into(),
@@ -574,12 +579,15 @@ fn player_index(state: &SessionState, player_id: PlayerId) -> Result<usize, Stri
 
 fn run_cmd(state: &mut SessionState, cmd: Cmd) -> Reply {
     match cmd {
-        Cmd::RegisterPlayer { eq_bands, pcm_pool } => {
+        Cmd::RegisterPlayer {
+            eq_layout,
+            pcm_pool,
+        } => {
             let player_id = state.next_player_id;
             state.next_player_id += 1;
             state
                 .players
-                .push(PlayerState::new(player_id, eq_bands, pcm_pool));
+                .push(PlayerState::new(player_id, eq_layout, pcm_pool));
             Reply::PlayerRegistered(player_id)
         }
         Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
@@ -728,7 +736,7 @@ fn start_player(
         return Err("player already started".into());
     }
 
-    let mut master_eq = MasterEqNode::new(player.eq_bands);
+    let mut master_eq = MasterEqNode::new(&player.eq_layout);
     for (band, gain) in player.shared_eq.snapshot().into_iter().enumerate() {
         master_eq.set_gain(band, gain);
     }

@@ -6,8 +6,8 @@ pub struct AppConfig {
     pub tracks: Vec<String>,
     /// Crossfade duration in seconds.
     pub crossfade_seconds: f32,
-    /// Number of EQ bands.
-    pub eq_bands: usize,
+    /// Number of EQ bands for the UI.
+    pub eq_band_count: usize,
     /// Log filter directives.
     pub log_directives: Vec<String>,
     /// Color palette for the UI.
@@ -40,7 +40,7 @@ impl AppConfig {
         Self {
             tracks,
             crossfade_seconds: Self::DEFAULT_CROSSFADE_SECONDS,
-            eq_bands: Self::DEFAULT_EQ_BANDS,
+            eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),
             palette: Palette::default(),
         }

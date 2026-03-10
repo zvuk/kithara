@@ -1,7 +1,7 @@
 use std::{io, sync::Arc};
 
 use clap::Parser;
-use kithara::{play::PlayerConfig, prelude::PlayerImpl};
+use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig, prelude::PlayerImpl};
 use kithara_app::{
     config::AppConfig, controls::AppController, frontend::Frontend, playlist::Playlist,
 };
@@ -78,10 +78,10 @@ fn main() -> AppResult {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::default()
             .with_crossfade_duration(config.crossfade_seconds)
-            .with_eq_bands(config.eq_bands),
+            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count)),
     ));
     let playlist = Arc::new(Playlist::new(config.tracks.clone()));
-    let mut controller = AppController::new(Arc::clone(&player), playlist, config.eq_bands);
+    let mut controller = AppController::new(Arc::clone(&player), playlist, config.eq_band_count);
 
     match mode {
         #[cfg(feature = "tui")]

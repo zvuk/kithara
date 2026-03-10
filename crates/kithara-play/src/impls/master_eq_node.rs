@@ -1,6 +1,6 @@
 use core::num::NonZeroU32;
 
-use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
+use biquad::{Biquad, Coefficients, DirectForm1, ToHertz};
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
@@ -12,7 +12,7 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::effects::generate_log_spaced_bands;
+use kithara_audio::effects::eq::{EqBandConfig, FilterKind, compute_coefficients};
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 
@@ -24,11 +24,18 @@ const PASSTHROUGH: Coefficients<f32> = Coefficients {
     b2: 0.0,
 };
 
+/// Smoothing time constant in milliseconds.
+const SMOOTH_TIME_MS: f32 = 10.0;
+
+/// Number of samples between coefficient recalculations during smoothing.
+const SMOOTH_BLOCK_SIZE: usize = 32;
+
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
     pub(crate) frequency: f32,
     pub(crate) gain_db: f32,
     pub(crate) q_factor: f32,
+    pub(crate) kind: u8,
 }
 
 #[derive(Diff, Patch, Debug, Clone, PartialEq)]
@@ -38,13 +45,14 @@ pub(crate) struct MasterEqNode {
 }
 
 impl MasterEqNode {
-    pub(crate) fn new(bands: usize) -> Self {
-        let bands = generate_log_spaced_bands(bands)
-            .into_iter()
+    pub(crate) fn new(layout: &[EqBandConfig]) -> Self {
+        let bands = layout
+            .iter()
             .map(|band| MasterEqBand {
                 frequency: band.frequency,
                 gain_db: band.gain_db,
                 q_factor: band.q_factor,
+                kind: band.kind as u8,
             })
             .collect();
 
@@ -85,51 +93,98 @@ impl AudioNode for MasterEqNode {
 struct MasterEqProcessor {
     filters_l: Vec<DirectForm1<f32>>,
     filters_r: Vec<DirectForm1<f32>>,
+    /// Current smoothed gains (one per band).
+    current_gains: Vec<f32>,
     params: MasterEqNode,
     sample_rate: NonZeroU32,
+    /// One-pole smoother coefficient per block boundary.
+    smooth_coeff: f32,
 }
 
 impl MasterEqProcessor {
     fn new(params: MasterEqNode, sample_rate: NonZeroU32) -> Self {
+        let band_count = params.bands.len();
+        // Pre-warm: current gains start at target to avoid fade-in click.
+        let current_gains: Vec<f32> = params.bands.iter().map(|b| b.gain_db).collect();
+        let smooth_coeff = Self::calc_smooth_coeff(sample_rate);
+
         let mut this = Self {
-            filters_l: Vec::new(),
-            filters_r: Vec::new(),
+            filters_l: vec![DirectForm1::<f32>::new(PASSTHROUGH); band_count],
+            filters_r: vec![DirectForm1::<f32>::new(PASSTHROUGH); band_count],
+            current_gains,
             params,
             sample_rate,
+            smooth_coeff,
         };
-        this.update_filters();
+        this.rebuild_all_coefficients();
         this
     }
 
-    fn update_filters(&mut self) {
-        let band_count = self.params.bands.len();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "sample rate and block size are small integers"
+    )]
+    fn calc_smooth_coeff(sample_rate: NonZeroU32) -> f32 {
+        let tau = SMOOTH_TIME_MS / 1000.0;
+        let effective_rate = sample_rate.get() as f32 / SMOOTH_BLOCK_SIZE as f32;
+        1.0 - (-1.0 / (tau * effective_rate)).exp()
+    }
 
-        if self.filters_l.len() != band_count {
-            self.filters_l = vec![DirectForm1::<f32>::new(PASSTHROUGH); band_count];
-            self.filters_r = vec![DirectForm1::<f32>::new(PASSTHROUGH); band_count];
-        }
+    /// Rebuild all filter coefficients from current gains (used at init / stream change).
+    fn rebuild_all_coefficients(&mut self) {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Firewheel sample rates are far below f32 integer precision bounds"
+        )]
+        let sample_rate_hz = (self.sample_rate.get() as f32).hz();
 
         for (idx, band) in self.params.bands.iter().enumerate() {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "Firewheel sample rates are far below f32 integer precision bounds"
-            )]
-            let sample_rate_hz = (self.sample_rate.get() as f32).hz();
-            let coeffs = if band.gain_db.abs() < 0.01 {
-                PASSTHROUGH
-            } else {
-                Coefficients::<f32>::from_params(
-                    Type::PeakingEQ(band.gain_db),
-                    sample_rate_hz,
-                    band.frequency.hz(),
-                    band.q_factor,
-                )
-                .unwrap_or(PASSTHROUGH)
-            };
-
+            let eq_band = to_eq_band_config(band);
+            let coeffs = compute_coefficients(&eq_band, self.current_gains[idx], sample_rate_hz);
             self.filters_l[idx] = DirectForm1::new(coeffs);
             self.filters_r[idx] = DirectForm1::new(coeffs);
         }
+    }
+
+    /// Smooth one band's gain toward target, returning true if coefficients were updated.
+    fn smooth_and_update_band(&mut self, idx: usize, sample_rate_hz: biquad::Hertz<f32>) -> bool {
+        let target = self.params.bands[idx].gain_db;
+        let current = self.current_gains[idx];
+        let diff = target - current;
+
+        if diff.abs() < 0.01 {
+            if (current - target).abs() > f32::EPSILON {
+                self.current_gains[idx] = target;
+                let eq_band = to_eq_band_config(&self.params.bands[idx]);
+                let coeffs = compute_coefficients(&eq_band, target, sample_rate_hz);
+                self.filters_l[idx].update_coefficients(coeffs);
+                self.filters_r[idx].update_coefficients(coeffs);
+                return true;
+            }
+            return false;
+        }
+
+        let new_gain = current + diff * self.smooth_coeff;
+        self.current_gains[idx] = new_gain;
+
+        let eq_band = to_eq_band_config(&self.params.bands[idx]);
+        let coeffs = compute_coefficients(&eq_band, new_gain, sample_rate_hz);
+        self.filters_l[idx].update_coefficients(coeffs);
+        self.filters_r[idx].update_coefficients(coeffs);
+        true
+    }
+}
+
+fn to_eq_band_config(band: &MasterEqBand) -> EqBandConfig {
+    EqBandConfig {
+        frequency: band.frequency,
+        q_factor: band.q_factor,
+        gain_db: band.gain_db,
+        kind: match band.kind {
+            0 => FilterKind::LowShelf,
+            2 => FilterKind::HighShelf,
+            _ => FilterKind::Peaking,
+        },
     }
 }
 
@@ -141,14 +196,8 @@ impl AudioNodeProcessor for MasterEqProcessor {
         events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let mut updated = false;
         for patch in events.drain_patches::<MasterEqNode>() {
             self.params.apply(patch);
-            updated = true;
-        }
-
-        if updated {
-            self.update_filters();
         }
 
         if buffers.inputs.len() < 2 || buffers.outputs.len() < 2 {
@@ -172,17 +221,38 @@ impl AudioNodeProcessor for MasterEqProcessor {
         let out_l = &mut out_l_slice[..info.frames];
         let out_r = &mut out_r_slice[..info.frames];
 
-        for frame in 0..info.frames {
-            let mut sample_l = in_l[frame];
-            let mut sample_r = in_r[frame];
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Firewheel sample rates are far below f32 integer precision bounds"
+        )]
+        let sample_rate_hz = (self.sample_rate.get() as f32).hz();
+        let band_count = self.params.bands.len();
 
-            for band in 0..self.params.bands.len() {
-                sample_l = self.filters_l[band].run(sample_l);
-                sample_r = self.filters_r[band].run(sample_r);
+        // Process in blocks of SMOOTH_BLOCK_SIZE for smooth coefficient updates.
+        let mut offset = 0;
+        while offset < info.frames {
+            let block_end = (offset + SMOOTH_BLOCK_SIZE).min(info.frames);
+
+            // Update smoothed coefficients at block boundaries.
+            for band in 0..band_count {
+                self.smooth_and_update_band(band, sample_rate_hz);
             }
 
-            out_l[frame] = sample_l;
-            out_r[frame] = sample_r;
+            // Run filters on this block.
+            for frame in offset..block_end {
+                let mut sample_l = in_l[frame];
+                let mut sample_r = in_r[frame];
+
+                for band in 0..band_count {
+                    sample_l = self.filters_l[band].run(sample_l);
+                    sample_r = self.filters_r[band].run(sample_r);
+                }
+
+                out_l[frame] = sample_l;
+                out_r[frame] = sample_r;
+            }
+
+            offset = block_end;
         }
 
         ProcessStatus::OutputsModified
@@ -190,6 +260,7 @@ impl AudioNodeProcessor for MasterEqProcessor {
 
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.sample_rate = stream_info.sample_rate;
-        self.update_filters();
+        self.smooth_coeff = Self::calc_smooth_coeff(self.sample_rate);
+        self.rebuild_all_coefficients();
     }
 }

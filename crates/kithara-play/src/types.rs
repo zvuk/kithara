@@ -77,15 +77,6 @@ impl TimeRange {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum EqBand {
-    #[default]
-    Low,
-    Mid,
-    High,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum SessionDuckingMode {
     #[default]
     Off,

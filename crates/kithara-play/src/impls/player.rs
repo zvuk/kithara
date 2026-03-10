@@ -11,7 +11,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara_audio::AudioWorkerHandle;
+use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
@@ -43,9 +43,9 @@ pub struct PlayerConfig {
     /// Default playback rate (1.0 = normal). Default: 1.0.
     #[derivative(Default(value = "1.0"))]
     pub default_rate: f32,
-    /// Number of EQ bands. Default: 10.
-    #[derivative(Default(value = "10"))]
-    pub eq_bands: usize,
+    /// EQ band layout. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
@@ -96,7 +96,7 @@ impl PlayerImpl {
             .unwrap_or_else(|| pcm_pool().clone());
 
         let engine_config = EngineConfig {
-            eq_bands: config.eq_bands,
+            eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
             ..EngineConfig::default()
@@ -440,7 +440,7 @@ impl PlayerImpl {
 
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
-        self.config.eq_bands
+        self.config.eq_layout.len()
     }
 
     /// Get EQ gain for a band in dB.
@@ -613,6 +613,24 @@ impl PlayerImpl {
     }
 }
 
+impl crate::traits::dj::eq::Equalizer for PlayerImpl {
+    fn band_count(&self) -> usize {
+        self.eq_band_count()
+    }
+
+    fn gain(&self, band: usize) -> Option<f32> {
+        self.eq_gain(band)
+    }
+
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        self.set_eq_gain(band, gain_db)
+    }
+
+    fn reset(&self) -> Result<(), PlayError> {
+        self.reset_eq()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_audio::mock::TestPcmReader;
@@ -749,7 +767,7 @@ mod tests {
         let config = PlayerConfig {
             crossfade_duration: 2.0,
             default_rate: 0.5,
-            eq_bands: 5,
+            eq_layout: generate_log_spaced_bands(5),
             max_slots: 2,
             pcm_pool: None,
         };
@@ -763,11 +781,11 @@ mod tests {
             .with_max_slots(8)
             .with_default_rate(0.5)
             .with_crossfade_duration(2.5)
-            .with_eq_bands(5);
+            .with_eq_layout(generate_log_spaced_bands(5));
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
-        assert_eq!(config.eq_bands, 5);
+        assert_eq!(config.eq_layout.len(), 5);
     }
 
     #[kithara::test(tokio)]
