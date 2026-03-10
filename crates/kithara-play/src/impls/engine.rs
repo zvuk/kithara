@@ -20,6 +20,7 @@ use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
 
 use super::{
+    arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
     session_engine::{PlayerId, SessionClient, session_client},
     shared_eq::SharedEq,
@@ -57,7 +58,6 @@ pub struct EngineConfig {
 
 /// Handle for a slot, providing command channel and shared state.
 pub(crate) struct SlotHandle {
-    pub(crate) slot_id: SlotId,
     pub(crate) cmd_tx: HeapProd<PlayerCmd>,
     pub(crate) eq: SharedEq,
     pub(crate) shared_state: Arc<SharedPlayerState>,
@@ -92,7 +92,7 @@ pub struct EngineImpl {
     session: Arc<SessionClient>,
 
     /// Per-slot command channels and shared state.
-    slot_handles: Mutex<Vec<SlotHandle>>,
+    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
 
     /// Shared audio worker for cooperative multi-track decoding.
     ///
@@ -123,7 +123,7 @@ impl EngineImpl {
             player_id: Mutex::new(None),
             running: AtomicBool::new(false),
             session,
-            slot_handles: Mutex::new(Vec::new()),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(config.max_slots)),
             worker: AudioWorkerHandle::new(),
         }
     }
@@ -168,8 +168,8 @@ impl EngineImpl {
         reason = "guard must live through find + try_push for atomicity"
     )]
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slot_handles = self.slot_handles.lock_sync();
-        let Some(handle) = slot_handles.iter_mut().find(|h| h.slot_id == slot) else {
+        let mut slot_registry = self.slot_registry.lock_sync();
+        let Some(handle) = slot_registry.get_mut(slot) else {
             return Err(PlayError::Internal("slot handle not found".into()));
         };
         handle
@@ -179,18 +179,16 @@ impl EngineImpl {
     }
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
-        self.slot_handles
+        self.slot_registry
             .lock_sync()
-            .iter()
-            .find(|h| h.slot_id == slot)
+            .get(slot)
             .map(|h| h.eq.clone())
     }
 
     pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
-        self.slot_handles
+        self.slot_registry
             .lock_sync()
-            .iter()
-            .find(|h| h.slot_id == slot)
+            .get(slot)
             .map(|h| Arc::clone(&h.shared_state))
     }
 
@@ -270,7 +268,7 @@ impl Engine for EngineImpl {
         self.session.stop_player(player_id)?;
 
         self.active_slots.lock_sync().clear();
-        self.slot_handles.lock_sync().clear();
+        self.slot_registry.lock_sync().clear();
 
         self.running.store(false, Ordering::Release);
         info!(player_id, "engine stopped");
@@ -298,12 +296,14 @@ impl Engine for EngineImpl {
         let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
 
         self.active_slots.lock_sync().push(slot_id);
-        self.slot_handles.lock_sync().push(SlotHandle {
+        self.slot_registry.lock_sync().insert(
             slot_id,
-            cmd_tx,
-            eq,
-            shared_state,
-        });
+            SlotHandle {
+                cmd_tx,
+                eq,
+                shared_state,
+            },
+        );
 
         debug!(?slot_id, player_id, "slot allocated");
         self.emit(EngineEvent::SlotAllocated { slot: slot_id });
@@ -326,7 +326,7 @@ impl Engine for EngineImpl {
         self.session.release_slot(player_id, slot)?;
 
         self.active_slots.lock_sync().retain(|s| *s != slot);
-        self.slot_handles.lock_sync().retain(|h| h.slot_id != slot);
+        let _ = self.slot_registry.lock_sync().remove(&slot);
 
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
