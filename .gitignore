@@ -53,7 +53,7 @@ log*.txt
 crates/kithara-wasm/dist
 
 # Local docs / plans
-docs/
+.docs/
 .claude/*.md
 .claude-octopus
 .claude/debates
