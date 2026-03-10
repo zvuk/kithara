@@ -19,9 +19,8 @@ async fn fetch_and_cache_key(
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
     let key_url = server.url("/key.bin")?;
 
-    // Note: This test assumes the server provides a key endpoint
-    // In real implementation, the test server would need to serve key data
-    let _key = key_manager.get_raw_key(&key_url, None).await;
+    let key = key_manager.get_raw_key(&key_url, None).await?;
+    assert!(!key.is_empty(), "fetched key must not be empty");
 
     Ok(())
 }
@@ -90,9 +89,7 @@ async fn key_manager_error_handling(
             .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
 
     let result: HlsResult<bytes::Bytes> = key_manager.get_raw_key(&invalid_url, None).await;
-
-    // Should fail with network error (or succeed if somehow connects)
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_err(), "invalid URL should fail, got Ok");
 
     Ok(())
 }

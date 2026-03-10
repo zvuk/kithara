@@ -425,22 +425,6 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
-    typealias FfiType = Int32
-    typealias SwiftType = Int32
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
-        return try lift(readInt(&buf))
-    }
-
-    public static func write(_ value: Int32, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
     typealias FfiType = Float
     typealias SwiftType = Float
@@ -546,12 +530,20 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func defaultRate()  -> Float
     
     /**
+     * Insert an item into the queue.
+     *
+     * If the item's resource is already loaded, it is inserted into both
+     * the FFI queue and the engine immediately. If not yet loaded,
+     * the item is placed in the FFI queue and an async auto-load task
+     * is spawned; upon completion the resource is inserted into the engine.
+     *
      * # Errors
      *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue,
-     * or [`FfiError::NotReady`] if the item has not been loaded.
+     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue.
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws 
+    
+    func isMuted()  -> Bool
     
     func items()  -> [AudioPlayerItem]
     
@@ -571,15 +563,30 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems() 
     
     /**
-     * # Errors
+     * Seek to a position in the current item.
      *
-     * Returns [`FfiError`] if the seek position is invalid.
+     * The callback is invoked synchronously with `true` if the seek command
+     * was accepted, `false` otherwise (matches `AVPlayer` semantics).
      */
-    func seek(toSeconds: Double) throws 
+    func seek(toSeconds: Double, callback: SeekCallback) 
     
     func setDefaultRate(rate: Float) 
     
+    func setMuted(muted: Bool) 
+    
     func setObserver(observer: PlayerObserver) 
+    
+    func setVolume(volume: Float) 
+    
+    /**
+     * Return a snapshot of the player's current state.
+     *
+     * Cheap synchronous read — Swift should use this instead of caching
+     * state locally.
+     */
+    func snapshot()  -> FfiPlayerSnapshot
+    
+    func volume()  -> Float
     
 }
 /**
@@ -654,10 +661,16 @@ open func defaultRate() -> Float  {
 }
     
     /**
+     * Insert an item into the queue.
+     *
+     * If the item's resource is already loaded, it is inserted into both
+     * the FFI queue and the engine immediately. If not yet loaded,
+     * the item is placed in the FFI queue and an async auto-load task
+     * is spawned; upon completion the resource is inserted into the engine.
+     *
      * # Errors
      *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue,
-     * or [`FfiError::NotReady`] if the item has not been loaded.
+     * Returns [`FfiError::InvalidArgument`] if `after` is not in the queue.
      */
 open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_insert(
@@ -666,6 +679,14 @@ open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try ru
         FfiConverterOptionTypeAudioPlayerItem.lower(after),$0
     )
 }
+}
+    
+open func isMuted() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_is_muted(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
     
 open func items() -> [AudioPlayerItem]  {
@@ -719,14 +740,16 @@ open func removeAllItems()  {try! rustCall() {
 }
     
     /**
-     * # Errors
+     * Seek to a position in the current item.
      *
-     * Returns [`FfiError`] if the seek position is invalid.
+     * The callback is invoked synchronously with `true` if the seek command
+     * was accepted, `false` otherwise (matches `AVPlayer` semantics).
      */
-open func seek(toSeconds: Double)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_seek(
             self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(toSeconds),$0
+        FfiConverterDouble.lower(toSeconds),
+        FfiConverterTypeSeekCallback_lower(callback),$0
     )
 }
 }
@@ -739,12 +762,50 @@ open func setDefaultRate(rate: Float)  {try! rustCall() {
 }
 }
     
+open func setMuted(muted: Bool)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_muted(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(muted),$0
+    )
+}
+}
+    
 open func setObserver(observer: PlayerObserver)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_observer(
             self.uniffiCloneHandle(),
         FfiConverterTypePlayerObserver_lower(observer),$0
     )
 }
+}
+    
+open func setVolume(volume: Float)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(volume),$0
+    )
+}
+}
+    
+    /**
+     * Return a snapshot of the player's current state.
+     *
+     * Cheap synchronous read — Swift should use this instead of caching
+     * state locally.
+     */
+open func snapshot() -> FfiPlayerSnapshot  {
+    return try!  FfiConverterTypeFfiPlayerSnapshot_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_snapshot(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func volume() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_volume(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
     
 
@@ -808,13 +869,13 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     func id()  -> String
     
     /**
-     * Asynchronously create the underlying [`Resource`].
+     * Synchronous fire-and-forget load.
      *
-     * # Errors
-     *
-     * Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
+     * Spawns resource creation on `FFI_RUNTIME`. Errors are reported
+     * through [`ItemObserver::on_event`] instead of being returned.
+     * Double-calls are ignored (idempotent).
      */
-    func load() async throws 
+    func load() 
     
     func preferredPeakBitrate()  -> Double
     
@@ -909,27 +970,17 @@ open func id() -> String  {
 }
     
     /**
-     * Asynchronously create the underlying [`Resource`].
+     * Synchronous fire-and-forget load.
      *
-     * # Errors
-     *
-     * Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
+     * Spawns resource creation on `FFI_RUNTIME`. Errors are reported
+     * through [`ItemObserver::on_event`] instead of being returned.
+     * Double-calls are ignored (idempotent).
      */
-open func load()async throws   {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_kithara_ffi_fn_method_audioplayeritem_load(
-                    self.uniffiCloneHandle()
-                    
-                )
-            },
-            pollFunc: ffi_kithara_ffi_rust_future_poll_void,
-            completeFunc: ffi_kithara_ffi_rust_future_complete_void,
-            freeFunc: ffi_kithara_ffi_rust_future_free_void,
-            liftFunc: { $0 },
-            errorHandler: FfiConverterTypeFfiError_lift
-        )
+open func load()  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_load(
+            self.uniffiCloneHandle(),$0
+    )
+}
 }
     
 open func preferredPeakBitrate() -> Double  {
@@ -1035,13 +1086,7 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
  */
 public protocol ItemObserver: AnyObject, Sendable {
     
-    func onDurationChanged(seconds: Double) 
-    
-    func onBufferedDurationChanged(seconds: Double) 
-    
-    func onStatusChanged(statusCode: Int32) 
-    
-    func onError(code: Int32, message: String) 
+    func onEvent(event: FfiItemEvent) 
     
 }
 /**
@@ -1100,35 +1145,10 @@ open class ItemObserverImpl: ItemObserver, @unchecked Sendable {
     
 
     
-open func onDurationChanged(seconds: Double)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_itemobserver_on_duration_changed(
+open func onEvent(event: FfiItemEvent)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_itemobserver_on_event(
             self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(seconds),$0
-    )
-}
-}
-    
-open func onBufferedDurationChanged(seconds: Double)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_itemobserver_on_buffered_duration_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(seconds),$0
-    )
-}
-}
-    
-open func onStatusChanged(statusCode: Int32)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_itemobserver_on_status_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterInt32.lower(statusCode),$0
-    )
-}
-}
-    
-open func onError(code: Int32, message: String)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_itemobserver_on_error(
-            self.uniffiCloneHandle(),
-        FfiConverterInt32.lower(code),
-        FfiConverterString.lower(message),$0
+        FfiConverterTypeFfiItemEvent_lower(event),$0
     )
 }
 }
@@ -1162,9 +1182,9 @@ fileprivate struct UniffiCallbackInterfaceItemObserver {
                 fatalError("Uniffi callback interface ItemObserver: handle missing in uniffiClone")
             }
         },
-        onDurationChanged: { (
+        onEvent: { (
             uniffiHandle: UInt64,
-            seconds: Double,
+            event: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1173,82 +1193,8 @@ fileprivate struct UniffiCallbackInterfaceItemObserver {
                 guard let uniffiObj = try? FfiConverterTypeItemObserver.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return uniffiObj.onDurationChanged(
-                     seconds: try FfiConverterDouble.lift(seconds)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onBufferedDurationChanged: { (
-            uniffiHandle: UInt64,
-            seconds: Double,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypeItemObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onBufferedDurationChanged(
-                     seconds: try FfiConverterDouble.lift(seconds)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onStatusChanged: { (
-            uniffiHandle: UInt64,
-            statusCode: Int32,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypeItemObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onStatusChanged(
-                     statusCode: try FfiConverterInt32.lift(statusCode)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onError: { (
-            uniffiHandle: UInt64,
-            code: Int32,
-            message: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypeItemObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onError(
-                     code: try FfiConverterInt32.lift(code),
-                     message: try FfiConverterString.lift(message)
+                return uniffiObj.onEvent(
+                     event: try FfiConverterTypeFfiItemEvent_lift(event)
                 )
             }
 
@@ -1330,31 +1276,19 @@ public func FfiConverterTypeItemObserver_lower(_ value: ItemObserver) -> UInt64 
 /**
  * Receives player-level state changes from Rust.
  *
- * All methods are called on an arbitrary background thread.
- * Swift implementations must dispatch to main actor as needed.
+ * All calls happen on an arbitrary background thread.
+ * Swift implementations must dispatch to the main actor as needed.
  */
 public protocol PlayerObserver: AnyObject, Sendable {
     
-    func onTimeChanged(seconds: Double) 
-    
-    func onRateChanged(rate: Float) 
-    
-    func onCurrentItemChanged() 
-    
-    func onStatusChanged(statusCode: Int32) 
-    
-    func onError(code: Int32, message: String) 
-    
-    func onDurationChanged(seconds: Double) 
-    
-    func onBufferedDurationChanged(seconds: Double) 
+    func onEvent(event: FfiPlayerEvent) 
     
 }
 /**
  * Receives player-level state changes from Rust.
  *
- * All methods are called on an arbitrary background thread.
- * Swift implementations must dispatch to main actor as needed.
+ * All calls happen on an arbitrary background thread.
+ * Swift implementations must dispatch to the main actor as needed.
  */
 open class PlayerObserverImpl: PlayerObserver, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1409,58 +1343,10 @@ open class PlayerObserverImpl: PlayerObserver, @unchecked Sendable {
     
 
     
-open func onTimeChanged(seconds: Double)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_time_changed(
+open func onEvent(event: FfiPlayerEvent)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_playerobserver_on_event(
             self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(seconds),$0
-    )
-}
-}
-    
-open func onRateChanged(rate: Float)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_rate_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterFloat.lower(rate),$0
-    )
-}
-}
-    
-open func onCurrentItemChanged()  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_current_item_changed(
-            self.uniffiCloneHandle(),$0
-    )
-}
-}
-    
-open func onStatusChanged(statusCode: Int32)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_status_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterInt32.lower(statusCode),$0
-    )
-}
-}
-    
-open func onError(code: Int32, message: String)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_error(
-            self.uniffiCloneHandle(),
-        FfiConverterInt32.lower(code),
-        FfiConverterString.lower(message),$0
-    )
-}
-}
-    
-open func onDurationChanged(seconds: Double)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_duration_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(seconds),$0
-    )
-}
-}
-    
-open func onBufferedDurationChanged(seconds: Double)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_playerobserver_on_buffered_duration_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterDouble.lower(seconds),$0
+        FfiConverterTypeFfiPlayerEvent_lower(event),$0
     )
 }
 }
@@ -1494,9 +1380,9 @@ fileprivate struct UniffiCallbackInterfacePlayerObserver {
                 fatalError("Uniffi callback interface PlayerObserver: handle missing in uniffiClone")
             }
         },
-        onTimeChanged: { (
+        onEvent: { (
             uniffiHandle: UInt64,
-            seconds: Double,
+            event: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1505,152 +1391,8 @@ fileprivate struct UniffiCallbackInterfacePlayerObserver {
                 guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return uniffiObj.onTimeChanged(
-                     seconds: try FfiConverterDouble.lift(seconds)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onRateChanged: { (
-            uniffiHandle: UInt64,
-            rate: Float,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onRateChanged(
-                     rate: try FfiConverterFloat.lift(rate)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onCurrentItemChanged: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onCurrentItemChanged(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onStatusChanged: { (
-            uniffiHandle: UInt64,
-            statusCode: Int32,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onStatusChanged(
-                     statusCode: try FfiConverterInt32.lift(statusCode)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onError: { (
-            uniffiHandle: UInt64,
-            code: Int32,
-            message: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onError(
-                     code: try FfiConverterInt32.lift(code),
-                     message: try FfiConverterString.lift(message)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onDurationChanged: { (
-            uniffiHandle: UInt64,
-            seconds: Double,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onDurationChanged(
-                     seconds: try FfiConverterDouble.lift(seconds)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onBufferedDurationChanged: { (
-            uniffiHandle: UInt64,
-            seconds: Double,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterTypePlayerObserver.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onBufferedDurationChanged(
-                     seconds: try FfiConverterDouble.lift(seconds)
+                return uniffiObj.onEvent(
+                     event: try FfiConverterTypeFfiPlayerEvent_lift(event)
                 )
             }
 
@@ -1920,6 +1662,86 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 
 
 /**
+ * Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
+ *
+ * Fields are `Option` when no current item is loaded — callers should
+ * not assume defaults.
+ */
+public struct FfiPlayerSnapshot: Equatable, Hashable {
+    public let status: FfiPlayerStatus
+    public let currentTime: Double?
+    public let duration: Double?
+    public let rate: Float
+    public let defaultRate: Float
+    public let volume: Float
+    public let muted: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, rate: Float, defaultRate: Float, volume: Float, muted: Bool) {
+        self.status = status
+        self.currentTime = currentTime
+        self.duration = duration
+        self.rate = rate
+        self.defaultRate = defaultRate
+        self.volume = volume
+        self.muted = muted
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiPlayerSnapshot: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerSnapshot {
+        return
+            try FfiPlayerSnapshot(
+                status: FfiConverterTypeFfiPlayerStatus.read(from: &buf), 
+                currentTime: FfiConverterOptionDouble.read(from: &buf), 
+                duration: FfiConverterOptionDouble.read(from: &buf), 
+                rate: FfiConverterFloat.read(from: &buf), 
+                defaultRate: FfiConverterFloat.read(from: &buf), 
+                volume: FfiConverterFloat.read(from: &buf), 
+                muted: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiPlayerSnapshot, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiPlayerStatus.write(value.status, into: &buf)
+        FfiConverterOptionDouble.write(value.currentTime, into: &buf)
+        FfiConverterOptionDouble.write(value.duration, into: &buf)
+        FfiConverterFloat.write(value.rate, into: &buf)
+        FfiConverterFloat.write(value.defaultRate, into: &buf)
+        FfiConverterFloat.write(value.volume, into: &buf)
+        FfiConverterBool.write(value.muted, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerSnapshot_lift(_ buf: RustBuffer) throws -> FfiPlayerSnapshot {
+    return try FfiConverterTypeFfiPlayerSnapshot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) -> RustBuffer {
+    return FfiConverterTypeFfiPlayerSnapshot.lower(value)
+}
+
+
+/**
  * FFI-friendly time range (seconds-based).
  */
 public struct FfiTimeRange: Equatable, Hashable {
@@ -2097,6 +1919,102 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * Typed item event dispatched through [`ItemObserver::on_event`].
+ */
+
+public enum FfiItemEvent: Equatable, Hashable {
+    
+    case durationChanged(seconds: Double
+    )
+    case bufferedDurationChanged(seconds: Double
+    )
+    case statusChanged(status: FfiItemStatus
+    )
+    case error(error: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiItemEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiItemEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 2: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 3: return .statusChanged(status: try FfiConverterTypeFfiItemStatus.read(from: &buf)
+        )
+        
+        case 4: return .error(error: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiItemEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .durationChanged(seconds):
+            writeInt(&buf, Int32(1))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .bufferedDurationChanged(seconds):
+            writeInt(&buf, Int32(2))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .statusChanged(status):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeFfiItemStatus.write(status, into: &buf)
+            
+        
+        case let .error(error):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(error, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemEvent_lift(_ buf: RustBuffer) throws -> FfiItemEvent {
+    return try FfiConverterTypeFfiItemEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemEvent_lower(_ value: FfiItemEvent) -> RustBuffer {
+    return FfiConverterTypeFfiItemEvent.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * FFI-friendly mirror of [`ItemStatus`].
  */
 
@@ -2168,6 +2086,169 @@ public func FfiConverterTypeFfiItemStatus_lift(_ buf: RustBuffer) throws -> FfiI
 #endif
 public func FfiConverterTypeFfiItemStatus_lower(_ value: FfiItemStatus) -> RustBuffer {
     return FfiConverterTypeFfiItemStatus.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Typed player event dispatched through [`PlayerObserver::on_event`].
+ *
+ * Replaces raw integer status codes with typed enums. Swift receives
+ * a single callback with a discriminated union instead of 7 separate methods.
+ *
+ * **Concurrency**: events may arrive from multiple threads concurrently
+ * (async broadcast task + OS polling thread). Swift must handle
+ * thread-safe delivery internally.
+ */
+
+public enum FfiPlayerEvent: Equatable, Hashable {
+    
+    case timeChanged(seconds: Double
+    )
+    case rateChanged(rate: Float
+    )
+    case currentItemChanged(itemId: String?
+    )
+    case statusChanged(status: FfiPlayerStatus
+    )
+    case timeControlStatusChanged(status: FfiTimeControlStatus
+    )
+    case error(error: String
+    )
+    case durationChanged(seconds: Double
+    )
+    case bufferedDurationChanged(seconds: Double
+    )
+    case volumeChanged(volume: Float
+    )
+    case muteChanged(muted: Bool
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPlayerEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPlayerEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .timeChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 2: return .rateChanged(rate: try FfiConverterFloat.read(from: &buf)
+        )
+        
+        case 3: return .currentItemChanged(itemId: try FfiConverterOptionString.read(from: &buf)
+        )
+        
+        case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
+        )
+        
+        case 5: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
+        )
+        
+        case 6: return .error(error: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 8: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        )
+        
+        case 9: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        )
+        
+        case 10: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiPlayerEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .timeChanged(seconds):
+            writeInt(&buf, Int32(1))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .rateChanged(rate):
+            writeInt(&buf, Int32(2))
+            FfiConverterFloat.write(rate, into: &buf)
+            
+        
+        case let .currentItemChanged(itemId):
+            writeInt(&buf, Int32(3))
+            FfiConverterOptionString.write(itemId, into: &buf)
+            
+        
+        case let .statusChanged(status):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeFfiPlayerStatus.write(status, into: &buf)
+            
+        
+        case let .timeControlStatusChanged(status):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeFfiTimeControlStatus.write(status, into: &buf)
+            
+        
+        case let .error(error):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(error, into: &buf)
+            
+        
+        case let .durationChanged(seconds):
+            writeInt(&buf, Int32(7))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .bufferedDurationChanged(seconds):
+            writeInt(&buf, Int32(8))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .volumeChanged(volume):
+            writeInt(&buf, Int32(9))
+            FfiConverterFloat.write(volume, into: &buf)
+            
+        
+        case let .muteChanged(muted):
+            writeInt(&buf, Int32(10))
+            FfiConverterBool.write(muted, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerEvent_lift(_ buf: RustBuffer) throws -> FfiPlayerEvent {
+    return try FfiConverterTypeFfiPlayerEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerEvent_lower(_ value: FfiPlayerEvent) -> RustBuffer {
+    return FfiConverterTypeFfiPlayerEvent.lower(value)
 }
 
 
@@ -2328,6 +2409,54 @@ public func FfiConverterTypeFfiTimeControlStatus_lower(_ value: FfiTimeControlSt
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
+    typealias SwiftType = Double?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterDouble.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterDouble.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer {
     typealias SwiftType = AudioPlayerItem?
 
@@ -2423,54 +2552,6 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
         return dict
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
-
-fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call the ensure init function since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureKitharaFfiInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                { handle, pollResult in
-                    uniffiFutureContinuationCallback(handle: handle, pollResult: pollResult)
-                },
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 
 private enum InitializationResult {
     case ok
@@ -2490,7 +2571,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_id() != 43480) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 24455) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 49002) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_preferred_peak_bitrate() != 37617) {
@@ -2511,37 +2592,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 17628) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_duration_changed() != 53647) {
+    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 60649) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_buffered_duration_changed() != 12346) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_status_changed() != 40165) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_error() != 13065) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_time_changed() != 34808) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_rate_changed() != 42421) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_current_item_changed() != 12301) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_status_changed() != 16355) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_error() != 46881) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_duration_changed() != 18565) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_buffered_duration_changed() != 57243) {
+    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_event() != 53539) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 9600) {
@@ -2550,7 +2604,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_default_rate() != 41174) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 35420) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 37914) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 23590) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 26264) {
@@ -2571,13 +2628,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 32344) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 13125) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 62537) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 50507) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 3831) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 4642) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 50155) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 50555) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 37818) {

@@ -37,6 +37,7 @@ const RSS_BUDGET_MB: usize = 30;
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
 #[kithara::test(native, tokio, serial, timeout(Duration::from_secs(120)))]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
+    let _guard = hotpath::FunctionsGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(BUDGET_RUNS);
 
     for run in 0..BUDGET_RUNS {
@@ -125,6 +126,7 @@ const LEAK_TOLERANCE_MB: usize = 5;
 /// RSS should stabilize after warmup — no sustained growth.
 #[kithara::test(native, tokio, serial, timeout(Duration::from_secs(120)))]
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
+    let _guard = hotpath::FunctionsGuardBuilder::new("rss_leak").build();
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
 

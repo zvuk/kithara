@@ -74,7 +74,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-matched-key != ''
         id: compare
         run: |
-          result=$(bash scripts/ci/compare-perf.sh perf-results.txt baseline-results.txt 10 2>&1) || true
+          result=$(cargo xtask perf-compare perf-results.txt baseline-results.txt --threshold 10 2>&1) || true
           echo "$result"
           {
             echo 'comparison<<EOF'

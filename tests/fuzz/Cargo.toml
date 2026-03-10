@@ -1,0 +1,24 @@
+[package]
+name = "kithara-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { workspace = true }
+arbitrary = { workspace = true }
+kithara-drm = { workspace = true }
+hls_m3u8 = { workspace = true }
+
+[[bin]]
+name = "aes_decrypt"
+path = "fuzz_targets/aes_decrypt.rs"
+doc = false
+
+[[bin]]
+name = "hls_parsing"
+path = "fuzz_targets/hls_parsing.rs"
+doc = false

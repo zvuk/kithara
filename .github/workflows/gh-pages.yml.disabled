@@ -74,7 +74,7 @@ jobs:
         run: cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
 
       - name: Run wasm-slim check
-        run: WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+        run: WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
 
       - name: Upload wasm-slim report
         if: always()

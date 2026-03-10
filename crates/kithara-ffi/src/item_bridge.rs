@@ -6,7 +6,10 @@ use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{observer::ItemObserver, types::FfiError};
+use crate::{
+    observer::ItemObserver,
+    types::{FfiError, FfiItemEvent, FfiItemStatus},
+};
 
 /// Forwards resource events to an item observer on background tasks.
 pub(crate) struct ItemEventBridge {
@@ -21,9 +24,11 @@ impl ItemEventBridge {
         duration_seconds: Option<f64>,
         cancel: CancellationToken,
     ) -> Self {
-        observer.on_status_changed(1);
+        observer.on_event(FfiItemEvent::StatusChanged {
+            status: FfiItemStatus::ReadyToPlay,
+        });
         if let Some(duration) = duration_seconds {
-            observer.on_duration_changed(duration);
+            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
         Self::spawn_event_task(rx, observer, duration_seconds, cancel.clone());
         Self { cancel }
@@ -67,19 +72,23 @@ impl ItemEventBridge {
             && duration_seconds.is_none_or(|current| (current - duration).abs() > 0.01)
         {
             *duration_seconds = Some(duration);
-            observer.on_duration_changed(duration);
+            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
         if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
             && last_buffered.is_none_or(|current| (current - buffered).abs() > 0.01)
         {
             *last_buffered = Some(buffered);
-            observer.on_buffered_duration_changed(buffered);
+            observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
         }
 
         if let Some(error) = Self::error_from_event(event) {
-            observer.on_status_changed(2);
-            observer.on_error(error.observer_code(), error.to_string());
+            observer.on_event(FfiItemEvent::StatusChanged {
+                status: FfiItemStatus::Failed,
+            });
+            observer.on_event(FfiItemEvent::Error {
+                error: error.to_string(),
+            });
         }
     }
 

@@ -16,8 +16,7 @@ impl<S> Iterator for Audio<S> {
         {
             let sample = chunk.pcm[self.chunk_offset];
             self.chunk_offset += 1;
-            self.timeline
-                .advance_committed_samples(1, self.spec.sample_rate, self.spec.channels);
+            self.advance_timeline(1);
             return Some(sample);
         }
 
@@ -28,8 +27,7 @@ impl<S> Iterator for Audio<S> {
         {
             let sample = chunk.pcm[self.chunk_offset];
             self.chunk_offset += 1;
-            self.timeline
-                .advance_committed_samples(1, self.spec.sample_rate, self.spec.channels);
+            self.advance_timeline(1);
             return Some(sample);
         }
 

@@ -16,7 +16,9 @@
 
 - integration tests for workspace crates;
 - performance regression tests (`hotpath`, ignored by default);
+- RSS memory profiling tests;
 - Criterion microbenchmarks;
+- fuzz targets (`cargo-fuzz`);
 - local test binaries/fixtures (fixture server, WASM test runner).
 
 ## Layout
@@ -24,6 +26,7 @@
 - `tests/tests/` — integration tests grouped by crate (`kithara_hls`, `kithara_file`, `kithara_decode`, ...).
 - `tests/perf/` — perf scenarios, each behind `feature = "perf"` and `#[ignore]`.
 - `tests/benches/` — Criterion benchmarks.
+- `tests/fuzz/` — `cargo-fuzz` fuzz targets.
 - `tests/bin/` — helper binaries:
   - `fixture_server` — dynamic fixture server for HLS/ABR test sessions (native + WASM).
   - `wasm_test_runner` — custom WASM test runner that auto-starts fixture server.
@@ -38,6 +41,18 @@ Integration tests run on both **native** and **WASM (browser)** targets. The `#[
 | `#[kithara::test(wasm, ...)]` | yes | yes |
 | `#[kithara::test(native, ...)]` | yes | no |
 | `#[kithara::test(tokio, ...)]` (no flag) | yes | no |
+| `#[kithara::test(selenium, ...)]` | yes | no |
+
+Additional flags:
+
+| Flag | Effect |
+|------|--------|
+| `serial` | Run test exclusively (no parallel tests) |
+| `timeout(Duration::from_secs(N))` | Per-test timeout |
+| `env("KEY", "VAL")` | Set env var for test duration |
+| `soft_fail("pattern")` | Allow panics matching pattern |
+| `multi_thread` | Use multi-thread tokio runtime instead of current-thread |
+| `selenium` | Implies `native + tokio + serial + multi_thread`, adds `#[ignore = "requires selenium"]` |
 
 ### Fixture Server
 
@@ -86,9 +101,11 @@ cargo test -p kithara-integration-tests --test suite_heavy live_stress_real_stre
 `just` shortcuts (from repo root):
 
 ```bash
-just test
-just test-doc
-just test-all
+just test          # default nextest run
+just test-fast     # fast profile: skips suite_heavy (stress/selenium)
+just test-stress   # stress profile: only suite_heavy, 1 thread, 60s timeout
+just test-doc      # doc tests only
+just test-all      # both unit and doc tests
 ```
 
 ## WASM Tests
@@ -97,7 +114,7 @@ WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner
 
 ```bash
 # Recommended entrypoint (handles everything)
-bash scripts/ci/wasm-test.sh
+just wasm-test
 
 # Manual run (wasm_test_runner auto-starts fixture server)
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
@@ -127,14 +144,17 @@ page and are implemented as ignored integration tests in:
 
 - `tests/tests/kithara_wasm/selenium.rs`
 
+Tests use the `#[kithara::test(selenium, ...)]` macro flag, which implies
+`native + tokio + serial + multi_thread` and adds `#[ignore = "requires selenium"]`.
+
 Run them explicitly:
 
 ```bash
-cargo test -p kithara-integration-tests --test suite_heavy selenium_hls_log_scenario -- --ignored --nocapture
-
+# Single test
 cargo test -p kithara-integration-tests --test suite_heavy selenium_player_scenarios -- --ignored --nocapture
 
-cargo test -p kithara-integration-tests --test suite_heavy selenium_diagnostic_suite -- --ignored --nocapture
+# All selenium tests
+cargo test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
 ```
 
 Environment knobs:
@@ -177,6 +197,7 @@ Perf modules in this crate:
 
 - `abr.rs` — `perf_abr_scenarios`
 - `decoder.rs` — `perf_decoder_scenarios`
+- `memory_rss.rs` — RSS memory profiling for HLS playback
 - `pool.rs` — `perf_pool_scenarios`
 - `resampler.rs` — `perf_resampler_scenarios`
 - `storage.rs` — `perf_storage_scenarios`
@@ -185,18 +206,21 @@ Local compare flow:
 
 ```bash
 just perf-test
-./scripts/ci/compare-perf.sh perf-results.txt saved-baseline.txt 10
+cargo xtask perf-compare perf-results.txt saved-baseline.txt --threshold 10
 ```
 
 ## Benchmarks (`tests/benches`)
 
-Criterion benchmark target:
+Criterion benchmark targets:
 
-- `refactor_hotpaths.rs`
+- `abr_estimator.rs` — ABR throughput estimation
+- `bufpool.rs` — buffer pool allocation hot paths
+- `refactor_hotpaths.rs` — general hot path benchmarks
 
 Run manually:
 
 ```bash
+cargo bench -p kithara-integration-tests --bench bufpool
 cargo bench -p kithara-integration-tests --bench refactor_hotpaths
 ```
 
@@ -205,6 +229,27 @@ Or with project shortcuts:
 ```bash
 just bench-build
 RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just bench-ci
+```
+
+Note: `abr_estimator` is in the `kithara-abr` crate, not `kithara-integration-tests`.
+
+## Fuzzing (`tests/fuzz`)
+
+Fuzz targets use `cargo-fuzz` / `libfuzzer-sys`:
+
+- `aes_decrypt` — AES-128-CBC decryption with random key/iv/ciphertext
+- `hls_parsing` — HLS M3U8 playlist parsing with `arbitrary`-generated inputs
+
+Run:
+
+```bash
+# Install cargo-fuzz (once)
+cargo install cargo-fuzz
+
+# Run a fuzz target (requires nightly)
+cd tests/fuzz
+cargo +nightly fuzz run aes_decrypt -- -max_total_time=60
+cargo +nightly fuzz run hls_parsing -- -max_total_time=60
 ```
 
 ## Adding New Tests
@@ -219,6 +264,8 @@ Integration tests:
 6. Use `#[kithara::test(tokio, browser, ...)]` for tests that need a server — they'll run on both native and WASM.
 7. Use `#[kithara::test(wasm, ...)]` for pure logic tests that can run on WASM.
 8. Use `#[kithara::test(native, ...)]` for tests that require filesystem or OS-specific features.
+9. Use `#[kithara::test(selenium, ...)]` for Selenium E2E tests (auto-ignored, multi-thread runtime).
+10. Use `#[case::name(value)]` for parameterized test cases.
 
 Performance tests:
 
@@ -231,6 +278,23 @@ Benchmarks:
 
 1. Add benchmark file in `tests/benches/`.
 2. Register `[[bench]]` target in `tests/Cargo.toml` (if new).
+
+Fuzz targets:
+
+1. Add fuzz target in `tests/fuzz/fuzz_targets/`.
+2. Register `[[bin]]` target in `tests/fuzz/Cargo.toml`.
+3. Use workspace dependencies from root `Cargo.toml`.
+
+## Nextest Profiles
+
+| Profile | Command | Description |
+|---------|---------|-------------|
+| `default` | `just test` | All tests, 4 threads |
+| `fast` | `just test-fast` | Skips `suite_heavy` (stress/selenium) |
+| `stress` | `just test-stress` | Only `suite_heavy`, 1 thread, 60s slow-timeout |
+| `ci` | `just test-ci` | CI mode, no fast-fail |
+
+Profiles are defined in `.config/nextest.toml`.
 
 ## Troubleshooting
 

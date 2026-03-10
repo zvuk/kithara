@@ -2,6 +2,7 @@ stages:
   - lint
   - test
   - quality
+  - release
 
 default:
   image: rust:1.88
@@ -43,6 +44,7 @@ lint:
     - rustup toolchain install nightly --component rustfmt
   script:
     - just lint-full
+    - just quality-report-ci
   artifacts:
     paths:
       - target/quality-report.md
@@ -55,22 +57,25 @@ deny:
   stage: lint
   before_script:
     - test -f "$CARGO_HOME/bin/cargo-deny" || cargo install cargo-deny --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo deny check
+    - just deny
 
 machete:
   stage: lint
   before_script:
     - test -f "$CARGO_HOME/bin/cargo-machete" || cargo install cargo-machete --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo machete
+    - just machete
   allow_failure: true
 
 arch:
   stage: lint
-  before_script: []
+  before_script:
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - bash scripts/ci/check-arch.sh
+    - just arch
 
 # --- test stage ---
 
@@ -81,29 +86,27 @@ test:
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-nextest" || cargo install cargo-nextest --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo nextest run --workspace
+    - just test
 
 msrv:
   stage: test
   needs: [lint]
   image: rust:1.88
+  before_script:
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo check --workspace
+    - just check
 
 wasm:
   stage: test
   needs: [lint]
   before_script:
     - rustup target add wasm32-unknown-unknown
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo check -p kithara-wasm --target wasm32-unknown-unknown --no-default-features
-    - cargo check -p kithara-storage --target wasm32-unknown-unknown
-    - cargo check -p kithara-net --target wasm32-unknown-unknown
-    - cargo check -p kithara-stream --target wasm32-unknown-unknown
-    - cargo check -p kithara-assets --target wasm32-unknown-unknown
-    - cargo check -p kithara-hls --target wasm32-unknown-unknown
-    - cargo check -p kithara-decode --target wasm32-unknown-unknown
+    - just wasm-check
 
 wasm-size:
   stage: test
@@ -113,7 +116,7 @@ wasm-size:
     - rustup target add wasm32-unknown-unknown --toolchain nightly
     - test -f "$CARGO_HOME/bin/wasm-slim" || cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
   script:
-    - WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+    - WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
   artifacts:
     paths:
       - target/wasm-slim-result.json
@@ -128,9 +131,9 @@ hack:
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace
-      --exclude kithara-wasm
+    - just hack
   allow_failure: true
 
 semver:
@@ -139,8 +142,9 @@ semver:
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-semver-checks" || cargo install cargo-semver-checks --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - cargo semver-checks check-release --workspace
+    - just semver
   allow_failure: true
   rules:
     - changes:
@@ -212,6 +216,8 @@ bench-baseline:
     - if: '$CI_COMMIT_REF_NAME == "main"'
       changes:
         - crates/kithara-abr/**/*
+        - tests/benches/**/*
+        - justfile
         - Cargo.toml
         - Cargo.lock
 
@@ -242,5 +248,26 @@ bench:
     - if: '$CI_COMMIT_REF_NAME != "main"'
       changes:
         - crates/kithara-abr/**/*
+        - tests/benches/**/*
+        - justfile
         - Cargo.toml
         - Cargo.lock
+
+# --- release stage ---
+
+release-apple:
+  stage: release
+  tags:
+    - macos
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+      when: manual
+  before_script:
+    - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+  script:
+    - just release-apple
+  artifacts:
+    paths:
+      - /tmp/KitharaFFIInternal.xcframework.zip
+    expire_in: 90 days

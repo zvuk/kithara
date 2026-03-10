@@ -1,17 +1,24 @@
 //! FFI wrapper for audio player items.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use kithara::play::{Resource, ResourceConfig};
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, tokio::sync::Notify};
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     config,
     item_bridge::ItemEventBridge,
     observer::ItemObserver,
-    types::{FfiError, FfiResult},
+    types::{FfiError, FfiItemEvent, FfiResult},
 };
 
 /// FFI-facing audio player item with UUID identity and lazy loading.
@@ -25,6 +32,13 @@ pub struct AudioPlayerItem {
     resource: Mutex<Option<Resource>>,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
+    loading: AtomicBool,
+    load_notify: Notify,
+}
+
+/// Internal configuration built from item properties before loading.
+struct ResourceLoadConfig {
+    config: ResourceConfig,
 }
 
 /// Methods exported across the FFI boundary.
@@ -43,6 +57,8 @@ impl AudioPlayerItem {
             resource: Mutex::new(None),
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
+            loading: AtomicBool::new(false),
+            load_notify: Notify::new(),
         })
     }
 
@@ -71,50 +87,37 @@ impl AudioPlayerItem {
         *self.preferred_peak_bitrate_expensive.lock_sync() = bitrate;
     }
 
-    /// Asynchronously create the underlying [`Resource`].
+    /// Synchronous fire-and-forget load.
     ///
-    /// # Errors
-    ///
-    /// Returns [`FfiError::Internal`] if the URL is invalid or resource creation fails.
-    pub async fn load(&self) -> Result<(), FfiError> {
-        let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
-            description: e.to_string(),
-        })?;
-
-        config::configure_resource(&mut config);
-
-        let bitrate = self.preferred_peak_bitrate();
-        if bitrate > 0.0 {
-            config = config.with_preferred_peak_bitrate(bitrate);
+    /// Spawns resource creation on `FFI_RUNTIME`. Errors are reported
+    /// through [`ItemObserver::on_event`] instead of being returned.
+    /// Double-calls are ignored (idempotent).
+    pub fn load(self: Arc<Self>) {
+        if !self.claim_loading() {
+            return;
         }
 
-        if let Some(headers) = &self.headers {
-            config = config.with_headers(headers.clone().into());
-        }
+        let config = match self.build_resource_config() {
+            Ok(c) => c,
+            Err(e) => {
+                self.report_error(&e);
+                self.finish_loading();
+                return;
+            }
+        };
 
-        // Spawn on FFI_RUNTIME so the future runs within a Tokio reactor context.
-        // UniFFI polls async futures on its own thread pool which lacks a Tokio runtime.
-        let resource = crate::FFI_RUNTIME
-            .spawn(Resource::new(config))
-            .await
-            .map_err(|e| {
-                let error = FfiError::Internal {
-                    description: e.to_string(),
-                };
-                self.notify_load_error(&error);
-                error
-            })?
-            .map_err(|e| {
-                let error = FfiError::Internal {
-                    description: e.to_string(),
-                };
-                self.notify_load_error(&error);
-                error
-            })?;
-
-        *self.resource.lock_sync() = Some(resource);
-        self.restart_bridge();
-        Ok(())
+        crate::FFI_RUNTIME.spawn(async move {
+            match Self::load_resource(config).await {
+                Ok(resource) => {
+                    *self.resource.lock_sync() = Some(resource);
+                    self.restart_bridge();
+                }
+                Err(e) => {
+                    self.report_error(&e);
+                }
+            }
+            self.finish_loading();
+        });
     }
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
@@ -137,13 +140,6 @@ impl AudioPlayerItem {
 
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
         self.observer.lock_sync().clone()
-    }
-
-    fn notify_load_error(&self, error: &FfiError) {
-        if let Some(observer) = self.observer() {
-            observer.on_status_changed(2);
-            observer.on_error(error.observer_code(), error.to_string());
-        }
     }
 
     fn restart_bridge(&self) {
@@ -169,6 +165,69 @@ impl AudioPlayerItem {
         let bridge =
             ItemEventBridge::spawn(rx, observer, duration_seconds, CancellationToken::new());
         *self.event_bridge.lock_sync() = Some(bridge);
+    }
+
+    /// Atomically claim loading rights. Returns `true` if this call won.
+    fn claim_loading(&self) -> bool {
+        !self.loading.swap(true, Ordering::AcqRel)
+    }
+
+    /// Mark loading as finished and notify any waiters.
+    fn finish_loading(&self) {
+        self.loading.store(false, Ordering::Release);
+        self.load_notify.notify_waiters();
+    }
+
+    /// Wait until any in-progress load completes.
+    ///
+    /// Registers `notified()` BEFORE checking the flag to avoid TOCTOU race.
+    pub(crate) async fn wait_for_load(&self) {
+        loop {
+            let notified = self.load_notify.notified();
+            if !self.loading.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Build a [`ResourceConfig`] from item properties.
+    fn build_resource_config(&self) -> FfiResult<ResourceLoadConfig> {
+        let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
+            description: e.to_string(),
+        })?;
+
+        config::configure_resource(&mut config);
+
+        let bitrate = self.preferred_peak_bitrate();
+        if bitrate > 0.0 {
+            config = config.with_preferred_peak_bitrate(bitrate);
+        }
+
+        if let Some(headers) = &self.headers {
+            config = config.with_headers(headers.clone().into());
+        }
+
+        Ok(ResourceLoadConfig { config })
+    }
+
+    /// Async resource creation — runs on `FFI_RUNTIME`.
+    async fn load_resource(load_config: ResourceLoadConfig) -> Result<Resource, FfiError> {
+        Resource::new(load_config.config)
+            .await
+            .map_err(|e| FfiError::Internal {
+                description: e.to_string(),
+            })
+    }
+
+    /// Report an error through the item observer.
+    fn report_error(&self, err: &FfiError) {
+        error!(%err, item_id = %self.id, "item load failed");
+        if let Some(obs) = self.observer() {
+            obs.on_event(FfiItemEvent::Error {
+                error: err.to_string(),
+            });
+        }
     }
 }
 
@@ -204,18 +263,50 @@ mod tests {
         assert!(matches!(result, Err(FfiError::NotReady)));
     }
 
-    /// Simulates UniFFI's async polling: `load()` is called from a thread
-    /// with NO Tokio runtime context. The future must not panic — it should
-    /// run I/O on `FFI_RUNTIME` internally.
     #[kithara::test]
-    fn load_without_tokio_context_does_not_panic() {
+    fn load_does_not_panic() {
         let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
-        let result = std::thread::spawn(move || futures::executor::block_on(item.load()))
-            .join()
-            .expect("load() panicked — no Tokio runtime context");
+        // Sync fire-and-forget — must not panic.
+        item.load();
+    }
 
-        // Network error is expected (example.com won't serve audio).
-        // The point is: no panic from missing Tokio reactor.
-        assert!(result.is_err());
+    #[kithara::test]
+    fn double_load_is_idempotent() {
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        let item2 = Arc::clone(&item);
+        item.load();
+        // Second call should be ignored (claim_loading returns false).
+        item2.load();
+    }
+
+    #[kithara::test]
+    fn build_resource_config_valid_url() {
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        let config = item.build_resource_config();
+        assert!(config.is_ok());
+    }
+
+    #[kithara::test]
+    fn build_resource_config_invalid_url() {
+        let item = AudioPlayerItem::new("not a url".into(), None);
+        let config = item.build_resource_config();
+        assert!(config.is_err());
+    }
+
+    #[kithara::test]
+    fn build_resource_config_with_bitrate() {
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        item.set_preferred_peak_bitrate(256_000.0);
+        let config = item.build_resource_config();
+        assert!(config.is_ok());
+    }
+
+    #[kithara::test]
+    fn build_resource_config_with_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".into(), "Bearer token".into());
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), Some(headers));
+        let config = item.build_resource_config();
+        assert!(config.is_ok());
     }
 }

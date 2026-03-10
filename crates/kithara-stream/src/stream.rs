@@ -208,10 +208,12 @@ impl<T: StreamType> Read for Stream<T> {
                             kithara_platform::thread::yield_now();
                             continue;
                         }
-                        return Err(io::Error::new(
-                            io::ErrorKind::Interrupted,
-                            "seek pending",
-                        ));
+                        // Use `Other` instead of `Interrupted` because Symphonia
+                        // silently retries `Interrupted` errors (standard Rust I/O
+                        // convention).  `Other` propagates through the decoder and
+                        // becomes `DecodeError::Io`, which `handle_decode_error`
+                        // can recover from by exiting to the worker loop.
+                        return Err(io::Error::other("seek pending"));
                     }
                 }
 
@@ -414,7 +416,9 @@ mod tests {
 
         let err = stream
             .read(&mut buf)
-            .expect_err("flushing read must return interrupted");
-        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+            .expect_err("flushing read must return error");
+        // Uses `Other` (not `Interrupted`) so that Symphonia propagates
+        // the error instead of silently retrying.
+        assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 }

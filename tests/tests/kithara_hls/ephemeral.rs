@@ -68,18 +68,16 @@ fn disk_backend_creates_mmap_resource() {
     );
 }
 
+use crate::common::test_defaults::SawWav;
+
 #[cfg(not(target_arch = "wasm32"))]
-const SAMPLE_RATE: u32 = 44100;
-#[cfg(not(target_arch = "wasm32"))]
-const CHANNELS: u16 = 2;
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_SIZE: usize = 200_000;
+const D: SawWav = SawWav::DEFAULT;
 /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
 /// MemResources which would make `wait_range()` block forever.
 #[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 3;
 #[cfg(not(target_arch = "wasm32"))]
-const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE;
+const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size;
 
 /// Recursively count files inside a directory tree.
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,10 +114,10 @@ async fn ephemeral_pipeline_no_disk_writes() {
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
     // Spawn HLS server
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(Arc::new(wav_data)),
         ..Default::default()

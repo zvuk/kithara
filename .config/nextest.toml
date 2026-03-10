@@ -5,3 +5,14 @@ test-threads = 4
 [profile.ci]
 fail-fast = false
 test-threads = 4
+
+# Fast-only profile: heavy tests are excluded via -E filter in justfile.
+[profile.fast]
+fail-fast = false
+test-threads = 4
+
+# Stress-only profile: run only the heavy test binary.
+[profile.stress]
+fail-fast = false
+test-threads = 1
+slow-timeout = { period = "60s", terminate-after = 5 }

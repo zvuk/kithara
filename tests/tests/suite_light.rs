@@ -4,6 +4,8 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
+mod common;
+
 mod browser_runner_smoke;
 mod env_guard;
 mod events;

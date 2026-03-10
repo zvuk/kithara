@@ -7,7 +7,6 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use serial_test::serial;
 use thirtyfour::{
     common::capabilities::{chromium::ChromiumLikeCapabilities, firefox::FirefoxPreferences},
     prelude::*,
@@ -117,6 +116,10 @@ impl SeleniumConfig {
 
     fn mp3_url(&self) -> String {
         format!("{}/track.mp3", self.fixture_base_url())
+    }
+
+    fn drm_url(&self) -> String {
+        format!("{}/drm/master.m3u8", self.fixture_base_url())
     }
 
     fn page_url(&self) -> String {
@@ -322,6 +325,7 @@ impl Default for Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 struct TrackIndexes {
+    drm: usize,
     hls: usize,
     mp3: usize,
 }
@@ -380,16 +384,96 @@ impl WasmPlayerSelenium {
         }
     }
 
+    async fn install_console_capture(&self) {
+        let script = r#"
+            if (!window.__consoleLogs) {
+                window.__consoleLogs = [];
+                const orig = console.log.bind(console);
+                console.log = (...args) => {
+                    window.__consoleLogs.push(args.map(String).join(' '));
+                    if (window.__consoleLogs.length > 200) {
+                        window.__consoleLogs.splice(0, window.__consoleLogs.length - 200);
+                    }
+                    orig(...args);
+                };
+                const origWarn = console.warn.bind(console);
+                console.warn = (...args) => {
+                    window.__consoleLogs.push('[WARN] ' + args.map(String).join(' '));
+                    origWarn(...args);
+                };
+                const origErr = console.error.bind(console);
+                console.error = (...args) => {
+                    window.__consoleLogs.push('[ERROR] ' + args.map(String).join(' '));
+                    origErr(...args);
+                };
+            }
+        "#;
+        let _ = self.driver.execute(script, Vec::<Value>::new()).await;
+    }
+
+    async fn collect_browser_logs(&self) -> String {
+        let mut logs = Vec::new();
+
+        // UI event log
+        let script = r#"
+            return [...document.querySelectorAll('#event-log > div')]
+                .slice(-30)
+                .map(el => el.textContent ?? '')
+                .join('\n');
+        "#;
+        if let Ok(ret) = self.driver.execute(script, Vec::<Value>::new()).await {
+            if let Ok(s) = ret.convert::<String>() {
+                if !s.is_empty() {
+                    logs.push(format!("--- UI event log ---\n{s}"));
+                }
+            }
+        }
+
+        // Captured console logs
+        let console_script = "return (window.__consoleLogs || []).slice(-80).join('\\n');";
+        if let Ok(ret) = self
+            .driver
+            .execute(console_script, Vec::<Value>::new())
+            .await
+        {
+            if let Ok(s) = ret.convert::<String>() {
+                if !s.is_empty() && s != "<no console capture>" {
+                    logs.push(format!("--- console logs ---\n{s}"));
+                }
+            }
+        }
+
+        if logs.is_empty() {
+            return "<no logs collected>".to_string();
+        }
+        logs.join("\n\n")
+    }
+
     async fn prepare_local_tracks(&self) -> Result<TrackIndexes, String> {
         self.open_player_page().await?;
+        self.clear_playlist().await?;
 
         self.add_track(&self.config.mp3_url()).await?;
         self.add_track(&self.config.hls_url()).await?;
+        self.add_track(&self.config.drm_url()).await?;
 
         let mp3 = self.find_track_index("track.mp3").await?;
-        let hls = self.find_track_index("master.m3u8").await?;
+        let hls = self.find_track_index("hls/master.m3u8").await?;
+        let drm = self.find_track_index("drm/master.m3u8").await?;
 
-        Ok(TrackIndexes { hls, mp3 })
+        Ok(TrackIndexes { drm, hls, mp3 })
+    }
+
+    async fn clear_playlist(&self) -> Result<(), String> {
+        self.driver
+            .execute(
+                "window.playlist && (window.playlist.length = 0); \
+                 typeof renderPlaylist === 'function' && renderPlaylist();",
+                Vec::<Value>::new(),
+            )
+            .await
+            .map_err(|err| format!("clear playlist failed: {err}"))?;
+        Ok(())
     }
 
     async fn add_track(&self, url: &str) -> Result<(), String> {
@@ -856,6 +940,83 @@ impl WasmPlayerSelenium {
         Ok((true, playback_ok))
     }
 
+    /// Like [`seek_and_verify`] but with longer timeouts and event capture for DRM.
+    async fn drm_seek_and_verify(
+        &self,
+        target_ms: f64,
+        label: &str,
+    ) -> Result<(bool, bool), String> {
+        // Drain events before seek so we see only seek-related events
+        let _ = self
+            .driver
+            .execute(
+                "window.__player && window.__player.take_events();",
+                Vec::<Value>::new(),
+            )
+            .await;
+
+        self.driver
+            .execute(
+                "window.__player && window.__player.seek(arguments[0]);",
+                vec![json!(target_ms)],
+            )
+            .await
+            .map_err(|err| format!("seek '{label}' command failed: {err}"))?;
+
+        let low = (target_ms - 5000.0).max(0.0);
+        let high = target_ms + 15_000.0;
+        let deadline = Instant::now() + Duration::from_secs(15);
+
+        let mut seek_ok = false;
+        let mut position_samples = Vec::new();
+        while Instant::now() < deadline {
+            sleep(POLL_INTERVAL).await;
+            let pos = self.get_position_ms().await?;
+            position_samples.push(pos);
+            if (low..=high).contains(&pos) {
+                seek_ok = true;
+                break;
+            }
+        }
+
+        if !seek_ok {
+            eprintln!("[drm_seek] {label}: seek NOT ok, positions={position_samples:?}");
+            return Ok((false, false));
+        }
+
+        // Sample position + events during playback check
+        let mut positions = Vec::new();
+        let steps = 16; // 8s / 500ms
+        for _ in 0..steps {
+            sleep(POLL_INTERVAL).await;
+            let pos = self.get_position_ms().await?;
+            positions.push(pos);
+        }
+
+        // Collect events that happened during/after seek
+        let events = self
+            .driver
+            .execute(
+                "return window.__player ? (window.__player.take_events() || '') : '';",
+                Vec::<Value>::new(),
+            )
+            .await
+            .ok()
+            .and_then(|v| v.convert::<String>().ok())
+            .unwrap_or_default();
+
+        let advancing =
+            positions.len() >= 2 && positions.last().copied().unwrap_or(0.0) > positions[0] + 100.0;
+
+        if !advancing {
+            eprintln!(
+                "[drm_seek] {label}: NOT advancing, positions={positions:?}\nevents:\n{events}"
+            );
+        }
+
+        Ok((true, advancing))
+    }
+
     async fn scenario_crossfade(&self, tracks: TrackIndexes) -> Result<(), String> {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
         self.select_track_and_wait(tracks.mp3, "MP3").await?;
@@ -954,6 +1115,47 @@ impl WasmPlayerSelenium {
         Err(format!("hls scenario failures: {failures:?}"))
     }
 
+    async fn scenario_drm_playback(&self, tracks: TrackIndexes) -> Result<(), String> {
+        self.select_track_and_wait(tracks.drm, "DRM").await?;
+        self.install_console_capture().await;
+
+        let (started, _) = self
+            .check_playback_advancing(Duration::from_secs(8), POLL_INTERVAL)
+            .await?;
+        if !started {
+            let snap = self.snapshot().await;
+            let logs = self.collect_browser_logs().await;
+            return Err(format!(
+                "drm playback did not start: {snap:?}\nbrowser logs:\n{logs}"
+            ));
+        }
+
+        let plan = [
+            (30_000.0, "drm-fwd30"),
+            (60_000.0, "drm-fwd60"),
+            (10_000.0, "drm-bwd10"),
+        ];
+
+        let mut failures = Vec::new();
+        for (target, label) in plan {
+            let (seek_ok, playback_ok) = self.drm_seek_and_verify(target, label).await?;
+            if !(seek_ok && playback_ok) {
+                let snap = self.snapshot().await;
+                let logs = self.collect_browser_logs().await;
+                failures.push(format!(
+                    "{label}: seek_ok={seek_ok}, playback_ok={playback_ok}, \
+                     snap={snap:?}\nbrowser logs:\n{logs}"
+                ));
+            }
+        }
+
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        Err(format!("drm scenario failures:\n{}", failures.join("\n")))
+    }
+
     async fn run_diagnostic_suite(&self) -> Result<(), String> {
         let tracks = self.prepare_local_tracks().await?;
         self.scenario_crossfade(tracks).await?;
@@ -965,7 +1167,10 @@ impl WasmPlayerSelenium {
         self.scenario_playlist_crash(tracks).await?;
 
         let tracks = self.prepare_local_tracks().await?;
-        self.scenario_hls_playback(tracks).await
+        self.scenario_hls_playback(tracks).await?;
+
+        let tracks = self.prepare_local_tracks().await?;
+        self.scenario_drm_playback(tracks).await
     }
 
     async fn run_hls_log_scenario(&self) -> Result<(), String> {
@@ -1136,80 +1341,69 @@ async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
     Err(format!("timeout waiting for wasm page {url}"))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+/// Create a [`WasmPlayerSelenium`] session with its owning harness.
+///
+/// Returns both the harness (which keeps trunk/webdriver/fixture-server
+/// processes alive via [`ChildGuard`]) and the WebDriver session.
+/// The caller must keep the harness alive for the session's lifetime
+/// and drop it **after** the session is closed.
+async fn selenium_setup() -> (SeleniumHarness, WasmPlayerSelenium) {
+    let config = SeleniumConfig::from_env();
+    let harness = SeleniumHarness::start(config)
+        .await
+        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
+
+    let session = harness
+        .new_session()
+        .await
+        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
+
+    (harness, session)
+}
+
+/// Run a selenium scenario with screenshot-on-failure and session cleanup.
+///
+/// Takes ownership of the session to ensure `close()` is always called.
+/// The harness is dropped after cleanup, stopping child processes.
+async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Result<(), String>) {
+    if result.is_err() {
+        let path = format!("/tmp/wasm_{name}_failed.png");
+        session.save_screenshot(&path).await;
+    }
+    session.close().await;
+    if let Err(err) = result {
+        panic!("{name} failed: {err}");
+    }
+}
+
+#[kithara::test(selenium)]
 async fn selenium_player_scenarios() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_player_scenarios().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_player_scenarios_failed.png")
-            .await;
-    }
-    session.close().await;
-
-    if let Err(err) = result {
-        panic!("selenium_player_scenarios failed: {err}");
-    }
+    selenium_teardown(session, "player_scenarios", result).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+#[kithara::test(selenium)]
 async fn selenium_diagnostic_suite() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_diagnostic_suite().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_diagnostic_suite_failed.png")
-            .await;
-    }
-    session.close().await;
-
-    if let Err(err) = result {
-        panic!("selenium_diagnostic_suite failed: {err}");
-    }
+    selenium_teardown(session, "diagnostic_suite", result).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
-#[ignore = "requires trunk + webdriver + browser"]
+#[kithara::test(selenium)]
 async fn selenium_hls_log_scenario() {
-    let config = SeleniumConfig::from_env();
-    let harness = SeleniumHarness::start(config)
-        .await
-        .unwrap_or_else(|err| panic!("failed to start selenium harness: {err}"));
-    let session = harness
-        .new_session()
-        .await
-        .unwrap_or_else(|err| panic!("failed to create webdriver session: {err}"));
-
+    let (_harness, session) = selenium_setup().await;
     let result = session.run_hls_log_scenario().await;
-    if result.is_err() {
-        session
-            .save_screenshot("/tmp/wasm_hls_log_scenario_failed.png")
-            .await;
-    }
-    session.close().await;
+    selenium_teardown(session, "hls_log_scenario", result).await;
+}
 
-    if let Err(err) = result {
-        panic!("selenium_hls_log_scenario failed: {err}");
-    }
+#[kithara::test(selenium)]
+async fn selenium_drm_playback_scenario() {
+    let (_harness, session) = selenium_setup().await;
+    let tracks = session
+        .prepare_local_tracks()
+        .await
+        .unwrap_or_else(|err| panic!("failed to prepare local tracks: {err}"));
+    let result = session.scenario_drm_playback(tracks).await;
+    selenium_teardown(session, "drm_playback_scenario", result).await;
 }

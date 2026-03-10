@@ -88,6 +88,13 @@ pub trait PcmReader: Send {
     /// Used for dynamic updates when the host sample rate changes at runtime.
     fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
 
+    /// Set the playback rate for timeline scaling.
+    ///
+    /// Rate > 1.0 speeds up playback (position advances faster).
+    /// Rate < 1.0 slows down playback (position advances slower).
+    /// The actual pitch-shifting is done by the resampler.
+    fn set_playback_rate(&self, _rate: f32) {}
+
     /// Get notify for async preload (first chunk available).
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         None

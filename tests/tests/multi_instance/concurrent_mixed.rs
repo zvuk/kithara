@@ -26,12 +26,9 @@ use kithara_test_utils::{TestTempDir, tracing_setup, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 2;
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_SIZE: usize = 200_000;
-#[cfg(target_arch = "wasm32")]
-const SEGMENT_SIZE: usize = 32_000;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 #[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 10;
 #[cfg(target_arch = "wasm32")]
@@ -158,11 +155,11 @@ fn read_hls_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
 }
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
-    let bytes_per_frame = CHANNELS as usize * 2;
+    let total_bytes = SEGMENT_COUNT * D.segment_size;
+    let bytes_per_frame = D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, SAMPLE_RATE, CHANNELS))
+    Arc::new(create_test_wav(sample_count, D.sample_rate, D.channels))
 }
 
 /// 2 File + 2 HLS instances running concurrently.
@@ -171,7 +168,7 @@ async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
@@ -205,7 +202,7 @@ async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     for i in 2..4 {
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,
-            segment_size: SEGMENT_SIZE,
+            segment_size: D.segment_size,
             segment_duration_secs: segment_duration,
             custom_data: Some(Arc::clone(&wav_data)),
             ..Default::default()
@@ -268,7 +265,7 @@ async fn mixed_four_file_four_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
@@ -302,7 +299,7 @@ async fn mixed_four_file_four_hls(_tracing_setup: ()) {
     for i in 4..8 {
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,
-            segment_size: SEGMENT_SIZE,
+            segment_size: D.segment_size,
             segment_duration_secs: segment_duration,
             custom_data: Some(Arc::clone(&wav_data)),
             ..Default::default()

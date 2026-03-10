@@ -165,7 +165,7 @@ If a new dependency is unavoidable:
 **Rule:** shared types (`AudioCodec`, `ContainerFormat`, `MediaInfo`) live in `kithara-stream`. **Never** duplicate type definitions across crates.
 - Before creating a new public type, search the workspace: `grep -r 'pub struct YourType\|pub enum YourType' crates/`.
 - If a type exists, import it — do not create a parallel definition.
-- `scripts/ci/check-arch.sh` enforces this automatically.
+- `cargo xtask arch` enforces this automatically.
 
 ---
 
@@ -183,7 +183,7 @@ If a new dependency is unavoidable:
 - Avoid circular dependencies.
 - Dependencies point "downward" toward base abstractions, never back up.
 - Facade layer (if present) aggregates components but must not contain "smart" logic.
-- `scripts/ci/check-arch.sh` validates dependency direction in CI.
+- `cargo xtask arch` validates dependency direction in CI.
 
 ### 6.3 Encapsulation
 - External code must not know about internal cache details (paths/files/lease format).

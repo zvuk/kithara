@@ -105,8 +105,11 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Check MSRV
-        run: cargo check --workspace
+        run: just check
 
   deny:
     name: cargo-deny
@@ -136,11 +139,14 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Install cargo-machete
         run: cargo install cargo-machete --locked
 
       - name: Run cargo-machete
-        run: cargo machete
+        run: just machete
 
   arch:
     name: Architecture checks
@@ -150,8 +156,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Run architecture checks
-        run: bash scripts/ci/check-arch.sh
+        run: just arch
 
   wasm:
     name: WASM checks
@@ -173,15 +182,11 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Run wasm checks
-        run: |
-          cargo check -p kithara-wasm --target wasm32-unknown-unknown --no-default-features
-          cargo check -p kithara-storage --target wasm32-unknown-unknown
-          cargo check -p kithara-net --target wasm32-unknown-unknown
-          cargo check -p kithara-stream --target wasm32-unknown-unknown
-          cargo check -p kithara-assets --target wasm32-unknown-unknown
-          cargo check -p kithara-hls --target wasm32-unknown-unknown
-          cargo check -p kithara-decode --target wasm32-unknown-unknown
+        run: just wasm-check
 
   wasm-size:
     name: WASM size budget (advisory)
@@ -208,7 +213,7 @@ jobs:
         run: cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
 
       - name: Run wasm-slim check
-        run: WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+        run: WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
 
       - name: Upload wasm-slim report
         if: always()
@@ -238,11 +243,14 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Install cargo-hack
         run: cargo install cargo-hack --locked
 
       - name: Run cargo-hack
-        run: cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace --exclude kithara-wasm
+        run: just hack
 
   semver:
     name: Semver checks (advisory)
@@ -265,8 +273,11 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Install cargo-semver-checks
         run: cargo install cargo-semver-checks --locked
 
       - name: Run semver checks
-        run: cargo semver-checks check-release --workspace
+        run: just semver

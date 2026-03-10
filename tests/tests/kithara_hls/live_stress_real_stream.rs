@@ -17,10 +17,11 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::sleep;
+use kithara_platform::{time::Instant, tokio};
 use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -120,6 +121,18 @@ fn live_hls_tracing_setup(live_hls_filter: EnvFilter) {
 #[kithara::fixture]
 fn live_hls_stream_tracing_setup(live_hls_stream_filter: EnvFilter) {
     kithara_test_utils::init_tracing(live_hls_stream_filter);
+}
+
+#[kithara::fixture]
+fn live_hls_seek_debug_filter() -> EnvFilter {
+    EnvFilter::new(kithara_test_utils::rust_log_filter(
+        "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug",
+    ))
+}
+
+#[kithara::fixture]
+fn live_hls_seek_debug_setup(live_hls_seek_debug_filter: EnvFilter) {
+    kithara_test_utils::init_tracing(live_hls_seek_debug_filter);
 }
 
 #[derive(Default)]
@@ -236,13 +249,533 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     serial,
+    timeout(browser_timeout(60, 75)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
+async fn live_real_drm_playback_smoke(_live_hls_stream_tracing_setup: (), temp_dir: TestTempDir) {
+    let server = serve_assets().await;
+    let url = server.url("/drm/master.m3u8");
+    info!(%url, "starting real DRM playback smoke");
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        ..AbrOptions::default()
+    });
+
+    info!("creating Audio<Stream<Hls>> for DRM asset");
+    let mut audio = tokio::time::timeout(
+        browser_timeout(10, 15),
+        Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config)),
+    )
+    .await
+    .expect("audio creation timed out")
+    .expect("audio creation");
+    info!("audio created, preloading");
+    audio.preload();
+    info!("preload issued, waiting for chunks");
+
+    let mut chunks_read = 0usize;
+    while chunks_read < 8 {
+        let Some(_chunk) = tokio::time::timeout(
+            browser_timeout(10, 15),
+            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "drm_playback_smoke"),
+        )
+        .await
+        .expect("waiting for DRM chunk timed out") else {
+            break;
+        };
+        chunks_read += 1;
+        info!(chunks_read, "read DRM chunk");
+    }
+
+    assert!(
+        chunks_read > 0,
+        "expected decrypted audio output from /drm/master.m3u8"
+    );
+    info!(chunks_read, "real DRM playback smoke completed");
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(browser_timeout(90, 120)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn live_ephemeral_revisit_sequence_regression(
+    _live_hls_seek_debug_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
+    temp_dir: TestTempDir,
+) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        down_switch_buffer_secs: 0.0,
+        min_buffer_for_up_switch_secs: 0.0,
+        min_switch_interval: Duration::from_millis(250),
+        mode: AbrMode::Auto(Some(0)),
+        throughput_safety_factor: 1.0,
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    let stats = Arc::new(Mutex::new(LiveStats::default()));
+    let stats_bg = Arc::clone(&stats);
+    let mut events = audio.events();
+    let events_task = tokio::task::spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            let Event::Hls(hls_event) = event else {
+                continue;
+            };
+            let mut locked = stats_bg.lock().expect("stats lock poisoned");
+            match hls_event {
+                HlsEvent::VariantsDiscovered {
+                    initial_variant, ..
+                } => {
+                    if locked.initial_variant.is_none() {
+                        locked.initial_variant = Some(initial_variant);
+                    }
+                    if locked.current_variant.is_none() {
+                        locked.current_variant = Some(initial_variant);
+                    }
+                }
+                HlsEvent::VariantApplied { to_variant, .. } => {
+                    locked.current_variant = Some(to_variant);
+                    locked.variant_switches = locked.variant_switches.saturating_add(1);
+                }
+                HlsEvent::SegmentComplete {
+                    cached,
+                    segment_index,
+                    variant,
+                    ..
+                } => {
+                    let key = (variant, segment_index);
+                    let map = if cached {
+                        &mut locked.cache_hits
+                    } else {
+                        &mut locked.network_hits
+                    };
+                    let entry = map.entry(key).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    while Instant::now() < warmup_deadline {
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "repro_warmup").await;
+        if snapshot(&stats).variant_switches > 0 {
+            break;
+        }
+    }
+
+    let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
+    let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+    let mut seek_positions = Vec::with_capacity(64);
+    for _ in 0..64 {
+        seek_positions.push(rng.range_f64(1.0, max_seek_secs));
+    }
+
+    for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .unwrap_or_else(|_| panic!("{label} seek must not fail at idx={idx}"));
+        audio.preload();
+        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+            let stage = format!("repro_random_seek_{idx}_chunk_{read_idx}");
+            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+                .await
+                .unwrap_or_else(|| panic!("{label} random seek stopped early at idx={idx}"));
+        }
+    }
+
+    for _ in 0..FAST_SEEK_BURST {
+        let pos_secs = rng.range_f64(1.0, max_seek_secs);
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .unwrap_or_else(|_| panic!("{label} fast seek must not fail"));
+    }
+    audio.preload();
+
+    let final_seek = rng.range_f64(1.0, (max_seek_secs - 20.0).max(5.0));
+    audio
+        .seek(Duration::from_secs_f64(final_seek))
+        .unwrap_or_else(|_| panic!("{label} final seek before sequential read must not fail"));
+    audio.preload();
+
+    for idx in 0..SEQUENTIAL_CHUNKS_AFTER_BURST {
+        let stage = format!("repro_sequential_after_burst_{idx}");
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            .await
+            .unwrap_or_else(|| panic!("{label} sequential read stopped early at chunk {idx}"));
+    }
+
+    for (idx, pos_secs) in seek_positions.iter().take(50).enumerate() {
+        audio
+            .seek(Duration::from_secs_f64(*pos_secs))
+            .unwrap_or_else(|_| panic!("{label} revisit seek must not fail at idx={idx}"));
+        audio.preload();
+        let stage = format!("repro_revisit_{idx}");
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            .await
+            .unwrap_or_else(|| panic!("{label} revisit stopped early at idx={idx}"));
+    }
+
+    drop(audio);
+    let _ = events_task.await;
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(90)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn live_real_stream_fixed_seek_window_regression(
+    _live_hls_stream_tracing_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
+    temp_dir: TestTempDir,
+) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        down_switch_buffer_secs: 0.0,
+        min_buffer_for_up_switch_secs: 0.0,
+        min_switch_interval: Duration::from_millis(250),
+        mode: AbrMode::Auto(Some(0)),
+        throughput_safety_factor: 1.0,
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    let stats = Arc::new(Mutex::new(LiveStats::default()));
+    let stats_bg = Arc::clone(&stats);
+    let mut events = audio.events();
+    let events_task = tokio::task::spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            let Event::Hls(hls_event) = event else {
+                continue;
+            };
+            let mut locked = stats_bg.lock().expect("stats lock poisoned");
+            match hls_event {
+                HlsEvent::VariantsDiscovered {
+                    initial_variant, ..
+                } => {
+                    if locked.initial_variant.is_none() {
+                        locked.initial_variant = Some(initial_variant);
+                    }
+                    if locked.current_variant.is_none() {
+                        locked.current_variant = Some(initial_variant);
+                    }
+                }
+                HlsEvent::VariantApplied { to_variant, .. } => {
+                    locked.current_variant = Some(to_variant);
+                    locked.variant_switches = locked.variant_switches.saturating_add(1);
+                }
+                HlsEvent::SegmentComplete {
+                    cached,
+                    segment_index,
+                    variant,
+                    ..
+                } => {
+                    let key = (variant, segment_index);
+                    let map = if cached {
+                        &mut locked.cache_hits
+                    } else {
+                        &mut locked.network_hits
+                    };
+                    let entry = map.entry(key).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    while Instant::now() < warmup_deadline {
+        let _ =
+            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "fixed_window_warmup").await;
+        if snapshot(&stats).variant_switches > 0 {
+            break;
+        }
+    }
+
+    let seek_positions = [
+        29.928_167_827,
+        53.261_199_975,
+        123.263_139_768,
+        108.744_577_324,
+        150.472_324_063,
+        35.758_908_045,
+        123.021_311_355,
+    ];
+
+    for (idx, pos_secs) in seek_positions.into_iter().enumerate() {
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .unwrap_or_else(|_| panic!("{label} fixed-window seek must not fail at idx={idx}"));
+        audio.preload();
+        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+            let stage = format!("fixed_window_{idx}_chunk_{read_idx}");
+            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+                .await
+                .unwrap_or_else(|| panic!("{label} fixed-window read stopped early at idx={idx}"));
+        }
+    }
+
+    drop(audio);
+    let _ = events_task.await;
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(120)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn live_real_stream_random_seek_prefix_regression(
+    _live_hls_stream_tracing_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
+    temp_dir: TestTempDir,
+) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        down_switch_buffer_secs: 0.0,
+        min_buffer_for_up_switch_secs: 0.0,
+        min_switch_interval: Duration::from_millis(250),
+        mode: AbrMode::Auto(Some(0)),
+        throughput_safety_factor: 1.0,
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    let stats = Arc::new(Mutex::new(LiveStats::default()));
+    let stats_bg = Arc::clone(&stats);
+    let mut events = audio.events();
+    let events_task = tokio::task::spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            let Event::Hls(hls_event) = event else {
+                continue;
+            };
+            let mut locked = stats_bg.lock().expect("stats lock poisoned");
+            match hls_event {
+                HlsEvent::VariantsDiscovered {
+                    initial_variant, ..
+                } => {
+                    if locked.initial_variant.is_none() {
+                        locked.initial_variant = Some(initial_variant);
+                    }
+                    if locked.current_variant.is_none() {
+                        locked.current_variant = Some(initial_variant);
+                    }
+                }
+                HlsEvent::VariantApplied { to_variant, .. } => {
+                    locked.current_variant = Some(to_variant);
+                    locked.variant_switches = locked.variant_switches.saturating_add(1);
+                }
+                HlsEvent::SegmentComplete {
+                    cached,
+                    segment_index,
+                    variant,
+                    ..
+                } => {
+                    let key = (variant, segment_index);
+                    let map = if cached {
+                        &mut locked.cache_hits
+                    } else {
+                        &mut locked.network_hits
+                    };
+                    let entry = map.entry(key).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    while Instant::now() < warmup_deadline {
+        let _ =
+            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "rng_prefix_warmup").await;
+        if snapshot(&stats).variant_switches > 0 {
+            break;
+        }
+    }
+
+    let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
+    let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+
+    for idx in 0..80 {
+        let pos_secs = rng.range_f64(1.0, max_seek_secs);
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .unwrap_or_else(|_| panic!("{label} rng-prefix seek must not fail at idx={idx}"));
+        audio.preload();
+        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+            let stage = format!("rng_prefix_{idx}_chunk_{read_idx}");
+            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+                .await
+                .unwrap_or_else(|| panic!("{label} rng-prefix read stopped early at idx={idx}"));
+        }
+    }
+
+    drop(audio);
+    let _ = events_task.await;
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(90)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "30")
+)]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
+async fn live_real_stream_seek_resume_native(
+    _live_hls_seek_debug_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
+    temp_dir: TestTempDir,
+) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    for warmup_idx in 0..4 {
+        let stage = format!("drm_seek_warmup_{warmup_idx}");
+        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            .await
+            .expect("warmup chunk");
+    }
+
+    for (seek_idx, seek_secs) in [30.0, 60.0, 10.0].into_iter().enumerate() {
+        info!(seek_idx, seek_secs, %path, label, "seeking real stream");
+        audio
+            .seek(Duration::from_secs_f64(seek_secs))
+            .expect("seek must succeed");
+        audio.preload();
+
+        let mut resumed_chunks = 0usize;
+        let mut seek_applied = false;
+        for chunk_idx in 0..3 {
+            let stage = format!("drm_seek_{seek_idx}_chunk_{chunk_idx}");
+            let Some(_chunk) =
+                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
+            else {
+                break;
+            };
+            resumed_chunks += 1;
+            let pos_secs = audio.position().as_secs_f64();
+            if (pos_secs - seek_secs).abs() <= 5.0 {
+                seek_applied = true;
+            }
+        }
+
+        assert!(
+            resumed_chunks > 0,
+            "expected playback to resume after {label} seek #{seek_idx} to {seek_secs}s ({path})"
+        );
+        assert!(
+            seek_applied,
+            "expected {label} seek #{seek_idx} to land near {seek_secs}s on {path}, got {:.3}s",
+            audio.position().as_secs_f64()
+        );
+    }
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
     timeout(browser_timeout(180, 240)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
-#[cfg_attr(not(target_arch = "wasm32"), case::mmap(false))]
-#[case::ephemeral(true)]
+#[case::hls_ephemeral("/hls/master.m3u8", "HLS", true)]
+#[case::drm_ephemeral("/drm/master.m3u8", "DRM", true)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::hls_mmap("/hls/master.m3u8", "HLS", false)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::drm_mmap("/drm/master.m3u8", "DRM", false)
+)]
 async fn live_stress_real_stream_seek_read_cache(
     _live_hls_tracing_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
 ) {
@@ -253,7 +786,7 @@ async fn live_stress_real_stream_seek_read_cache(
     }
 
     let server = serve_assets().await;
-    let url = server.url("/hls/master.m3u8");
+    let url = server.url(path);
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.ephemeral = true;
@@ -279,8 +812,13 @@ async fn live_stress_real_stream_seek_read_cache(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = kithara_platform::tokio::task::spawn(async move {
-        while let Ok(event) = events.recv().await {
+    let events_task = tokio::task::spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
             let Event::Hls(hls_event) = event else {
                 continue;
             };
@@ -321,7 +859,7 @@ async fn live_stress_real_stream_seek_read_cache(
         }
     });
 
-    info!(ephemeral, "Phase 1: warmup until ABR switch");
+    info!(ephemeral, %path, label, "Phase 1: warmup until ABR switch");
     let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
         let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "warmup").await;
@@ -498,7 +1036,7 @@ async fn live_stress_real_stream_seek_read_cache(
             let after_count = after_revisit.network_hits.get(key).copied().unwrap_or(0);
             assert_eq!(
                 after_count, *before_count,
-                "unexpected repeated network fetch for segment {:?}",
+                "unexpected repeated network fetch for {label} segment {:?}",
                 key
             );
         }
@@ -537,12 +1075,16 @@ async fn live_stress_real_stream_seek_read_cache(
     timeout(browser_timeout(90, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
 async fn live_ephemeral_small_cache_playback(
     _live_hls_stream_tracing_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
     temp_dir: TestTempDir,
 ) {
     let server = serve_assets().await;
-    let url = server.url("/hls/master.m3u8");
+    let url = server.url(path);
     let store = StoreOptions::new(temp_dir.path())
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
@@ -557,7 +1099,7 @@ async fn live_ephemeral_small_cache_playback(
         .expect("audio creation");
     audio.preload();
 
-    info!("Reading audio chunks for 60 seconds with small ephemeral cache");
+    info!(%path, label, "Reading audio chunks for 60 seconds with small ephemeral cache");
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut chunks_read = 0usize;
 
@@ -573,7 +1115,7 @@ async fn live_ephemeral_small_cache_playback(
 
     assert!(
         chunks_read > 100,
-        "expected substantial audio output, got only {chunks_read} chunks"
+        "expected substantial {label} audio output from {path}, got only {chunks_read} chunks"
     );
     info!(chunks_read, "Ephemeral small-cache playback completed");
 }
@@ -593,8 +1135,12 @@ async fn live_ephemeral_small_cache_playback(
     timeout(browser_timeout(90, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "30")
 )]
+#[case::hls("/hls/master.m3u8", "HLS")]
+#[case::drm("/drm/master.m3u8", "DRM")]
 async fn live_ephemeral_small_cache_seek_stress(
     _live_hls_stream_tracing_setup: (),
+    #[case] path: &str,
+    #[case] label: &str,
     temp_dir: TestTempDir,
 ) {
     #[cfg(target_arch = "wasm32")]
@@ -604,7 +1150,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     }
 
     let server = serve_assets().await;
-    let url = server.url("/hls/master.m3u8");
+    let url = server.url(path);
     let store = StoreOptions::new(temp_dir.path())
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
@@ -620,7 +1166,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     audio.preload();
 
     // Warmup: read a few chunks so the stream is initialized
-    info!("Warmup: reading initial chunks");
+    info!(%path, label, "Warmup: reading initial chunks");
     for i in 0..browser_usize(SMALL_CACHE_WARMUP_CHUNKS, WASM_SMALL_CACHE_WARMUP_CHUNKS) {
         let stage = format!("warmup_{i}");
         if next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
@@ -671,11 +1217,11 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     assert!(
         seeks_done >= 5,
-        "expected at least 5 seeks, got {seeks_done}"
+        "expected at least 5 {label} seeks on {path}, got {seeks_done}"
     );
     assert!(
         total_chunks > 20,
-        "expected substantial audio after seeks, got only {total_chunks} chunks"
+        "expected substantial {label} audio after seeks on {path}, got only {total_chunks} chunks"
     );
     info!(
         seeks_done,

@@ -25,16 +25,12 @@ use kithara_test_utils::{TestTempDir, Xorshift64, tracing_setup, wav::create_saw
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 2;
-const SEGMENT_SIZE: usize = 200_000;
-const SEGMENT_COUNT: usize = 100;
-const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE; // 20 MB
-const SEEK_ITERATIONS: usize = 1000;
+use crate::common::test_defaults::SawWav;
 
-/// Saw-tooth period: 65536 frames (~1.486s at 44100 Hz).
-/// Each frame within a period has a unique `i16` value.
-const SAW_PERIOD: usize = 65536;
+const D: SawWav = SawWav::DEFAULT;
+const SEGMENT_COUNT: usize = 100;
+const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size; // 20 MB
+const SEEK_ITERATIONS: usize = 1000;
 
 // Verification Helpers
 
@@ -47,15 +43,15 @@ fn phase_from_f32(sample: f32) -> usize {
 /// Compute the expected duration in seconds for the generated WAV.
 fn expected_duration_secs() -> f64 {
     let header_size = 44usize;
-    let bytes_per_frame = CHANNELS as usize * 2;
+    let bytes_per_frame = D.channels as usize * 2;
     let frame_count = (TOTAL_BYTES - header_size) / bytes_per_frame;
-    frame_count as f64 / SAMPLE_RATE as f64
+    frame_count as f64 / D.sample_rate as f64
 }
 
-/// Check circular distance between two phases (mod `SAW_PERIOD`).
+/// Check circular distance between two phases (mod `D.saw_period`).
 fn phase_distance(a: usize, b: usize) -> usize {
     let d = a.abs_diff(b);
-    d.min(SAW_PERIOD - d)
+    d.min(D.saw_period - d)
 }
 
 // Stress Test
@@ -88,10 +84,10 @@ async fn stress_seek_audio_hls_wav(_tracing_setup: (), #[case] ephemeral: bool) 
     );
 
     // Step 2: Spawn HLS server with custom WAV data
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(Arc::new(wav_data)),
         ..Default::default()
@@ -224,7 +220,7 @@ async fn stress_seek_audio_hls_wav(_tracing_setup: (), #[case] ephemeral: bool) 
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
                     let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected_next = (prev_phase + 1) % SAW_PERIOD;
+                    let expected_next = (prev_phase + 1) % D.saw_period;
                     if curr_phase != expected_next {
                         continuity_errors += 1;
                         if continuity_errors <= 3 {
@@ -251,7 +247,7 @@ async fn stress_seek_audio_hls_wav(_tracing_setup: (), #[case] ephemeral: bool) 
             // up to 1151 frames earlier. Tolerance of 1200 covers this
             // while still detecting gross seek errors (>27ms at 44.1 kHz).
             let expected_frame_idx = (pos_secs * spec.sample_rate as f64).round() as usize;
-            let expected_phase = expected_frame_idx % SAW_PERIOD;
+            let expected_phase = expected_frame_idx % D.saw_period;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);
             if dist > 1200 {

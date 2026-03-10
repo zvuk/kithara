@@ -13,6 +13,7 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::PcmSpec;
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
+use portable_atomic::AtomicF32;
 
 use crate::{
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
@@ -48,6 +49,11 @@ pub struct AudioConfig<T: StreamType> {
     pub media_info: Option<kithara_stream::MediaInfo>,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
+    /// Shared atomic for dynamic playback rate (1.0 = normal speed).
+    ///
+    /// When set, propagated to the resampler for pitch-shifting playback.
+    /// When `None`, a default `Arc<AtomicF32>` with value `1.0` is created.
+    pub playback_rate: Option<Arc<AtomicF32>>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
@@ -80,7 +86,8 @@ impl<T: StreamType> AudioConfig<T> {
             media_info: None,
             pcm_buffer_chunks: DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
-            prefer_hardware: false,
+            playback_rate: None,
+            prefer_hardware: cfg!(feature = "apple"),
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,
@@ -122,6 +129,7 @@ pub(super) fn expected_output_spec(
 pub(super) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
+    playback_rate: &Arc<AtomicF32>,
     quality: ResamplerQuality,
     pool: Option<PcmPool>,
     custom_effects: Vec<Box<dyn AudioEffect>>,
@@ -131,6 +139,7 @@ pub(super) fn create_effects(
         initial_spec.sample_rate,
         initial_spec.channels as usize,
     )
+    .with_playback_rate(Arc::clone(playback_rate))
     .with_quality(quality)
     .with_pool(pool);
 
@@ -172,12 +181,14 @@ mod tests {
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
         let host_sr = Arc::new(AtomicU32::new(44100));
+        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
             PcmSpec {
                 sample_rate: 44100,
                 channels: 2,
             },
             &host_sr,
+            &playback_rate,
             ResamplerQuality::default(),
             None,
             vec![Box::new(PassthroughEffect)],

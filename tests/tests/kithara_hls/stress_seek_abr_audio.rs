@@ -24,31 +24,30 @@ use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule, t
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 2;
-const SEGMENT_SIZE: usize = 200_000;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
-const SAW_PERIOD: usize = 65536;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
 
 // WAV Generators
 
 /// Ascending saw-tooth: frame 0 → -32768, frame 65535 → 32767.
 fn ascending_sample(frame: usize) -> i16 {
-    ((frame % SAW_PERIOD) as i32 - 32768) as i16
+    ((frame % D.saw_period) as i32 - 32768) as i16
 }
 
 /// Descending saw-tooth: frame 0 → 32767, frame 65535 → -32768.
 fn descending_sample(frame: usize) -> i16 {
-    (32767 - (frame % SAW_PERIOD) as i32) as i16
+    (32767 - (frame % D.saw_period) as i32) as i16
 }
 
 /// Build WAV init segment (44-byte header) with known PCM data size.
 fn create_wav_init_segment() -> Vec<u8> {
     let bytes_per_sample: u16 = 2;
-    let byte_rate = SAMPLE_RATE * CHANNELS as u32 * bytes_per_sample as u32;
-    let block_align = CHANNELS * bytes_per_sample;
+    let byte_rate = D.sample_rate * D.channels as u32 * bytes_per_sample as u32;
+    let block_align = D.channels * bytes_per_sample;
     // Use 0xFFFFFFFF for streaming mode: the decoder will read until EOF
     // rather than expecting an exact data size. This avoids size mismatch
     // when ABR switch starts from a mid-stream segment.
@@ -66,8 +65,8 @@ fn create_wav_init_segment() -> Vec<u8> {
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&16u32.to_le_bytes());
     wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&CHANNELS.to_le_bytes());
-    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&D.channels.to_le_bytes());
+    wav.extend_from_slice(&D.sample_rate.to_le_bytes());
     wav.extend_from_slice(&byte_rate.to_le_bytes());
     wav.extend_from_slice(&block_align.to_le_bytes());
     wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
@@ -81,14 +80,14 @@ fn create_wav_init_segment() -> Vec<u8> {
 
 /// Generate PCM data (no WAV header) for media segments.
 fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
-    let bytes_per_frame = CHANNELS as usize * 2;
+    let total_bytes = SEGMENT_COUNT * D.segment_size;
+    let bytes_per_frame = D.channels as usize * 2;
     let total_frames = total_bytes / bytes_per_frame;
 
     let mut pcm = Vec::with_capacity(total_bytes);
     for frame in 0..total_frames {
         let sample = sample_fn(frame);
-        for _ in 0..CHANNELS {
+        for _ in 0..D.channels {
             pcm.extend_from_slice(&sample.to_le_bytes());
         }
     }
@@ -115,8 +114,8 @@ fn phase_from_f32(sample: f32) -> usize {
 /// Detect saw-tooth direction from a buffer of interleaved f32 samples.
 ///
 /// Checks up to 10 pairs of consecutive frames.
-/// ascending: phase\[f+1\] == (phase\[f\] + 1) % `SAW_PERIOD`
-/// descending: phase\[f+1\] == (phase\[f\] + `SAW_PERIOD` - 1) % `SAW_PERIOD`
+/// ascending: phase\[f+1\] == (phase\[f\] + 1) % `D.saw_period`
+/// descending: phase\[f+1\] == (phase\[f\] + `D.saw_period` - 1) % `D.saw_period`
 fn detect_direction(buf: &[f32], channels: usize) -> Direction {
     let frames = buf.len() / channels;
     if frames < 2 {
@@ -131,8 +130,8 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
         let p0 = phase_from_f32(buf[f * channels]);
         let p1 = phase_from_f32(buf[(f + 1) * channels]);
 
-        let expected_asc = (p0 + 1) % SAW_PERIOD;
-        let expected_desc = (p0 + SAW_PERIOD - 1) % SAW_PERIOD;
+        let expected_asc = (p0 + 1) % D.saw_period;
+        let expected_desc = (p0 + D.saw_period - 1) % D.saw_period;
 
         if p1 == expected_asc {
             ascending_votes += 1;
@@ -175,12 +174,12 @@ async fn stress_seek_abr_audio(_tracing_setup: ()) {
     );
 
     // Spawn HLS server
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
@@ -334,7 +333,7 @@ async fn stress_seek_abr_audio(_tracing_setup: ()) {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
                     let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected = (prev_phase + SAW_PERIOD - 1) % SAW_PERIOD;
+                    let expected = (prev_phase + D.saw_period - 1) % D.saw_period;
                     if curr_phase != expected {
                         break_count += 1;
                     }
@@ -426,8 +425,8 @@ async fn stress_seek_abr_audio(_tracing_setup: ()) {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
                     let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected_asc = (prev_phase + 1) % SAW_PERIOD;
-                    let expected_desc = (prev_phase + SAW_PERIOD - 1) % SAW_PERIOD;
+                    let expected_asc = (prev_phase + 1) % D.saw_period;
+                    let expected_desc = (prev_phase + D.saw_period - 1) % D.saw_period;
                     if curr_phase != expected_asc && curr_phase != expected_desc {
                         continuity_errors += 1;
                         if continuity_errors <= 3 {

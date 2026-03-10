@@ -87,12 +87,14 @@ where
         if !self.is_active() {
             return true;
         }
-        let cache_key = CacheKey::Resource(key.clone(), None);
-        matches!(
-            self.cache.lock_sync().peek(&cache_key),
-            Some(CacheEntry::Resource(res))
-                if matches!(res.status(), ResourceStatus::Committed { .. })
-        )
+        self.cache.lock_sync().iter().any(|(cache_key, entry)| {
+            matches!(
+                (cache_key, entry),
+                (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
+                    if resource_key == key
+                        && matches!(res.status(), ResourceStatus::Committed { .. })
+            )
+        })
     }
 }
 
@@ -135,6 +137,40 @@ where
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
             return Ok(res.clone());
+        }
+
+        // Fallback: when ctx=None, look for any committed resource with this key
+        if ctx.is_none() {
+            if let Some(res) =
+                cache
+                    .iter()
+                    .find_map(|(candidate_key, entry)| match (candidate_key, entry) {
+                        (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
+                            if resource_key == key
+                                && matches!(res.status(), ResourceStatus::Committed { .. }) =>
+                        {
+                            Some(res.clone())
+                        }
+                        _ => None,
+                    })
+            {
+                return Ok(res);
+            }
+
+            if let Some(res) =
+                cache
+                    .iter()
+                    .find_map(|(candidate_key, entry)| match (candidate_key, entry) {
+                        (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
+                            if resource_key == key =>
+                        {
+                            Some(res.clone())
+                        }
+                        _ => None,
+                    })
+            {
+                return Ok(res);
+            }
         }
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
@@ -213,8 +249,18 @@ where
         // Remove from cache (all contexts)
         {
             let mut cache = self.cache.lock_sync();
-            let cache_key = CacheKey::Resource(key.clone(), None);
-            cache.pop(&cache_key);
+            let keys_to_remove: Vec<_> = cache
+                .iter()
+                .filter_map(|(cache_key, _)| match cache_key {
+                    CacheKey::Resource(resource_key, _) if resource_key == key => {
+                        Some(cache_key.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for cache_key in keys_to_remove {
+                cache.pop(&cache_key);
+            }
         }
         self.inner.remove_resource(key)
     }
@@ -223,15 +269,66 @@ where
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::{fs, sync::Arc, time::Duration};
+    use std::{fs, path::Path, sync::Arc, time::Duration};
 
     use kithara_platform::thread;
-    use kithara_storage::ResourceExt;
+    use kithara_storage::{ResourceExt, StorageResource};
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::disk_store::DiskAssetStore;
+    use crate::{base::Capabilities, disk_store::DiskAssetStore, mem_store::MemAssetStore};
+
+    #[derive(Clone, Debug)]
+    struct ContextMemStore {
+        inner: MemAssetStore,
+    }
+
+    impl ContextMemStore {
+        fn new(asset_root: &str) -> Self {
+            Self {
+                inner: MemAssetStore::new(asset_root, CancellationToken::new(), None),
+            }
+        }
+    }
+
+    impl Assets for ContextMemStore {
+        type Res = StorageResource;
+        type Context = u8;
+        type IndexRes = kithara_storage::MemResource;
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn root_dir(&self) -> &Path {
+            self.inner.root_dir()
+        }
+
+        fn asset_root(&self) -> &str {
+            self.inner.asset_root()
+        }
+
+        fn open_resource_with_ctx(
+            &self,
+            key: &ResourceKey,
+            _ctx: Option<Self::Context>,
+        ) -> AssetsResult<Self::Res> {
+            self.inner.open_resource(key)
+        }
+
+        fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+            self.inner.open_pins_index_resource()
+        }
+
+        fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+            self.inner.open_lru_index_resource()
+        }
+
+        fn delete_asset(&self) -> AssetsResult<()> {
+            self.inner.delete_asset()
+        }
+    }
 
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
@@ -339,5 +436,43 @@ mod tests {
 
         // Both should work (same path) even without caching
         assert_eq!(res1.path(), res2.path());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn has_resource_matches_contextful_entries() {
+        let store = Arc::new(ContextMemStore::new("test_asset"));
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let key = ResourceKey::new("segment-0.m4s");
+
+        let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
+        res.write_at(0, b"segment data").unwrap();
+        res.commit(Some(12)).unwrap();
+
+        assert!(
+            cached.has_resource(&key),
+            "committed resource opened with context must still satisfy has_resource(key)"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_without_context_reuses_committed_contextful_resource() {
+        let store = Arc::new(ContextMemStore::new("test_asset"));
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let key = ResourceKey::new("segment-0.m4s");
+
+        let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
+        res.write_at(0, b"segment data").unwrap();
+        res.commit(Some(12)).unwrap();
+
+        let reopened = cached.open_resource(&key).unwrap();
+        assert!(
+            matches!(reopened.status(), ResourceStatus::Committed { .. }),
+            "open_resource(key) must reuse committed contextful entry"
+        );
+
+        let mut buf = [0u8; 12];
+        let n = reopened.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 12);
+        assert_eq!(&buf, b"segment data");
     }
 }

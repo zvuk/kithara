@@ -71,3 +71,7 @@ crates/kithara-ffi/generated/
 android/.gradle/
 android/**/build/
 android/local.properties
+tests/fuzz/corpus
+
+# Node.js
+package-lock.json

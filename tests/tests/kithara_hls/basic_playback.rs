@@ -8,7 +8,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::time::sleep;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
@@ -157,14 +157,12 @@ async fn test_hls_with_init_segments(
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
-    let url = server.url("/master-init.m3u8")?;
-    info!("Testing HLS with init segments: {}", url);
+    info!("Testing HLS with init segments");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token);
-
-    let _stream = Stream::<Hls>::new(config).await?;
+    let _stream = HlsStreamBuilder::new()
+        .with_init()
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     info!("Stream with init segments opened successfully");
     Ok(())
@@ -177,15 +175,12 @@ async fn test_hls_with_different_options(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
-    let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
 
-    let config = HlsConfig::new(test_stream_url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
-
     // Test source creation with different options
-    let _stream = Stream::<Hls>::new(config).await?;
+    let _stream = HlsStreamBuilder::new()
+        .build(&server, temp_dir.path(), CancellationToken::new())
+        .await;
 
     info!("HLS source opened successfully with custom options");
     Ok(())
@@ -211,8 +206,10 @@ async fn test_hls_invalid_url_handling(
             .with_cancel(cancel_token);
 
         let result = Stream::<Hls>::new(config).await;
-        // Either Ok (if somehow connects) or Err (expected) is acceptable
-        assert!(result.is_ok() || result.is_err());
+        assert!(
+            result.is_err(),
+            "invalid URL should fail, got Ok for {invalid_url:?}"
+        );
     } else {
         // Invalid URL string - parse should fail
         assert!(url_result.is_err());
@@ -230,14 +227,12 @@ async fn test_init_segment_at_stream_start(
     cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
-    let url = server.url("/master-init.m3u8")?;
-    info!("Testing INIT segment at stream start: {}", url);
+    info!("Testing INIT segment at stream start");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token);
-
-    let mut stream = Stream::<Hls>::new(config).await?;
+    let mut stream = HlsStreamBuilder::new()
+        .with_init()
+        .build(&server, temp_dir.path(), cancel_token)
+        .await;
 
     // Wait for INIT and first segment to be loaded.
     sleep(Duration::from_millis(100)).await;
@@ -279,21 +274,15 @@ async fn test_hls_without_cache(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
-    let test_stream_url = server.url("/master.m3u8")?;
-
-    // Create options with very small cache to simulate limited caching
-    let config = HlsConfig::new(test_stream_url)
-        .with_store(
-            StoreOptions::new(temp_dir.path())
-                .with_max_assets(1)
-                .with_max_bytes(1024), // 1KB cache
-        )
-        .with_cancel(CancellationToken::new());
 
     info!("Testing HLS with limited cache");
 
-    // Test source creation with limited cache
-    let _stream = Stream::<Hls>::new(config).await?;
+    // Test source creation with limited cache (1KB)
+    let _stream = HlsStreamBuilder::new()
+        .max_assets(1)
+        .max_bytes(1024)
+        .build(&server, temp_dir.path(), CancellationToken::new())
+        .await;
 
     info!("HLS source opened successfully with limited cache");
     Ok(())

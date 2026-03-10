@@ -28,19 +28,6 @@ public enum TimeControlStatus: Sendable {
     case playing
 }
 
-// MARK: - Time Range
-
-/// A time range expressed in seconds.
-public struct TimeRange: Sendable {
-    public let start: TimeInterval
-    public let duration: TimeInterval
-
-    public init(start: TimeInterval, duration: TimeInterval) {
-        self.start = start
-        self.duration = duration
-    }
-}
-
 // MARK: - Kithara Error
 
 /// Public error type surfaced by the Kithara Swift layer.
@@ -53,46 +40,44 @@ public enum KitharaError: Error, Sendable {
     case `internal`(String)
 }
 
+// MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
+
+/// Player event from Rust — use with ``KitharaPlayer/eventPublisher``.
+public typealias PlayerEvent = FfiPlayerEvent
+
+/// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
+public typealias ItemEvent = FfiItemEvent
+
+/// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
+public typealias PlayerSnapshot = FfiPlayerSnapshot
+
+/// Seek completion callback — use with ``KitharaPlayer/seek(to:callback:)``.
+public typealias SeekCallback = KitharaFFI.SeekCallback
+
 // MARK: - Internal conversions
 
 extension PlayerStatus {
-    init(ffi: FfiPlayerStatus) {
+    public init(ffi: FfiPlayerStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
         case .failed: self = .failed
         case .unknown: self = .unknown
-        }
-    }
-
-    init(statusCode: Int32) {
-        switch statusCode {
-        case 1: self = .readyToPlay
-        case 2: self = .failed
-        default: self = .unknown
         }
     }
 }
 
 extension ItemStatus {
-    init(ffi: FfiItemStatus) {
+    public init(ffi: FfiItemStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
         case .failed: self = .failed
         case .unknown: self = .unknown
         }
     }
-
-    init(statusCode: Int32) {
-        switch statusCode {
-        case 1: self = .readyToPlay
-        case 2: self = .failed
-        default: self = .unknown
-        }
-    }
 }
 
 extension TimeControlStatus {
-    init(ffi: FfiTimeControlStatus) {
+    public init(ffi: FfiTimeControlStatus) {
         switch ffi {
         case .paused: self = .paused
         case .waitingToPlay: self = .waitingToPlay
@@ -101,14 +86,8 @@ extension TimeControlStatus {
     }
 }
 
-extension TimeRange {
-    init(ffi: FfiTimeRange) {
-        self.init(start: ffi.startSeconds, duration: ffi.durationSeconds)
-    }
-}
-
 extension KitharaError {
-    init(ffi: FfiError) {
+    public init(ffi: FfiError) {
         switch ffi {
         case .NotReady:
             self = .notReady
@@ -122,21 +101,6 @@ extension KitharaError {
             self = .invalidArgument(reason)
         case let .Internal(message):
             self = .internal(message)
-        }
-    }
-
-    /// Map observer callback error codes to ``KitharaError``.
-    ///
-    /// Codes match Rust `FfiError` variant order:
-    /// 1=NotReady, 2=ItemFailed, 3=SeekFailed, 4=EngineNotRunning, 5=InvalidArgument.
-    init(observerCode code: Int32, message: String) {
-        switch code {
-        case 1: self = .notReady
-        case 2: self = .itemFailed(message)
-        case 3: self = .seekFailed(message)
-        case 4: self = .engineNotRunning
-        case 5: self = .invalidArgument(message)
-        default: self = .internal(message)
         }
     }
 }

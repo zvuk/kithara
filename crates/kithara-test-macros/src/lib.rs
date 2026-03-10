@@ -21,6 +21,8 @@ struct TestArgs {
     is_native_only: bool,
     is_browser: bool,
     is_serial: bool,
+    is_selenium: bool,
+    is_multi_thread: bool,
     timeout: Option<Expr>,
     env_vars: Vec<(String, String)>,
     /// Substring patterns for soft-fail: if a panic message contains any of
@@ -36,6 +38,8 @@ impl Parse for TestArgs {
             is_native_only: false,
             is_browser: false,
             is_serial: false,
+            is_selenium: false,
+            is_multi_thread: false,
             timeout: None,
             env_vars: Vec::new(),
             soft_fail_patterns: Vec::new(),
@@ -49,6 +53,8 @@ impl Parse for TestArgs {
                 "native" => args.is_native_only = true,
                 "browser" => args.is_browser = true,
                 "serial" => args.is_serial = true,
+                "selenium" => args.is_selenium = true,
+                "multi_thread" => args.is_multi_thread = true,
                 "timeout" => {
                     let content;
                     syn::parenthesized!(content in input);
@@ -114,6 +120,35 @@ impl Parse for TestArgs {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
                 "`browser` and `wasm` are mutually exclusive (`browser` already implies wasm)",
+            ));
+        }
+
+        if args.is_selenium && args.is_wasm_only {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`selenium` and `wasm` are mutually exclusive (selenium runs on native only)",
+            ));
+        }
+
+        if args.is_selenium && args.is_browser {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`selenium` and `browser` are mutually exclusive",
+            ));
+        }
+
+        // selenium implies native + tokio + serial + multi_thread
+        if args.is_selenium {
+            args.is_native_only = true;
+            args.is_tokio = true;
+            args.is_serial = true;
+            args.is_multi_thread = true;
+        }
+
+        if args.is_multi_thread && !args.is_tokio {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`multi_thread` requires `tokio` (or `selenium` which implies it)",
             ));
         }
 
@@ -259,6 +294,38 @@ fn make_sync_test_attrs() -> TokenStream2 {
     quote! { #native #wasm }
 }
 
+/// Generate the tokio runtime builder expression.
+///
+/// Uses `new_multi_thread().worker_threads(2)` when `multi_thread` or `selenium`
+/// is set; otherwise uses `new_current_thread()`.
+fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
+    if args.is_multi_thread {
+        quote! {
+            kithara_platform::tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("kithara test runtime")
+        }
+    } else {
+        quote! {
+            kithara_platform::tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("kithara test runtime")
+        }
+    }
+}
+
+/// Generate extra attributes for selenium tests (`#[ignore]`).
+fn make_selenium_attrs(args: &TestArgs) -> TokenStream2 {
+    if args.is_selenium {
+        quote! { #[ignore = "requires selenium"] }
+    } else {
+        quote! {}
+    }
+}
+
 /// Emit a native async test with a **manual tokio runtime** (no timeout).
 ///
 /// Generates a sync `#[test]` fn that creates a `current_thread` runtime via
@@ -277,6 +344,8 @@ fn emit_async_runtime_test(
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
     let env_setup = make_env_setup(&args.env_vars);
+    let selenium_attr = make_selenium_attrs(args);
+    let runtime_builder = make_runtime_builder(args);
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -291,14 +360,12 @@ fn emit_async_runtime_test(
     quote! {
         #(#remaining_attrs)*
         #serial_attr
+        #selenium_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         #vis fn #fn_name() #ret_type {
             #env_setup
-            let __rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("kithara test runtime");
+            let __rt = #runtime_builder;
             __rt.block_on(async #inner_body)
         }
     }
@@ -455,10 +522,13 @@ fn emit_async_timeout_test(
     };
 
     let env_setup = make_env_setup(&args.env_vars);
+    let selenium_attr = make_selenium_attrs(args);
+    let runtime_builder = make_runtime_builder(args);
 
     quote! {
         #(#remaining_attrs)*
         #serial_attr
+        #selenium_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         #vis fn #fn_name() #ret_type {
@@ -498,10 +568,7 @@ fn emit_async_timeout_test(
             }
             let _wg = __WG(__done);
 
-            let __rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("kithara test runtime");
+            let __rt = #runtime_builder;
 
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
@@ -872,6 +939,9 @@ fn emit_browser_test(
 /// #[kithara::test(env(NO_PROXY = "host.example.com"))] // set env vars
 /// #[kithara::test(soft_fail("connection", "refused"))] // soft-fail on matching panics
 /// #[kithara::test(tokio, serial)]                      // serial execution (no parallel)
+/// #[kithara::test(tokio, multi_thread)]                 // multi-thread tokio runtime
+/// #[kithara::test(selenium)]                            // selenium: native + serial + multi_thread + ignore
+/// #[kithara::test(selenium, timeout(Duration::from_secs(120)))]
 /// ```
 ///
 /// ## `env`
@@ -893,6 +963,18 @@ fn emit_browser_test(
 /// resource-intensive tests that are sensitive to CPU/IO contention.
 ///
 /// Requires `serial_test` crate at the call site.
+///
+/// ## `multi_thread`
+///
+/// Uses `tokio::runtime::Builder::new_multi_thread().worker_threads(2)` instead
+/// of `new_current_thread()`.  Required when the test body spawns tasks that
+/// need a multi-threaded executor (e.g. `thirtyfour` WebDriver).
+///
+/// ## `selenium`
+///
+/// Convenience flag that implies `native + tokio + serial + multi_thread` and
+/// adds `#[ignore = "requires selenium"]`.  Designed for Selenium/WebDriver
+/// integration tests that need a multi-threaded runtime and serial execution.
 ///
 /// ## `browser`
 ///

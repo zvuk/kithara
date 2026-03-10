@@ -26,12 +26,11 @@ use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 2;
-const SEGMENT_SIZE: usize = 200_000;
+use crate::common::test_defaults::SawWav;
+
+const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
-const SAW_PERIOD: usize = 65536;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
 const TEST_TIMEOUT_SECS: u64 = 60;
 const POST_SWITCH_CHUNKS: usize = 50;
@@ -42,17 +41,17 @@ const NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
 // WAV Generators
 
 fn ascending_sample(frame: usize) -> i16 {
-    ((frame % SAW_PERIOD) as i32 - 32768) as i16
+    ((frame % D.saw_period) as i32 - 32768) as i16
 }
 
 fn descending_sample(frame: usize) -> i16 {
-    (32767 - (frame % SAW_PERIOD) as i32) as i16
+    (32767 - (frame % D.saw_period) as i32) as i16
 }
 
 fn create_wav_init_segment() -> Vec<u8> {
     let bytes_per_sample: u16 = 2;
-    let byte_rate = SAMPLE_RATE * CHANNELS as u32 * bytes_per_sample as u32;
-    let block_align = CHANNELS * bytes_per_sample;
+    let byte_rate = D.sample_rate * D.channels as u32 * bytes_per_sample as u32;
+    let block_align = D.channels * bytes_per_sample;
     let data_size = 0xFFFF_FFFFu32;
     let file_size = 0xFFFF_FFFFu32;
 
@@ -63,8 +62,8 @@ fn create_wav_init_segment() -> Vec<u8> {
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&16u32.to_le_bytes());
     wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&CHANNELS.to_le_bytes());
-    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&D.channels.to_le_bytes());
+    wav.extend_from_slice(&D.sample_rate.to_le_bytes());
     wav.extend_from_slice(&byte_rate.to_le_bytes());
     wav.extend_from_slice(&block_align.to_le_bytes());
     wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
@@ -74,14 +73,14 @@ fn create_wav_init_segment() -> Vec<u8> {
 }
 
 fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
-    let bytes_per_frame = CHANNELS as usize * 2;
+    let total_bytes = SEGMENT_COUNT * D.segment_size;
+    let bytes_per_frame = D.channels as usize * 2;
     let total_frames = total_bytes / bytes_per_frame;
 
     let mut pcm = Vec::with_capacity(total_bytes);
     for frame in 0..total_frames {
         let sample = sample_fn(frame);
-        for _ in 0..CHANNELS {
+        for _ in 0..D.channels {
             pcm.extend_from_slice(&sample.to_le_bytes());
         }
     }
@@ -118,8 +117,8 @@ fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
         let p0 = phase_from_f32(chunk.pcm[f * channels]);
         let p1 = phase_from_f32(chunk.pcm[(f + 1) * channels]);
 
-        let expected_asc = (p0 + 1) % SAW_PERIOD;
-        let expected_desc = (p0 + SAW_PERIOD - 1) % SAW_PERIOD;
+        let expected_asc = (p0 + 1) % D.saw_period;
+        let expected_desc = (p0 + D.saw_period - 1) % D.saw_period;
 
         if p1 == expected_asc {
             ascending_votes += 1;
@@ -158,8 +157,8 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     for f in 1..frames {
         let prev_phase = phase_from_f32(chunk.pcm[(f - 1) * channels]);
         let curr_phase = phase_from_f32(chunk.pcm[f * channels]);
-        let expected_asc = (prev_phase + 1) % SAW_PERIOD;
-        let expected_desc = (prev_phase + SAW_PERIOD - 1) % SAW_PERIOD;
+        let expected_asc = (prev_phase + 1) % D.saw_period;
+        let expected_desc = (prev_phase + D.saw_period - 1) % D.saw_period;
         if curr_phase != expected_asc && curr_phase != expected_desc {
             breaks += 1;
         }
@@ -217,12 +216,12 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     );
 
     // Spawn HLS server
-    let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
+    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segment_size: D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
@@ -544,8 +543,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 let curr_first = chunk.pcm[0]; // first sample (L channel)
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
-                let expected_asc = (prev_phase + 1) % SAW_PERIOD;
-                let expected_desc = (prev_phase + SAW_PERIOD - 1) % SAW_PERIOD;
+                let expected_asc = (prev_phase + 1) % D.saw_period;
+                let expected_desc = (prev_phase + D.saw_period - 1) % D.saw_period;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {

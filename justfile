@@ -1,77 +1,144 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+ast-grep-bin := "$(command -v ast-grep || command -v sg || true)"
+
 # Show available commands.
 default:
     @just --list
 
+# --- formatting ---
+
+# Auto-format all Rust code.
+fmt:
+    cargo +nightly fmt --all
+
+# Check formatting without modifying files.
 fmt-check:
     cargo +nightly fmt --all --check
+
+# --- checks ---
 
 clippy:
     cargo clippy --workspace -- -D warnings
 
-test:
-    cargo nextest run --workspace
+# Type-check the workspace (also used as MSRV gate in CI).
+check:
+    cargo check --workspace
 
-test-ci:
-    cargo nextest run --workspace --profile ci --no-fail-fast
+# Audit dependencies with cargo-deny.
+deny:
+    cargo deny check
 
-test-doc:
-    cargo test --doc --workspace
-
-test-all: test test-doc
-
-ast-grep-blocking:
-    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
-    if [[ -z "$AST_GREP_BIN" ]]; then \
-      echo "FAILED: ast-grep is required but not installed."; \
-      exit 1; \
-    fi; \
-    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short \
-      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml)$'
-
-ast-grep-advisory:
-    AST_GREP_BIN="$(command -v ast-grep || command -v sg || true)"; \
-    if [[ -z "$AST_GREP_BIN" ]]; then \
-      echo "FAILED: ast-grep is required but not installed."; \
-      exit 1; \
-    fi; \
-    "$AST_GREP_BIN" scan --config sgconfig.yml --report-style short --warning
-
-arch:
-    bash scripts/ci/check-arch.sh
-
+# Check unused dependencies.
 machete:
     cargo machete
 
-perf-compare-selftest:
-    bash scripts/ci/test-compare-perf.sh
+# Validate workspace architecture.
+arch:
+    cargo xtask arch
 
-quality-report:
-    bash scripts/ci/quality-report.sh
+# Generate and open API docs.
+doc:
+    cargo doc --workspace --no-deps --open
+
+# --- tests ---
+
+test:
+    cargo nextest run --workspace --exclude kithara-fuzz
+
+test-ci:
+    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast
+
+test-doc:
+    cargo test --doc --workspace --exclude kithara-fuzz
+
+test-fast:
+    cargo nextest run --workspace --exclude kithara-fuzz --profile fast -E 'not binary(suite_heavy)'
+
+test-stress:
+    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)'
+
+test-all: test test-doc
+
+# Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
+test-ultimate:
+    just lint-fast
+    cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
+    just test-doc
+    just wasm-test
+    cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
+    just bench-build
+    cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
+    echo "==> all checks passed"
+
+xtask-test:
+    cargo test -p xtask
+
+# --- ast-grep ---
+
+ast-grep-blocking:
+    @if [[ -z "{{ast-grep-bin}}" ]]; then \
+      echo "FAILED: ast-grep is required but not installed."; \
+      exit 1; \
+    fi; \
+    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
+      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml)$'
+
+ast-grep-advisory:
+    @if [[ -z "{{ast-grep-bin}}" ]]; then \
+      echo "FAILED: ast-grep is required but not installed."; \
+      exit 1; \
+    fi; \
+    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short --warning
+
+# --- quality ---
+
+quality-report *ARGS:
+    cargo xtask quality report {{ARGS}}
+
+quality-report-ci:
+    cargo xtask quality report \
+        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}" \
+        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}" \
+        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}" \
+        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}" \
+        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
 
 play-unimock-check:
-    bash scripts/ci/check-play-traits-unimock.sh
+    cargo xtask quality unimock-check
 
 rstest-audit:
-    bash scripts/ci/rstest-audit.sh
+    cargo xtask quality rstest-audit
 
 trait-mock-audit:
-    bash scripts/ci/trait-mock-audit.sh
+    cargo xtask quality trait-mock-audit
 
 trait-mock-exceptions:
-    bash scripts/ci/trait-mock-exceptions.sh
+    cargo xtask quality trait-mock-exceptions
+
+# Feature-powerset check (requires cargo-hack).
+hack:
+    cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
+      --exclude kithara-wasm
+
+# Semver compatibility check (requires cargo-semver-checks).
+semver:
+    cargo semver-checks check-release --workspace --exclude kithara-fuzz
+
+# --- lint composites ---
 
 lint-fast: fmt-check clippy ast-grep-blocking arch
 
-lint-full: lint-fast perf-compare-selftest quality-report play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+
+# --- coverage ---
 
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
     COVERAGE_MIN="${COVERAGE_MIN:-80}"; \
     mkdir -p "$OUTPUT_DIR"; \
     cargo llvm-cov nextest \
-      --workspace \
+      --workspace --exclude kithara-fuzz \
       --profile ci \
       --cobertura \
       --output-path "$OUTPUT_DIR/cobertura.xml" \
@@ -80,16 +147,26 @@ coverage:
     echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
     echo "==> line coverage threshold: $COVERAGE_MIN%"
 
+# --- perf & benchmarks ---
+
 perf-test:
     cargo test -p kithara-integration-tests --features perf --release \
       -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
 
+# Compare perf results between baseline and candidate.
+perf-compare *ARGS:
+    cargo xtask perf-compare {{ARGS}}
+
 bench-build:
-    cargo bench -p kithara-abr --bench abr_estimator --no-run
+    cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
+    cargo bench -p kithara-integration-tests --bench bufpool --no-run
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
 
 bench-run:
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt
+    cargo bench -p kithara-integration-tests --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench bufpool -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
 
 bench-ci:
     just bench-build; \
@@ -99,9 +176,15 @@ bench-ci:
     fi; \
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
     candidate_name="${BENCH_CANDIDATE_NAME:-ci}"; \
-    cargo bench -p kithara-abr --bench abr_estimator \
+    cargo bench -p kithara-integration-tests --bench abr_estimator \
       -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
       2>&1 | tee bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench bufpool \
+      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
+      2>&1 | tee -a bench-results.txt; \
+    cargo bench -p kithara-integration-tests --bench refactor_hotpaths \
+      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
+      2>&1 | tee -a bench-results.txt; \
     if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then \
       if ! command -v critcmp >/dev/null 2>&1; then \
         echo "FAILED: critcmp is required when BENCH_COMPARE_BASELINE_NAME is set" | tee -a bench-results.txt; \
@@ -111,11 +194,74 @@ bench-ci:
       critcmp "$baseline_name" "$candidate_name" 2>&1 | tee -a bench-results.txt; \
     fi
 
-wasm-test:
-    bash scripts/ci/wasm-test.sh
+# --- memory ---
 
+memory-check:
+    @echo "=== Tier 1: Pool-native budget tests ==="
+    cargo test -p kithara-bufpool --test memory_budget
+    @echo ""
+    @echo "=== Tier 2: Allocation regression tests ==="
+    cargo test -p kithara-bufpool --test alloc_regression -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 3: Audio hot path zero-alloc ==="
+    cargo test -p kithara-audio --test alloc_free_hotpath -- --test-threads=1
+    @echo ""
+    @echo "=== Tier 4: RSS budget (HLS playback) ==="
+    cargo test --test memory_rss -- --test-threads=1
+    @echo ""
+    @echo "All memory checks passed."
+
+# --- wasm ---
+
+# Check that key crates compile for wasm32 target.
+wasm-check:
+    cargo check -p kithara-wasm --target wasm32-unknown-unknown --no-default-features
+    cargo check -p kithara-storage --target wasm32-unknown-unknown
+    cargo check -p kithara-net --target wasm32-unknown-unknown
+    cargo check -p kithara-stream --target wasm32-unknown-unknown
+    cargo check -p kithara-assets --target wasm32-unknown-unknown
+    cargo check -p kithara-hls --target wasm32-unknown-unknown
+    cargo check -p kithara-decode --target wasm32-unknown-unknown
+
+# Run wasm integration tests in browser.
+wasm-test:
+    CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
+    WASM_BINDGEN_TEST_TIMEOUT=300 \
+    WASM_BINDGEN_USE_BROWSER=1 \
+    cargo +nightly test --target wasm32-unknown-unknown \
+        -p kithara-integration-tests
+
+# Build wasm demo app.
 wasm-build:
     bash crates/kithara-wasm/build-wasm.sh
 
 wasm-size-check:
-    bash scripts/ci/wasm-slim-check.sh
+    @toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"; \
+    if command -v wasm-slim >/dev/null 2>&1; then \
+        slim_cmd="wasm-slim"; \
+    elif command -v cargo-wasm-slim >/dev/null 2>&1; then \
+        slim_cmd="cargo wasm-slim"; \
+    else \
+        echo "wasm-slim is not installed"; exit 2; \
+    fi; \
+    mkdir -p target; \
+    cd crates/kithara-wasm && \
+    RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json; \
+    echo "wasm-slim report: target/wasm-slim-result.json"
+
+# --- apple ---
+
+# Build XCFramework for Apple platforms.
+xcframework *ARGS:
+    cargo xtask xcframework {{ARGS}}
+
+# Build XCFramework (debug) and run the Swift demo app.
+apple-demo:
+    just xcframework --profile debug
+    cd apple && swift run KitharaDemo
+
+# Build XCFramework, zip, and compute checksum for SPM distribution.
+release-apple:
+    just xcframework
+    cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
+    swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip

@@ -60,6 +60,7 @@ disable-hang-detector = [
     "kithara-audio/disable-hang-detector",
     "kithara-hls?/disable-hang-detector",
 ]
+apple = ["kithara-audio/apple", "kithara-play/apple"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 internal = [
     "kithara-assets?/internal",

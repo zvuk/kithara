@@ -28,6 +28,7 @@ ringbuf = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 kithara-platform = { workspace = true }
+portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }

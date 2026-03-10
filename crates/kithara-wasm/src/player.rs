@@ -26,107 +26,112 @@ macro_rules! clog {
 const CROSSFADE_SECONDS: f32 = 5.0;
 const EQ_BANDS: usize = 10;
 
-fn load_f32(a: &AtomicU32) -> f32 {
-    f32::from_bits(a.load(Ordering::Relaxed))
+struct Player {
+    volume: AtomicU32,
+    crossfade_secs: AtomicU32,
+    eq_gains: [AtomicU32; EQ_BANDS],
+    ducking: AtomicU32,
+    cmd_tx: LazyLock<Mutex<Option<mpsc::Sender<WorkerCmd>>>>,
+    start_lock: LazyLock<Mutex<()>>,
+    start_count: AtomicU32,
 }
 
-fn store_f32(a: &AtomicU32, val: f32) {
-    a.store(val.to_bits(), Ordering::Relaxed);
-}
-
-struct Player;
-
-static PLAYER: Player = Player;
-
-// Cached settings used by getters on the JS side.
-static VOLUME: AtomicU32 = AtomicU32::new(0);
-static CROSSFADE_SECS: AtomicU32 = AtomicU32::new(0);
-static EQ_GAINS: [AtomicU32; EQ_BANDS] = [const { AtomicU32::new(0) }; EQ_BANDS];
-static DUCKING: AtomicU32 = AtomicU32::new(0);
-
-static CMD_TX: LazyLock<Mutex<Option<mpsc::Sender<WorkerCmd>>>> =
-    LazyLock::new(|| Mutex::new(None));
-static START_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-static START_COUNT: AtomicU32 = AtomicU32::new(0);
+static PLAYER: Player = Player {
+    volume: AtomicU32::new(0),
+    crossfade_secs: AtomicU32::new(0),
+    eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
+    ducking: AtomicU32::new(0),
+    cmd_tx: LazyLock::new(|| Mutex::new(None)),
+    start_lock: LazyLock::new(|| Mutex::new(())),
+    start_count: AtomicU32::new(0),
+};
 
 fn player() -> &'static Player {
     &PLAYER
 }
 
-fn lock_cmd_tx() -> MutexGuard<'static, Option<mpsc::Sender<WorkerCmd>>> {
-    CMD_TX.lock_sync()
-}
-
-fn ensure_worker_started() -> Result<(), JsValue> {
-    if lock_cmd_tx().is_some() {
-        return Ok(());
+impl Player {
+    fn load_f32(a: &AtomicU32) -> f32 {
+        f32::from_bits(a.load(Ordering::Relaxed))
     }
 
-    let _start_guard = START_LOCK.lock_sync();
-
-    if lock_cmd_tx().is_some() {
-        return Ok(());
+    fn store_f32(a: &AtomicU32, val: f32) {
+        a.store(val.to_bits(), Ordering::Relaxed);
     }
 
-    let start_no = START_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    info!("player_new: initialising worker start={start_no}");
-
-    wasm_support::ensure_main_session();
-    wasm_support::init_worker_session();
-    crate::js_channel::init_event_reader();
-    reset_cached_state();
-
-    let (cmd_tx, cmd_rx) = mpsc::channel();
-    *lock_cmd_tx() = Some(cmd_tx);
-
-    let worker = kithara_platform::spawn(move || {
-        crate::worker_entry::worker_main(cmd_rx);
-    });
-    std::mem::forget(worker);
-
-    Ok(())
-}
-
-fn clear_cmd_tx() {
-    *lock_cmd_tx() = None;
-}
-
-fn send_cmd(cmd: WorkerCmd) -> Result<(), JsValue> {
-    ensure_worker_started()?;
-
-    let tx = lock_cmd_tx()
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-
-    if tx.send_sync(cmd.clone()).is_ok() {
-        return Ok(());
+    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
+        self.cmd_tx.lock_sync()
     }
 
-    // If worker channel closed, clear sender, restart worker, and retry once.
-    clear_cmd_tx();
-    ensure_worker_started()?;
-    let tx = lock_cmd_tx()
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-    tx.send_sync(cmd)
-        .map_err(|_| JsValue::from_str("worker channel closed"))
-}
-
-fn reset_cached_state() {
-    store_f32(&VOLUME, 0.5);
-    store_f32(&CROSSFADE_SECS, CROSSFADE_SECONDS);
-    for gain in &EQ_GAINS {
-        store_f32(gain, 0.0);
+    fn clear_cmd_tx(&self) {
+        *self.lock_cmd_tx() = None;
     }
-    DUCKING.store(0, Ordering::Relaxed);
+
+    fn ensure_worker_started(&self) -> Result<(), JsValue> {
+        if self.lock_cmd_tx().is_some() {
+            return Ok(());
+        }
+
+        let _start_guard = self.start_lock.lock_sync();
+
+        if self.lock_cmd_tx().is_some() {
+            return Ok(());
+        }
+
+        let start_no = self.start_count.fetch_add(1, Ordering::Relaxed) + 1;
+        info!("player_new: initialising worker start={start_no}");
+
+        wasm_support::ensure_main_session();
+        wasm_support::init_worker_session();
+        crate::js_channel::init_event_reader();
+        self.reset_cached_state();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        *self.lock_cmd_tx() = Some(cmd_tx);
+
+        let worker = kithara_platform::spawn(move || {
+            crate::worker_entry::worker_main(cmd_rx);
+        });
+        std::mem::forget(worker);
+
+        Ok(())
+    }
+
+    fn reset_cached_state(&self) {
+        Self::store_f32(&self.volume, 0.5);
+        Self::store_f32(&self.crossfade_secs, CROSSFADE_SECONDS);
+        for gain in &self.eq_gains {
+            Self::store_f32(gain, 0.0);
+        }
+        self.ducking.store(0, Ordering::Relaxed);
+    }
 }
 
 #[wasm_export]
 impl Player {
     fn send_cmd(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
-        send_cmd(cmd)
+        self.ensure_worker_started()?;
+
+        let tx = self
+            .lock_cmd_tx()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
+
+        if tx.send_sync(cmd.clone()).is_ok() {
+            return Ok(());
+        }
+
+        // If worker channel closed, clear sender, restart worker, and retry once.
+        self.clear_cmd_tx();
+        self.ensure_worker_started()?;
+        let tx = self
+            .lock_cmd_tx()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
+        tx.send_sync(cmd)
+            .map_err(|_| JsValue::from_str("worker channel closed"))
     }
 
     #[export]
@@ -165,35 +170,35 @@ impl Player {
 
     #[export]
     fn set_volume(&self, volume: f32) {
-        store_f32(&VOLUME, volume);
+        Self::store_f32(&self.volume, volume);
         let _ = self.send_cmd(WorkerCmd::SetVolume(volume));
     }
 
     #[export]
     fn set_crossfade_seconds(&self, seconds: f32) {
-        store_f32(&CROSSFADE_SECS, seconds);
+        Self::store_f32(&self.crossfade_secs, seconds);
         let _ = self.send_cmd(WorkerCmd::SetCrossfade(seconds));
     }
 
     #[export]
     fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), JsValue> {
-        if let Some(slot) = EQ_GAINS.get(band as usize) {
-            store_f32(slot, gain_db);
+        if let Some(slot) = self.eq_gains.get(band as usize) {
+            Self::store_f32(slot, gain_db);
         }
         self.send_cmd(WorkerCmd::SetEqGain { band, gain_db })
     }
 
     #[export]
     fn reset_eq(&self) -> Result<(), JsValue> {
-        for g in &EQ_GAINS {
-            store_f32(g, 0.0);
+        for g in &self.eq_gains {
+            Self::store_f32(g, 0.0);
         }
         self.send_cmd(WorkerCmd::ResetEq)
     }
 
     #[export]
     fn set_session_ducking(&self, mode: u32) -> Result<(), JsValue> {
-        DUCKING.store(mode, Ordering::Relaxed);
+        self.ducking.store(mode, Ordering::Relaxed);
         self.send_cmd(WorkerCmd::SetDucking(mode))
     }
 
@@ -219,12 +224,12 @@ impl Player {
 
     #[export]
     fn get_volume(&self) -> f32 {
-        load_f32(&VOLUME)
+        Self::load_f32(&self.volume)
     }
 
     #[export]
     fn get_crossfade_seconds(&self) -> f32 {
-        load_f32(&CROSSFADE_SECS)
+        Self::load_f32(&self.crossfade_secs)
     }
 
     #[export]
@@ -234,12 +239,15 @@ impl Player {
 
     #[export]
     fn eq_gain(&self, band: u32) -> f32 {
-        EQ_GAINS.get(band as usize).map(load_f32).unwrap_or(0.0)
+        self.eq_gains
+            .get(band as usize)
+            .map(Self::load_f32)
+            .unwrap_or(0.0)
     }
 
     #[export]
     fn get_session_ducking(&self) -> u32 {
-        DUCKING.load(Ordering::Relaxed)
+        self.ducking.load(Ordering::Relaxed)
     }
 
     #[export]
@@ -257,7 +265,7 @@ impl Player {
 #[allow(unreachable_pub)]
 #[wasm_bindgen]
 pub fn player_new() -> js_sys::Promise {
-    if let Err(err) = ensure_worker_started() {
+    if let Err(err) = player().ensure_worker_started() {
         return js_sys::Promise::reject(&err);
     }
     js_sys::Promise::resolve(&JsValue::UNDEFINED)

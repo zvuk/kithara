@@ -26,7 +26,9 @@ members = [
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
     "tests",
+    "tests/fuzz",
     "examples",
+    "xtask",
 ]
 default-members = [
     "crates/kithara",
@@ -234,7 +236,7 @@ cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
 tempfile = "3.26.0"
 
 # FFI
@@ -263,6 +265,10 @@ derivative = "2.2"
 derive_setters = "0.1"
 lru = "0.16"
 
+# fuzzing
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
 # memory profiling
 dhat = "0.3"
 memory-stats = "1.2"
@@ -289,6 +295,11 @@ iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "t
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
+
+# xtask tooling
+cargo_metadata = "0.19"
+anyhow = "1"
+regex = "1"
 
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }

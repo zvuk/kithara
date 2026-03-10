@@ -13,8 +13,9 @@ use tracing::warn;
 use crate::{events, tui_runner};
 
 pub(crate) const CROSSFADE_SECONDS: f32 = 5.0;
-pub(crate) const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
+pub(crate) const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3https://stream.silvercomet.top/track.mp3https://stream.silvercomet.top/track.mp3";
 pub(crate) const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
+pub(crate) const DRM_URL_DEFAULT: &str = "https://stream.silvercomet.top/drm/master.m3u8";
 
 pub type AppError = Box<dyn Error + Send + Sync>;
 pub type AppResult<T = ()> = Result<T, AppError>;
@@ -59,7 +60,11 @@ pub async fn run(mode: Mode, urls: Vec<String>) -> AppResult {
     let mode = resolve_mode(mode);
 
     let urls = if urls.is_empty() {
-        vec![FILE_URL_DEFAULT.to_string(), HLS_URL_DEFAULT.to_string()]
+        vec![
+            FILE_URL_DEFAULT.to_string(),
+            HLS_URL_DEFAULT.to_string(),
+            DRM_URL_DEFAULT.to_string(),
+        ]
     } else {
         urls
     };
@@ -92,7 +97,11 @@ pub async fn run(mode: Mode, urls: Vec<String>) -> AppResult {
 /// Returns an error if the iced UI event loop fails.
 pub fn run_gui_sync(urls: Vec<String>) -> AppResult {
     let urls = if urls.is_empty() {
-        vec![FILE_URL_DEFAULT.to_string(), HLS_URL_DEFAULT.to_string()]
+        vec![
+            FILE_URL_DEFAULT.to_string(),
+            HLS_URL_DEFAULT.to_string(),
+            DRM_URL_DEFAULT.to_string(),
+        ]
     } else {
         urls
     };

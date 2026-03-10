@@ -8,12 +8,14 @@
 
 pub mod abr;
 pub mod assets;
+pub mod builders;
 pub mod crypto;
 pub mod scalable_server;
 pub mod server;
 
 // Re-export commonly used types
 pub use assets::*;
+pub use builders::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crypto::*;
 #[cfg(target_arch = "wasm32")]

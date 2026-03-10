@@ -8,7 +8,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::{
     time::{Duration, sleep, timeout},
     tokio::{sync::oneshot, task::spawn},
@@ -66,40 +66,27 @@ async fn test_hls_session_creation(
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
-async fn test_hls_with_local_fixture(
+#[case::plain(false)]
+#[case::with_init(true)]
+async fn test_hls_stream_creation(
     _tracing_setup: (),
     temp_dir: TestTempDir,
+    #[case] with_init: bool,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
-    let url = server.url("/master.m3u8")?;
-    info!("Testing HLS with local fixture at: {}", url);
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
+    let builder = HlsStreamBuilder::new();
+    let builder = if with_init {
+        builder.with_init()
+    } else {
+        builder
+    };
 
-    let _stream = Stream::<Hls>::new(config).await?;
+    let _stream = builder
+        .build(&server, temp_dir.path(), CancellationToken::new())
+        .await;
 
-    info!("Local fixture test passed");
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
-async fn test_hls_session_with_init_segments(
-    _tracing_setup: (),
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
-    let url = server.url("/master-init.m3u8")?;
-    info!("Testing HLS session with init segments at URL: {}", url);
-
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
-
-    let _stream = Stream::<Hls>::new(config).await?;
-
-    info!("HLS source with init segments opened successfully");
+    info!("HLS stream created successfully (init={})", with_init);
     Ok(())
 }
 
@@ -158,8 +145,7 @@ async fn test_hls_invalid_url_handling(
             .with_cancel(CancellationToken::new());
 
         let result = Stream::<Hls>::new(config).await;
-        // Either Ok (if somehow connects) or Err (expected) is acceptable
-        assert!(result.is_ok() || result.is_err());
+        assert!(result.is_err(), "invalid URL should fail, got Ok");
     } else {
         // Invalid URL string - parse should fail
         assert!(url_result.is_err());
@@ -174,15 +160,12 @@ async fn test_hls_session_drop_cleanup(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
-    let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session drop cleanup");
 
-    let config = HlsConfig::new(test_stream_url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
-
     // Create and immediately drop session
-    let stream = Stream::<Hls>::new(config).await?;
+    let stream = HlsStreamBuilder::new()
+        .build(&server, temp_dir.path(), CancellationToken::new())
+        .await;
     drop(stream);
 
     // Wait a bit to ensure cleanup happens
