@@ -66,3 +66,18 @@
 2. `kithara-hls` (внутренняя пост-обработка + keys) — закрыть gap относительно текущего fuzz `hls_m3u8`.
 3. `kithara-stream` (read/seek state-machine) — высокая важность для runtime-стабильности.
 4. `kithara-play` (`ResourceConfig::new`) — hardening публичной входной точки.
+
+## 5) `kithara-assets`: `asset_root_for_url` + `ResourceKey::from_url`
+
+**Где:** `crates/kithara-assets/src/key.rs`
+
+**Почему это хороший fuzz-таргет:**
+- хеш-идентификатор строится через каноникализацию URL (scheme/host/port/query/fragment), что чувствительно к edge-case строкам;
+- `ResourceKey::from_url` извлекает path segment и должен стабильно отрабатывать на нестандартных URI;
+- обе функции принимают внешние данные (URL и имя), значит важна устойчивость к произвольному input.
+
+**Что проверять инвариантами:**
+- отсутствие panic на валидных произвольных URL;
+- `asset_root_for_url` всегда возвращает фиксированный hex-идентификатор длиной 32;
+- удаление query/fragment не меняет `asset_root_for_url` для URL с host;
+- `ResourceKey::from_url` всегда возвращает относительный ключ для URL-входа.
