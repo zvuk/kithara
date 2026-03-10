@@ -306,7 +306,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 #[case::single(false)]
 #[case::idempotent(true)]
 async fn test_audio_preload(#[case] second_preload: bool) {

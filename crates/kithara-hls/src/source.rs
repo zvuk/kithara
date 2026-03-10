@@ -674,7 +674,15 @@ impl Source for HlsSource {
         self.shared
             .had_midstream_switch
             .store(false, Ordering::Release);
-        while self.shared.segment_requests.pop().is_some() {}
+
+        kithara_platform::hang_watchdog! {
+            thread: "hls.set_seek_epoch";
+
+            while self.shared.segment_requests.pop().is_some() {
+                hang_tick!();
+            }
+        }
+
         self.shared.reader_advanced.notify_one();
         self.shared.condvar.notify_all();
     }
@@ -974,6 +982,28 @@ mod tests {
         assert!(
             timeout(TokioDuration::from_millis(10), wake).await.is_err(),
             "pending request must not re-wake downloader without new work"
+        );
+    }
+
+    #[kithara::test]
+    fn set_seek_epoch_drains_pending_segment_requests() {
+        let mut source = build_test_source(1);
+        source.shared.segment_requests.push(SegmentRequest {
+            variant: 0,
+            segment_index: 1,
+            seek_epoch: 3,
+        });
+        source.shared.segment_requests.push(SegmentRequest {
+            variant: 0,
+            segment_index: 2,
+            seek_epoch: 4,
+        });
+
+        source.set_seek_epoch(9);
+
+        assert!(
+            source.shared.segment_requests.pop().is_none(),
+            "set_seek_epoch must drain pending segment requests"
         );
     }
 }

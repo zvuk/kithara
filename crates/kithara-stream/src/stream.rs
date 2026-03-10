@@ -428,4 +428,16 @@ mod tests {
         // the error instead of silently retrying.
         assert_eq!(err.kind(), io::ErrorKind::Other);
     }
+
+    #[kithara::test]
+    fn seek_updates_position() {
+        let timeline = Timeline::new();
+        let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let mut stream = Stream::<DummyType> { source, timeline };
+
+        let pos = stream.seek(SeekFrom::Start(3)).expect("seek must succeed");
+
+        assert_eq!(pos, 3);
+        assert_eq!(stream.position(), 3);
+    }
 }

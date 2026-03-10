@@ -31,7 +31,7 @@ pub mod tokio;
 #[cfg(feature = "internal")]
 pub mod internal;
 
-pub use kithara_hang_detector::{HangDetector, hang_watchdog};
+pub use kithara_hang_detector::hang_watchdog;
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,

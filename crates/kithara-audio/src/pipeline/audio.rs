@@ -326,32 +326,37 @@ impl<S> Audio<S> {
         let mut written = 0;
         let mut last_output_meta: Option<PcmMeta> = None;
 
-        while written < buf.len() {
-            // Try to read from current chunk
-            if let Some(ref chunk) = self.current_chunk {
-                let remaining_in_chunk = chunk.pcm.len() - self.chunk_offset;
-                let to_copy = (buf.len() - written).min(remaining_in_chunk);
+        kithara_platform::hang_watchdog! {
+            thread: "audio.read";
 
-                buf[written..written + to_copy]
-                    .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
-                last_output_meta = Some(chunk.meta);
+            while written < buf.len() {
+                hang_tick!();
 
-                written += to_copy;
-                self.chunk_offset += to_copy;
+                // Try to read from current chunk
+                if let Some(ref chunk) = self.current_chunk {
+                    let remaining_in_chunk = chunk.pcm.len() - self.chunk_offset;
+                    let to_copy = (buf.len() - written).min(remaining_in_chunk);
+                    if to_copy > 0 {
+                        hang_reset!();
+                    }
 
-                if self.chunk_offset >= chunk.pcm.len() {
-                    self.current_chunk = None; // auto-recycles via Drop
-                    self.chunk_offset = 0;
+                    buf[written..written + to_copy]
+                        .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
+                    last_output_meta = Some(chunk.meta);
+
+                    written += to_copy;
+                    self.chunk_offset += to_copy;
+
+                    if self.chunk_offset >= chunk.pcm.len() {
+                        self.current_chunk = None; // auto-recycles via Drop
+                        self.chunk_offset = 0;
+                    }
                 }
 
-                if written >= buf.len() {
+                // Need more data - fetch next chunk
+                if !self.fill_buffer() {
                     break;
                 }
-            }
-
-            // Need more data - fetch next chunk
-            if !self.fill_buffer() {
-                break;
             }
         }
 
@@ -385,7 +390,13 @@ impl<S> Audio<S> {
         self.eof = false;
 
         // 3. Drain stale chunks from pcm channel to unblock worker
-        while self.pcm_rx.try_pop().is_some() {}
+        kithara_platform::hang_watchdog! {
+            thread: "audio.seek";
+
+            while self.pcm_rx.try_pop().is_some() {
+                hang_tick!();
+            }
+        }
 
         // 4. Wake blocked wait_range() calls for instant seek response
         if let Some(ref notify) = self.notify_waiting {
@@ -420,24 +431,37 @@ impl<S> Audio<S> {
             return None;
         }
 
-        loop {
-            match self.recv_outcome() {
-                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                    ChunkOutcome::Continue => continue,
-                    ChunkOutcome::Return(chunk) => return chunk,
-                },
-                RecvOutcome::Empty => return None,
-                RecvOutcome::Closed => return self.close_channel_and_mark_eof(),
+        kithara_platform::hang_watchdog! {
+            thread: "audio.recv_chunk";
+            loop {
+                match self.recv_outcome() {
+                    RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
+                        ChunkOutcome::Continue => {
+                            hang_tick!();
+                            continue;
+                        }
+                        ChunkOutcome::Return(chunk) => {
+                            hang_reset!();
+                            return chunk;
+                        }
+                    },
+                    RecvOutcome::Empty => return None,
+                    RecvOutcome::Closed => {
+                        hang_reset!();
+                        return self.close_channel_and_mark_eof();
+                    }
+                }
             }
         }
     }
 
     fn recv_outcome(&mut self) -> RecvOutcome {
         if self.use_nonblocking_recv() {
-            return self.pcm_rx.try_pop().map_or(RecvOutcome::Empty, |fetch| {
+            if let Some(fetch) = self.pcm_rx.try_pop() {
                 self.wake_worker();
-                RecvOutcome::Item(fetch)
-            });
+                return RecvOutcome::Item(fetch);
+            }
+            return RecvOutcome::Empty;
         }
 
         self.recv_outcome_blocking()
@@ -457,6 +481,7 @@ impl<S> Audio<S> {
                     .as_ref()
                     .is_some_and(CancellationToken::is_cancelled)
                 {
+                    hang_reset!();
                     return RecvOutcome::Closed;
                 }
                 hang_tick!();
@@ -1018,7 +1043,7 @@ mod tests {
     #[should_panic(expected = "audio.recv_chunk")]
     fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
         let mut audio = empty_audio();
-        let _ = audio.recv_outcome();
+        let _ = audio.recv_valid_chunk();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1035,7 +1060,7 @@ mod tests {
     #[kithara::test]
     fn preloaded_recv_is_nonblocking() {
         let mut audio = empty_audio();
-        audio.preloaded = true;
+        audio.preload();
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
     }
