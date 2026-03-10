@@ -18,8 +18,12 @@ kithara-workspace-hack = { version = "0.1", path = "../../crates/kithara-workspa
 name = "aes_decrypt"
 path = "fuzz_targets/aes_decrypt.rs"
 doc = false
+test = false
+bench = false
 
 [[bin]]
 name = "hls_parsing"
 path = "fuzz_targets/hls_parsing.rs"
 doc = false
+test = false
+bench = false
