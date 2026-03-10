@@ -23,7 +23,8 @@ Icon?
 .vscode/
 
 # Zed
-.zed/
+/.zed/*
+!/.zed/debug.json
 
 # Editor swap/backup files
 *~
