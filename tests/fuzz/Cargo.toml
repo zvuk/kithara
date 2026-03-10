@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = { workspace = true }
 arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
+kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
 kithara-play = { workspace = true }
@@ -60,4 +61,9 @@ doc = false
 [[bin]]
 name = "file_config"
 path = "fuzz_targets/file_config.rs"
+doc = false
+
+[[bin]]
+name = "assets_key"
+path = "fuzz_targets/assets_key.rs"
 doc = false
