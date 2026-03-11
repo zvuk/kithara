@@ -14,6 +14,7 @@ kithara-drm = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
+kithara-platform = { workspace = true }
 kithara-play = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }

@@ -887,6 +887,8 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     
     func setPreferredPeakBitrateForExpensiveNetworks(bitrate: Double) 
     
+    func setStoreOptions(store: FfiStoreOptions)
+
     func url()  -> String
     
 }
@@ -1023,6 +1025,14 @@ open func setPreferredPeakBitrateForExpensiveNetworks(bitrate: Double)  {try! ru
 }
 }
     
+open func setStoreOptions(store: FfiStoreOptions)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_set_store_options(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiStoreOptions_lower(store),$0
+    )
+}
+}
+
 open func url() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_url(
@@ -1277,7 +1287,7 @@ public func FfiConverterTypeItemObserver_lower(_ value: ItemObserver) -> UInt64 
  * Receives player-level state changes from Rust.
  *
  * All calls happen on an arbitrary background thread.
- * Swift implementations must dispatch to the main actor as needed.
+ * Platform bindings must dispatch to the UI thread as needed.
  */
 public protocol PlayerObserver: AnyObject, Sendable {
     
@@ -1288,7 +1298,7 @@ public protocol PlayerObserver: AnyObject, Sendable {
  * Receives player-level state changes from Rust.
  *
  * All calls happen on an arbitrary background thread.
- * Swift implementations must dispatch to the main actor as needed.
+ * Platform bindings must dispatch to the UI thread as needed.
  */
 open class PlayerObserverImpl: PlayerObserver, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1742,6 +1752,56 @@ public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) 
 
 
 /**
+ * Store configuration forwarded from platform layer to resource creation.
+ */
+public struct FfiStoreOptions: Equatable, Hashable {
+    public let cacheDir: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(cacheDir: String?) {
+        self.cacheDir = cacheDir
+    }
+
+
+}
+
+#if compiler(>=6)
+extension FfiStoreOptions: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiStoreOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiStoreOptions {
+        return
+            try FfiStoreOptions(
+                cacheDir: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiStoreOptions, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.cacheDir, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiStoreOptions_lift(_ buf: RustBuffer) throws -> FfiStoreOptions {
+    return try FfiConverterTypeFfiStoreOptions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiStoreOptions_lower(_ value: FfiStoreOptions) -> RustBuffer {
+    return FfiConverterTypeFfiStoreOptions.lower(value)
+}
+
+/**
  * FFI-friendly time range (seconds-based).
  */
 public struct FfiTimeRange: Equatable, Hashable {
@@ -1799,7 +1859,7 @@ public func FfiConverterTypeFfiTimeRange_lower(_ value: FfiTimeRange) -> RustBuf
 
 
 /**
- * FFI-friendly error type bridging [`PlayError`] and [`DecodeError`].
+ * FFI-friendly error type bridging playback failures into platform bindings.
  */
 public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -1813,7 +1873,7 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
     case EngineNotRunning
     case InvalidArgument(reason: String
     )
-    case Internal(message: String
+    case Internal(description: String
     )
 
     
@@ -1856,7 +1916,7 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             reason: try FfiConverterString.read(from: &buf)
             )
         case 6: return .Internal(
-            message: try FfiConverterString.read(from: &buf)
+            description: try FfiConverterString.read(from: &buf)
             )
 
          default: throw UniffiInternalError.unexpectedEnumCase
@@ -1893,9 +1953,9 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             FfiConverterString.write(reason, into: &buf)
             
         
-        case let .Internal(message):
+        case let .Internal(description):
             writeInt(&buf, Int32(6))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(description, into: &buf)
             
         }
     }
@@ -2587,6 +2647,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_preferred_peak_bitrate_for_expensive_networks() != 44522) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_store_options() != 53474) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 17628) {

@@ -14,7 +14,6 @@ test-threads = 4
 [[profile.ci.overrides]]
 filter = 'binary(suite_heavy)'
 threads-required = 4
-
 # Fast-only profile: heavy tests are excluded via -E filter in justfile.
 [profile.fast]
 fail-fast = false

@@ -3,3 +3,8 @@ module_name = "KitharaFFI"
 ffi_module_name = "KitharaFFIInternal"
 generate_module_map = true
 generate_immutable_records = true
+
+[bindings.kotlin]
+package_name = "com.kithara.ffi"
+android = true
+generate_immutable_records = true

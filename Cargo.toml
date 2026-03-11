@@ -238,6 +238,9 @@ tempfile = "3.26.0"
 
 # FFI
 uniffi = { version = "0.31.0" }
+jni = "0.21.1"
+ndk-context = "0.1.1"
+rustls-platform-verifier = "0.6.2"
 
 # async traits
 async-trait = "0.1.89"

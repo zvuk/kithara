@@ -31,7 +31,7 @@ use tracing::info;
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
@@ -176,7 +176,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]

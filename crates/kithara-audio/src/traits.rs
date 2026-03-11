@@ -102,7 +102,6 @@ pub trait PcmReader: Send {
     /// Maps track playback state to worker priority: `Audible` tracks
     /// are decoded first, then `Warm`, then `Idle`.
     fn set_service_class(&self, _class: ServiceClass) {}
-
     /// Get notify for async preload (first chunk available).
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         None

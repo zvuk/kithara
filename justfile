@@ -249,6 +249,17 @@ wasm-size-check:
     RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json; \
     echo "wasm-slim report: target/wasm-slim-result.json"
 
+# --- android ---
+
+# Build Android JNI libraries and Kotlin bindings.
+android *ARGS:
+    cargo xtask android {{ARGS}}
+
+# Build release AAR (includes JNI libs and Kotlin bindings).
+android-aar:
+    cargo xtask android --profile release
+    cd android && ./gradlew :lib:assembleRelease -Pkithara.release=true -x generateKitharaFfi
+    @echo "==> AAR: android/lib/build/outputs/aar/lib-release.aar"
 # --- apple ---
 
 # Build XCFramework for Apple platforms.

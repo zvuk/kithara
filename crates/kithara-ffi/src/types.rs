@@ -1,10 +1,10 @@
-//! FFI-compatible type conversions between `kithara-play` and Swift.
+//! FFI-compatible type conversions between `kithara-play` and platform bindings.
 
 use std::time::Duration;
 
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
-/// FFI-friendly error type bridging [`PlayError`] and [`DecodeError`].
+/// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Error))]
 pub enum FfiError {
@@ -23,11 +23,25 @@ pub enum FfiError {
     #[error("invalid argument: {reason}")]
     InvalidArgument { reason: String },
 
-    #[error("{message}")]
-    Internal { message: String },
+    #[error("{description}")]
+    Internal { description: String },
 }
 
 pub type FfiResult<T> = Result<T, FfiError>;
+
+impl FfiError {
+    #[must_use]
+    pub fn observer_code(&self) -> i32 {
+        match self {
+            Self::Internal { .. } => 0,
+            Self::NotReady => 1,
+            Self::ItemFailed { .. } => 2,
+            Self::SeekFailed { .. } => 3,
+            Self::EngineNotRunning => 4,
+            Self::InvalidArgument { .. } => 5,
+        }
+    }
+}
 
 impl From<PlayError> for FfiError {
     fn from(err: PlayError) -> Self {
@@ -39,7 +53,7 @@ impl From<PlayError> for FfiError {
             },
             PlayError::EngineNotRunning => Self::EngineNotRunning,
             _ => Self::Internal {
-                message: err.to_string(),
+                description: err.to_string(),
             },
         }
     }
@@ -48,7 +62,9 @@ impl From<PlayError> for FfiError {
 #[cfg(feature = "backend-uniffi")]
 impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
     fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::Internal { message: e.reason }
+        Self::Internal {
+            description: e.reason,
+        }
     }
 }
 
@@ -299,6 +315,40 @@ mod tests {
     fn play_error_internal_fallback() {
         let ffi: FfiError = PlayError::ArenaFull.into();
         assert!(matches!(ffi, FfiError::Internal { .. }));
+    }
+
+    #[kithara::test]
+    fn observer_error_codes_match_platform_mapping() {
+        assert_eq!(FfiError::NotReady.observer_code(), 1);
+        assert_eq!(
+            FfiError::ItemFailed {
+                reason: "bad codec".into(),
+            }
+            .observer_code(),
+            2
+        );
+        assert_eq!(
+            FfiError::SeekFailed {
+                reason: "position".into(),
+            }
+            .observer_code(),
+            3
+        );
+        assert_eq!(FfiError::EngineNotRunning.observer_code(), 4);
+        assert_eq!(
+            FfiError::InvalidArgument {
+                reason: "bad arg".into(),
+            }
+            .observer_code(),
+            5
+        );
+        assert_eq!(
+            FfiError::Internal {
+                description: "boom".into(),
+            }
+            .observer_code(),
+            0
+        );
     }
 
     #[kithara::test]

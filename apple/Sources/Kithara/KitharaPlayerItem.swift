@@ -6,6 +6,12 @@ import KitharaFFI
 ///
 /// Create with a URL, then call ``load()`` before inserting into the player.
 /// If inserted before loading completes, the player will auto-load the item.
+///
+/// ```swift
+/// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
+/// item.load()
+/// try player.insert(item)
+/// ```
 public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     /// Unique item identifier.
     public nonisolated let id: String
@@ -24,13 +30,13 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
 
     // MARK: - Bitrate preferences
 
-    /// Preferred peak bitrate (0 = no limit).
+    /// Preferred peak bitrate in bits per second. Zero means no limit.
     public nonisolated var preferredPeakBitrate: Double {
         get { _inner.preferredPeakBitrate() }
         set { _inner.setPreferredPeakBitrate(bitrate: newValue) }
     }
 
-    /// Preferred peak bitrate for expensive networks (0 = no limit).
+    /// Preferred peak bitrate for expensive networks in bits per second. Zero means no limit.
     public nonisolated var preferredPeakBitrateForExpensiveNetworks: Double {
         get { _inner.preferredPeakBitrateForExpensiveNetworks() }
         set { _inner.setPreferredPeakBitrateForExpensiveNetworks(bitrate: newValue) }
@@ -46,7 +52,7 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - url: The audio source URL.
-    ///   - additionalHeaders: Optional HTTP headers to include in requests.
+    ///   - additionalHeaders: Optional HTTP headers included in all requests for this item.
     public init(url: String, additionalHeaders: [String: String]? = nil) {
         self._inner = AudioPlayerItem(url: url, additionalHeaders: additionalHeaders)
         self.id = _inner.id()
@@ -56,7 +62,7 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         _inner.setObserver(observer: observer)
     }
 
-    /// Internal init wrapping an existing FFI item (used by queue queries).
+    /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
     init(inner: AudioPlayerItem) {
         self._inner = inner
         self.id = inner.id()

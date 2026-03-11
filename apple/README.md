@@ -187,7 +187,6 @@ cargo xtask xcframework --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
-
 ## Demo App
 
 A minimal macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). Plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.

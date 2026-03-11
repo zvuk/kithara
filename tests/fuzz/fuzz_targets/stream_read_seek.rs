@@ -8,10 +8,11 @@ use std::{
 };
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamType, Timeline,
+    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
+    Timeline,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -102,6 +103,17 @@ struct ScriptSource {
     waits: VecDeque<WaitOutcome>,
 }
 
+impl Default for ScriptSource {
+    fn default() -> Self {
+        Self {
+            data: Vec::new(),
+            reads: VecDeque::new(),
+            timeline: Timeline::new(),
+            waits: VecDeque::new(),
+        }
+    }
+}
+
 impl Source for ScriptSource {
     type Error = io::Error;
 
@@ -109,11 +121,11 @@ impl Source for ScriptSource {
         &mut self,
         _range: Range<u64>,
         _timeout: Duration,
-    ) -> Result<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome, Self::Error> {
         Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Data(0));
         match outcome {
             ReadOutcome::Data(n) => {
@@ -141,13 +153,13 @@ impl Source for ScriptSource {
 struct DummyType;
 
 impl StreamType for DummyType {
-    type Config = ();
+    type Config = ScriptSource;
     type Error = io::Error;
     type Events = ();
     type Source = ScriptSource;
 
-    async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
-        Err(io::Error::other("unused in fuzz target"))
+    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+        Ok(config)
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
@@ -174,7 +186,14 @@ fuzz_target!(|input: Input| {
         timeline: timeline.clone(),
         waits: waits.collect(),
     };
-    let mut stream = Stream::<DummyType> { source, timeline };
+    let runtime = match Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(_) => return,
+    };
+    let mut stream = match runtime.block_on(Stream::<DummyType>::new(source)) {
+        Ok(stream) => stream,
+        Err(_) => return,
+    };
 
     for op in input.ops {
         match op {

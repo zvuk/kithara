@@ -958,7 +958,6 @@ impl<S: Send> PcmReader for Audio<S> {
             worker.set_service_class(track_id, class);
         }
     }
-
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         Some(self.preload_notify.clone())
     }

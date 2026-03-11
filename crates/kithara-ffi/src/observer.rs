@@ -9,7 +9,7 @@ use crate::types::{FfiItemEvent, FfiPlayerEvent};
 /// Receives player-level state changes from Rust.
 ///
 /// All calls happen on an arbitrary background thread.
-/// Swift implementations must dispatch to the main actor as needed.
+/// Platform bindings must dispatch to the UI thread as needed.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
     fn on_event(&self, event: FfiPlayerEvent);
