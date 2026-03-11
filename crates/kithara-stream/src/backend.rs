@@ -632,7 +632,10 @@ mod tests {
         // so the hang detector must NOT fire.  Let it run for 1.5× the
         // timeout and verify it stays alive.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert!(!handle.is_finished(), "downloader should stay alive during idle wakeups");
+        assert!(
+            !handle.is_finished(),
+            "downloader should stay alive during idle wakeups"
+        );
 
         cancel.cancel();
         wake_task.abort();

@@ -1284,9 +1284,7 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
     // wait_range for offset 100..200 — no entries cover this range.
     // Background entries are at 10000+. total grows but range stays unready.
     // Budget check returns Err(Timeout) after 3s.
-    let handle = spawn_blocking(move || {
-        source.wait_range(100..200, Duration::from_secs(3))
-    });
+    let handle = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(3)));
 
     #[cfg(not(target_arch = "wasm32"))]
     {
