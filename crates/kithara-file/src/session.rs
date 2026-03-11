@@ -547,7 +547,7 @@ mod tests {
         let source = FileSource::new(res, progress, bus);
 
         // Initiate seek to make timeline flushing.
-        timeline.initiate_seek(Duration::from_secs(0));
+        let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Range 50..60 is NOT present — seeking wins.
         assert_eq!(
@@ -567,7 +567,7 @@ mod tests {
         let source = FileSource::new(res, progress, bus);
 
         // Initiate seek to make timeline flushing.
-        timeline.initiate_seek(Duration::from_secs(0));
+        let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Data IS present — Ready wins over Seeking (allows drain).
         assert_eq!(source.phase(&(0..5)), kithara_stream::SourcePhase::Ready,);
@@ -596,7 +596,7 @@ mod tests {
         let mut source = FileSource::new(res, progress, bus);
 
         // Initiate seek to make timeline flushing.
-        timeline.initiate_seek(Duration::from_secs(0));
+        let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Range 50..60 is NOT present, so Seeking phase fires (not Ready).
         let result = Source::wait_range(&mut source, 50..60, Duration::from_secs(1));

@@ -483,7 +483,13 @@ impl Source for HlsSource {
                         return Err(StreamError::Source(HlsError::Cancelled));
                     }
                     kithara_stream::SourcePhase::Eof => {
-                        debug!(range_start = range.start, "wait_range: EOF");
+                        let segs = &*segments;
+                        debug!(
+                            range_start = range.start,
+                            total_bytes = segs.max_end_offset(),
+                            num_entries = segs.num_entries(),
+                            "wait_range: EOF"
+                        );
                         return Ok(WaitOutcome::Eof);
                     }
                     kithara_stream::SourcePhase::Seeking => {
@@ -960,6 +966,10 @@ mod tests {
         shared.segments.lock_sync().push(seg);
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "test helper, segment index fits u32"
+    )]
     fn make_anchor(variant: usize, segment: usize, offset: u64) -> SourceSeekAnchor {
         SourceSeekAnchor {
             byte_offset: offset,
@@ -1069,8 +1079,7 @@ mod tests {
         res.write_at(0, &[0u8; 100]).unwrap();
         res.commit(Some(100)).unwrap();
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), None, 0);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::Ready,
@@ -1080,10 +1089,9 @@ mod tests {
     #[kithara::test]
     fn hls_phase_seeking_when_flushing() {
         let source = build_phase_test_source(1);
-        source.shared.timeline.initiate_seek(Duration::from_secs(0));
+        let _ = source.shared.timeline.initiate_seek(Duration::from_secs(0));
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), None, 0);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::Seeking,
@@ -1095,8 +1103,12 @@ mod tests {
         let source = build_phase_test_source(1);
         let seek_epoch = source.shared.timeline.seek_epoch();
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), Some(seek_epoch), 0);
+        let view = source.phase_view(
+            &source.shared.segments.lock_sync(),
+            &(0..50),
+            Some(seek_epoch),
+            0,
+        );
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::WaitingDemand,
@@ -1107,8 +1119,7 @@ mod tests {
     fn hls_phase_waiting_metadata_after_metadata_miss() {
         let source = build_phase_test_source(1);
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), None, 3);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 3);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::WaitingMetadata,
@@ -1122,8 +1133,7 @@ mod tests {
         source.shared.timeline.set_eof(true);
         source.shared.timeline.set_total_bytes(Some(100));
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(200..250), None, 0);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(200..250), None, 0);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::Eof,
@@ -1135,8 +1145,7 @@ mod tests {
         let source = build_test_source(1);
         source.shared.stopped.store(true, Ordering::Release);
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), None, 0);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::Stopped,
@@ -1148,8 +1157,7 @@ mod tests {
         let source = build_test_source(1);
         source.shared.cancel.cancel();
 
-        let segments = source.shared.segments.lock_sync();
-        let view = source.phase_view(&segments, &(0..50), None, 0);
+        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
         assert_eq!(
             kithara_stream::SourcePhase::classify(view),
             kithara_stream::SourcePhase::Cancelled,
