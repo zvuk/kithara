@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod android;
 mod arch;
 mod perf_compare;
 mod quality;
@@ -51,6 +52,12 @@ enum Command {
         #[command(subcommand)]
         command: QualityCommand,
     },
+    /// Build Android shared libraries and Kotlin bindings.
+    Android {
+        /// Build profile.
+        #[arg(long, default_value_t = BuildProfile::Release)]
+        profile: BuildProfile,
+    },
     /// Build an `XCFramework`.
     Xcframework {
         /// Build profile.
@@ -70,6 +77,7 @@ fn main() -> anyhow::Result<()> {
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
         Command::Quality { command } => quality::run(command),
+        Command::Android { profile } => android::run(profile),
         Command::Xcframework { profile } => xcframework::run(profile),
     }
 }

@@ -3766,10 +3766,13 @@ name = "kithara-ffi"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "jni",
  "kithara",
  "kithara-events",
  "kithara-platform",
  "kithara-play",
+ "ndk-context",
+ "rustls-platform-verifier",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

@@ -61,11 +61,18 @@ crates/kithara-wasm/pkg
 
 # Swift / Xcode
 apple/.build/
+apple/build/
 apple/.swiftpm/
 apple/KitharaFFIInternal.xcframework/
 apple/Examples/KitharaDemo/KitharaDemo.xcodeproj/
+apple/Examples/KitharaDemo/build/
 crates/kithara-ffi/KitharaFFI/
 crates/kithara-ffi/generated/
+
+# Android / Gradle
+android/.gradle/
+android/**/build/
+android/local.properties
 tests/fuzz/corpus
 
 # Node.js

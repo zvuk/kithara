@@ -10,10 +10,13 @@ use std::{
 
 use kithara::play::{Resource, ResourceConfig};
 use kithara_platform::{Mutex, tokio::sync::Notify};
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::{
+    config::{self, StoreOptions},
+    item_bridge::ItemEventBridge,
     observer::ItemObserver,
     types::{FfiError, FfiItemEvent, FfiResult},
 };
@@ -27,6 +30,8 @@ pub struct AudioPlayerItem {
     preferred_peak_bitrate: Mutex<f64>,
     preferred_peak_bitrate_expensive: Mutex<f64>,
     resource: Mutex<Option<Resource>>,
+    store: Mutex<StoreOptions>,
+    event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     loading: AtomicBool,
     load_notify: Notify,
@@ -51,6 +56,8 @@ impl AudioPlayerItem {
             preferred_peak_bitrate: Mutex::new(0.0),
             preferred_peak_bitrate_expensive: Mutex::new(0.0),
             resource: Mutex::new(None),
+            store: Mutex::new(StoreOptions::default()),
+            event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             loading: AtomicBool::new(false),
             load_notify: Notify::new(),
@@ -105,6 +112,7 @@ impl AudioPlayerItem {
             match Self::load_resource(config).await {
                 Ok(resource) => {
                     *self.resource.lock_sync() = Some(resource);
+                    self.restart_bridge();
                 }
                 Err(e) => {
                     self.report_error(&e);
@@ -116,6 +124,11 @@ impl AudioPlayerItem {
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
         *self.observer.lock_sync() = Some(observer);
+        self.restart_bridge();
+    }
+
+    pub fn set_store_options(&self, store: StoreOptions) {
+        *self.store.lock_sync() = store;
     }
 }
 
@@ -133,6 +146,31 @@ impl AudioPlayerItem {
 
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
         self.observer.lock_sync().clone()
+    }
+
+    fn restart_bridge(&self) {
+        let observer = self.observer();
+        let Some(observer) = observer else {
+            *self.event_bridge.lock_sync() = None;
+            return;
+        };
+
+        let Some((rx, duration_seconds)) = ({
+            let resource = self.resource.lock_sync();
+            resource.as_ref().map(|resource| {
+                (
+                    resource.subscribe(),
+                    resource.duration().map(|duration| duration.as_secs_f64()),
+                )
+            })
+        }) else {
+            *self.event_bridge.lock_sync() = None;
+            return;
+        };
+
+        let bridge =
+            ItemEventBridge::spawn(rx, observer, duration_seconds, CancellationToken::new());
+        *self.event_bridge.lock_sync() = Some(bridge);
     }
 
     /// Atomically claim loading rights. Returns `true` if this call won.
@@ -162,8 +200,10 @@ impl AudioPlayerItem {
     /// Build a [`ResourceConfig`] from item properties.
     fn build_resource_config(&self) -> FfiResult<ResourceLoadConfig> {
         let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
-            message: e.to_string(),
+            description: e.to_string(),
         })?;
+
+        config::configure_resource(&mut config, &self.store.lock_sync());
 
         let bitrate = self.preferred_peak_bitrate();
         if bitrate > 0.0 {
@@ -182,7 +222,7 @@ impl AudioPlayerItem {
         Resource::new(load_config.config)
             .await
             .map_err(|e| FfiError::Internal {
-                message: e.to_string(),
+                description: e.to_string(),
             })
     }
 
