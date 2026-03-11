@@ -166,6 +166,42 @@ impl HlsSource {
         Ok(())
     }
 
+    /// Check if the read position is past the effective end of stream.
+    pub(super) fn is_past_eof(&self, segments: &DownloadState, range: &Range<u64>) -> bool {
+        if !self.shared.timeline.eof() {
+            return false;
+        }
+        let total = segments.max_end_offset();
+        let expected_total = self.shared.timeline.total_bytes().unwrap_or(0);
+        let effective_total = total.max(expected_total);
+        effective_total > 0 && range.start >= effective_total
+    }
+
+    /// Build a [`SourcePhaseView`] from HLS-specific state.
+    ///
+    /// Pure function — no side effects, no `&mut self`.
+    pub(super) fn phase_view(
+        &self,
+        segments: &DownloadState,
+        range: &Range<u64>,
+        on_demand_epoch: Option<u64>,
+        metadata_miss_count: usize,
+    ) -> kithara_stream::SourcePhaseView {
+        let seek_epoch = self.shared.timeline.seek_epoch();
+        let waiting_demand = on_demand_epoch.is_some_and(|epoch| epoch == seek_epoch);
+        let waiting_metadata = metadata_miss_count > 0 && !waiting_demand;
+
+        kithara_stream::SourcePhaseView {
+            cancelled: self.shared.cancel.is_cancelled(),
+            past_eof: self.is_past_eof(segments, range),
+            range_ready: self.range_ready_from_segments(segments, range),
+            seeking: self.shared.timeline.is_flushing(),
+            stopped: self.shared.stopped.load(Ordering::Acquire),
+            waiting_demand,
+            waiting_metadata,
+        }
+    }
+
     #[expect(
         clippy::result_large_err,
         reason = "Stream source APIs use StreamResult<_, HlsError> consistently"

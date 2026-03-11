@@ -1043,4 +1043,112 @@ mod tests {
             "set_seek_epoch must drain pending segment requests"
         );
     }
+
+    // --- SourcePhase adapter tests ---
+
+    /// Build source for phase tests — resets `stopped` flag that
+    /// `HlsDownloader::drop` sets when the downloader half is discarded.
+    fn build_phase_test_source(num_variants: usize) -> HlsSource {
+        let source = build_test_source(num_variants);
+        source.shared.stopped.store(false, Ordering::Release);
+        source
+    }
+
+    #[kithara::test]
+    fn hls_phase_ready_when_range_ready() {
+        let source = build_phase_test_source(1);
+        push_segment(&source.shared, 0, 0, 0, 100);
+
+        // Write actual resource data so ephemeral backend reports it as present.
+        let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
+        let res = source.fetch.backend().open_resource(&key).unwrap();
+        res.write_at(0, &[0u8; 100]).unwrap();
+        res.commit(Some(100)).unwrap();
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), None, 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::Ready,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_seeking_when_flushing() {
+        let source = build_phase_test_source(1);
+        source.shared.timeline.initiate_seek(Duration::from_secs(0));
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), None, 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::Seeking,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_waiting_demand_when_pending_epoch_matches() {
+        let source = build_phase_test_source(1);
+        let seek_epoch = source.shared.timeline.seek_epoch();
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), Some(seek_epoch), 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::WaitingDemand,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_waiting_metadata_after_metadata_miss() {
+        let source = build_phase_test_source(1);
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), None, 3);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::WaitingMetadata,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_eof_when_past_effective_total() {
+        let source = build_phase_test_source(1);
+        push_segment(&source.shared, 0, 0, 0, 100);
+        source.shared.timeline.set_eof(true);
+        source.shared.timeline.set_total_bytes(Some(100));
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(200..250), None, 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::Eof,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_stopped_when_stopped_before_eof() {
+        let source = build_test_source(1);
+        source.shared.stopped.store(true, Ordering::Release);
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), None, 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::Stopped,
+        );
+    }
+
+    #[kithara::test]
+    fn hls_phase_cancelled_when_cancel_token_set() {
+        let source = build_test_source(1);
+        source.shared.cancel.cancel();
+
+        let segments = source.shared.segments.lock_sync();
+        let view = source.phase_view(&segments, &(0..50), None, 0);
+        assert_eq!(
+            kithara_stream::SourcePhase::classify(view),
+            kithara_stream::SourcePhase::Cancelled,
+        );
+    }
 }
