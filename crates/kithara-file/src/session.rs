@@ -216,6 +216,27 @@ impl FileSource {
     }
 }
 
+impl FileSource {
+    /// Derive the current source phase from local observations.
+    ///
+    /// Pure function — no side effects, no `&mut self`.
+    pub(crate) fn phase(&self, range: &Range<u64>) -> kithara_stream::SourcePhase {
+        let timeline = self.progress.timeline();
+        let past_eof = timeline
+            .total_bytes()
+            .is_some_and(|total| total > 0 && range.start >= total);
+        let range_ready = self.res.contains_range(range.clone());
+        let seeking = timeline.is_flushing();
+
+        kithara_stream::SourcePhase::classify(kithara_stream::SourcePhaseView {
+            past_eof,
+            range_ready,
+            seeking,
+            ..Default::default()
+        })
+    }
+}
+
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
@@ -227,6 +248,15 @@ impl kithara_stream::Source for FileSource {
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
         let _ = timeout;
+
+        // Fast-path via shared FSM: check for seek, EOF, or already-ready data
+        // before touching downloader state or blocking on the resource.
+        match self.phase(&range) {
+            kithara_stream::SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
+            kithara_stream::SourcePhase::Eof => return Ok(WaitOutcome::Eof),
+            kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
+            _ => {}
+        }
 
         // Update read position so downloader knows where reader needs data.
         // This prevents backpressure deadlock when symphonia seeks ahead
@@ -490,6 +520,87 @@ mod tests {
 
         // len() should return the explicit value provided at construction.
         assert_eq!(Source::len(&source), Some(12345));
+    }
+
+    // SourcePhase integration tests
+
+    #[kithara::test]
+    fn file_source_phase_ready_when_range_present() {
+        let data = b"hello world";
+        let res = create_committed_resource(data);
+        let progress = Arc::new(Progress::new(Timeline::new()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = FileSource::new(res, progress, bus);
+
+        assert_eq!(source.phase(&(0..5)), kithara_stream::SourcePhase::Ready,);
+    }
+
+    #[kithara::test]
+    fn file_source_phase_seeking_when_data_not_ready() {
+        let data = b"hello world";
+        let res = create_committed_resource(data);
+        let timeline = Timeline::new();
+        let progress = Arc::new(Progress::new(timeline.clone()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(100)); // larger than actual data
+        let source = FileSource::new(res, progress, bus);
+
+        // Initiate seek to make timeline flushing.
+        timeline.initiate_seek(Duration::from_secs(0));
+
+        // Range 50..60 is NOT present — seeking wins.
+        assert_eq!(
+            source.phase(&(50..60)),
+            kithara_stream::SourcePhase::Seeking,
+        );
+    }
+
+    #[kithara::test]
+    fn file_source_phase_ready_beats_seeking_when_data_present() {
+        let data = b"hello world";
+        let res = create_committed_resource(data);
+        let timeline = Timeline::new();
+        let progress = Arc::new(Progress::new(timeline.clone()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = FileSource::new(res, progress, bus);
+
+        // Initiate seek to make timeline flushing.
+        timeline.initiate_seek(Duration::from_secs(0));
+
+        // Data IS present — Ready wins over Seeking (allows drain).
+        assert_eq!(source.phase(&(0..5)), kithara_stream::SourcePhase::Ready,);
+    }
+
+    #[kithara::test]
+    fn file_source_phase_eof_past_known_length() {
+        let data = b"abc";
+        let res = create_committed_resource(data);
+        let progress = Arc::new(Progress::new(Timeline::new()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = FileSource::new(res, progress, bus);
+
+        assert_eq!(source.phase(&(100..110)), kithara_stream::SourcePhase::Eof,);
+    }
+
+    #[kithara::test]
+    fn file_source_wait_range_returns_interrupted_while_flushing() {
+        let data = b"hello world from kithara";
+        let res = create_committed_resource(data);
+        let timeline = Timeline::new();
+        let progress = Arc::new(Progress::new(timeline.clone()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(100)); // larger than data
+        let mut source = FileSource::new(res, progress, bus);
+
+        // Initiate seek to make timeline flushing.
+        timeline.initiate_seek(Duration::from_secs(0));
+
+        // Range 50..60 is NOT present, so Seeking phase fires (not Ready).
+        let result = Source::wait_range(&mut source, 50..60, Duration::from_secs(1));
+        assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
     }
 
     #[kithara::test]

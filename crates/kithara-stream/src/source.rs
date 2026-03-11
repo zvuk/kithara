@@ -48,7 +48,6 @@ pub enum SourcePhase {
 /// Sources populate this from their local observations (cancel tokens,
 /// timeline state, segment readiness, etc.) without holding `&mut self`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
 pub struct SourcePhaseView {
     /// Cancellation token is set.
     pub cancelled: bool,
