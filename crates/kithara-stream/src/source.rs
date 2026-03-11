@@ -16,6 +16,99 @@ use unimock::unimock;
 
 use crate::{Timeline, error::StreamResult, media::MediaInfo};
 
+/// Phase of a source's wait/read lifecycle.
+///
+/// Shared FSM core for both `FileSource` and `HlsSource`.
+/// Sources build a [`SourcePhaseView`] from their local state,
+/// then call [`SourcePhase::classify`] to derive the current phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum SourcePhase {
+    /// Cancelled — terminal, source will not produce more data.
+    Cancelled,
+    /// End of stream reached.
+    Eof,
+    /// Requested range is available for non-blocking read.
+    Ready,
+    /// Active seek in progress — decoder should be interrupted.
+    Seeking,
+    /// Stopped before EOF — terminal unless range is ready (drain).
+    Stopped,
+    /// Default: data not yet available, no specific sub-state.
+    #[default]
+    Waiting,
+    /// On-demand request already in flight for this seek epoch.
+    WaitingDemand,
+    /// Metadata lookup needed before data can be requested.
+    WaitingMetadata,
+}
+
+/// Input view for [`SourcePhase::classify`].
+///
+/// Sources populate this from their local observations (cancel tokens,
+/// timeline state, segment readiness, etc.) without holding `&mut self`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct SourcePhaseView {
+    /// Cancellation token is set.
+    pub cancelled: bool,
+    /// Read position is past the effective end of stream.
+    pub past_eof: bool,
+    /// Requested byte range is available for non-blocking read.
+    pub range_ready: bool,
+    /// Timeline is flushing (active seek).
+    pub seeking: bool,
+    /// Source has been stopped.
+    pub stopped: bool,
+    /// On-demand request already pending for this seek epoch.
+    pub waiting_demand: bool,
+    /// Metadata lookup miss — segment cannot be resolved yet.
+    pub waiting_metadata: bool,
+}
+
+impl SourcePhase {
+    /// Classify source phase from an observation view.
+    ///
+    /// Priority order (highest wins):
+    /// 1. `Cancelled` — overrides everything
+    /// 2. `Stopped` (without ready data) — `Eof` if past end, else `Stopped`
+    /// 3. `Ready` — data available, preempts seeking/eof
+    /// 4. `Seeking` — decoder interrupt
+    /// 5. `Eof` — end of stream
+    /// 6. `WaitingMetadata` — metadata miss
+    /// 7. `WaitingDemand` — on-demand in flight
+    /// 8. `Waiting` — default
+    #[must_use]
+    pub fn classify(view: SourcePhaseView) -> Self {
+        if view.cancelled {
+            return Self::Cancelled;
+        }
+        if view.stopped && !view.range_ready {
+            return if view.past_eof {
+                Self::Eof
+            } else {
+                Self::Stopped
+            };
+        }
+        if view.range_ready {
+            return Self::Ready;
+        }
+        if view.seeking {
+            return Self::Seeking;
+        }
+        if view.past_eof {
+            return Self::Eof;
+        }
+        if view.waiting_metadata {
+            return Self::WaitingMetadata;
+        }
+        if view.waiting_demand {
+            return Self::WaitingDemand;
+        }
+        Self::Waiting
+    }
+}
+
 /// Outcome of a `Source::read_at` call.
 ///
 /// Distinguishes between normal data reads (including true EOF) and
@@ -194,6 +287,150 @@ mod tests {
         // Source is not object-safe due to associated types,
         // but we can verify it compiles with concrete types
         fn _accepts_source<S: Source>(_s: S) {}
+    }
+
+    #[kithara::test]
+    fn source_phase_defaults_to_waiting() {
+        assert_eq!(SourcePhase::default(), SourcePhase::Waiting);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_prefers_cancelled() {
+        // Cancelled overrides everything, even if range is ready.
+        let view = SourcePhaseView {
+            cancelled: true,
+            range_ready: true,
+            seeking: true,
+            past_eof: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Cancelled);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_prefers_ready_over_seeking() {
+        let view = SourcePhaseView {
+            range_ready: true,
+            seeking: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_returns_waiting_demand() {
+        let view = SourcePhaseView {
+            waiting_demand: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::WaitingDemand);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_returns_waiting_metadata() {
+        let view = SourcePhaseView {
+            waiting_metadata: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::WaitingMetadata);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_returns_stopped_before_eof() {
+        // Stopped + not range_ready + not past_eof = Stopped (not Eof)
+        let view = SourcePhaseView {
+            stopped: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Stopped);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_stopped_past_eof_returns_eof() {
+        // Stopped + past_eof = Eof (graceful drain)
+        let view = SourcePhaseView {
+            stopped: true,
+            past_eof: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Eof);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_seeking_without_ready() {
+        let view = SourcePhaseView {
+            seeking: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Seeking);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_eof_without_stopped() {
+        let view = SourcePhaseView {
+            past_eof: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Eof);
+    }
+
+    // --- Priority edge tests (ordering contract) ---
+
+    #[kithara::test]
+    fn source_phase_classify_stopped_beats_seeking() {
+        let view = SourcePhaseView {
+            stopped: true,
+            seeking: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Stopped);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_seeking_beats_waiting_demand() {
+        let view = SourcePhaseView {
+            seeking: true,
+            waiting_demand: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Seeking);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_eof_beats_waiting_metadata() {
+        let view = SourcePhaseView {
+            past_eof: true,
+            waiting_metadata: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Eof);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_waiting_metadata_beats_waiting_demand() {
+        let view = SourcePhaseView {
+            waiting_metadata: true,
+            waiting_demand: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::WaitingMetadata);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_empty_view_returns_waiting() {
+        let view = SourcePhaseView::default();
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Waiting);
+    }
+
+    #[kithara::test]
+    fn source_phase_classify_stopped_with_range_ready_returns_ready() {
+        // Stopped but data is available — allow drain.
+        let view = SourcePhaseView {
+            stopped: true,
+            range_ready: true,
+            ..Default::default()
+        };
+        assert_eq!(SourcePhase::classify(view), SourcePhase::Ready);
     }
 
     #[kithara::test]
