@@ -39,7 +39,6 @@ use crate::{
 
 #[path = "source_wait_range.rs"]
 mod source_wait_range;
-use source_wait_range::{WaitRangeDecision, WaitRangeState};
 
 /// Request to load a specific segment (on-demand or sequential).
 #[derive(Debug, Clone)]
@@ -449,7 +448,8 @@ impl Source for HlsSource {
         range: Range<u64>,
         timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
-        let mut state = WaitRangeState::default();
+        let mut metadata_miss_count: usize = 0;
+        let mut on_demand_epoch: Option<u64> = None;
         let started_at = Instant::now();
 
         kithara_platform::hang_watchdog! {
@@ -457,51 +457,76 @@ impl Source for HlsSource {
             thread: "hls.wait_range";
             loop {
                 let mut segments = self.shared.segments.lock_sync();
-                let context = self.build_wait_range_context(&segments, &range);
-                state.reset_for_seek_epoch(context.seek_epoch);
+                let seek_epoch = self.shared.timeline.seek_epoch();
+
+                // Reset on-demand tracking if seek epoch changed.
+                if on_demand_epoch.is_some_and(|epoch| epoch != seek_epoch) {
+                    on_demand_epoch = None;
+                }
+
+                let view = self.phase_view(
+                    &segments, &range, on_demand_epoch, metadata_miss_count,
+                );
+                let phase = kithara_stream::SourcePhase::classify(view);
 
                 // Reset hang detector only when data covering our range is
                 // available. Do NOT reset on total growth alone — a downloader
                 // re-downloading unrelated segments (e.g. segment 0 in a loop)
                 // must not mask a hang where the *needed* segment is missing.
-                if context.range_ready {
+                if view.range_ready {
                     hang_reset!();
                 }
 
-                match self.decide_wait_range(&range, &context) {
-                    WaitRangeDecision::Cancelled => {
+                match phase {
+                    kithara_stream::SourcePhase::Cancelled
+                    | kithara_stream::SourcePhase::Stopped => {
                         return Err(StreamError::Source(HlsError::Cancelled));
                     }
-                    WaitRangeDecision::Continue => {
+                    kithara_stream::SourcePhase::Eof => {
+                        debug!(range_start = range.start, "wait_range: EOF");
+                        return Ok(WaitOutcome::Eof);
+                    }
+                    kithara_stream::SourcePhase::Seeking => {
+                        return Ok(WaitOutcome::Interrupted);
+                    }
+                    kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
+                    kithara_stream::SourcePhase::Waiting
+                    | kithara_stream::SourcePhase::WaitingDemand
+                    | kithara_stream::SourcePhase::WaitingMetadata
+                    | _ => {
                         debug!(
                             range_start = range.start,
                             range_end = range.end,
-                            eof = context.eof,
-                            total = context.total,
-                            expected_total = context.expected_total,
-                            num_entries = context.num_entries,
-                            range_ready = context.range_ready,
-                            "wait_range: spinning (condition not met)"
+                            ?phase,
+                            "wait_range: spinning"
                         );
                     }
-                    WaitRangeDecision::Eof => return Ok(WaitOutcome::Eof),
-                    WaitRangeDecision::Interrupted => return Ok(WaitOutcome::Interrupted),
-                    WaitRangeDecision::Ready => return Ok(WaitOutcome::Ready),
                 }
 
-                if context.eof && !context.range_ready {
-                    state.clear_on_demand_requested();
+                if self.shared.timeline.eof() && !view.range_ready {
+                    on_demand_epoch = None;
                 }
 
                 // A midstream variant switch drains all segment_requests.
-                // Clear `on_demand_pending` so we can re-push for the new variant.
-                // Use swap to consume the flag — prevents duplicate re-pushes.
+                // Clear on-demand tracking so we can re-push for the new variant.
                 if self.shared.had_midstream_switch.swap(false, Ordering::AcqRel) {
-                    state.clear_on_demand_requested();
+                    on_demand_epoch = None;
                 }
 
                 drop(segments);
-                self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
+
+                // Request on-demand segment if not already pending.
+                if on_demand_epoch.is_none_or(|epoch| epoch != seek_epoch) {
+                    let requested = self.request_on_demand_segment(
+                        range.start,
+                        seek_epoch,
+                        &mut metadata_miss_count,
+                        WAIT_RANGE_MAX_METADATA_MISS_SPINS,
+                    )?;
+                    if requested {
+                        on_demand_epoch = Some(seek_epoch);
+                    }
+                }
 
                 // Honour the overall time budget.  Placed after decision logic
                 // and on-demand requests so that errors (e.g. SegmentNotFound)
@@ -981,10 +1006,10 @@ mod tests {
     async fn on_demand_request_notifies_downloader_once() {
         let source = build_test_source(1);
         let wake = source.shared.reader_advanced.notified();
-        let mut state = WaitRangeState::default();
+        let mut miss_count = 0;
 
         source
-            .request_on_demand_if_needed(0, 7, &mut state)
+            .request_on_demand_segment(0, 7, &mut miss_count, 5)
             .expect("request should succeed");
 
         let req = source
@@ -999,27 +1024,6 @@ mod tests {
         timeout(TokioDuration::from_millis(10), wake)
             .await
             .expect("initial on-demand request must wake downloader");
-    }
-
-    #[kithara::test(tokio)]
-    async fn pending_on_demand_request_does_not_rewake_downloader() {
-        let source = build_test_source(1);
-        let wake = source.shared.reader_advanced.notified();
-        let mut state = WaitRangeState::default();
-        state.mark_on_demand_requested(7);
-
-        source
-            .request_on_demand_if_needed(0, 7, &mut state)
-            .expect("pending request check should succeed");
-
-        assert!(
-            source.shared.segment_requests.pop().is_none(),
-            "pending request must not enqueue a duplicate segment"
-        );
-        assert!(
-            timeout(TokioDuration::from_millis(10), wake).await.is_err(),
-            "pending request must not re-wake downloader without new work"
-        );
     }
 
     #[kithara::test]

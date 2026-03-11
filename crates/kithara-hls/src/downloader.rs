@@ -2384,9 +2384,9 @@ mod tests {
     /// flag and notifies condvar so the reader can re-push drained requests.
     ///
     /// Before the fix, `handle_midstream_switch` drained all segment requests
-    /// without waking the reader. The reader's `WaitRangeState` still believed
-    /// its request was pending (`on_demand_pending = true`) and would never
-    /// re-push, causing a deadlock.
+    /// without waking the reader. The reader's on-demand epoch tracking still
+    /// believed its request was pending and would never re-push, causing a
+    /// deadlock.
     ///
     /// The fix adds `condvar.notify_all()` after draining and checks
     /// `had_midstream_switch` in `wait_range` to clear the pending flag,
