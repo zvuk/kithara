@@ -58,6 +58,16 @@ crates/kithara-wasm/dist
 .claude/*.md
 .claude-octopus
 .claude/debates
+.claude/commands/
+.claude/skills/
+
+# OpenSpec / AI tool configs
+.codex/
+.gemini/
+.opencode/
+.github/prompts/
+.github/skills/
+openspec/
 crates/kithara-wasm/pkg
 
 # Swift / Xcode
