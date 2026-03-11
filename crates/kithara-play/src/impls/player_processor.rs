@@ -160,6 +160,10 @@ impl PlayerNodeProcessor {
 
         self.evict_tracks_if_needed();
 
+        if let Ok(res) = resource.try_lock() {
+            res.set_host_sample_rate(self.sample_rate);
+        }
+
         let track = PlayerTrack::new(
             resource,
             Arc::clone(&src),
@@ -481,7 +485,10 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc as TestArc, Mutex};
+    use std::sync::{
+        Arc as TestArc, Mutex,
+        atomic::{AtomicU32, Ordering as AtomicOrdering},
+    };
 
     use kithara_audio::{DecodeResult, PcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
@@ -514,6 +521,104 @@ mod tests {
         let processor =
             PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
         (processor, tx)
+    }
+
+    /// Reader that records the last `host_sample_rate` set via `set_host_sample_rate`.
+    struct SampleRateTrackingReader {
+        spec: PcmSpec,
+        meta: TrackMetadata,
+        events_tx: broadcast::Sender<AudioEvent>,
+        recorded_host_rate: TestArc<AtomicU32>,
+    }
+
+    impl SampleRateTrackingReader {
+        fn new(spec: PcmSpec) -> (Self, TestArc<AtomicU32>) {
+            let (events_tx, _) = broadcast::channel(1);
+            let recorded = TestArc::new(AtomicU32::new(0));
+            let reader = Self {
+                spec,
+                meta: TrackMetadata::default(),
+                events_tx,
+                recorded_host_rate: TestArc::clone(&recorded),
+            };
+            (reader, recorded)
+        }
+    }
+
+    impl PcmReader for SampleRateTrackingReader {
+        fn read(&mut self, _buf: &mut [f32]) -> usize {
+            0
+        }
+
+        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
+            0
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            false
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
+            self.events_tx.subscribe()
+        }
+
+        fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+            self.recorded_host_rate
+                .store(sample_rate.get(), AtomicOrdering::Relaxed);
+        }
+    }
+
+    #[kithara::test(tokio)]
+    async fn load_track_propagates_host_sample_rate() {
+        let host_rate = 88_200u32;
+
+        let (reader, recorded) = SampleRateTrackingReader::new(PcmSpec {
+            channels: 2,
+            sample_rate: 44_100,
+        });
+
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            kithara_bufpool::pcm_pool(),
+        )));
+
+        let shared_state = make_shared_state();
+        let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
+        let sample_rate = NonZeroU32::new(host_rate).expect("non-zero");
+        let mut processor =
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
+
+        let mut tx = tx;
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            src: Arc::from("track.mp3"),
+        })
+        .ok();
+        processor.drain_commands();
+
+        assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
     }
 
     #[kithara::test]
