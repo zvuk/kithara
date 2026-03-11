@@ -1148,8 +1148,8 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(Duration::from_secs(8)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     let cancel = CancellationToken::new();
@@ -1158,7 +1158,7 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -1193,7 +1193,7 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
 }
 
-#[kithara::test(tokio, browser)]
+#[kithara::test(tokio, browser, env(KITHARA_HANG_TIMEOUT_SECS = "3"))]
 async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1202,7 +1202,7 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -1237,13 +1237,14 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
 }
 
-/// Hang detector must fire when waited range has no loaded segments,
-/// even if total grows from entries at other offsets.
+/// Budget check must return `Err(Timeout)` when waited range has no loaded
+/// segments, even if total grows from entries at other offsets.
 ///
-/// Scenario: reader waits for offset 2500 (beyond all loaded data).
-/// Background task pushes entries at 0..100, 100..200, ... every 200ms.
-/// `range_ready=false` throughout (no entry covers offset 2500).
-/// Expected: hang detector panics after 10s timeout.
+/// Scenario: reader waits for offset 100..200 (beyond all loaded data).
+/// Background task pushes entries at 10000+ that do NOT cover the waited
+/// range.  `range_ready=false` throughout.
+/// Expected: budget check returns `Err(HlsError::Timeout)` after the
+/// wait_range timeout expires.
 #[kithara::test(
     tokio,
     browser,
@@ -1251,7 +1252,7 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
+async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
@@ -1282,28 +1283,29 @@ async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
 
     // wait_range for offset 100..200 — no entries cover this range.
     // Background entries are at 10000+. total grows but range stays unready.
-    // Expected: hang detector fires after 10s.
-    let mut handle = Box::pin(spawn_blocking(move || {
-        source.wait_range(100..200, Duration::from_secs(30))
-    }));
+    // Budget check returns Err(Timeout) after 3s.
+    let handle = spawn_blocking(move || {
+        source.wait_range(100..200, Duration::from_secs(3))
+    });
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let result = handle.as_mut().await;
+        let result = timeout(Duration::from_secs(10), handle)
+            .await
+            .expect("test must not time out")
+            .expect("wait_range task should not panic");
 
         cancel.cancel();
         let _ = timeout(Duration::from_secs(1), bg).await;
 
-        // BlockingError means the spawned thread panicked (hang detector fired).
-        // Ok(result) means wait_range returned normally — unexpected.
+        // Budget check returns Err(Timeout) because range is never ready.
         match result {
-            Err(_blocking_error) => {
-                // HangDetector panic was caught by spawn_blocking.
-                // This is the expected outcome — the detector fired.
+            Err(StreamError::Source(HlsError::Timeout(_))) => {
+                // Expected: budget exceeded.
             }
-            Ok(inner) => {
+            other => {
                 panic!(
-                    "wait_range should not return normally when range is never ready: {inner:?}"
+                    "wait_range should return Err(Timeout) when range is never ready: {other:?}"
                 );
             }
         }
@@ -1311,22 +1313,19 @@ async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
 
     #[cfg(target_arch = "wasm32")]
     {
-        assert!(
-            timeout(Duration::from_secs(2), handle.as_mut())
-                .await
-                .is_err(),
-            "wait_range must stay blocked when unrelated segment data grows total"
-        );
-
+        // On WASM, wait_range runs synchronously on the current thread,
+        // so we just check that it eventually returns an error or blocks
+        // until cancellation.
         cancel.cancel();
-        let result = timeout(Duration::from_secs(2), handle.as_mut())
+        shared.condvar.notify_all();
+        let result = timeout(Duration::from_secs(5), handle)
             .await
-            .expect("wait_range should exit after cancellation")
+            .expect("test must not time out")
             .expect("wait_range task should not panic");
-        assert!(matches!(
-            result,
-            Err(StreamError::Source(HlsError::Cancelled)) | Ok(WaitOutcome::Interrupted)
-        ));
+        assert!(
+            result.is_err(),
+            "wait_range should return error when range is never ready: {result:?}"
+        );
 
         let _ = timeout(Duration::from_secs(1), bg).await;
     }

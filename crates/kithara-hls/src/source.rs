@@ -447,11 +447,13 @@ impl Source for HlsSource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
         let mut state = WaitRangeState::default();
+        let started_at = Instant::now();
 
         kithara_platform::hang_watchdog! {
+            timeout: timeout;
             thread: "hls.wait_range";
             loop {
                 let mut segments = self.shared.segments.lock_sync();
@@ -500,6 +502,19 @@ impl Source for HlsSource {
 
                 drop(segments);
                 self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
+
+                // Honour the overall time budget.  Placed after decision logic
+                // and on-demand requests so that errors (e.g. SegmentNotFound)
+                // always take priority over the timeout fallback.
+                if started_at.elapsed() > timeout {
+                    return Err(StreamError::Source(HlsError::Timeout(format!(
+                        "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={timeout:?}",
+                        range.start,
+                        range.end,
+                        started_at.elapsed(),
+                    ))));
+                }
+
                 segments = self.shared.segments.lock_sync();
 
                 hang_tick!();
@@ -657,12 +672,14 @@ impl Source for HlsSource {
 
     fn notify_waiting(&self) {
         self.shared.condvar.notify_all();
+        self.shared.reader_advanced.notify_one();
     }
 
     fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
         let shared = Arc::clone(&self.shared);
         Some(Box::new(move || {
             shared.condvar.notify_all();
+            shared.reader_advanced.notify_one();
         }))
     }
 
@@ -704,7 +721,27 @@ impl Source for HlsSource {
             return true;
         }
         let segments = self.shared.segments.lock_sync();
-        self.range_ready_from_segments(&segments, &range)
+        if self.range_ready_from_segments(&segments, &range) {
+            return true;
+        }
+
+        // Ephemeral eviction: the segment is committed but its resource was
+        // evicted from the LRU cache.  The worker calls is_range_ready()
+        // *before* fetch_next(), so if we just return false, the worker never
+        // enters wait_range → no demand request is ever sent → deadlock.
+        // Push a demand here so the downloader re-fetches the segment while
+        // the worker waits for the next is_ready() poll.
+        if self.fetch.backend().is_ephemeral()
+            && let Some(seg) = segments.find_at_offset(range.start)
+        {
+            let variant = seg.variant;
+            let segment_index = seg.segment_index;
+            let seek_epoch = self.shared.timeline.seek_epoch();
+            drop(segments);
+            self.push_segment_request(variant, segment_index, seek_epoch);
+        }
+
+        false
     }
 
     fn timeline(&self) -> Timeline {

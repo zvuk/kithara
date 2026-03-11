@@ -382,7 +382,6 @@ impl<S> Audio<S> {
         // 1. Atomic write to Timeline — FLUSH_START
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
-
         // 2. Update local consumer state
         self.validator.epoch = epoch;
         self.current_chunk = None;
@@ -492,16 +491,10 @@ impl<S> Audio<S> {
 
     fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> ChunkOutcome {
         if !self.validator.is_valid(&fetch) {
-            trace!(
-                chunk_epoch = fetch.epoch(),
-                current_epoch = self.validator.epoch,
-                "skipping stale chunk"
-            );
             return ChunkOutcome::Continue;
         }
 
         if fetch.is_eof() {
-            debug!(epoch = fetch.epoch(), "Audio: received EOF");
             self.eof = true;
             return ChunkOutcome::Return(None);
         }
@@ -516,7 +509,6 @@ impl<S> Audio<S> {
     }
 
     fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
-        debug!("Audio: channel closed (EOF)");
         self.eof = true;
         None
     }

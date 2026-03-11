@@ -45,7 +45,7 @@ pub struct Backend {
     cancel: CancellationToken,
 
     /// Worker thread handle (joined on drop after cancellation).
-    _worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Backend {
@@ -88,7 +88,7 @@ impl Backend {
         };
 
         #[cfg(target_arch = "wasm32")]
-        let _worker = {
+        let worker = {
             // On WASM, spawn the downloader as an async task on the current
             // Worker's tokio runtime instead of creating a dedicated Web Worker.
             // The engine command worker already has a tokio runtime; downloads
@@ -98,11 +98,11 @@ impl Backend {
         };
 
         #[cfg(not(target_arch = "wasm32"))]
-        let _worker = Some(worker);
+        let worker = Some(worker);
 
         Self {
             cancel: child_cancel,
-            _worker,
+            worker,
         }
     }
 
@@ -118,15 +118,24 @@ impl Backend {
                     return;
                 }
 
-                let mut made_progress = match Self::wait_while_throttled(&mut dl, &cancel).await {
-                    Ok(value) => value,
-                    Err(()) => return,
+                // Drain demand BEFORE throttle check: a demand request may
+                // reset the download cursor (reset_for_seek_epoch), which
+                // relieves segment-based throttle pressure. Without this,
+                // handle_idle can consume the Notify permit, and the
+                // subsequent wait_while_throttled blocks forever because
+                // the demand (still in the queue) would have un-throttled
+                // the downloader.
+                let Ok(mut made_progress) =
+                    Self::drain_demand_requests(&mut dl, &cancel).await
+                else {
+                    return;
                 };
-                let demand_progress = match Self::drain_demand_requests(&mut dl, &cancel).await {
-                    Ok(value) => value,
-                    Err(()) => return,
+                let Ok(throttle_progress) =
+                    Self::wait_while_throttled(&mut dl, &cancel).await
+                else {
+                    return;
                 };
-                made_progress |= demand_progress;
+                made_progress |= throttle_progress;
 
                 hang_tick!();
                 kithara_platform::thread::yield_now();
@@ -185,6 +194,25 @@ impl Backend {
     ) -> Result<bool, ()> {
         let mut made_progress = false;
         while dl.should_throttle() {
+            // Check demand BEFORE blocking: a demand request may have arrived
+            // between drain_demand_requests() and entering this loop, or
+            // between the previous wait_ready() wake and re-checking throttle.
+            // Processing it can reset the download cursor and relieve throttle.
+            if let Some(plan) = Self::try_poll_demand(dl, cancel).await
+                && Self::fetch_and_commit_demand(dl, plan, cancel)
+                    .await
+                    .map(|progress| {
+                        made_progress |= progress;
+                    })
+                    .is_err()
+            {
+                return Err(());
+            }
+            // Demand processing may have relieved throttle — recheck.
+            if !dl.should_throttle() {
+                break;
+            }
+
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
@@ -248,7 +276,11 @@ impl Backend {
             () = dl.wait_for_work() => {
                 // Yield to let other tasks run (e.g. TUI updates).
                 tokio::task::yield_now().await;
-                LoopControl::Continue { made_progress: false }
+                // Completing an idle wait is forward progress: the downloader
+                // successfully blocked until woken.  Without this the hang
+                // detector fires on legitimate post-download idle (all
+                // segments cached, reader still consuming).
+                LoopControl::Continue { made_progress: true }
             }
         }
     }
@@ -384,6 +416,13 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.cancel.cancel();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            debug!("Downloader worker panicked during shutdown");
+        }
     }
 }
 
@@ -568,7 +607,7 @@ mod tests {
         timeout(Duration::from_secs(3)),
         env(KITHARA_HANG_TIMEOUT_SECS = "1")
     )]
-    async fn idle_wakeups_without_commits_trigger_hang_detector() {
+    async fn idle_wakeups_without_commits_do_not_trigger_hang_detector() {
         let wake_notify = Arc::new(Notify::new());
         let downloader = IdleWakeDownloader {
             io: MockIo {
@@ -589,13 +628,14 @@ mod tests {
         });
         let handle = tokio::spawn(Backend::run_downloader(downloader, cancel.clone()));
 
-        let join = tokio::time::timeout(Duration::from_secs(2), handle)
-            .await
-            .expect("downloader should fail fast instead of looping forever");
+        // Idle wakeups with successful wait_for_work() count as progress,
+        // so the hang detector must NOT fire.  Let it run for 1.5× the
+        // timeout and verify it stays alive.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!handle.is_finished(), "downloader should stay alive during idle wakeups");
+
         cancel.cancel();
         wake_task.abort();
-
-        let err = join.expect_err("downloader must panic via hang detector");
-        assert!(err.is_panic(), "expected hang detector panic, got: {err}");
+        let _ = handle.await;
     }
 }

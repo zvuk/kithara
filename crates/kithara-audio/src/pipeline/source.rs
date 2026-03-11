@@ -93,6 +93,13 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock_sync().is_range_ready(range)
     }
 
+    /// Wake blocked `wait_range()` calls and downstream waiters.
+    ///
+    /// Safe to call outside of `read()`; briefly takes the inner mutex.
+    fn notify_waiting(&self) {
+        self.inner.lock_sync().notify_waiting();
+    }
+
     /// Create a lock-free callback for waking blocked `wait_range()`.
     ///
     /// Called once during `Audio::new()` (before the worker starts),
@@ -1152,10 +1159,16 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         let pos = self.shared_stream.position();
         // For HLS: check current segment range; for File: check next chunk-size bytes.
         // 32KB fallback matches Symphonia's MediaSourceStream buffer size.
+        // Clamp to known stream length so a position near EOF doesn't
+        // produce a range past the end (which is_range_ready rejects).
         let check_end = self
             .shared_stream
             .current_segment_range()
             .map_or_else(|| pos.saturating_add(32 * 1024), |seg| seg.end);
+        let check_end = self
+            .shared_stream
+            .len()
+            .map_or(check_end, |len| check_end.min(len));
         self.shared_stream.is_range_ready(pos..check_end)
     }
 
@@ -1212,6 +1225,13 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         // alignment. Decoder alignment may read from the stream via
         // wait_range, which needs flushing to be cleared.
         self.timeline.complete_seek(epoch);
+
+        // Wake the downloader so it can process the segment request now
+        // that flushing is cleared. Without this, the downloader may
+        // sleep indefinitely: it saw is_flushing()=true when it woke
+        // from the earlier notification, went back to wait_for_work(),
+        // and nobody wakes it after complete_seek clears the flag.
+        self.shared_stream.notify_waiting();
 
         let applied = match anchor_result {
             Ok(Some(anchor)) => self.apply_anchor_seek_with_fallback(epoch, position, anchor),

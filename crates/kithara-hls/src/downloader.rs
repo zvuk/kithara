@@ -928,6 +928,20 @@ impl HlsDownloader {
             return false;
         }
 
+        // Ephemeral backends can evict resources between this check and the
+        // reader's actual read_at(). Always re-download on demand to ensure
+        // the resource is fresh at the top of the LRU cache, preventing
+        // near-term eviction by subsequent batch downloads.
+        if self.fetch.backend().is_ephemeral() {
+            debug!(
+                variant,
+                segment_index,
+                reason = "ephemeral: force re-download to refresh LRU position",
+                "demand segment re-download"
+            );
+            return false;
+        }
+
         debug!(
             variant,
             segment_index,
@@ -2503,10 +2517,12 @@ mod tests {
             });
         }
 
-        // Segment is loaded (metadata present)
+        // Ephemeral backends always force re-download to keep the LRU
+        // position fresh, so segment_loaded_for_demand returns false even
+        // when resources are available.
         assert!(
-            downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
-            "segment must be loaded before eviction"
+            !downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
+            "ephemeral must force re-download even when resources are present"
         );
 
         // Open enough other resources to evict init from LRU cache

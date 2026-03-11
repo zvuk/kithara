@@ -34,6 +34,9 @@ pub enum HlsError {
 
     #[error("Cancelled")]
     Cancelled,
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;

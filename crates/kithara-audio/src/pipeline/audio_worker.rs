@@ -18,7 +18,7 @@ use kithara_platform::{
 use kithara_stream::Fetch;
 use ringbuf::{
     HeapCons, HeapProd,
-    traits::{Consumer, Observer, Producer},
+    traits::{Consumer, Producer},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
@@ -193,10 +193,13 @@ impl TrackSlot {
 
         // Phase dispatch.
         match self.phase {
-            TrackPhase::Failed => return StepResult::NoProgress,
+            TrackPhase::Failed => {
+                return StepResult::NoProgress;
+            }
             TrackPhase::AtEof => {
-                if self.source.timeline().is_seek_pending() || self.source.timeline().is_flushing()
-                {
+                let sp = self.source.timeline().is_seek_pending();
+                let fl = self.source.timeline().is_flushing();
+                if sp || fl {
                     self.pending_fetch = None;
                     self.phase = TrackPhase::PendingReset;
                     return StepResult::Progress;
@@ -204,7 +207,8 @@ impl TrackSlot {
                 return StepResult::NoProgress;
             }
             TrackPhase::PendingReset => {
-                if self.source.is_ready() {
+                let ready = self.source.is_ready();
+                if ready {
                     if self.source.apply_pending_seek() {
                         self.phase = TrackPhase::Decoding;
                     }
@@ -236,8 +240,9 @@ impl TrackSlot {
             }
         }
 
-        // Check readiness + ringbuf space before decode.
-        if !self.source.is_ready() || self.data_tx.is_full() {
+        // Check readiness before decode. Ringbuf backpressure is handled
+        // by try_push → pending_fetch below (avoids stale CachingProd cache).
+        if !self.source.is_ready() {
             return StepResult::NoProgress;
         }
 
@@ -333,6 +338,13 @@ fn run_shared_worker_loop(
                         warn!(track_id = slot.track_id, "shared worker: track panicked");
                         slot.phase = TrackPhase::Failed;
                         slot.complete_preload();
+                        // Push EOF so the consumer stops waiting for chunks.
+                        let epoch = slot.source.timeline().seek_epoch();
+                        let _ = slot.data_tx.try_push(Fetch::new(
+                            PcmChunk::default(),
+                            true,
+                            epoch,
+                        ));
                     }
                 }
             }
@@ -354,7 +366,22 @@ fn run_shared_worker_loop(
                 hang_reset!();
                 wake.wait_timeout(EMPTY_TIMEOUT);
             } else {
-                hang_tick!();
+                // Terminal phases (AtEof/Failed) are legitimately idle:
+                // they wait for an external event (seek command). Reset the
+                // watchdog so it doesn't fire during normal inter-seek gaps.
+                //
+                // Non-terminal phases (Decoding/PendingReset) that report
+                // no progress should tick the watchdog: if the source stays
+                // "not ready" because the downloader is also stalled, the
+                // watchdog will fire after the configured timeout.
+                let all_terminal = tracks.iter().all(|s| {
+                    matches!(s.phase, TrackPhase::AtEof | TrackPhase::Failed)
+                });
+                if all_terminal {
+                    hang_reset!();
+                } else {
+                    hang_tick!();
+                }
                 wake.wait_timeout(IDLE_TIMEOUT);
             }
         }
