@@ -3,6 +3,10 @@
 //! Replaces `#[test]`, `#[tokio::test]`, `#[multiplatform_test]`, `#[rstest]`,
 //! and `#[timeout]` with a single attribute.
 //!
+#![expect(
+    clippy::needless_pass_by_value, // proc_macro parse_macro_input! produces owned values
+    clippy::option_if_let_else      // match is more readable for format_ident! case names
+)]
 //! Also provides `#[kithara::fixture]` as a no-op marker (replaces `#[rstest::fixture]`).
 
 use proc_macro::TokenStream;
@@ -32,7 +36,7 @@ struct TestArgs {
 
 impl Parse for TestArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut args = TestArgs {
+        let mut args = Self {
             is_tokio: false,
             is_wasm_only: false,
             is_native_only: false,
@@ -333,7 +337,6 @@ fn make_selenium_attrs(args: &TestArgs) -> TokenStream2 {
 ///
 /// This avoids depending on `#[tokio::test]` so consumer crates do not need
 /// `tokio` as a direct dependency.
-#[allow(clippy::too_many_arguments)]
 fn emit_async_runtime_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
@@ -468,7 +471,6 @@ fn wrap_with_timeout(
 /// 5. Calls `runtime.shutdown_timeout(100ms)` — never blocks on zombies.
 /// 6. The watchdog Drop guard fires **after** `shutdown_timeout`, so it only
 ///    aborts if even the forced shutdown is stuck.
-#[allow(clippy::too_many_arguments)]
 fn emit_async_timeout_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
@@ -769,7 +771,7 @@ fn finalize_body(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn emit_one_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
@@ -846,7 +848,7 @@ fn emit_one_test(
 
 /// Emit a single browser test pair: WASM side (with `tokio::ensure_thread_pool`) and
 /// optional native side. Returns one or two `#[cfg]`-gated functions.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn emit_browser_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
@@ -968,7 +970,7 @@ fn emit_browser_test(
 ///
 /// Uses `tokio::runtime::Builder::new_multi_thread().worker_threads(2)` instead
 /// of `new_current_thread()`.  Required when the test body spawns tasks that
-/// need a multi-threaded executor (e.g. `thirtyfour` WebDriver).
+/// need a multi-threaded executor (e.g. `thirtyfour` `WebDriver`).
 ///
 /// ## `selenium`
 ///
