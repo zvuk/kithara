@@ -65,9 +65,13 @@ impl From<ReqwestError> for NetError {
         if e.is_timeout() {
             return Self::Timeout;
         }
-        // Use alternate formatting {:#} to include the full error chain
-        // (e.g. "error sending request … : connection refused")
-        Self::Http(format!("{e:#}"))
+        let mut msg = e.to_string();
+        let mut current: &dyn std::error::Error = &e;
+        while let Some(source) = current.source() {
+            msg += &format!(": {source}");
+            current = source;
+        }
+        Self::Http(msg)
     }
 }
 

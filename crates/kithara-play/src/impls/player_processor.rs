@@ -162,6 +162,10 @@ impl PlayerNodeProcessor {
 
         self.evict_tracks_if_needed();
 
+        if let Ok(res) = resource.try_lock() {
+            res.set_host_sample_rate(self.sample_rate);
+        }
+
         let track = PlayerTrack::new(
             resource,
             Arc::clone(&src),

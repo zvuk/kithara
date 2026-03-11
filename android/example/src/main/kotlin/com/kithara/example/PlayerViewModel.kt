@@ -35,6 +35,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     private var localError: String? = null
     private var player: KitharaPlayer
     private var playerJob: Job? = null
+    private var itemJob: Job? = null
     private var sourceUrl: String? = null
 
     init {
@@ -132,9 +133,21 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
 
     override fun onCleared() {
         super.onCleared()
+        itemJob?.cancel()
         playerJob?.cancel()
         player.pause()
         player.removeAllItems()
+    }
+
+    private fun observeItem(item: KitharaPlayerItem) {
+        itemJob?.cancel()
+        itemJob = viewModelScope.launch {
+            item.state.collectLatest { state ->
+                val error = state.error ?: return@collectLatest
+                Log.e(TAG, "Item error for source: $sourceUrl — ${error.message}")
+                setPlaybackError(error)
+            }
+        }
     }
 
     private fun observePlayer() {
@@ -180,6 +193,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         }
 
         val item = KitharaPlayerItem(source)
+        observeItem(item)
         item.load()
         player.removeAllItems()
         player.insert(item)
@@ -187,6 +201,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     private fun resetPlayer() {
+        itemJob?.cancel()
         player.pause()
         player.removeAllItems()
     }

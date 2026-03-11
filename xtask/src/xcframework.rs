@@ -63,6 +63,8 @@ pub(crate) fn run(profile: crate::BuildProfile) -> Result<()> {
         "-y",
     ]);
     cmd.current_dir(&crate_dir);
+    // Match the deployment target declared in project.yml / Package.swift.
+    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", "16.0");
 
     let status = cmd.status().context("failed to run cargo swift package")?;
     if !status.success() {
