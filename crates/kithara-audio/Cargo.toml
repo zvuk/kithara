@@ -22,7 +22,6 @@ biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
-fallible-iterator = { workspace = true }
 tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 rodio = { workspace = true, optional = true }

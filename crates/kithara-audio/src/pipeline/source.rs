@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::Mutex;
@@ -1054,12 +1053,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
-    type Item = PcmChunk;
-    type Error = DecodeError;
-
+impl<T: StreamType> StreamAudioSource<T> {
+    /// Core decode loop — produces one PCM chunk or signals EOF/error.
+    ///
+    /// Replaces the old `FallibleIterator::next` implementation.
+    /// Called from `decode_one_fetch` to drive the decoder.
     #[kithara_hang_detector::hang_watchdog]
-    fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn decode_next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             hang_tick!();
             kithara_platform::thread::yield_now();
@@ -1138,7 +1138,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         )
     }
 
-    /// Decode one chunk using the `FallibleIterator` decode loop.
+    /// Decode one chunk using the decode loop.
     ///
     /// Returns a `Fetch` with `is_eof=true` on EOF/error, `is_eof=false`
     /// with an empty chunk on seek interruption, or a valid chunk on success.
@@ -1150,7 +1150,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
-        match FallibleIterator::next(self) {
+        match self.decode_next_chunk() {
             Ok(Some(chunk)) => {
                 if self.pending_decode_started_epoch == Some(current_epoch) {
                     let segment_range = self.shared_stream.current_segment_range();
