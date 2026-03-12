@@ -144,7 +144,7 @@ pub mod source {
 
     #[must_use]
     pub fn current_base_offset<T: StreamType>(source: &StreamAudioSource<T>) -> u64 {
-        source.0.base_offset
+        source.0.session.base_offset
     }
 
     pub fn fetch_next<T: StreamType>(source: &mut StreamAudioSource<T>) -> Fetch<PcmChunk> {
@@ -161,14 +161,14 @@ pub mod source {
     }
 
     pub fn set_base_offset<T: StreamType>(source: &mut StreamAudioSource<T>, base_offset: u64) {
-        source.0.base_offset = base_offset;
+        source.0.session.base_offset = base_offset;
     }
 
     pub fn set_cached_media_info<T: StreamType>(
         source: &mut StreamAudioSource<T>,
         media_info: Option<MediaInfo>,
     ) {
-        source.0.cached_media_info = media_info;
+        source.0.session.media_info = media_info;
     }
 
     pub fn set_seek_recover_state<T: StreamType>(
@@ -178,7 +178,7 @@ pub mod source {
         target: Option<(u64, Duration)>,
         attempts: u8,
     ) {
-        source.0.base_offset = base_offset;
+        source.0.session.base_offset = base_offset;
         source.0.pending_decode_started_epoch = decode_started_epoch;
         source.0.pending_seek_recover_target = target;
         source.0.pending_seek_recover_attempts = attempts;

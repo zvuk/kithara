@@ -20,8 +20,9 @@ use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Tim
 use tracing::{debug, trace, warn};
 
 use crate::{
-    pipeline::worker::{
-        AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects,
+    pipeline::{
+        track_fsm::DecoderSession,
+        worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
     },
     traits::AudioEffect,
 };
@@ -197,9 +198,9 @@ pub(crate) type DecoderFactory<T> =
 /// At that point, we seek to the segment boundary and recreate the decoder.
 pub(crate) struct StreamAudioSource<T: StreamType> {
     shared_stream: SharedStream<T>,
-    decoder: Box<dyn InnerDecoder>,
+    /// Decoder + `base_offset` + `media_info` as an atomic unit.
+    pub(crate) session: DecoderSession,
     decoder_factory: DecoderFactory<T>,
-    pub(crate) cached_media_info: Option<MediaInfo>,
     /// Pending format change: (new `MediaInfo`, byte offset where new segment starts).
     pub(crate) pending_format_change: Option<(MediaInfo, u64)>,
     epoch: Arc<AtomicU64>,
@@ -208,10 +209,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     last_spec: Option<PcmSpec>,
     emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
     effects: Vec<Box<dyn AudioEffect>>,
-    /// Base offset of current decoder in the virtual stream.
-    /// Used to adjust `update_byte_len` after ABR variant switch:
-    /// symphonia sees `total_len - base_offset` as byte length.
-    pub(crate) base_offset: u64,
     pub(crate) pending_decode_started_epoch: Option<u64>,
     pending_seek_skip: Option<(u64, Duration)>,
     pub(crate) pending_seek_recover_target: Option<(u64, Duration)>,
@@ -232,11 +229,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let timeline = shared_stream.timeline();
+        let session = DecoderSession {
+            base_offset: 0,
+            decoder,
+            media_info: initial_media_info,
+        };
         Self {
             shared_stream,
-            decoder,
+            session,
             decoder_factory,
-            cached_media_info: initial_media_info,
             pending_format_change: None,
             epoch,
             chunks_decoded: 0,
@@ -244,7 +245,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             last_spec: None,
             emit: None,
             effects,
-            base_offset: 0,
             pending_decode_started_epoch: None,
             pending_seek_skip: None,
             pending_seek_recover_target: None,
@@ -272,7 +272,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             return;
         };
         let codec_changed = self
-            .cached_media_info
+            .session
+            .media_info
             .as_ref()
             .is_some_and(|cached| cached.codec != current_info.codec);
         if !codec_changed {
@@ -292,7 +293,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             let remaining_bytes = seg_range.start.saturating_sub(current_pos);
 
             debug!(
-                old = ?self.cached_media_info,
+                old = ?self.session.media_info,
                 new = ?current_info,
                 current_pos,
                 new_segment_start = seg_range.start,
@@ -409,7 +410,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<()> {
-        match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(position))) {
+        match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
             Ok(result) => result,
             Err(payload) => Err(DecodeError::InvalidData(format!(
                 "decoder panic during seek: {}",
@@ -419,7 +420,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn decoder_next_chunk_safe(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
+        match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
             Ok(result) => result,
             Err(payload) => Err(DecodeError::InvalidData(format!(
                 "decoder panic during next_chunk: {}",
@@ -464,22 +465,30 @@ impl<T: StreamType> StreamAudioSource<T> {
     ///
     /// The factory handles `OffsetReader` creation and decoder instantiation.
     /// Returns true if decoder was recreated successfully.
+    /// Recreate decoder with new `MediaInfo` via factory.
+    ///
+    /// On success, updates `session` atomically — all three fields
+    /// (`decoder`, `base_offset`, `media_info`) change together.
+    /// On failure, `session` is unchanged (fixes prior bug where
+    /// `media_info` and `base_offset` were updated before factory call).
     fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> bool {
         debug!(
-            old = ?self.cached_media_info,
+            old = ?self.session.media_info,
             new = ?new_info,
             base_offset,
             "Recreating decoder for new format"
         );
 
-        self.cached_media_info = Some(new_info.clone());
-        self.base_offset = base_offset;
-
         if let Some(new_decoder) =
             (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
         {
             let new_duration = new_decoder.duration();
-            self.decoder = new_decoder;
+            // Atomic session update — only on success
+            self.session = DecoderSession {
+                base_offset,
+                decoder: new_decoder,
+                media_info: Some(new_info.clone()),
+            };
             debug!(?new_duration, base_offset, "Decoder recreated successfully");
             true
         } else {
@@ -530,7 +539,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 epoch,
                 stream_pos,
                 ?segment_range,
-                base_offset = self.base_offset,
+                base_offset = self.session.base_offset,
                 "seek: about to call decoder.seek()"
             );
             if let Err(err) = self.decoder_seek_safe(position) {
@@ -633,11 +642,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn align_decoder_with_seek_anchor(&mut self, anchor: SourceSeekAnchor) -> bool {
-        let current_codec = self.cached_media_info.as_ref().and_then(|info| info.codec);
+        let current_codec = self.session.media_info.as_ref().and_then(|info| info.codec);
         let target_info = self.shared_stream.media_info();
         let target_codec = target_info.as_ref().and_then(|info| info.codec);
         let current_variant = self
-            .cached_media_info
+            .session
+            .media_info
             .as_ref()
             .and_then(|info| info.variant_index);
         let target_variant = target_info.as_ref().and_then(|info| info.variant_index);
@@ -650,7 +660,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
-        let stale_base_offset = self.base_offset > 0;
+        let stale_base_offset = self.session.base_offset > 0;
         debug!(
             ?current_codec,
             ?target_codec,
@@ -659,7 +669,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             codec_changed,
             variant_changed,
             stale_base_offset,
-            base_offset = self.base_offset,
+            base_offset = self.session.base_offset,
             "seek anchor alignment: compare format"
         );
         if !codec_changed && !stale_base_offset {
@@ -717,7 +727,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .current_segment_range()
                     .map(|range| range.start)
             })
-            .unwrap_or(self.base_offset)
+            .unwrap_or(self.session.base_offset)
     }
 
     fn recreate_decoder_for_seek(
@@ -784,7 +794,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(media_info) = self
             .shared_stream
             .media_info()
-            .or_else(|| self.cached_media_info.clone())
+            .or_else(|| self.session.media_info.clone())
         else {
             warn!(
                 ?seek_position,
@@ -807,11 +817,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         // After ABR switch (base_offset > 0), byte_len is intentionally 0
         // to prevent mismatch between byte_len and moov duration.
         // Symphonia uses moof seek index for fMP4, not byte_len.
-        if self.base_offset == 0
+        if self.session.base_offset == 0
             && let Some(len) = self.shared_stream.len()
             && len > 0
         {
-            self.decoder.update_byte_len(len);
+            self.session.decoder.update_byte_len(len);
         }
     }
 
@@ -943,7 +953,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(new_info) = self
             .shared_stream
             .media_info()
-            .or_else(|| self.cached_media_info.clone())
+            .or_else(|| self.session.media_info.clone())
         else {
             warn!(
                 epoch = seek_epoch,
@@ -1102,7 +1112,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         if self.timeline.total_duration().is_none() {
-            let duration = self.decoder.duration();
+            let duration = self.session.decoder.duration();
             if duration.is_some() {
                 self.timeline.set_total_duration(duration);
             }
