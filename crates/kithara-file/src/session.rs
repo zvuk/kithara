@@ -98,33 +98,30 @@ impl Progress {
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub(crate) fn read_pos(&self) -> u64 {
-        self.timeline.byte_position()
-    }
-
-    pub(crate) fn download_pos(&self) -> u64 {
-        self.timeline.download_position()
+    delegate::delegate! {
+        to self.timeline {
+            #[call(byte_position)]
+            #[cfg_attr(feature = "perf", hotpath::measure)]
+            pub(crate) fn read_pos(&self) -> u64;
+            #[call(download_position)]
+            pub(crate) fn download_pos(&self) -> u64;
+            #[call(set_download_position)]
+            pub(crate) fn set_download_pos(&self, v: u64);
+            #[call(clone)]
+            pub(crate) fn timeline(&self) -> Timeline;
+        }
+        to self.reader_advanced {
+            #[call(notified)]
+            /// Register for reader advance notification.
+            /// Must be called BEFORE checking positions to avoid race.
+            pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_>;
+        }
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn set_read_pos(&self, v: u64) {
         self.timeline.set_byte_position(v);
         self.reader_advanced.notify_one();
-    }
-
-    pub(crate) fn set_download_pos(&self, v: u64) {
-        self.timeline.set_download_position(v);
-    }
-
-    /// Register for reader advance notification.
-    /// Must be called BEFORE checking positions to avoid race.
-    pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
-        self.reader_advanced.notified()
-    }
-
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
     }
 }
 

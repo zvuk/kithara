@@ -3912,6 +3912,7 @@ dependencies = [
  "axum",
  "bytes",
  "crossbeam-queue",
+ "delegate",
  "derivative",
  "derive_setters",
  "futures",
