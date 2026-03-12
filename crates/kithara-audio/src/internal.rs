@@ -47,11 +47,15 @@ pub mod source {
         time::Duration,
     };
 
+    use delegate::delegate;
     use kithara_decode::{InnerDecoder, PcmChunk};
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
-    use crate::{pipeline::worker::AudioWorkerSource, traits::AudioEffect};
+    use crate::{
+        pipeline::{source::RecoveryAction, track_fsm, worker::AudioWorkerSource},
+        traits::AudioEffect,
+    };
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
 
@@ -68,28 +72,36 @@ pub mod source {
     }
 
     impl<T: StreamType> Read for SharedStream<T> {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+        delegate! {
+            to self.0 {
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+            }
         }
     }
 
     impl<T: StreamType> Seek for SharedStream<T> {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.0.seek(pos)
+        delegate! {
+            to self.0 {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 
     pub struct OffsetReader<T: StreamType>(crate::pipeline::source::OffsetReader<T>);
 
     impl<T: StreamType> Read for OffsetReader<T> {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+        delegate! {
+            to self.0 {
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+            }
         }
     }
 
     impl<T: StreamType> Seek for OffsetReader<T> {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.0.seek(pos)
+        delegate! {
+            to self.0 {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 
@@ -149,11 +161,6 @@ pub mod source {
     }
 
     #[must_use]
-    pub fn has_pending_format_change<T: StreamType>(source: &StreamAudioSource<T>) -> bool {
-        source.0.pending_format_change.is_some()
-    }
-
-    #[must_use]
     pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
         &source.0.timeline
     }
@@ -194,8 +201,13 @@ pub mod source {
             let result = step_track(source);
             match result {
                 TrackStep::StateChanged => {
-                    // Continue if still in SeekRequested; stop otherwise.
-                    if track_state(source) != TrackPhaseTag::SeekRequested {
+                    let phase = track_state(source);
+                    if !matches!(
+                        phase,
+                        TrackPhaseTag::SeekRequested
+                            | TrackPhaseTag::ApplyingSeek
+                            | TrackPhaseTag::RecreatingDecoder
+                    ) {
                         return;
                     }
                 }
@@ -217,21 +229,26 @@ pub mod source {
         source.0.session.media_info = media_info;
     }
 
-    pub fn set_seek_recover_state<T: StreamType>(
+    pub fn set_awaiting_resume_state<T: StreamType>(
         source: &mut StreamAudioSource<T>,
-        base_offset: u64,
-        decode_started_epoch: Option<u64>,
-        target: Option<(u64, Duration)>,
-        attempts: u8,
+        epoch: u64,
+        target: Duration,
+        recover_attempts: u8,
+        skip: Option<Duration>,
     ) {
-        source.0.session.base_offset = base_offset;
-        source.0.pending_decode_started_epoch = decode_started_epoch;
-        source.0.pending_seek_recover_target = target;
-        source.0.pending_seek_recover_attempts = attempts;
+        source.0.state = track_fsm::TrackState::AwaitingResume(track_fsm::ResumeState {
+            recover_attempts,
+            seek: track_fsm::SeekContext { epoch, target },
+            skip,
+        });
     }
 
     pub fn retry_decode_error_after_seek<T: StreamType>(source: &mut StreamAudioSource<T>) -> bool {
-        source.0.retry_decode_error_after_seek()
+        match source.0.retry_decode_error_after_seek() {
+            RecoveryAction::Continue => true,
+            RecoveryAction::Yield => matches!(step_track(source), TrackStep::StateChanged),
+            RecoveryAction::None => false,
+        }
     }
 }
 

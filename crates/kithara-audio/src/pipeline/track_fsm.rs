@@ -17,13 +17,12 @@ use kithara_stream::{Fetch, MediaInfo, SourcePhase, SourceSeekAnchor};
 ///
 /// Each variant carries exactly the context needed for that phase.
 /// Transitions happen inside `step_track()` — one transition per call.
-#[expect(dead_code, reason = "variants used progressively across Phase 2-4")]
 pub(crate) enum TrackState {
     /// Normal decoding — produce PCM chunks.
     Decoding,
 
     /// Consumer requested a seek; not yet applied.
-    SeekRequested { epoch: u64, target: Duration },
+    SeekRequested(SeekRequest),
 
     /// Waiting for the underlying source to become ready.
     WaitingForSource {
@@ -32,26 +31,13 @@ pub(crate) enum TrackState {
     },
 
     /// Actively applying a seek to the decoder.
-    ApplyingSeek {
-        epoch: u64,
-        target: Duration,
-        mode: SeekMode,
-        attempt: u8,
-    },
+    ApplyingSeek(ApplySeekState),
 
     /// Recreating the decoder (format boundary, codec change, seek recovery).
-    RecreatingDecoder {
-        cause: RecreateCause,
-        seek: Option<SeekContext>,
-        offset: u64,
-        attempt: u8,
-    },
+    RecreatingDecoder(RecreateState),
 
     /// Decoder recreated / seek applied; waiting for first valid chunk.
-    AwaitingResume {
-        seek: Option<SeekContext>,
-        skip: Option<Duration>,
-    },
+    AwaitingResume(ResumeState),
 
     /// End of stream reached.
     AtEof,
@@ -67,24 +53,72 @@ pub(crate) struct SeekContext {
     pub target: Duration,
 }
 
+/// Stateful seek request tracked across retries and waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeekRequest {
+    pub attempt: u8,
+    pub seek: SeekContext,
+}
+
+/// Seek application mode resolved before touching the decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ApplySeekState {
+    pub mode: SeekMode,
+    pub request: SeekRequest,
+}
+
+/// Resume state after a seek has been applied to the decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResumeState {
+    pub recover_attempts: u8,
+    pub seek: SeekContext,
+    pub skip: Option<Duration>,
+}
+
+/// Post-recreation resume task for an already-applied seek.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResumeRequest {
+    pub position: Duration,
+    pub state: ResumeState,
+}
+
+/// What to do once decoder recreation succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecreateNext {
+    /// Continue plain decoding from the new decoder.
+    Decode,
+    /// Re-run seek resolution on the recreated decoder.
+    Seek(SeekRequest),
+    /// Finish seek application by seeking the recreated decoder.
+    ApplySeek(SeekRequest),
+    /// Resume decoding after a post-seek recovery seek.
+    Resume(ResumeRequest),
+}
+
+/// Decoder recreation task tracked by the FSM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecreateState {
+    pub attempt: u8,
+    pub cause: RecreateCause,
+    pub media_info: MediaInfo,
+    pub next: RecreateNext,
+    pub offset: u64,
+}
+
 /// What caused us to enter `WaitingForSource`.
 #[derive(Debug)]
-#[expect(dead_code, reason = "variants used in Phase 2-4 step methods")]
 pub(crate) enum WaitContext {
     /// Starvation during normal playback.
     Playback,
     /// Seek-initiated wait (source not ready for seek).
-    Seek(SeekContext),
+    Seek(SeekRequest),
     /// Init bytes unavailable for decoder recreation.
-    Recreation {
-        cause: RecreateCause,
-        seek: Option<SeekContext>,
-        offset: u64,
-    },
+    Recreation(RecreateState),
 }
 
 /// Why the source is not ready, mirroring relevant `SourcePhase` variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum WaitingReason {
     /// Generic wait — data not yet available.
     Waiting,
@@ -95,8 +129,7 @@ pub enum WaitingReason {
 }
 
 /// How the seek should be applied.
-#[derive(Debug)]
-#[expect(dead_code, reason = "used in Phase 2-4 step_applying_seek")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SeekMode {
     /// Direct decoder seek (no anchor).
     Direct,
@@ -106,7 +139,6 @@ pub(crate) enum SeekMode {
 
 /// Why the decoder needs to be recreated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "used in Phase 2-4 step_recreating_decoder")]
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
@@ -118,16 +150,9 @@ pub(crate) enum RecreateCause {
 
 /// Terminal failure reasons.
 #[derive(Debug)]
-#[expect(dead_code, reason = "variants used in Phase 2-4 failure paths")]
 pub(crate) enum TrackFailure {
     /// Decoder produced an error.
     Decode(DecodeError),
-    /// Seek exhausted all retry attempts.
-    SeekExhausted {
-        epoch: u64,
-        target: Duration,
-        attempts: u8,
-    },
     /// Decoder recreation failed.
     RecreateFailed { offset: u64 },
     /// Source was cancelled.
@@ -147,6 +172,7 @@ pub(crate) struct DecoderSession {
 }
 
 /// Result of a single `step_track()` call.
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum TrackStep<C> {
     /// Produced a chunk ready for the consumer.
     Produced(Fetch<C>),
@@ -162,6 +188,7 @@ pub enum TrackStep<C> {
 
 /// Fieldless discriminant of [`TrackState`] for external phase queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum TrackPhaseTag {
     Decoding,
     SeekRequested,
@@ -205,11 +232,11 @@ impl TrackState {
     pub(crate) fn phase_tag(&self) -> TrackPhaseTag {
         match self {
             Self::Decoding => TrackPhaseTag::Decoding,
-            Self::SeekRequested { .. } => TrackPhaseTag::SeekRequested,
+            Self::SeekRequested(_) => TrackPhaseTag::SeekRequested,
             Self::WaitingForSource { .. } => TrackPhaseTag::WaitingForSource,
-            Self::ApplyingSeek { .. } => TrackPhaseTag::ApplyingSeek,
-            Self::RecreatingDecoder { .. } => TrackPhaseTag::RecreatingDecoder,
-            Self::AwaitingResume { .. } => TrackPhaseTag::AwaitingResume,
+            Self::ApplyingSeek(_) => TrackPhaseTag::ApplyingSeek,
+            Self::RecreatingDecoder(_) => TrackPhaseTag::RecreatingDecoder,
+            Self::AwaitingResume(_) => TrackPhaseTag::AwaitingResume,
             Self::AtEof => TrackPhaseTag::AtEof,
             Self::Failed(_) => TrackPhaseTag::Failed,
         }
@@ -259,30 +286,42 @@ mod tests {
     fn is_terminal_for_each_state() {
         let non_terminal = [
             TrackState::Decoding,
-            TrackState::SeekRequested {
-                epoch: 1,
-                target: Duration::from_secs(5),
-            },
+            TrackState::SeekRequested(SeekRequest {
+                attempt: 0,
+                seek: SeekContext {
+                    epoch: 1,
+                    target: Duration::from_secs(5),
+                },
+            }),
             TrackState::WaitingForSource {
                 context: WaitContext::Playback,
                 reason: WaitingReason::Waiting,
             },
-            TrackState::ApplyingSeek {
-                epoch: 1,
-                target: Duration::from_secs(5),
+            TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Direct,
+                request: SeekRequest {
+                    attempt: 0,
+                    seek: SeekContext {
+                        epoch: 1,
+                        target: Duration::from_secs(5),
+                    },
+                },
+            }),
+            TrackState::RecreatingDecoder(RecreateState {
                 attempt: 0,
-            },
-            TrackState::RecreatingDecoder {
                 cause: RecreateCause::FormatBoundary,
-                seek: None,
+                media_info: MediaInfo::default(),
+                next: RecreateNext::Decode,
                 offset: 0,
-                attempt: 0,
-            },
-            TrackState::AwaitingResume {
-                seek: None,
+            }),
+            TrackState::AwaitingResume(ResumeState {
+                recover_attempts: 0,
+                seek: SeekContext {
+                    epoch: 1,
+                    target: Duration::from_secs(5),
+                },
                 skip: None,
-            },
+            }),
             // AtEof is NOT terminal — seek-after-EOF is valid
             TrackState::AtEof,
         ];
@@ -302,10 +341,13 @@ mod tests {
     fn phase_tag_preserves_discriminant() {
         assert_eq!(TrackState::Decoding.phase_tag(), TrackPhaseTag::Decoding);
         assert_eq!(
-            TrackState::SeekRequested {
-                epoch: 1,
-                target: Duration::ZERO
-            }
+            TrackState::SeekRequested(SeekRequest {
+                attempt: 0,
+                seek: SeekContext {
+                    epoch: 1,
+                    target: Duration::ZERO,
+                },
+            })
             .phase_tag(),
             TrackPhaseTag::SeekRequested
         );
@@ -318,33 +360,49 @@ mod tests {
             TrackPhaseTag::WaitingForSource
         );
         assert_eq!(
-            TrackState::ApplyingSeek {
-                epoch: 1,
-                target: Duration::ZERO,
+            TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Direct,
-                attempt: 0,
-            }
+                request: SeekRequest {
+                    attempt: 0,
+                    seek: SeekContext {
+                        epoch: 1,
+                        target: Duration::ZERO,
+                    },
+                },
+            })
             .phase_tag(),
             TrackPhaseTag::ApplyingSeek
         );
         assert_eq!(
-            TrackState::RecreatingDecoder {
-                cause: RecreateCause::SeekRecovery,
-                seek: None,
-                offset: 100,
+            TrackState::RecreatingDecoder(RecreateState {
                 attempt: 1,
-            }
+                cause: RecreateCause::SeekRecovery,
+                media_info: MediaInfo::default(),
+                next: RecreateNext::Resume(ResumeRequest {
+                    position: Duration::ZERO,
+                    state: ResumeState {
+                        recover_attempts: 1,
+                        seek: SeekContext {
+                            epoch: 1,
+                            target: Duration::from_secs(10),
+                        },
+                        skip: None,
+                    },
+                }),
+                offset: 100,
+            })
             .phase_tag(),
             TrackPhaseTag::RecreatingDecoder
         );
         assert_eq!(
-            TrackState::AwaitingResume {
-                seek: Some(SeekContext {
+            TrackState::AwaitingResume(ResumeState {
+                recover_attempts: 0,
+                seek: SeekContext {
                     epoch: 1,
                     target: Duration::from_secs(10)
-                }),
+                },
                 skip: None,
-            }
+            })
             .phase_tag(),
             TrackPhaseTag::AwaitingResume
         );

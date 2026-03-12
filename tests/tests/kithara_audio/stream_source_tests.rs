@@ -425,10 +425,9 @@ fn format_change_recreates_decoder() {
         s.segment_range = Some(1000..2000);
     }
 
-    // Decode remaining V0 chunk — detect_format_change sets boundary
+    // Decode remaining V0 chunk — the next EOF should trigger boundary recreation
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
-    assert!(has_pending_format_change(&source));
 
     // V0 decoder exhausted → EOF → apply_format_change → V3 decoder
     let fetch = fetch_next(&mut source);
@@ -519,6 +518,8 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
     apply_pending_seek(&mut source);
 
+    assert_eq!(track_state(&source), TrackPhaseTag::AwaitingResume);
+
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
         current_base_offset(&source),
@@ -546,6 +547,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
 
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
+    assert_eq!(track_state(&source), TrackPhaseTag::Decoding);
     assert_eq!(
         fetch.data.pcm.len(),
         75,
@@ -854,13 +856,8 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
         Arc::clone(&epoch),
         vec![],
     );
-    set_seek_recover_state(
-        &mut source,
-        152_859,
-        Some(1),
-        Some((1, Duration::from_secs(174))),
-        1,
-    );
+    set_base_offset(&mut source, 152_859);
+    set_awaiting_resume_state(&mut source, 1, Duration::from_secs(174), 1, None);
 
     {
         let mut s = state.lock_sync();
@@ -908,13 +905,8 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
         Arc::clone(&epoch),
         vec![],
     );
-    set_seek_recover_state(
-        &mut source,
-        152_859,
-        Some(1),
-        Some((1, Duration::from_secs(174))),
-        1,
-    );
+    set_base_offset(&mut source, 152_859);
+    set_awaiting_resume_state(&mut source, 1, Duration::from_secs(174), 1, None);
 
     {
         let mut s = state.lock_sync();
@@ -1022,13 +1014,9 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
         s.segment_range = Some(1000..2000);
     }
 
-    // Decode another V0 chunk — detect_format_change sets boundary + pending
+    // Decode another V0 chunk — next seek recovery should rebuild on V3 boundary
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
-    assert!(
-        has_pending_format_change(&source),
-        "Format change should be pending after detection"
-    );
 
     // Seek arrives BEFORE format change is applied.
     // Old V0 decoder seek fails. base_offset=0.

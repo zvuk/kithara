@@ -3820,6 +3820,7 @@ dependencies = [
  "biquad",
  "bytes",
  "cbc",
+ "delegate",
  "derivative",
  "derive_setters",
  "fast-interleave",

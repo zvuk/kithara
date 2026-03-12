@@ -235,7 +235,10 @@ impl TrackSlot {
                 self.eof_sent = false;
                 StepResult::Progress
             }
-            TrackStep::Blocked(_) => StepResult::NoProgress,
+            TrackStep::Blocked(reason) => {
+                trace!(?reason, "track blocked");
+                StepResult::NoProgress
+            }
             TrackStep::Eof => {
                 if !self.eof_sent {
                     self.complete_preload();
@@ -376,6 +379,11 @@ fn run_shared_worker_loop(
             if all_terminal {
                 hang_reset!();
             } else {
+                trace!(
+                    track_count = tracks.len(),
+                    terminal_count = tracks.iter().filter(|s| s.terminal || s.eof_sent).count(),
+                    "worker no-progress tick (non-terminal tracks stalled)"
+                );
                 hang_tick!();
             }
             wake.wait_timeout(IDLE_TIMEOUT);
