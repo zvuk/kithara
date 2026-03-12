@@ -1,10 +1,25 @@
+/// Wrap a `loop` or `while` with a [`HangDetector`](crate::HangDetector).
+///
+/// Inside the loop body, two helper macros are available:
+/// - `hang_tick!()` — advance the detector's tick counter.
+/// - `hang_reset!()` — reset the detector (call when progress is made).
+///
+/// # Syntax
+///
+/// ```text
+/// hang_watchdog! {
+///     [thread: <expr>;]      // optional: detector label (default: module_path!:line!)
+///     [timeout: <expr>;]     // optional: hang timeout  (default: default_timeout())
+///     loop { ... }           // or: while <condition> { ... }
+/// }
+/// ```
+///
+/// `thread:` and `timeout:` may appear in either order.
 #[macro_export]
 macro_rules! hang_watchdog {
-    (while $($rest:tt)*) => {{
-        let mut __hang_detector = $crate::HangDetector::new(
-            concat!(module_path!(), ":", line!()),
-            $crate::default_timeout(),
-        );
+    // Internal rule — preamble written once.
+    (@inner name=$name:expr, timeout=$timeout:expr; $($loop_body:tt)*) => {{
+        let mut __hang_detector = $crate::HangDetector::new($name, $timeout);
         #[allow(unused_macros)]
         macro_rules! hang_tick {
             () => {
@@ -17,157 +32,26 @@ macro_rules! hang_watchdog {
                 __hang_detector.reset();
             };
         }
-        while $($rest)*
+        $($loop_body)*
     }};
-    (loop $body:block) => {{
-        let mut __hang_detector = $crate::HangDetector::new(
-            concat!(module_path!(), ":", line!()),
-            $crate::default_timeout(),
-        );
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        loop $body
-    }};
-    (thread: $thread:expr; while $($rest:tt)*) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $crate::default_timeout());
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        while $($rest)*
-    }};
-    (thread: $thread:expr; loop $body:block) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $crate::default_timeout());
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        loop $body
-    }};
-    (timeout: $timeout:expr; while $($rest:tt)*) => {{
-        let mut __hang_detector =
-            $crate::HangDetector::new(concat!(module_path!(), ":", line!()), $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        while $($rest)*
-    }};
-    (timeout: $timeout:expr; loop $body:block) => {{
-        let mut __hang_detector =
-            $crate::HangDetector::new(concat!(module_path!(), ":", line!()), $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        loop $body
-    }};
-    (thread: $thread:expr; timeout: $timeout:expr; while $($rest:tt)*) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        while $($rest)*
-    }};
-    (thread: $thread:expr; timeout: $timeout:expr; loop $body:block) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        loop $body
-    }};
-    (timeout: $timeout:expr; thread: $thread:expr; while $($rest:tt)*) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        while $($rest)*
-    }};
-    (timeout: $timeout:expr; thread: $thread:expr; loop $body:block) => {{
-        let mut __hang_detector = $crate::HangDetector::new($thread, $timeout);
-        #[allow(unused_macros)]
-        macro_rules! hang_tick {
-            () => {
-                __hang_detector.tick();
-            };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hang_reset {
-            () => {
-                __hang_detector.reset();
-            };
-        }
-        loop $body
-    }};
+
+    // --- public entry points (most specific first) ---
+
+    (thread: $thread:expr; timeout: $timeout:expr; $($loop_body:tt)*) => {
+        $crate::hang_watchdog!(@inner name=$thread, timeout=$timeout; $($loop_body)*)
+    };
+    (timeout: $timeout:expr; thread: $thread:expr; $($loop_body:tt)*) => {
+        $crate::hang_watchdog!(@inner name=$thread, timeout=$timeout; $($loop_body)*)
+    };
+    (thread: $thread:expr; $($loop_body:tt)*) => {
+        $crate::hang_watchdog!(@inner name=$thread, timeout=$crate::default_timeout(); $($loop_body)*)
+    };
+    (timeout: $timeout:expr; $($loop_body:tt)*) => {
+        $crate::hang_watchdog!(@inner name=concat!(module_path!(), ":", line!()), timeout=$timeout; $($loop_body)*)
+    };
+    ($($loop_body:tt)*) => {
+        $crate::hang_watchdog!(@inner name=concat!(module_path!(), ":", line!()), timeout=$crate::default_timeout(); $($loop_body)*)
+    };
 }
 
 #[cfg(test)]
