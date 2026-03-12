@@ -215,6 +215,37 @@ impl HlsSource {
             })
     }
 
+    fn metadata_range_for_segment(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> Option<Range<u64>> {
+        let start = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index)?;
+        let end = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index + 1)
+            .or_else(|| self.playlist_state.total_variant_size(variant))?;
+        (end > start).then_some(start..end)
+    }
+
+    fn init_segment_range_for_variant(&self, variant: usize) -> Option<Range<u64>> {
+        let init_segment = {
+            let segments = self.shared.segments.lock_sync();
+            segments.first_init_segment_of_variant(variant).cloned()
+        }?;
+
+        if let Some(metadata_range) =
+            self.metadata_range_for_segment(variant, init_segment.segment_index)
+            && metadata_range.start != init_segment.byte_offset
+        {
+            return Some(metadata_range);
+        }
+
+        Some(init_segment.byte_offset..init_segment.end_offset())
+    }
+
     fn fallback_segment_index_for_offset(&self, variant: usize, offset: u64) -> Option<usize> {
         let num_segments = self.playlist_state.num_segments(variant)?;
         if num_segments == 0 {
@@ -862,24 +893,22 @@ impl Source for HlsSource {
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
-        {
-            let segments = self.shared.segments.lock_sync();
-            // Decoder recreate needs init-bearing segment (ftyp/moov),
-            // not just the first loaded segment of the variant.
-            if let Some(seg) = segments.first_init_segment_of_variant(current_variant) {
-                return Some(seg.byte_offset..seg.end_offset());
-            }
+        if let Some(range) = self.init_segment_range_for_variant(current_variant) {
+            return Some(range);
+        }
 
+        let fallback_variant = {
+            let segments = self.shared.segments.lock_sync();
             let reader_offset = self.shared.timeline.byte_position();
-            let fallback_variant = segments
+            segments
                 .find_at_offset(reader_offset)
                 .or_else(|| segments.last())
-                .map(|seg| seg.variant);
-            if let Some(fallback_variant) = fallback_variant
-                && let Some(seg) = segments.first_init_segment_of_variant(fallback_variant)
-            {
-                return Some(seg.byte_offset..seg.end_offset());
-            }
+                .map(|seg| seg.variant)
+        };
+        if let Some(fallback_variant) = fallback_variant
+            && let Some(range) = self.init_segment_range_for_variant(fallback_variant)
+        {
+            return Some(range);
         }
 
         // After seek flush, no segments may be loaded yet.
@@ -1065,7 +1094,7 @@ mod tests {
         download_state::LoadedSegment,
         fetch::{DefaultFetchManager, FetchManager},
         parsing::{VariantId, VariantStream},
-        playlist::{PlaylistState, SegmentState, VariantState},
+        playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
     };
 
     fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
@@ -1215,6 +1244,32 @@ mod tests {
         timeout(TokioDuration::from_millis(10), wake)
             .await
             .expect("initial on-demand request must wake downloader");
+    }
+
+    #[kithara::test]
+    fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() {
+        let source = build_test_source(1);
+        source.playlist_state.set_size_map(
+            0,
+            VariantSizeMap {
+                init_size: 25,
+                segment_sizes: vec![100, 100, 100],
+                offsets: vec![0, 100, 200],
+                total: 300,
+            },
+        );
+
+        source.shared.segments.lock_sync().push(LoadedSegment {
+            variant: 0,
+            segment_index: 1,
+            byte_offset: 10,
+            init_len: 25,
+            media_len: 75,
+            init_url: None,
+            media_url: Url::parse("https://example.com/seg-0-1.m4s").expect("valid segment URL"),
+        });
+
+        assert_eq!(source.format_change_segment_range(), Some(100..200));
     }
 
     #[kithara::test]
