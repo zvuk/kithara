@@ -37,7 +37,9 @@ pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
 };
-pub use thread::{Duration, JoinHandle, sleep, spawn};
+pub use thread::{
+    Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]

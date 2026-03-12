@@ -58,15 +58,6 @@ impl WorkerWake {
             }
         }
     }
-
-    /// Non-blocking check: returns `true` if woken, clears the flag.
-    #[expect(dead_code, reason = "reserved for advanced scheduler strategies")]
-    pub(crate) fn try_consume(&self) -> bool {
-        let mut guard = self.woken.lock_sync();
-        let was_woken = *guard;
-        *guard = false;
-        was_woken
-    }
 }
 
 #[cfg(test)]
@@ -101,20 +92,6 @@ mod tests {
         w.wake();
         assert!(w.wait_timeout(Duration::from_millis(1)));
         assert!(!w.wait_timeout(Duration::from_millis(1)));
-    }
-
-    #[kithara::test]
-    fn try_consume_returns_false_when_not_woken() {
-        let w = WorkerWake::new();
-        assert!(!w.try_consume());
-    }
-
-    #[kithara::test]
-    fn try_consume_returns_true_and_clears() {
-        let w = WorkerWake::new();
-        w.wake();
-        assert!(w.try_consume());
-        assert!(!w.try_consume());
     }
 
     #[kithara::test]

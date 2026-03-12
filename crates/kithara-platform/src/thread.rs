@@ -10,6 +10,18 @@ pub use std::time::Duration;
 use wasm_bindgen::JsCast;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub type Thread = std::thread::Thread;
+
+#[cfg(target_arch = "wasm32")]
+pub type Thread = wasm_safe_thread::Thread;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub type ThreadId = std::thread::ThreadId;
+
+#[cfg(target_arch = "wasm32")]
+pub type ThreadId = wasm_safe_thread::ThreadId;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[inline]
 pub fn yield_now() {
     std::thread::yield_now();
@@ -82,6 +94,22 @@ pub type JoinHandle<T> = std::thread::JoinHandle<T>;
 #[cfg(target_arch = "wasm32")]
 pub type JoinHandle<T> = wasm_safe_thread::JoinHandle<T>;
 
+/// Get a handle to the current thread.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[must_use]
+pub fn current() -> Thread {
+    std::thread::current()
+}
+
+/// Get a handle to the current thread.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn current() -> Thread {
+    wasm_safe_thread::current()
+}
+
 /// Spawn a new thread.
 ///
 /// On WASM, uses [`wasm_safe_thread::Builder`] with an explicit `shim_name`
@@ -131,13 +159,41 @@ pub fn sleep(duration: Duration) {
     wasm_safe_thread::sleep(duration);
 }
 
+/// Block until the current thread is explicitly unparked.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub fn park() {
+    std::thread::park();
+}
+
+/// Block until the current thread is explicitly unparked.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub fn park() {
+    wasm_safe_thread::park();
+}
+
+/// Block until unparked or until `duration` elapses.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub fn park_timeout(duration: Duration) {
+    std::thread::park_timeout(duration);
+}
+
+/// Block until unparked or until `duration` elapses.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub fn park_timeout(duration: Duration) {
+    wasm_safe_thread::park_timeout(duration);
+}
+
 /// Hash of the current thread's ID, usable for shard indexing.
 #[cfg(not(target_arch = "wasm32"))]
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
     use std::hash::{Hash, Hasher};
-    let id = std::thread::current().id();
+    let id = current().id();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
     hasher.finish()
@@ -148,7 +204,7 @@ pub fn current_thread_id() -> u64 {
 #[must_use]
 pub fn current_thread_id() -> u64 {
     use std::hash::{Hash, Hasher};
-    let id = wasm_safe_thread::current().id();
+    let id = current().id();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
     hasher.finish()
@@ -171,6 +227,8 @@ pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     #[test]
@@ -181,6 +239,22 @@ mod tests {
             assert!(!is_worker_thread());
             assert_main_thread("native-main");
             assert_not_main_thread("native-main");
+        }
+    }
+
+    #[test]
+    fn park_timeout_returns_after_unpark() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let parked = current();
+            let start = Instant::now();
+            let join = spawn(move || {
+                sleep(Duration::from_millis(5));
+                parked.unpark();
+            });
+            park_timeout(Duration::from_secs(1));
+            join.join().expect("wake helper thread");
+            assert!(start.elapsed() < Duration::from_millis(250));
         }
     }
 }

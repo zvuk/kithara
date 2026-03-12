@@ -4,6 +4,7 @@ pub(crate) mod audio;
 pub(crate) mod audio_worker;
 mod config;
 pub(crate) mod source;
+pub(crate) mod thread_wake;
 pub(crate) mod worker;
 pub(crate) mod worker_types;
 pub(crate) mod worker_wake;

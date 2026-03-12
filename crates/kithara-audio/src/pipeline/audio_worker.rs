@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::pipeline::{
+    thread_wake::ThreadWake,
     worker::{AudioCommand, AudioWorkerSource},
     worker_types::{ServiceClass, StepResult, TrackId, TrackIdGen, TrackPhase},
     worker_wake::WorkerWake,
@@ -47,6 +48,7 @@ pub(crate) enum WorkerCmd {
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
+    pub consumer_wake: Arc<ThreadWake>,
     pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk, Command = AudioCommand>>,
     pub data_tx: HeapProd<Fetch<PcmChunk>>,
     pub cmd_rx: HeapCons<AudioCommand>,
@@ -144,6 +146,7 @@ impl Default for AudioWorkerHandle {
 
 /// Per-track state inside the worker thread.
 struct TrackSlot {
+    consumer_wake: Arc<ThreadWake>,
     track_id: TrackId,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk, Command = AudioCommand>>,
     data_tx: HeapProd<Fetch<PcmChunk>>,
@@ -161,6 +164,7 @@ struct TrackSlot {
 impl TrackSlot {
     fn from_registration(track_id: TrackId, reg: TrackRegistration) -> Self {
         Self {
+            consumer_wake: reg.consumer_wake,
             track_id,
             source: reg.source,
             data_tx: reg.data_tx,
@@ -231,6 +235,7 @@ impl TrackSlot {
             match self.data_tx.try_push(fetch) {
                 Ok(()) => {
                     self.mark_preload_progress();
+                    self.consumer_wake.wake();
                     return StepResult::Progress;
                 }
                 Err(rejected) => {
@@ -251,7 +256,10 @@ impl TrackSlot {
         let is_eof = fetch.is_eof();
 
         match self.data_tx.try_push(fetch) {
-            Ok(()) => self.mark_preload_progress(),
+            Ok(()) => {
+                self.mark_preload_progress();
+                self.consumer_wake.wake();
+            }
             Err(rejected) => {
                 self.pending_fetch = Some(rejected);
             }
@@ -342,6 +350,7 @@ fn run_shared_worker_loop(
                     let _ = slot
                         .data_tx
                         .try_push(Fetch::new(PcmChunk::default(), true, epoch));
+                    slot.consumer_wake.wake();
                 }
             }
         }
@@ -549,6 +558,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let reg = TrackRegistration {
+            consumer_wake: Arc::new(ThreadWake::new()),
             source: Box::new(source),
             data_tx,
             cmd_rx,
@@ -720,7 +730,7 @@ mod tests {
     fn worker_preload_notify_fires() {
         let handle = AudioWorkerHandle::new();
 
-        let (reg, _rx, preload_notify, _cancel) = make_registration(MockSource::new(10), 32, 3);
+        let (reg, _rx, _preload_notify, _cancel) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
 

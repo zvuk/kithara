@@ -33,6 +33,7 @@ use super::{
     audio_worker::{AudioWorkerHandle, TrackRegistration},
     config::{AudioConfig, create_effects, expected_output_spec},
     source::{OffsetReader, SharedStream, StreamAudioSource},
+    thread_wake::ThreadWake,
     worker::AudioCommand,
     worker_types::{ServiceClass, TrackId},
 };
@@ -161,6 +162,9 @@ pub struct Audio<S> {
 
     /// Worker handle for unregistration and optional shutdown.
     worker: Option<AudioWorkerHandle>,
+
+    /// Wake handle for blocking PCM reads.
+    reader_wake: Arc<ThreadWake>,
 
     /// Whether the worker was auto-created for this track (standalone mode).
     /// Standalone workers are shut down when the track is dropped.
@@ -474,8 +478,39 @@ impl<S> Audio<S> {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
+            self.wake_worker();
+            self.reader_wake.register_current();
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
+            }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
             hang_tick!();
-            kithara_platform::thread::sleep(RECV_BACKOFF);
+            Self::wait_for_fetch();
+        }
+    }
+
+    fn wait_for_fetch() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            kithara_platform::thread::park_timeout(RECV_BACKOFF);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            if kithara_platform::thread::is_worker_thread() {
+                kithara_platform::thread::park_timeout(RECV_BACKOFF);
+            } else {
+                kithara_platform::thread::sleep(RECV_BACKOFF);
+            }
         }
     }
 
@@ -668,27 +703,6 @@ where
         })
     }
 
-    fn register_with_worker(
-        audio_source: StreamAudioSource<T>,
-        cmd_rx: HeapCons<AudioCommand>,
-        data_tx: HeapProd<Fetch<PcmChunk>>,
-        preload_notify: Arc<Notify>,
-        preload_chunks: usize,
-        cancel: CancellationToken,
-        worker: &AudioWorkerHandle,
-    ) -> TrackId {
-        let reg = TrackRegistration {
-            source: Box::new(audio_source),
-            data_tx,
-            cmd_rx,
-            preload_notify,
-            preload_chunks,
-            service_class: ServiceClass::default(),
-            cancel,
-        };
-        worker.register_track(reg)
-    }
-
     /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
@@ -803,20 +817,22 @@ where
         .with_emit(emit);
 
         let preload_notify = Arc::new(Notify::new());
+        let reader_wake = Arc::new(ThreadWake::new());
 
         // Get or create worker — standalone mode when no worker provided.
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
 
-        let track_id = Self::register_with_worker(
-            audio_source,
-            cmd_rx,
+        let track_id = worker.register_track(TrackRegistration {
+            consumer_wake: Arc::clone(&reader_wake),
+            source: Box::new(audio_source),
             data_tx,
-            preload_notify.clone(),
-            preload_chunks.get(),
-            cancel.clone(),
-            &worker,
-        );
+            cmd_rx,
+            preload_notify: preload_notify.clone(),
+            preload_chunks: preload_chunks.get(),
+            cancel: cancel.clone(),
+            service_class: ServiceClass::default(),
+        });
 
         Ok(Self {
             cmd_tx,
@@ -840,6 +856,7 @@ where
             notify_waiting,
             track_id: Some(track_id),
             worker: Some(worker),
+            reader_wake,
             is_standalone_worker: is_standalone,
             _marker: PhantomData,
         })
@@ -1014,6 +1031,7 @@ mod tests {
             notify_waiting: None,
             track_id: None,
             worker: None,
+            reader_wake: Arc::new(ThreadWake::new()),
             is_standalone_worker: false,
             _marker: PhantomData,
         }
