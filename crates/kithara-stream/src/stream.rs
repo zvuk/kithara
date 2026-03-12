@@ -23,8 +23,6 @@ use crate::{
     source::{ReadOutcome, Source},
 };
 
-const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Defines a stream type and how to create it.
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
@@ -182,6 +180,8 @@ impl<T: StreamType> Stream<T> {
         Ok(anchor)
     }
 }
+
+const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
