@@ -4181,6 +4181,7 @@ dependencies = [
  "async-stream",
  "axum",
  "bytes",
+ "delegate",
  "derive_setters",
  "futures",
  "hotpath",

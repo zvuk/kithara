@@ -103,60 +103,28 @@ impl<T: StreamType> Stream<T> {
         &self.source
     }
 
-    /// Get current media info if known.
-    pub fn media_info(&self) -> Option<MediaInfo> {
-        self.source.media_info()
-    }
-
-    /// Get total length if known.
-    #[expect(clippy::len_without_is_empty)]
-    pub fn len(&self) -> Option<u64> {
-        self.source.len()
-    }
-
-    /// Get current segment byte range (for segmented sources like HLS).
-    pub fn current_segment_range(&self) -> Option<Range<u64>> {
-        self.source.current_segment_range()
-    }
-
-    /// Get byte range of first segment with current format after ABR switch.
-    ///
-    /// For HLS: returns the first segment of the new variant which contains
-    /// init data (ftyp/moov). This is where the decoder should be recreated.
-    pub fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        self.source.format_change_segment_range()
-    }
-
-    /// Clear variant fence, allowing reads from the next variant.
-    pub fn clear_variant_fence(&mut self) {
-        self.source.clear_variant_fence();
-    }
-
-    /// Set seek epoch for stale request invalidation.
-    pub fn set_seek_epoch(&mut self, seek_epoch: u64) {
-        self.source.set_seek_epoch(seek_epoch);
-    }
-
-    /// Check whether all bytes in `range` are available for non-blocking read.
-    ///
-    /// Delegates to `Source::is_range_ready()`.
-    pub fn is_range_ready(&self, range: Range<u64>) -> bool {
-        self.source.is_range_ready(range)
-    }
-
-    /// Wake any blocked `wait_range()` calls.
-    ///
-    /// Called after `Timeline::initiate_seek()` for instant wakeup.
-    pub fn notify_waiting(&self) {
-        self.source.notify_waiting();
-    }
-
-    /// Create a lock-free callback for waking blocked `wait_range()`.
-    ///
-    /// The returned closure captures only the condvar/notify primitive,
-    /// so it can be called without holding the `SharedStream` mutex.
-    pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        self.source.make_notify_fn()
+    delegate::delegate! {
+        to self.source {
+            /// Get current media info if known.
+            pub fn media_info(&self) -> Option<MediaInfo>;
+            /// Get total length if known.
+            #[expect(clippy::len_without_is_empty)]
+            pub fn len(&self) -> Option<u64>;
+            /// Get current segment byte range (for segmented sources like HLS).
+            pub fn current_segment_range(&self) -> Option<Range<u64>>;
+            /// Get byte range of first segment with current format after ABR switch.
+            pub fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            /// Clear variant fence, allowing reads from the next variant.
+            pub fn clear_variant_fence(&mut self);
+            /// Set seek epoch for stale request invalidation.
+            pub fn set_seek_epoch(&mut self, seek_epoch: u64);
+            /// Check whether all bytes in `range` are available for non-blocking read.
+            pub fn is_range_ready(&self, range: Range<u64>) -> bool;
+            /// Wake any blocked `wait_range()` calls.
+            pub fn notify_waiting(&self);
+            /// Create a lock-free callback for waking blocked `wait_range()`.
+            pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>>;
+        }
     }
 
     /// Resolve a deterministic time-based seek anchor and move the stream position.
