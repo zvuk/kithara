@@ -276,19 +276,21 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+        use kithara_stream::SourcePhase;
         let timeline = self.progress.timeline();
         let past_eof = timeline
             .total_bytes()
             .is_some_and(|total| total > 0 && range.start >= total);
-        let range_ready = self.res.contains_range(range);
-        let seeking = timeline.is_flushing();
-
-        kithara_stream::SourcePhase::classify(kithara_stream::SourcePhaseView {
-            past_eof,
-            range_ready,
-            seeking,
-            ..Default::default()
-        })
+        if self.res.contains_range(range) {
+            return SourcePhase::Ready;
+        }
+        if timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        if past_eof {
+            return SourcePhase::Eof;
+        }
+        SourcePhase::Waiting
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

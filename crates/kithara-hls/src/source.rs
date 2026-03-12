@@ -464,52 +464,60 @@ impl Source for HlsSource {
                     on_demand_epoch = None;
                 }
 
-                let view = self.phase_view(
-                    &segments, &range, on_demand_epoch, metadata_miss_count,
-                );
-                let phase = kithara_stream::SourcePhase::classify(view);
+                // Compute phase inline — priority order matches SourcePhase::classify.
+                let cancelled = self.shared.cancel.is_cancelled();
+                let stopped = self.shared.stopped.load(Ordering::Acquire);
+                let range_ready = self.range_ready_from_segments(&segments, &range);
+                let seeking = self.shared.timeline.is_flushing();
+                let past_eof = self.is_past_eof(&segments, &range);
+                let waiting_demand =
+                    on_demand_epoch.is_some_and(|epoch| epoch == seek_epoch);
+                let waiting_metadata = metadata_miss_count > 0 && !waiting_demand;
 
-                // Reset hang detector only when data covering our range is
-                // available. Do NOT reset on total growth alone — a downloader
-                // re-downloading unrelated segments (e.g. segment 0 in a loop)
-                // must not mask a hang where the *needed* segment is missing.
-                if view.range_ready {
+                if range_ready {
                     hang_reset!();
                 }
 
-                match phase {
-                    kithara_stream::SourcePhase::Cancelled
-                    | kithara_stream::SourcePhase::Stopped => {
-                        return Err(StreamError::Source(HlsError::Cancelled));
-                    }
-                    kithara_stream::SourcePhase::Eof => {
-                        let segs = &*segments;
-                        debug!(
-                            range_start = range.start,
-                            total_bytes = segs.max_end_offset(),
-                            num_entries = segs.num_entries(),
-                            "wait_range: EOF"
-                        );
-                        return Ok(WaitOutcome::Eof);
-                    }
-                    kithara_stream::SourcePhase::Seeking => {
-                        return Ok(WaitOutcome::Interrupted);
-                    }
-                    kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
-                    kithara_stream::SourcePhase::Waiting
-                    | kithara_stream::SourcePhase::WaitingDemand
-                    | kithara_stream::SourcePhase::WaitingMetadata
-                    | _ => {
-                        debug!(
-                            range_start = range.start,
-                            range_end = range.end,
-                            ?phase,
-                            "wait_range: spinning"
-                        );
-                    }
+                // Priority dispatch (highest wins).
+                if cancelled || (stopped && !range_ready) {
+                    return if stopped && past_eof {
+                        Ok(WaitOutcome::Eof)
+                    } else {
+                        Err(StreamError::Source(HlsError::Cancelled))
+                    };
+                }
+                if range_ready {
+                    return Ok(WaitOutcome::Ready);
+                }
+                if seeking {
+                    return Ok(WaitOutcome::Interrupted);
+                }
+                if past_eof {
+                    debug!(
+                        range_start = range.start,
+                        total_bytes = segments.max_end_offset(),
+                        num_entries = segments.num_entries(),
+                        "wait_range: EOF"
+                    );
+                    return Ok(WaitOutcome::Eof);
                 }
 
-                if self.shared.timeline.eof() && !view.range_ready {
+                // Waiting sub-states — log and continue spinning.
+                let phase = if waiting_metadata {
+                    kithara_stream::SourcePhase::WaitingMetadata
+                } else if waiting_demand {
+                    kithara_stream::SourcePhase::WaitingDemand
+                } else {
+                    kithara_stream::SourcePhase::Waiting
+                };
+                debug!(
+                    range_start = range.start,
+                    range_end = range.end,
+                    ?phase,
+                    "wait_range: spinning"
+                );
+
+                if self.shared.timeline.eof() && !range_ready {
                     on_demand_epoch = None;
                 }
 
@@ -562,8 +570,21 @@ impl Source for HlsSource {
     }
 
     fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
-        let view = self.phase_view(&self.shared.segments.lock_sync(), &range, None, 0);
-        kithara_stream::SourcePhase::classify(view)
+        use kithara_stream::SourcePhase;
+        let segments = self.shared.segments.lock_sync();
+        if self.shared.cancel.is_cancelled() || self.shared.stopped.load(Ordering::Acquire) {
+            return SourcePhase::Cancelled;
+        }
+        if self.range_ready_from_segments(&segments, &range) {
+            return SourcePhase::Ready;
+        }
+        if self.shared.timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        if self.is_past_eof(&segments, &range) {
+            return SourcePhase::Eof;
+        }
+        SourcePhase::Waiting
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, HlsError> {
@@ -1063,7 +1084,7 @@ mod tests {
         );
     }
 
-    // --- SourcePhase adapter tests ---
+    // --- Source::phase() trait method tests ---
 
     /// Build source for phase tests — resets `stopped` flag that
     /// `HlsDownloader::drop` sets when the downloader half is discarded.
@@ -1084,11 +1105,7 @@ mod tests {
         res.write_at(0, &[0u8; 100]).unwrap();
         res.commit(Some(100)).unwrap();
 
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::Ready,
-        );
+        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -1096,39 +1113,7 @@ mod tests {
         let source = build_phase_test_source(1);
         let _ = source.shared.timeline.initiate_seek(Duration::from_secs(0));
 
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::Seeking,
-        );
-    }
-
-    #[kithara::test]
-    fn hls_phase_waiting_demand_when_pending_epoch_matches() {
-        let source = build_phase_test_source(1);
-        let seek_epoch = source.shared.timeline.seek_epoch();
-
-        let view = source.phase_view(
-            &source.shared.segments.lock_sync(),
-            &(0..50),
-            Some(seek_epoch),
-            0,
-        );
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::WaitingDemand,
-        );
-    }
-
-    #[kithara::test]
-    fn hls_phase_waiting_metadata_after_metadata_miss() {
-        let source = build_phase_test_source(1);
-
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 3);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::WaitingMetadata,
-        );
+        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Seeking);
     }
 
     #[kithara::test]
@@ -1138,23 +1123,7 @@ mod tests {
         source.shared.timeline.set_eof(true);
         source.shared.timeline.set_total_bytes(Some(100));
 
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(200..250), None, 0);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::Eof,
-        );
-    }
-
-    #[kithara::test]
-    fn hls_phase_stopped_when_stopped_before_eof() {
-        let source = build_test_source(1);
-        source.shared.stopped.store(true, Ordering::Release);
-
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::Stopped,
-        );
+        assert_eq!(source.phase(200..250), kithara_stream::SourcePhase::Eof);
     }
 
     #[kithara::test]
@@ -1162,10 +1131,21 @@ mod tests {
         let source = build_test_source(1);
         source.shared.cancel.cancel();
 
-        let view = source.phase_view(&source.shared.segments.lock_sync(), &(0..50), None, 0);
-        assert_eq!(
-            kithara_stream::SourcePhase::classify(view),
-            kithara_stream::SourcePhase::Cancelled,
-        );
+        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Cancelled);
+    }
+
+    #[kithara::test]
+    fn hls_phase_cancelled_when_stopped() {
+        let source = build_test_source(1);
+        source.shared.stopped.store(true, Ordering::Release);
+
+        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Cancelled);
+    }
+
+    #[kithara::test]
+    fn hls_phase_waiting_when_no_data() {
+        let source = build_phase_test_source(1);
+
+        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Waiting);
     }
 }
