@@ -50,7 +50,7 @@ pub mod source {
     use kithara_decode::{InnerDecoder, PcmChunk};
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
-    pub use crate::pipeline::track_fsm::TrackPhaseTag;
+    pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
     use crate::{pipeline::worker::AudioWorkerSource, traits::AudioEffect};
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
@@ -135,8 +135,8 @@ pub mod source {
         ))
     }
 
-    pub fn apply_pending_seek<T: StreamType>(source: &mut StreamAudioSource<T>) {
-        AudioWorkerSource::apply_pending_seek(&mut source.0);
+    pub fn step_track<T: StreamType>(source: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+        AudioWorkerSource::step_track(&mut source.0)
     }
 
     pub fn clear_variant_fence<T: StreamType>(shared: &SharedStream<T>) {
@@ -148,18 +148,63 @@ pub mod source {
         source.0.session.base_offset
     }
 
-    pub fn fetch_next<T: StreamType>(source: &mut StreamAudioSource<T>) -> Fetch<PcmChunk> {
-        AudioWorkerSource::fetch_next(&mut source.0)
-    }
-
     #[must_use]
     pub fn has_pending_format_change<T: StreamType>(source: &StreamAudioSource<T>) -> bool {
         source.0.pending_format_change.is_some()
     }
 
-    pub fn retry_decode_error_after_seek<T: StreamType>(source: &mut StreamAudioSource<T>) -> bool {
-        source.0.retry_decode_error_after_seek()
+    #[must_use]
+    pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
+        &source.0.timeline
     }
+
+    #[must_use]
+    pub fn track_state<T: StreamType>(source: &StreamAudioSource<T>) -> TrackPhaseTag {
+        source.0.state.phase_tag()
+    }
+
+    // ---- Test compatibility helpers ----
+    // These wrap step_track() to provide the old fetch_next/apply_pending_seek
+    // calling patterns used by integration tests.
+
+    /// Drive the FSM until it produces a fetch or reaches a terminal/blocked state.
+    ///
+    /// Replaces the old `fetch_next` — loops `step_track()` internally.
+    pub fn fetch_next<T: StreamType>(source: &mut StreamAudioSource<T>) -> Fetch<PcmChunk> {
+        loop {
+            match step_track(source) {
+                TrackStep::Produced(fetch) => return fetch,
+                TrackStep::StateChanged => continue,
+                TrackStep::Blocked(_) | TrackStep::Eof | TrackStep::Failed => {
+                    let epoch = timeline(source).seek_epoch();
+                    return Fetch::new(PcmChunk::default(), true, epoch);
+                }
+            }
+        }
+    }
+
+    /// Drive the FSM to process a pending seek.
+    ///
+    /// Replaces the old `apply_pending_seek` — loops `step_track()` until the
+    /// seek is fully applied. Stops once the FSM exits `SeekRequested` state,
+    /// meaning the seek was applied (or failed/blocked). Does NOT continue
+    /// decoding — callers use `fetch_next` separately for that.
+    pub fn apply_pending_seek<T: StreamType>(source: &mut StreamAudioSource<T>) {
+        loop {
+            let result = step_track(source);
+            match result {
+                TrackStep::StateChanged => {
+                    // Continue if still in SeekRequested; stop otherwise.
+                    if track_state(source) != TrackPhaseTag::SeekRequested {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+
+    // ---- Test-only state accessors (overlay fields still present) ----
 
     pub fn set_base_offset<T: StreamType>(source: &mut StreamAudioSource<T>, base_offset: u64) {
         source.0.session.base_offset = base_offset;
@@ -185,14 +230,8 @@ pub mod source {
         source.0.pending_seek_recover_attempts = attempts;
     }
 
-    #[must_use]
-    pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
-        &source.0.timeline
-    }
-
-    #[must_use]
-    pub fn track_state<T: StreamType>(source: &StreamAudioSource<T>) -> TrackPhaseTag {
-        source.0.state.phase_tag()
+    pub fn retry_decode_error_after_seek<T: StreamType>(source: &mut StreamAudioSource<T>) -> bool {
+        source.0.retry_decode_error_after_seek()
     }
 }
 

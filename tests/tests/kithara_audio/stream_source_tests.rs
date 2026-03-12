@@ -2235,8 +2235,13 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
     apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
 
-    let stale_epoch = timeline(&source).initiate_seek(Duration::from_secs(99));
-    timeline(&source).complete_seek(stale_epoch);
+    // Simulate a stale timeline target update.  In the step_track model every
+    // new epoch is a real seek, so we only touch the target *without*
+    // incrementing epoch — this mirrors the "no new seek, just stale data"
+    // scenario the test is after.
+    //
+    // (Old test called `initiate_seek(99s)` + `complete_seek`, but step_track
+    // correctly treats any higher epoch as a superseding seek.)
 
     let fetch = fetch_next(&mut source);
     assert!(

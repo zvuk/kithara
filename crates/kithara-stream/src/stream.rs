@@ -272,7 +272,7 @@ impl<T: StreamType> Seek for Stream<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, io, sync::Arc};
+    use std::collections::VecDeque;
 
     use kithara_storage::WaitOutcome;
 

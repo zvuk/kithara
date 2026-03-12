@@ -33,35 +33,6 @@ pub enum ServiceClass {
     Audible,
 }
 
-/// Per-track phase in the shared worker state machine.
-///
-/// ```text
-///          ┌──────────┐
-///     ┌───►│ Decoding  │◄──── phase() == Ready + ringbuf has space
-///     │    └────┬──────┘
-///     │         │ seek / format change
-///     │    ┌────▼──────────────┐
-///     │    │ PendingReset      │ ← waiting for data to recreate decoder
-///     │    └────┬──────────────┘
-///     │         │ data ready → apply seek / recreate
-///     └─────────┘
-///
-///     AtEof ── seek ──► PendingReset
-///     Failed ── terminal, track will be removed
-/// ```
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum TrackPhase {
-    /// Normal decoding — `fetch_next()` when ready.
-    #[default]
-    Decoding,
-    /// Waiting for data to apply seek or decoder recreation (ABR switch).
-    PendingReset,
-    /// End of stream reached.
-    AtEof,
-    /// Unrecoverable error (panic or fatal decode error).
-    Failed,
-}
-
 /// Result of a single worker step for one track.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StepResult {
@@ -92,11 +63,6 @@ mod tests {
     fn service_class_ordering() {
         assert!(ServiceClass::Idle < ServiceClass::Warm);
         assert!(ServiceClass::Warm < ServiceClass::Audible);
-    }
-
-    #[kithara::test]
-    fn track_phase_default_is_decoding() {
-        assert_eq!(TrackPhase::default(), TrackPhase::Decoding);
     }
 
     #[kithara::test]

@@ -17,6 +17,7 @@ use kithara_stream::{Fetch, MediaInfo, SourcePhase, SourceSeekAnchor};
 ///
 /// Each variant carries exactly the context needed for that phase.
 /// Transitions happen inside `step_track()` — one transition per call.
+#[expect(dead_code, reason = "variants used progressively across Phase 2-4")]
 pub(crate) enum TrackState {
     /// Normal decoding — produce PCM chunks.
     Decoding,
@@ -68,6 +69,7 @@ pub(crate) struct SeekContext {
 
 /// What caused us to enter `WaitingForSource`.
 #[derive(Debug)]
+#[expect(dead_code, reason = "variants used in Phase 2-4 step methods")]
 pub(crate) enum WaitContext {
     /// Starvation during normal playback.
     Playback,
@@ -83,7 +85,7 @@ pub(crate) enum WaitContext {
 
 /// Why the source is not ready, mirroring relevant `SourcePhase` variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WaitingReason {
+pub enum WaitingReason {
     /// Generic wait — data not yet available.
     Waiting,
     /// On-demand request already in flight.
@@ -94,6 +96,7 @@ pub(crate) enum WaitingReason {
 
 /// How the seek should be applied.
 #[derive(Debug)]
+#[expect(dead_code, reason = "used in Phase 2-4 step_applying_seek")]
 pub(crate) enum SeekMode {
     /// Direct decoder seek (no anchor).
     Direct,
@@ -103,6 +106,7 @@ pub(crate) enum SeekMode {
 
 /// Why the decoder needs to be recreated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(dead_code, reason = "used in Phase 2-4 step_recreating_decoder")]
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
@@ -114,6 +118,7 @@ pub(crate) enum RecreateCause {
 
 /// Terminal failure reasons.
 #[derive(Debug)]
+#[expect(dead_code, reason = "variants used in Phase 2-4 failure paths")]
 pub(crate) enum TrackFailure {
     /// Decoder produced an error.
     Decode(DecodeError),
@@ -142,7 +147,7 @@ pub(crate) struct DecoderSession {
 }
 
 /// Result of a single `step_track()` call.
-pub(crate) enum TrackStep<C> {
+pub enum TrackStep<C> {
     /// Produced a chunk ready for the consumer.
     Produced(Fetch<C>),
     /// Source is not ready — cannot make progress.
@@ -151,8 +156,8 @@ pub(crate) enum TrackStep<C> {
     StateChanged,
     /// End of stream.
     Eof,
-    /// Terminal failure.
-    Failed(TrackFailure),
+    /// Terminal failure — details available via `TrackState::Failed`.
+    Failed,
 }
 
 /// Fieldless discriminant of [`TrackState`] for external phase queries.
@@ -170,6 +175,7 @@ pub enum TrackPhaseTag {
 
 /// Consumer-side phase for `Audio<S>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(dead_code, reason = "used in Phase 3 to replace eof:bool in Audio")]
 pub(crate) enum ConsumerPhase {
     /// Initial state — waiting for first chunk.
     Buffering,
@@ -215,6 +221,7 @@ impl TrackState {
 // ConsumerPhase methods
 // ---------------------------------------------------------------------------
 
+#[expect(dead_code, reason = "used in Phase 3")]
 impl ConsumerPhase {
     /// Returns `true` for terminal states.
     pub(crate) fn is_terminal(self) -> bool {

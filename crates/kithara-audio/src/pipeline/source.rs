@@ -21,7 +21,10 @@ use tracing::{debug, trace, warn};
 
 use crate::{
     pipeline::{
-        track_fsm::{DecoderSession, SeekContext, TrackState},
+        track_fsm::{
+            DecoderSession, SeekContext, TrackFailure, TrackPhaseTag, TrackState, TrackStep,
+            WaitContext, WaitingReason, map_source_phase,
+        },
         worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
     },
     traits::AudioEffect,
@@ -1120,11 +1123,26 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     }
 }
 
-impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
-    type Chunk = PcmChunk;
-    type Command = AudioCommand;
+// ---------------------------------------------------------------------------
+// Private helpers (renamed from old AudioWorkerSource methods)
+// ---------------------------------------------------------------------------
 
-    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+impl<T: StreamType> StreamAudioSource<T> {
+    /// Check whether the underlying source has data ready for a non-blocking
+    /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
+    fn source_is_ready(&self) -> bool {
+        use kithara_stream::SourcePhase;
+        matches!(
+            self.shared_stream.phase(),
+            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
+        )
+    }
+
+    /// Decode one chunk using the `FallibleIterator` decode loop.
+    ///
+    /// Returns a `Fetch` with `is_eof=true` on EOF/error, `is_eof=false`
+    /// with an empty chunk on seek interruption, or a valid chunk on success.
+    fn decode_one_fetch(&mut self) -> Fetch<PcmChunk> {
         if self.timeline.total_duration().is_none() {
             let duration = self.session.decoder.duration();
             if duration.is_some() {
@@ -1153,9 +1171,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             }
             Err(e) if e.is_interrupted() => {
                 // Seek-pending exit from the decode loop guard.
-                // Return an empty non-EOF fetch; the worker loop will
-                // detect flushing via send_with_backpressure and call
-                // apply_pending_seek().
                 Fetch::new(PcmChunk::default(), false, current_epoch)
             }
             _ => {
@@ -1167,29 +1182,13 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 
-    fn handle_command(&mut self, _cmd: Self::Command) {
-        // No commands left to handle. Seek flows through Timeline.
-        // This match is intentionally empty; AudioCommand currently has no variants.
-        // Future non-seek commands will be dispatched here.
-    }
-
-    fn timeline(&self) -> &Timeline {
-        &self.timeline
-    }
-
-    fn is_ready(&self) -> bool {
-        use kithara_stream::SourcePhase;
-        match self.shared_stream.phase() {
-            // Worker handles seek separately via apply_pending_seek().
-            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking => true,
-            _ => false,
-        }
-    }
-
-    fn apply_pending_seek(&mut self) -> bool {
+    /// Apply a pending seek from the Timeline.
+    ///
+    /// Reads epoch/target from Timeline, performs the seek on the decoder,
+    /// then clears `seek_pending` on success.
+    fn apply_seek_from_timeline(&mut self) -> bool {
         let epoch = self.timeline.seek_epoch();
         let Some(position) = self.timeline.seek_target() else {
-            // No target set — another thread already cleared it. Complete anyway.
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
             return true;
@@ -1224,33 +1223,12 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             byte_range_end,
         );
 
-        // Set seek epoch on the stream source (HLS needs this for variant fence).
-        // NOTE: self.epoch is NOT updated here — it moves after successful seek
-        // so that chunks decoded before the seek completes carry the old epoch
-        // and are filtered out by the consumer's EpochValidator.
         self.shared_stream.set_seek_epoch(epoch);
-
-        // Clear any variant fence so seek can move to any timeline
-        // position, including positions in previous variants.
         self.shared_stream.clear_variant_fence();
         self.pending_seek_skip = None;
 
-        // Resolve seek anchor BEFORE completing flush. seek_time_anchor()
-        // classifies the seek (Preserve/Reset) and applies the plan while
-        // flushing is still true — this prevents the downloader from
-        // processing stale state between complete_seek and plan application.
         let anchor_result = self.shared_stream.seek_time_anchor(position);
-
-        // Complete flush after seek plan is applied but before decoder
-        // alignment. Decoder alignment may read from the stream via
-        // wait_range, which needs flushing to be cleared.
         self.timeline.complete_seek(epoch);
-
-        // Wake the downloader so it can process the segment request now
-        // that flushing is cleared. Without this, the downloader may
-        // sleep indefinitely: it saw is_flushing()=true when it woke
-        // from the earlier notification, went back to wait_for_work(),
-        // and nobody wakes it after complete_seek clears the flag.
         self.shared_stream.notify_waiting();
 
         let applied = match anchor_result {
@@ -1266,8 +1244,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         };
 
         if applied {
-            // Seek succeeded: stamp new epoch so chunks carry correct epoch,
-            // and clear seek_pending so worker stops retrying.
             self.epoch.store(epoch, Ordering::Release);
             self.timeline.clear_seek_pending(epoch);
             self.seek_retry_count = 0;
@@ -1286,12 +1262,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     target: position,
                     attempts: self.seek_retry_count,
                 });
-                // Unstick the pipeline: accept new epoch so consumer stops
-                // rejecting chunks, and clear seek_pending to stop retries.
                 self.epoch.store(epoch, Ordering::Release);
                 self.timeline.clear_seek_pending(epoch);
                 self.seek_retry_count = 0;
-                // FSM: SeekRequested → Decoding (seek abandoned, resume playback)
+                // FSM: SeekRequested → Decoding (seek abandoned)
                 self.state = TrackState::Decoding;
                 true
             } else {
@@ -1301,9 +1275,216 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     attempt = self.seek_retry_count,
                     "seek not applied, will retry"
                 );
-                // seek_pending stays true → worker loop will retry
                 false
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FSM step methods
+// ---------------------------------------------------------------------------
+
+impl<T: StreamType> StreamAudioSource<T> {
+    fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
+        use kithara_stream::SourcePhase;
+
+        if !self.source_is_ready() {
+            let phase = self.shared_stream.phase();
+            if let Some(reason) = map_source_phase(phase) {
+                self.state = TrackState::WaitingForSource {
+                    context: WaitContext::Playback,
+                    reason,
+                };
+                return TrackStep::Blocked(reason);
+            }
+            match phase {
+                SourcePhase::Cancelled => {
+                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                    return TrackStep::Failed;
+                }
+                SourcePhase::Stopped => {
+                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
+                    return TrackStep::Failed;
+                }
+                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            }
+        }
+
+        let fetch = self.decode_one_fetch();
+        if fetch.is_eof() {
+            return TrackStep::Eof;
+        }
+        if fetch.data.pcm.is_empty() {
+            // Interrupted by seek — seek preemption handles on next call
+            return TrackStep::StateChanged;
+        }
+        TrackStep::Produced(fetch)
+    }
+
+    fn step_seek_requested(&mut self) -> TrackStep<PcmChunk> {
+        if !self.source_is_ready() {
+            let phase = self.shared_stream.phase();
+            if let Some(reason) = map_source_phase(phase) {
+                let (epoch, target) = match &self.state {
+                    TrackState::SeekRequested { epoch, target } => (*epoch, *target),
+                    _ => return TrackStep::StateChanged,
+                };
+                self.state = TrackState::WaitingForSource {
+                    context: WaitContext::Seek(SeekContext { epoch, target }),
+                    reason,
+                };
+                return TrackStep::Blocked(reason);
+            }
+        }
+        // Source is ready — apply the seek
+        self.apply_seek_from_timeline();
+        // State updated by apply_seek_from_timeline: AwaitingResume or Decoding
+        TrackStep::StateChanged
+    }
+
+    fn step_waiting_for_source(&mut self) -> TrackStep<PcmChunk> {
+        use kithara_stream::SourcePhase;
+
+        let phase = self.shared_stream.phase();
+
+        // Still waiting?
+        if let Some(reason) = map_source_phase(phase) {
+            return TrackStep::Blocked(reason);
+        }
+
+        // Terminal phases
+        match phase {
+            SourcePhase::Cancelled => {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
+            }
+            SourcePhase::Stopped => {
+                self.state = TrackState::Failed(TrackFailure::SourceStopped);
+                return TrackStep::Failed;
+            }
+            SourcePhase::Eof => {
+                self.state = TrackState::AtEof;
+                return TrackStep::Eof;
+            }
+            _ => {} // Ready, Seeking — proceed
+        }
+
+        // Source is ready — resume based on wait context
+        let old_state = std::mem::replace(&mut self.state, TrackState::Decoding);
+        match old_state {
+            TrackState::WaitingForSource {
+                context: WaitContext::Playback,
+                ..
+            } => {
+                self.state = TrackState::Decoding;
+            }
+            TrackState::WaitingForSource {
+                context: WaitContext::Seek(ctx),
+                ..
+            } => {
+                self.state = TrackState::SeekRequested {
+                    epoch: ctx.epoch,
+                    target: ctx.target,
+                };
+            }
+            TrackState::WaitingForSource {
+                context:
+                    WaitContext::Recreation {
+                        cause,
+                        seek,
+                        offset,
+                    },
+                ..
+            } => {
+                self.state = TrackState::RecreatingDecoder {
+                    cause,
+                    seek,
+                    offset,
+                    attempt: 0,
+                };
+            }
+            _ => {
+                // Already set to Decoding by mem::replace
+            }
+        }
+        TrackStep::StateChanged
+    }
+
+    fn step_awaiting_resume(&mut self) -> TrackStep<PcmChunk> {
+        if !self.source_is_ready() {
+            let phase = self.shared_stream.phase();
+            if let Some(reason) = map_source_phase(phase) {
+                return TrackStep::Blocked(reason);
+            }
+        }
+        let fetch = self.decode_one_fetch();
+        if fetch.is_eof() {
+            return TrackStep::Eof;
+        }
+        if fetch.data.pcm.is_empty() {
+            return TrackStep::StateChanged;
+        }
+        // state already set to Decoding by decode_one_fetch (DecodeStarted)
+        TrackStep::Produced(fetch)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AudioWorkerSource trait implementation
+// ---------------------------------------------------------------------------
+
+impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
+    type Chunk = PcmChunk;
+    type Command = AudioCommand;
+
+    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        // 1. Seek preemption: detect new seek epoch from Timeline.
+        //    Skip if the FSM is already handling this epoch (SeekRequested).
+        let timeline_epoch = self.timeline.seek_epoch();
+        let current_epoch = self.epoch.load(Ordering::Acquire);
+        let already_handling = matches!(
+            &self.state,
+            TrackState::SeekRequested { epoch, .. } if *epoch >= timeline_epoch
+        );
+        if timeline_epoch > current_epoch
+            && self.timeline.seek_target().is_some()
+            && !self.state.is_terminal()
+            && !already_handling
+        {
+            self.state = TrackState::SeekRequested {
+                epoch: timeline_epoch,
+                target: self.timeline.seek_target().unwrap_or(Duration::ZERO),
+            };
+            reset_effects(&mut self.effects);
+            return TrackStep::StateChanged;
+        }
+
+        // 2. State dispatch — one transition per call
+        match self.state.phase_tag() {
+            TrackPhaseTag::Decoding => self.step_decoding(),
+            TrackPhaseTag::SeekRequested => self.step_seek_requested(),
+            TrackPhaseTag::WaitingForSource => self.step_waiting_for_source(),
+            TrackPhaseTag::ApplyingSeek => {
+                // ApplyingSeek handled synchronously within step_seek_requested
+                self.state = TrackState::Decoding;
+                TrackStep::StateChanged
+            }
+            TrackPhaseTag::RecreatingDecoder => {
+                // Recreation handled internally by decode helpers
+                self.state = TrackState::Decoding;
+                TrackStep::StateChanged
+            }
+            TrackPhaseTag::AwaitingResume => self.step_awaiting_resume(),
+            TrackPhaseTag::AtEof | TrackPhaseTag::Failed => TrackStep::Eof,
+        }
+    }
+
+    fn handle_command(&mut self, _cmd: Self::Command) {
+        // No commands left to handle. Seek flows through Timeline.
+    }
+
+    fn timeline(&self) -> &Timeline {
+        &self.timeline
     }
 }

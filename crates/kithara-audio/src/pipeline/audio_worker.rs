@@ -26,7 +26,7 @@ use tracing::{debug, trace, warn};
 use crate::pipeline::{
     thread_wake::ThreadWake,
     worker::{AudioCommand, AudioWorkerSource},
-    worker_types::{ServiceClass, StepResult, TrackId, TrackIdGen, TrackPhase},
+    worker_types::{ServiceClass, StepResult, TrackId, TrackIdGen},
     worker_wake::WorkerWake,
 };
 
@@ -152,13 +152,16 @@ struct TrackSlot {
     data_tx: HeapProd<Fetch<PcmChunk>>,
     cmd_rx: HeapCons<AudioCommand>,
     pending_fetch: Option<Fetch<PcmChunk>>,
-    phase: TrackPhase,
     service_class: ServiceClass,
     preload_notify: Arc<Notify>,
     preload_chunks: usize,
     chunks_sent: usize,
     preloaded: bool,
     cancel: CancellationToken,
+    /// Set when `step_track()` returns `Failed` — truly terminal.
+    terminal: bool,
+    /// Set when EOF fetch has been pushed to the consumer.
+    eof_sent: bool,
 }
 
 impl TrackSlot {
@@ -170,64 +173,32 @@ impl TrackSlot {
             data_tx: reg.data_tx,
             cmd_rx: reg.cmd_rx,
             pending_fetch: None,
-            phase: TrackPhase::Decoding,
             service_class: reg.service_class,
             preload_notify: reg.preload_notify,
             preload_chunks: reg.preload_chunks,
             chunks_sent: 0,
             preloaded: false,
             cancel: reg.cancel,
+            terminal: false,
+            eof_sent: false,
         }
     }
 
     fn is_removable(&self) -> bool {
-        self.phase == TrackPhase::Failed || self.cancel.is_cancelled()
+        self.terminal || self.cancel.is_cancelled()
     }
 
-    /// One cooperative step: drain commands, handle phase, decode at most one chunk.
+    /// One cooperative step: drain commands, step FSM, push at most one chunk.
     fn step(&mut self) -> StepResult {
-        if self.cancel.is_cancelled() {
+        use crate::pipeline::track_fsm::TrackStep;
+
+        if self.cancel.is_cancelled() || self.terminal {
             return StepResult::NoProgress;
         }
 
         // Drain per-track commands.
         while let Some(cmd) = self.cmd_rx.try_pop() {
             self.source.handle_command(cmd);
-        }
-
-        // Phase dispatch.
-        match self.phase {
-            TrackPhase::Failed => {
-                return StepResult::NoProgress;
-            }
-            TrackPhase::AtEof => {
-                let sp = self.source.timeline().is_seek_pending();
-                let fl = self.source.timeline().is_flushing();
-                if sp || fl {
-                    self.pending_fetch = None;
-                    self.phase = TrackPhase::PendingReset;
-                    return StepResult::Progress;
-                }
-                return StepResult::NoProgress;
-            }
-            TrackPhase::PendingReset => {
-                let ready = self.source.is_ready();
-                if ready {
-                    if self.source.apply_pending_seek() {
-                        self.phase = TrackPhase::Decoding;
-                    }
-                    return StepResult::Progress;
-                }
-                return StepResult::NoProgress;
-            }
-            TrackPhase::Decoding => {
-                if self.source.timeline().is_flushing() || self.source.timeline().is_seek_pending()
-                {
-                    self.pending_fetch = None;
-                    self.phase = TrackPhase::PendingReset;
-                    return StepResult::Progress;
-                }
-            }
         }
 
         // Try push previously-rejected chunk (backpressure).
@@ -245,32 +216,53 @@ impl TrackSlot {
             }
         }
 
-        // Check readiness before decode. Ringbuf backpressure is handled
-        // by try_push → pending_fetch below (avoids stale CachingProd cache).
-        if !self.source.is_ready() {
-            return StepResult::NoProgress;
-        }
-
-        // Decode one chunk.
-        let fetch = self.source.fetch_next();
-        let is_eof = fetch.is_eof();
-
-        match self.data_tx.try_push(fetch) {
-            Ok(()) => {
-                self.mark_preload_progress();
-                self.consumer_wake.wake();
+        // Step the track FSM.
+        match self.source.step_track() {
+            TrackStep::Produced(fetch) => {
+                self.eof_sent = false;
+                match self.data_tx.try_push(fetch) {
+                    Ok(()) => {
+                        self.mark_preload_progress();
+                        self.consumer_wake.wake();
+                    }
+                    Err(rejected) => {
+                        self.pending_fetch = Some(rejected);
+                    }
+                }
+                StepResult::Progress
             }
-            Err(rejected) => {
-                self.pending_fetch = Some(rejected);
+            TrackStep::StateChanged => {
+                self.eof_sent = false;
+                StepResult::Progress
+            }
+            TrackStep::Blocked(_) => StepResult::NoProgress,
+            TrackStep::Eof => {
+                if !self.eof_sent {
+                    self.complete_preload();
+                    let epoch = self.source.timeline().seek_epoch();
+                    let eof_fetch = Fetch::new(PcmChunk::default(), true, epoch);
+                    if self.data_tx.try_push(eof_fetch).is_ok() {
+                        self.eof_sent = true;
+                        self.consumer_wake.wake();
+                    }
+                    // If push failed (backpressure), eof_sent stays false
+                    // and we retry on the next step() call.
+                }
+                StepResult::NoProgress
+            }
+            TrackStep::Failed => {
+                self.complete_preload();
+                let epoch = self.source.timeline().seek_epoch();
+                let eof_fetch = Fetch::new(PcmChunk::default(), true, epoch);
+                if self.data_tx.try_push(eof_fetch).is_ok() {
+                    self.terminal = true;
+                    self.consumer_wake.wake();
+                }
+                // If push failed, terminal stays false so we retry
+                // pushing the EOF marker on the next step() call.
+                StepResult::NoProgress
             }
         }
-
-        if is_eof {
-            self.phase = TrackPhase::AtEof;
-            self.complete_preload();
-        }
-
-        StepResult::Progress
     }
 
     fn mark_preload_progress(&mut self) {
@@ -343,7 +335,7 @@ fn run_shared_worker_loop(
                 Ok(StepResult::NoProgress) => {}
                 Err(_) => {
                     warn!(track_id = slot.track_id, "shared worker: track panicked");
-                    slot.phase = TrackPhase::Failed;
+                    slot.terminal = true;
                     slot.complete_preload();
                     // Push EOF so the consumer stops waiting for chunks.
                     let epoch = slot.source.timeline().seek_epoch();
@@ -380,9 +372,7 @@ fn run_shared_worker_loop(
             // no progress should tick the watchdog: if the source stays
             // "not ready" because the downloader is also stalled, the
             // watchdog will fire after the configured timeout.
-            let all_terminal = tracks
-                .iter()
-                .all(|s| matches!(s.phase, TrackPhase::AtEof | TrackPhase::Failed));
+            let all_terminal = tracks.iter().all(|s| s.terminal || s.eof_sent);
             if all_terminal {
                 hang_reset!();
             } else {
@@ -466,6 +456,7 @@ mod tests {
 
     use super::*;
     use crate::pipeline::{
+        track_fsm::{TrackStep, WaitingReason},
         worker::{AudioCommand, AudioWorkerSource},
         worker_types::ServiceClass,
     };
@@ -510,31 +501,31 @@ mod tests {
         type Chunk = PcmChunk;
         type Command = AudioCommand;
 
-        fn fetch_next(&mut self) -> Fetch<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+            // Handle seek
+            if self.timeline.is_seek_pending() || self.timeline.is_flushing() {
+                let epoch = self.timeline.seek_epoch();
+                self.timeline.complete_seek(epoch);
+                self.timeline.clear_seek_pending(epoch);
+                return TrackStep::StateChanged;
+            }
+            if !self.ready {
+                return TrackStep::Blocked(WaitingReason::Waiting);
+            }
             if self.should_panic {
                 panic!("mock panic for testing");
             }
             if self.cursor >= self.chunks_to_produce {
-                return Fetch::new(PcmChunk::default(), true, 0);
+                return TrackStep::Eof;
             }
             self.cursor += 1;
-            Fetch::new(PcmChunk::default(), false, 0)
+            TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
         }
 
         fn handle_command(&mut self, _cmd: AudioCommand) {}
 
         fn timeline(&self) -> &Timeline {
             &self.timeline
-        }
-
-        fn apply_pending_seek(&mut self) -> bool {
-            self.timeline.clear_seek_pending(self.timeline.seek_epoch());
-            self.timeline.complete_seek(self.timeline.seek_epoch());
-            true
-        }
-
-        fn is_ready(&self) -> bool {
-            self.ready
         }
     }
 
