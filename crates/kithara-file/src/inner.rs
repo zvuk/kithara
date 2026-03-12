@@ -10,7 +10,7 @@ use kithara_net::HttpClient;
 use kithara_storage::{ResourceExt, ResourceStatus};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_stream::Writer;
-use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, Timeline};
+use kithara_stream::{Backend, StreamType, Timeline};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -41,10 +41,6 @@ impl StreamType for File {
             FileSrc::Local(path) => Self::create_local(path, config, cancel),
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel).await,
         }
-    }
-
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
     }
 }
 

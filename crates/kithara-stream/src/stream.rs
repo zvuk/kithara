@@ -61,9 +61,11 @@ pub trait StreamType: MaybeSend + 'static {
 
     /// Build a `StreamContext` from the source and shared byte position.
     ///
-    /// HLS returns `HlsStreamContext` with segment/variant atomics.
-    /// File returns `NullStreamContext` (no segment/variant).
-    fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext>;
+    /// Default returns `NullStreamContext` (no segment/variant info).
+    /// HLS overrides with `HlsStreamContext` carrying segment/variant atomics.
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(crate::NullStreamContext::new(timeline))
+    }
 }
 
 /// Generic audio stream with sync `Read + Seek`.
@@ -273,7 +275,7 @@ mod tests {
     use kithara_storage::WaitOutcome;
 
     use super::*;
-    use crate::{NullStreamContext, ReadOutcome, Source, SourcePhase, StreamContext};
+    use crate::{ReadOutcome, Source, SourcePhase};
 
     mod kithara {
         pub(crate) use kithara_test_macros::test;
@@ -354,13 +356,6 @@ mod tests {
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(io::Error::other("not used in unit tests"))
-        }
-
-        fn build_stream_context(
-            _source: &Self::Source,
-            timeline: Timeline,
-        ) -> Arc<dyn StreamContext> {
-            Arc::new(NullStreamContext::new(timeline))
         }
     }
 

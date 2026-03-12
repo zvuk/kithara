@@ -3,9 +3,7 @@
 use std::io::{self, Read, Seek, SeekFrom};
 
 use kithara_platform::time::Duration;
-use kithara_test_utils::memory_source::{
-    MemorySource, UnknownLenSource, memory_stream, unknown_len_stream,
-};
+use kithara_test_utils::memory_source::{MemorySource, memory_stream, unknown_len_stream};
 
 // Fixtures
 
@@ -168,7 +166,7 @@ fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 
 #[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
-    let source = UnknownLenSource::new(test_data);
+    let source = MemorySource::without_len(test_data);
     let mut stream = unknown_len_stream(source);
 
     let result = stream.seek(SeekFrom::End(-5));

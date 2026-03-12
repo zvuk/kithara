@@ -183,10 +183,9 @@ pub trait Source: Send + 'static {
     /// iteration), but returning `true` when data is missing would block
     /// the shared worker thread.
     ///
-    /// Default returns `false` (unknown sources are assumed not ready).
+    /// Default returns `true` for empty ranges, `false` otherwise.
     fn is_range_ready(&self, range: Range<u64>) -> bool {
-        let _ = range;
-        false
+        range.is_empty()
     }
 
     /// Get shared playback timeline.
@@ -236,7 +235,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn is_range_ready_default_returns_false() {
+    fn is_range_ready_default_empty_returns_true() {
         use kithara_storage::WaitOutcome;
 
         struct StubSource;
@@ -267,6 +266,7 @@ mod tests {
             }
         }
         let source = StubSource;
+        assert!(source.is_range_ready(0..0));
         assert!(!source.is_range_ready(0..10));
     }
 }

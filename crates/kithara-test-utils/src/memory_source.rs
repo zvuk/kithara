@@ -1,12 +1,11 @@
 //! In-memory Source implementation for testing.
 
-use std::{io, ops::Range, sync::Arc};
+use std::{io, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
-    StreamResult, StreamType, Timeline,
+    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -15,9 +14,14 @@ use kithara_stream::{
 pub struct MemorySourceError;
 
 /// In-memory source for testing Source-based readers.
+///
+/// When `report_len` is `true` (default), `len()` returns `Some(data.len())`.
+/// Set `report_len` to `false` to simulate sources without known length
+/// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
     data: Vec<u8>,
     timeline: Timeline,
+    report_len: bool,
 }
 
 impl MemorySource {
@@ -26,6 +30,17 @@ impl MemorySource {
         Self {
             data,
             timeline: Timeline::new(),
+            report_len: true,
+        }
+    }
+
+    /// Create a source that reports unknown length (`len()` returns `None`).
+    #[must_use]
+    pub fn without_len(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            timeline: Timeline::new(),
+            report_len: false,
         }
     }
 }
@@ -66,11 +81,11 @@ impl Source for MemorySource {
     }
 
     fn len(&self) -> Option<u64> {
-        Some(self.data.len() as u64)
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        None
+        if self.report_len {
+            Some(self.data.len() as u64)
+        } else {
+            None
+        }
     }
 
     fn is_range_ready(&self, range: Range<u64>) -> bool {
@@ -83,70 +98,8 @@ impl Source for MemorySource {
     }
 }
 
-/// Source without known length for testing `SeekFrom::End` error.
-pub struct UnknownLenSource {
-    data: Vec<u8>,
-    timeline: Timeline,
-}
-
-impl UnknownLenSource {
-    #[must_use]
-    pub fn new(data: Vec<u8>) -> Self {
-        Self {
-            data,
-            timeline: Timeline::new(),
-        }
-    }
-}
-
-impl Source for UnknownLenSource {
-    type Error = MemorySourceError;
-
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        timeout: Duration,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
-        let _ = timeout;
-        if range.start >= self.data.len() as u64 {
-            Ok(WaitOutcome::Eof)
-        } else {
-            Ok(WaitOutcome::Ready)
-        }
-    }
-
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
-        let offset = offset as usize;
-        if offset >= self.data.len() {
-            return Ok(ReadOutcome::Data(0));
-        }
-        let available = self.data.len() - offset;
-        let n = buf.len().min(available);
-        buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(ReadOutcome::Data(n))
-    }
-
-    fn phase(&self, range: Range<u64>) -> SourcePhase {
-        if range.start >= self.data.len() as u64 {
-            SourcePhase::Eof
-        } else {
-            SourcePhase::Ready
-        }
-    }
-
-    fn len(&self) -> Option<u64> {
-        None
-    }
-
-    fn is_range_ready(&self, range: Range<u64>) -> bool {
-        // Empty range or position at/past EOF — non-blocking (returns 0 or Eof)
-        range.is_empty() || range.start < self.data.len() as u64
-    }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
+/// Backwards-compatible alias for `MemorySource::without_len`.
+pub type UnknownLenSource = MemorySource;
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
 
@@ -162,10 +115,6 @@ impl StreamType for MemStream {
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| io::Error::other("no source"))
     }
-
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
-    }
 }
 
 #[derive(Default)]
@@ -173,27 +122,23 @@ pub struct MemStreamConfig {
     pub source: Option<MemorySource>,
 }
 
-/// `StreamType` using `UnknownLenSource` (unknown length).
+/// `StreamType` using `MemorySource` with unknown length.
 pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Source = UnknownLenSource;
+    type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| io::Error::other("no source"))
     }
-
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
-    }
 }
 
 #[derive(Default)]
 pub struct UnknownLenStreamConfig {
-    pub source: Option<UnknownLenSource>,
+    pub source: Option<MemorySource>,
 }
 
 /// Create a `Stream` from a `MemorySource`.
@@ -205,9 +150,9 @@ pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     futures::executor::block_on(Stream::new(config)).unwrap()
 }
 
-/// Create a `Stream` from an `UnknownLenSource`.
+/// Create a `Stream` from a `MemorySource` with unknown length.
 #[must_use]
-pub fn unknown_len_stream(source: UnknownLenSource) -> Stream<UnknownLenStream> {
+pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),
     };
