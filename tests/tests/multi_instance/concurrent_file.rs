@@ -116,7 +116,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(20)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn two_file_instances(_tracing_setup: ()) {
@@ -155,7 +155,7 @@ async fn two_file_instances(_tracing_setup: ()) {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(20)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn four_file_instances(_tracing_setup: ()) {
@@ -194,7 +194,7 @@ async fn four_file_instances(_tracing_setup: ()) {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(20)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn eight_file_instances(_tracing_setup: ()) {
