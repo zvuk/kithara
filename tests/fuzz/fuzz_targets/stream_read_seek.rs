@@ -141,7 +141,7 @@ impl Source for ScriptSource {
         }
     }
 
-    fn phase(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
+    fn phase_at(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
         kithara_stream::SourcePhase::Ready
     }
 

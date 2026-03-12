@@ -37,7 +37,7 @@ pub enum ServiceClass {
 ///
 /// ```text
 ///          ┌──────────┐
-///     ┌───►│ Decoding  │◄──── is_range_ready + ringbuf has space
+///     ┌───►│ Decoding  │◄──── phase() == Ready + ringbuf has space
 ///     │    └────┬──────┘
 ///     │         │ seek / format change
 ///     │    ┌────▼──────────────┐

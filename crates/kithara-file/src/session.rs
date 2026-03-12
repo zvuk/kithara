@@ -227,7 +227,7 @@ impl kithara_stream::Source for FileSource {
 
         // Fast-path via shared FSM: check for seek, EOF, or already-ready data
         // before touching downloader state or blocking on the resource.
-        match self.phase(range.clone()) {
+        match self.phase_at(range.clone()) {
             kithara_stream::SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             kithara_stream::SourcePhase::Eof => return Ok(WaitOutcome::Eof),
             kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
@@ -272,7 +272,33 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
-    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+    fn phase(&self) -> kithara_stream::SourcePhase {
+        use kithara_stream::SourcePhase;
+
+        const WINDOW: u64 = 32 * 1024; // 32 KB look-ahead
+
+        let timeline = self.progress.timeline();
+        let pos = timeline.byte_position();
+        let total = timeline.total_bytes().unwrap_or(u64::MAX);
+
+        // Check EOF before contains_range: at pos == total the window
+        // collapses to an empty range which is trivially "contained".
+        if total > 0 && total < u64::MAX && pos >= total {
+            return SourcePhase::Eof;
+        }
+
+        let check_end = pos.saturating_add(WINDOW).min(total);
+
+        if self.res.contains_range(pos..check_end) {
+            return SourcePhase::Ready;
+        }
+        if timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        SourcePhase::Waiting
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         use kithara_stream::SourcePhase;
         let timeline = self.progress.timeline();
         let past_eof = timeline
@@ -527,7 +553,7 @@ mod tests {
         progress.timeline().set_total_bytes(Some(data.len() as u64));
         let source = FileSource::new(res, progress, bus);
 
-        assert_eq!(source.phase(0..5), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -544,7 +570,10 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Range 50..60 is NOT present — seeking wins.
-        assert_eq!(source.phase(50..60), kithara_stream::SourcePhase::Seeking,);
+        assert_eq!(
+            source.phase_at(50..60),
+            kithara_stream::SourcePhase::Seeking,
+        );
     }
 
     #[kithara::test]
@@ -561,7 +590,7 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Data IS present — Ready wins over Seeking (allows drain).
-        assert_eq!(source.phase(0..5), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -573,7 +602,37 @@ mod tests {
         progress.timeline().set_total_bytes(Some(data.len() as u64));
         let source = FileSource::new(res, progress, bus);
 
-        assert_eq!(source.phase(100..110), kithara_stream::SourcePhase::Eof,);
+        assert_eq!(source.phase_at(100..110), kithara_stream::SourcePhase::Eof,);
+    }
+
+    // Parameterless phase() tests — 32KB-window logic
+
+    #[kithara::test]
+    fn file_source_phase_parameterless_ready_when_data_available() {
+        // 64 KB resource — enough for the 32 KB look-ahead window.
+        let data = vec![0xABu8; 64 * 1024];
+        let res = create_committed_resource(&data);
+        let progress = Arc::new(Progress::new(Timeline::new()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        // Position stays at 0, so window is 0..32KB — all present.
+        let source = FileSource::new(res, progress, bus);
+
+        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn file_source_phase_parameterless_eof_at_end() {
+        let data = b"tiny";
+        let res = create_committed_resource(data);
+        let progress = Arc::new(Progress::new(Timeline::new()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        // Move position to end-of-file.
+        progress.set_read_pos(data.len() as u64);
+        let source = FileSource::new(res, progress, bus);
+
+        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Eof);
     }
 
     #[kithara::test]

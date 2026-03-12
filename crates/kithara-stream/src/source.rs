@@ -112,10 +112,24 @@ pub trait Source: Send + 'static {
 
     /// Point-in-time snapshot of the source phase for the given range.
     ///
-    /// Returns the current [`SourcePhase`] without blocking. Used by external
-    /// observers (audio pipeline, tracing, UI) and internally by `wait_range()`
-    /// implementations for fast-path dispatch.
-    fn phase(&self, range: Range<u64>) -> SourcePhase;
+    /// Returns the current [`SourcePhase`] without blocking. Used internally
+    /// by `wait_range()` implementations for fast-path dispatch.
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// Overall source readiness at the current timeline position.
+    ///
+    /// Uses the source's internal knowledge of chunk/segment boundaries
+    /// to determine if the next read operation can proceed without blocking.
+    ///
+    /// Unlike `phase_at(range)` which checks a specific byte range,
+    /// this method lets the source decide the appropriate granularity.
+    ///
+    /// Default checks a single byte at the current position.
+    /// HLS overrides with segment-aware logic, File with 32KB-window logic.
+    fn phase(&self) -> SourcePhase {
+        let pos = self.timeline().byte_position();
+        self.phase_at(pos..pos.saturating_add(1))
+    }
 
     /// Total length if known.
     fn len(&self) -> Option<u64>;
@@ -255,7 +269,7 @@ mod tests {
             ) -> StreamResult<ReadOutcome, Self::Error> {
                 Ok(ReadOutcome::Data(0))
             }
-            fn phase(&self, _range: Range<u64>) -> SourcePhase {
+            fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
                 SourcePhase::Waiting
             }
             fn len(&self) -> Option<u64> {
@@ -268,5 +282,41 @@ mod tests {
         let source = StubSource;
         assert!(source.is_range_ready(0..0));
         assert!(!source.is_range_ready(0..10));
+    }
+
+    #[kithara::test]
+    fn phase_default_delegates_to_phase_at() {
+        use kithara_storage::WaitOutcome;
+
+        struct ReadySource;
+        impl Source for ReadySource {
+            type Error = std::io::Error;
+            fn wait_range(
+                &mut self,
+                _range: Range<u64>,
+                _timeout: Duration,
+            ) -> StreamResult<WaitOutcome, Self::Error> {
+                Ok(WaitOutcome::Ready)
+            }
+            fn read_at(
+                &mut self,
+                _offset: u64,
+                _buf: &mut [u8],
+            ) -> StreamResult<ReadOutcome, Self::Error> {
+                Ok(ReadOutcome::Data(0))
+            }
+            fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+                SourcePhase::Ready
+            }
+            fn len(&self) -> Option<u64> {
+                Some(100)
+            }
+            fn timeline(&self) -> Timeline {
+                Timeline::new()
+            }
+        }
+        let source = ReadySource;
+        // Default phase() delegates to phase_at(0..1) since timeline position is 0.
+        assert_eq!(source.phase(), SourcePhase::Ready);
     }
 }

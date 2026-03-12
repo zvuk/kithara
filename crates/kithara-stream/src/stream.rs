@@ -19,7 +19,7 @@ use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 use kithara_storage::WaitOutcome;
 
 use crate::{
-    MediaInfo, SourceSeekAnchor, StreamContext, Timeline,
+    MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
     source::{ReadOutcome, Source},
 };
 
@@ -107,6 +107,8 @@ impl<T: StreamType> Stream<T> {
 
     delegate::delegate! {
         to self.source {
+            /// Overall source readiness at current position.
+            pub fn phase(&self) -> SourcePhase;
             /// Get current media info if known.
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Get total length if known.
@@ -333,7 +335,7 @@ mod tests {
             Ok(outcome)
         }
 
-        fn phase(&self, _range: Range<u64>) -> SourcePhase {
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
             SourcePhase::Waiting
         }
 

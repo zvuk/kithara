@@ -775,7 +775,7 @@ impl Source for HlsSource {
         }
     }
 
-    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         use kithara_stream::SourcePhase;
         let segments = self.shared.segments.lock_sync();
         if self.shared.cancel.is_cancelled() || self.shared.stopped.load(Ordering::Acquire) {
@@ -790,6 +790,39 @@ impl Source for HlsSource {
         if self.is_past_eof(&segments, &range) {
             return SourcePhase::Eof;
         }
+        SourcePhase::Waiting
+    }
+
+    fn phase(&self) -> kithara_stream::SourcePhase {
+        use kithara_stream::SourcePhase;
+
+        let pos = self.shared.timeline.byte_position();
+
+        if self.shared.cancel.is_cancelled() || self.shared.stopped.load(Ordering::Acquire) {
+            return SourcePhase::Cancelled;
+        }
+
+        let (segment_ready, past_eof) = {
+            let segments = self.shared.segments.lock_sync();
+            let ready = segments.find_at_offset(pos).is_some_and(|seg| {
+                let seg_range = seg.byte_offset..seg.end_offset();
+                self.range_ready_from_segments(&segments, &seg_range)
+            });
+            let eof = self.is_past_eof(&segments, &(pos..pos.saturating_add(1)));
+            drop(segments);
+            (ready, eof)
+        };
+
+        if segment_ready {
+            return SourcePhase::Ready;
+        }
+        if self.shared.timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        if past_eof {
+            return SourcePhase::Eof;
+        }
+
         SourcePhase::Waiting
     }
 
@@ -1315,7 +1348,7 @@ mod tests {
         res.write_at(0, &[0u8; 100]).unwrap();
         res.commit(Some(100)).unwrap();
 
-        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Ready);
+        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -1323,7 +1356,7 @@ mod tests {
         let source = build_phase_test_source(1);
         let _ = source.shared.timeline.initiate_seek(Duration::from_secs(0));
 
-        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Seeking);
+        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Seeking);
     }
 
     #[kithara::test]
@@ -1333,7 +1366,7 @@ mod tests {
         source.shared.timeline.set_eof(true);
         source.shared.timeline.set_total_bytes(Some(100));
 
-        assert_eq!(source.phase(200..250), kithara_stream::SourcePhase::Eof);
+        assert_eq!(source.phase_at(200..250), kithara_stream::SourcePhase::Eof);
     }
 
     #[kithara::test]
@@ -1341,7 +1374,10 @@ mod tests {
         let source = build_test_source(1);
         source.shared.cancel.cancel();
 
-        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Cancelled);
+        assert_eq!(
+            source.phase_at(0..50),
+            kithara_stream::SourcePhase::Cancelled
+        );
     }
 
     #[kithara::test]
@@ -1349,13 +1385,39 @@ mod tests {
         let source = build_test_source(1);
         source.shared.stopped.store(true, Ordering::Release);
 
-        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Cancelled);
+        assert_eq!(
+            source.phase_at(0..50),
+            kithara_stream::SourcePhase::Cancelled
+        );
     }
 
     #[kithara::test]
     fn hls_phase_waiting_when_no_data() {
         let source = build_phase_test_source(1);
 
-        assert_eq!(source.phase(0..50), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Waiting);
+    }
+
+    // --- Source::phase() parameterless override tests ---
+
+    #[kithara::test]
+    fn hls_phase_parameterless_ready_when_segment_loaded() {
+        let source = build_phase_test_source(1);
+        push_segment(&source.shared, 0, 0, 0, 100);
+
+        // Write actual resource data so ephemeral backend reports it as present.
+        let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
+        let res = source.fetch.backend().open_resource(&key).unwrap();
+        res.write_at(0, &[0u8; 100]).unwrap();
+        res.commit(Some(100)).unwrap();
+
+        assert_eq!(source.phase(), kithara_stream::SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn hls_phase_parameterless_waiting_when_no_segments() {
+        let source = build_phase_test_source(1);
+
+        assert_eq!(source.phase(), kithara_stream::SourcePhase::Waiting);
     }
 }

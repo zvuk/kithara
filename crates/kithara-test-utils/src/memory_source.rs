@@ -72,7 +72,7 @@ impl Source for MemorySource {
         Ok(ReadOutcome::Data(n))
     }
 
-    fn phase(&self, range: Range<u64>) -> SourcePhase {
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if range.start >= self.data.len() as u64 {
             SourcePhase::Eof
         } else {

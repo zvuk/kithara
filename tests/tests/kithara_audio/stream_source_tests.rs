@@ -166,7 +166,7 @@ impl Source for TestSource {
         Ok(self.state.lock_sync().seek_anchor)
     }
 
-    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         if self.timeline.is_flushing() {
             return kithara_stream::SourcePhase::Seeking;
         }
