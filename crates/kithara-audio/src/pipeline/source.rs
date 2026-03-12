@@ -21,7 +21,7 @@ use tracing::{debug, trace, warn};
 
 use crate::{
     pipeline::{
-        track_fsm::DecoderSession,
+        track_fsm::{DecoderSession, SeekContext, TrackState},
         worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
     },
     traits::AudioEffect,
@@ -200,6 +200,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     shared_stream: SharedStream<T>,
     /// Decoder + `base_offset` + `media_info` as an atomic unit.
     pub(crate) session: DecoderSession,
+    /// Explicit FSM state — single source of truth for track phase.
+    pub(crate) state: TrackState,
     decoder_factory: DecoderFactory<T>,
     /// Pending format change: (new `MediaInfo`, byte offset where new segment starts).
     pub(crate) pending_format_change: Option<(MediaInfo, u64)>,
@@ -237,6 +239,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         Self {
             shared_stream,
             session,
+            state: TrackState::Decoding,
             decoder_factory,
             pending_format_change: None,
             epoch,
@@ -519,6 +522,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.pending_decode_started_epoch = Some(epoch);
         self.pending_seek_recover_target = Some((epoch, position));
         self.pending_seek_recover_attempts = 0;
+        self.state = TrackState::AwaitingResume {
+            seek: Some(SeekContext {
+                epoch,
+                target: position,
+            }),
+            skip: None, // set later by apply_time_anchor_seek if needed
+        };
     }
 
     fn apply_seek_from_decoder(
@@ -996,6 +1006,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
             if self.apply_format_change() {
                 reset_effects(&mut self.effects);
+                // FSM: → Decoding (format change applied, new decoder active)
+                self.state = TrackState::Decoding;
                 return DecodeAction::Continue;
             }
         }
@@ -1025,6 +1037,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.detect_format_change();
         if self.try_recover_at_boundary() {
             reset_effects(&mut self.effects);
+            // FSM: → Decoding (boundary recovery, new decoder active)
+            self.state = TrackState::Decoding;
             return DecodeAction::Continue;
         }
 
@@ -1132,6 +1146,8 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         segment_range.as_ref().map(|range| range.end),
                     );
                     self.pending_decode_started_epoch = None;
+                    // FSM: AwaitingResume → Decoding (first valid chunk)
+                    self.state = TrackState::Decoding;
                 }
                 Fetch::new(chunk, false, current_epoch)
             }
@@ -1144,6 +1160,8 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             }
             _ => {
                 self.emit_event(AudioEvent::EndOfStream);
+                // FSM: → AtEof
+                self.state = TrackState::AtEof;
                 Fetch::new(PcmChunk::default(), true, current_epoch)
             }
         }
@@ -1188,6 +1206,12 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             self.timeline.clear_seek_pending(epoch);
             return true;
         }
+
+        // FSM: → SeekRequested
+        self.state = TrackState::SeekRequested {
+            epoch,
+            target: position,
+        };
 
         let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
         self.emit_seek_lifecycle(
@@ -1257,11 +1281,18 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     attempts = self.seek_retry_count,
                     "seek abandoned after max retries, continuing from current position"
                 );
+                self.emit_event(AudioEvent::SeekRejected {
+                    epoch,
+                    target: position,
+                    attempts: self.seek_retry_count,
+                });
                 // Unstick the pipeline: accept new epoch so consumer stops
                 // rejecting chunks, and clear seek_pending to stop retries.
                 self.epoch.store(epoch, Ordering::Release);
                 self.timeline.clear_seek_pending(epoch);
                 self.seek_retry_count = 0;
+                // FSM: SeekRequested → Decoding (seek abandoned, resume playback)
+                self.state = TrackState::Decoding;
                 true
             } else {
                 warn!(

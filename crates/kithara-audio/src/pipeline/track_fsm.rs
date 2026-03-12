@@ -157,7 +157,7 @@ pub(crate) enum TrackStep<C> {
 
 /// Fieldless discriminant of [`TrackState`] for external phase queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackPhaseTag {
+pub enum TrackPhaseTag {
     Decoding,
     SeekRequested,
     WaitingForSource,

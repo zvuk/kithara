@@ -50,6 +50,7 @@ pub mod source {
     use kithara_decode::{InnerDecoder, PcmChunk};
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
+    pub use crate::pipeline::track_fsm::TrackPhaseTag;
     use crate::{pipeline::worker::AudioWorkerSource, traits::AudioEffect};
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
@@ -187,6 +188,11 @@ pub mod source {
     #[must_use]
     pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
         &source.0.timeline
+    }
+
+    #[must_use]
+    pub fn track_state<T: StreamType>(source: &StreamAudioSource<T>) -> TrackPhaseTag {
+        source.0.state.phase_tag()
     }
 }
 
