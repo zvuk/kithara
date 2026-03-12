@@ -18,6 +18,7 @@ internal = []
 disable-hang-detector = ["kithara-platform/disable-hang-detector"]
 
 [dependencies]
+delegate = { workspace = true }
 derivative = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
