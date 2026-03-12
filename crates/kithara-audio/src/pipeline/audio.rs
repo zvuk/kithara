@@ -34,6 +34,7 @@ use super::{
     config::{AudioConfig, create_effects, expected_output_spec},
     source::{OffsetReader, SharedStream, StreamAudioSource},
     thread_wake::ThreadWake,
+    track_fsm::ConsumerPhase,
     worker::AudioCommand,
     worker_types::{ServiceClass, TrackId},
 };
@@ -117,8 +118,8 @@ pub struct Audio<S> {
     /// source-of-truth. Timeline advances only after samples are committed to output.
     pub(crate) chunk_offset: usize,
 
-    /// End of stream reached.
-    pub(crate) eof: bool,
+    /// Consumer-side phase — replaces the old `eof: bool` flag.
+    pub(crate) consumer_phase: ConsumerPhase,
 
     /// Shared stream timeline for committed playback position.
     pub(crate) timeline: Timeline,
@@ -190,7 +191,7 @@ impl<S> Audio<S> {
     /// `fill_buffer()` calls from JS (via `requestAnimationFrame`) don't hang.
     pub fn preload(&mut self) {
         self.preloaded = true;
-        if self.current_chunk.is_none() && !self.eof {
+        if self.current_chunk.is_none() && !self.consumer_phase.is_terminal() {
             self.fill_buffer();
         }
     }
@@ -271,7 +272,7 @@ impl<S> Audio<S> {
     /// Check if end of stream has been reached.
     #[must_use]
     pub fn is_eof(&self) -> bool {
-        self.eof
+        self.consumer_phase.is_terminal()
     }
 
     /// Get current playback position.
@@ -324,7 +325,7 @@ impl<S> Audio<S> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
     pub fn read(&mut self, buf: &mut [f32]) -> usize {
-        if self.eof || buf.is_empty() {
+        if self.consumer_phase.is_terminal() || buf.is_empty() {
             return 0;
         }
 
@@ -388,7 +389,7 @@ impl<S> Audio<S> {
         self.validator.epoch = epoch;
         self.current_chunk = None;
         self.chunk_offset = 0;
-        self.eof = false;
+        self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
         // 3. Drain stale chunks from pcm channel to unblock worker
         while self.pcm_rx.try_pop().is_some() {
@@ -425,7 +426,7 @@ impl<S> Audio<S> {
 
     #[kithara_hang_detector::hang_watchdog]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
-        if self.eof {
+        if self.consumer_phase.is_terminal() {
             return None;
         }
 
@@ -520,7 +521,7 @@ impl<S> Audio<S> {
         }
 
         if fetch.is_eof() {
-            self.eof = true;
+            self.consumer_phase = ConsumerPhase::AtEof;
             return ChunkOutcome::Return(None);
         }
 
@@ -534,7 +535,7 @@ impl<S> Audio<S> {
     }
 
     fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
-        self.eof = true;
+        self.consumer_phase = ConsumerPhase::Failed;
         None
     }
 
@@ -559,6 +560,14 @@ impl<S> Audio<S> {
         self.spec = chunk.spec();
         self.current_chunk = Some(chunk);
         self.chunk_offset = 0;
+
+        // Transition to Playing on first chunk received
+        if matches!(
+            self.consumer_phase,
+            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
+        ) {
+            self.consumer_phase = ConsumerPhase::Playing;
+        }
         true
     }
 }
@@ -842,7 +851,7 @@ where
             spec: output_spec,
             current_chunk: None,
             chunk_offset: 0,
-            eof: false,
+            consumer_phase: ConsumerPhase::Buffering,
             timeline,
             metadata,
             audio_events_tx,
@@ -985,6 +994,15 @@ impl<S: Send> PcmReader for Audio<S> {
 
         let chunk = chunk.or_else(|| self.recv_valid_chunk())?;
         self.spec = chunk.spec();
+
+        // Transition to Playing on first chunk (same as fill_buffer)
+        if matches!(
+            self.consumer_phase,
+            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
+        ) {
+            self.consumer_phase = ConsumerPhase::Playing;
+        }
+
         self.advance_timeline(chunk.pcm.len() as u64);
         Some(chunk)
     }
@@ -1017,7 +1035,7 @@ mod tests {
             spec: PcmSpec::default(),
             current_chunk: None,
             chunk_offset: 0,
-            eof: false,
+            consumer_phase: ConsumerPhase::Buffering,
             timeline: Timeline::new(),
             metadata: TrackMetadata::default(),
             audio_events_tx,
@@ -1062,5 +1080,135 @@ mod tests {
         audio.preload();
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
+    }
+
+    // Helper that returns (Audio, data_tx) so tests can push fetches.
+    fn audio_with_channel() -> (Audio<()>, HeapProd<Fetch<PcmChunk>>) {
+        let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
+        let (data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(4).split();
+        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
+
+        let audio = Audio {
+            cmd_tx,
+            pcm_rx,
+            _epoch: Arc::new(AtomicU64::new(0)),
+            validator: EpochValidator::new(),
+            spec: PcmSpec::default(),
+            current_chunk: None,
+            chunk_offset: 0,
+            consumer_phase: ConsumerPhase::Buffering,
+            timeline: Timeline::new(),
+            metadata: TrackMetadata::default(),
+            audio_events_tx,
+            bus: EventBus::new(16),
+            cancel: None,
+            pcm_pool: pcm_pool().clone(),
+            host_sample_rate: Arc::new(AtomicU32::new(0)),
+            playback_rate: Arc::new(AtomicF32::new(1.0)),
+            preload_notify: Arc::new(Notify::new()),
+            preloaded: true, // non-blocking for tests
+            notify_waiting: None,
+            track_id: None,
+            worker: None,
+            reader_wake: Arc::new(ThreadWake::new()),
+            is_standalone_worker: false,
+            _marker: PhantomData,
+        };
+        (audio, data_tx)
+    }
+
+    fn make_chunk(samples: &[f32]) -> PcmChunk {
+        let mut chunk = PcmChunk::default();
+        chunk.pcm.clear();
+        chunk.pcm.extend_from_slice(samples);
+        chunk
+    }
+
+    // ---- ConsumerPhase transition tests ----
+
+    #[kithara::test]
+    fn consumer_phase_starts_buffering() {
+        let audio = empty_audio();
+        assert_eq!(audio.consumer_phase, ConsumerPhase::Buffering);
+    }
+
+    #[kithara::test]
+    fn consumer_phase_transitions_to_playing_on_first_chunk() {
+        use ringbuf::traits::Producer;
+        let (mut audio, mut tx) = audio_with_channel();
+        let chunk = make_chunk(&[0.1, 0.2]);
+        let fetch = Fetch::new(chunk, false, 0);
+        tx.try_push(fetch).ok();
+
+        assert!(audio.fill_buffer());
+        assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn consumer_phase_transitions_to_seek_pending() {
+        let (mut audio, _tx) = audio_with_channel();
+        audio.seek(Duration::from_secs(5)).ok();
+        assert!(matches!(
+            audio.consumer_phase,
+            ConsumerPhase::SeekPending { .. }
+        ));
+    }
+
+    #[kithara::test]
+    fn consumer_phase_seek_pending_to_playing_on_chunk() {
+        use ringbuf::traits::Producer;
+        let (mut audio, mut tx) = audio_with_channel();
+
+        // Seek sets SeekPending
+        audio.seek(Duration::from_secs(5)).ok();
+        let epoch = audio.validator.epoch;
+
+        // Push chunk with matching epoch
+        let chunk = make_chunk(&[0.1, 0.2]);
+        let fetch = Fetch::new(chunk, false, epoch);
+        tx.try_push(fetch).ok();
+
+        assert!(audio.fill_buffer());
+        assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn consumer_phase_eof_terminates() {
+        use ringbuf::traits::Producer;
+        let (mut audio, mut tx) = audio_with_channel();
+
+        let fetch = Fetch::new(PcmChunk::default(), true, 0);
+        tx.try_push(fetch).ok();
+
+        // recv_valid_chunk should set AtEof
+        let result = audio.recv_valid_chunk();
+        assert!(result.is_none());
+        assert_eq!(audio.consumer_phase, ConsumerPhase::AtEof);
+        assert!(audio.is_eof());
+    }
+
+    #[kithara::test]
+    fn consumer_phase_failed_on_channel_close() {
+        let (mut audio, _tx) = audio_with_channel();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        audio.cancel = Some(cancel);
+        // preloaded=false to trigger blocking recv which checks cancel
+        audio.preloaded = false;
+
+        let result = audio.recv_valid_chunk();
+        assert!(result.is_none());
+        assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
+        assert!(audio.is_eof());
+    }
+
+    #[kithara::test]
+    fn consumer_does_not_park_in_terminal_phase() {
+        let (mut audio, _tx) = audio_with_channel();
+        audio.consumer_phase = ConsumerPhase::AtEof;
+
+        // read() should return 0 immediately
+        let mut buf = [0.0f32; 16];
+        assert_eq!(audio.read(&mut buf), 0);
     }
 }

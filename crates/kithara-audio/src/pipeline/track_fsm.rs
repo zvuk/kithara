@@ -175,7 +175,6 @@ pub enum TrackPhaseTag {
 
 /// Consumer-side phase for `Audio<S>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "used in Phase 3 to replace eof:bool in Audio")]
 pub(crate) enum ConsumerPhase {
     /// Initial state — waiting for first chunk.
     Buffering,
@@ -221,7 +220,6 @@ impl TrackState {
 // ConsumerPhase methods
 // ---------------------------------------------------------------------------
 
-#[expect(dead_code, reason = "used in Phase 3")]
 impl ConsumerPhase {
     /// Returns `true` for terminal states.
     pub(crate) fn is_terminal(self) -> bool {

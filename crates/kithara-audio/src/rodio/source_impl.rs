@@ -6,7 +6,7 @@ impl<S> Iterator for Audio<S> {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.eof {
+        if self.consumer_phase.is_terminal() {
             return None;
         }
 
