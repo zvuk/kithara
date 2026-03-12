@@ -237,11 +237,11 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 
 # FFI
 uniffi = { version = "0.31.0" }
-jni = "0.21.1"
+jni = "0.22.3"
 ndk-context = "0.1.1"
 rustls-platform-verifier = "0.6.2"
 
