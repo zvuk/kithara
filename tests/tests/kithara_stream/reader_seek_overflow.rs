@@ -100,6 +100,10 @@ impl Source for MockSource {
         Ok(ReadOutcome::Data(n))
     }
 
+    fn phase(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
+        kithara_stream::SourcePhase::Ready
+    }
+
     fn len(&self) -> Option<u64> {
         Some(self.reported_len)
     }

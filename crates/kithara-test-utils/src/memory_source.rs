@@ -5,8 +5,8 @@ use std::{io, ops::Range, sync::Arc};
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
-    StreamType, Timeline,
+    MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
+    StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -55,6 +55,14 @@ impl Source for MemorySource {
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&self.data[offset..offset + n]);
         Ok(ReadOutcome::Data(n))
+    }
+
+    fn phase(&self, range: Range<u64>) -> SourcePhase {
+        if range.start >= self.data.len() as u64 {
+            SourcePhase::Eof
+        } else {
+            SourcePhase::Ready
+        }
     }
 
     fn len(&self) -> Option<u64> {
@@ -116,6 +124,14 @@ impl Source for UnknownLenSource {
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&self.data[offset..offset + n]);
         Ok(ReadOutcome::Data(n))
+    }
+
+    fn phase(&self, range: Range<u64>) -> SourcePhase {
+        if range.start >= self.data.len() as u64 {
+            SourcePhase::Eof
+        } else {
+            SourcePhase::Ready
+        }
     }
 
     fn len(&self) -> Option<u64> {

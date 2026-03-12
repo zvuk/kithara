@@ -561,6 +561,11 @@ impl Source for HlsSource {
         }
     }
 
+    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+        let view = self.phase_view(&self.shared.segments.lock_sync(), &range, None, 0);
+        kithara_stream::SourcePhase::classify(view)
+    }
+
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, HlsError> {
         let seg = {
             let segments = self.shared.segments.lock_sync();

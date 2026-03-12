@@ -307,7 +307,7 @@ mod tests {
     use kithara_storage::WaitOutcome;
 
     use super::*;
-    use crate::{NullStreamContext, ReadOutcome, Source, StreamContext};
+    use crate::{NullStreamContext, ReadOutcome, Source, SourcePhase, StreamContext};
 
     mod kithara {
         pub(crate) use kithara_test_macros::test;
@@ -363,6 +363,10 @@ mod tests {
                 return Ok(ReadOutcome::Data(bytes));
             }
             Ok(outcome)
+        }
+
+        fn phase(&self, _range: Range<u64>) -> SourcePhase {
+            SourcePhase::Waiting
         }
 
         fn len(&self) -> Option<u64> {

@@ -175,6 +175,13 @@ pub trait Source: Send + 'static {
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error>;
 
+    /// Point-in-time snapshot of the source phase for the given range.
+    ///
+    /// Returns the current [`SourcePhase`] without blocking. Used by external
+    /// observers (audio pipeline, tracing, UI) and internally by `wait_range()`
+    /// implementations for fast-path dispatch.
+    fn phase(&self, range: Range<u64>) -> SourcePhase;
+
     /// Total length if known.
     fn len(&self) -> Option<u64>;
 
@@ -452,6 +459,9 @@ mod tests {
                 _buf: &mut [u8],
             ) -> StreamResult<ReadOutcome, Self::Error> {
                 Ok(ReadOutcome::Data(0))
+            }
+            fn phase(&self, _range: Range<u64>) -> SourcePhase {
+                SourcePhase::Waiting
             }
             fn len(&self) -> Option<u64> {
                 Some(100)

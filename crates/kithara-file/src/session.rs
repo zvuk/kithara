@@ -216,27 +216,6 @@ impl FileSource {
     }
 }
 
-impl FileSource {
-    /// Derive the current source phase from local observations.
-    ///
-    /// Pure function — no side effects, no `&mut self`.
-    pub(crate) fn phase(&self, range: &Range<u64>) -> kithara_stream::SourcePhase {
-        let timeline = self.progress.timeline();
-        let past_eof = timeline
-            .total_bytes()
-            .is_some_and(|total| total > 0 && range.start >= total);
-        let range_ready = self.res.contains_range(range.clone());
-        let seeking = timeline.is_flushing();
-
-        kithara_stream::SourcePhase::classify(kithara_stream::SourcePhaseView {
-            past_eof,
-            range_ready,
-            seeking,
-            ..Default::default()
-        })
-    }
-}
-
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
@@ -251,7 +230,7 @@ impl kithara_stream::Source for FileSource {
 
         // Fast-path via shared FSM: check for seek, EOF, or already-ready data
         // before touching downloader state or blocking on the resource.
-        match self.phase(&range) {
+        match self.phase(range.clone()) {
             kithara_stream::SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             kithara_stream::SourcePhase::Eof => return Ok(WaitOutcome::Eof),
             kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
@@ -294,6 +273,22 @@ impl kithara_stream::Source for FileSource {
         self.res
             .wait_range(range)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
+    }
+
+    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+        let timeline = self.progress.timeline();
+        let past_eof = timeline
+            .total_bytes()
+            .is_some_and(|total| total > 0 && range.start >= total);
+        let range_ready = self.res.contains_range(range);
+        let seeking = timeline.is_flushing();
+
+        kithara_stream::SourcePhase::classify(kithara_stream::SourcePhaseView {
+            past_eof,
+            range_ready,
+            seeking,
+            ..Default::default()
+        })
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -533,7 +528,7 @@ mod tests {
         progress.timeline().set_total_bytes(Some(data.len() as u64));
         let source = FileSource::new(res, progress, bus);
 
-        assert_eq!(source.phase(&(0..5)), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase(0..5), kithara_stream::SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -550,10 +545,7 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Range 50..60 is NOT present — seeking wins.
-        assert_eq!(
-            source.phase(&(50..60)),
-            kithara_stream::SourcePhase::Seeking,
-        );
+        assert_eq!(source.phase(50..60), kithara_stream::SourcePhase::Seeking,);
     }
 
     #[kithara::test]
@@ -570,7 +562,7 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Data IS present — Ready wins over Seeking (allows drain).
-        assert_eq!(source.phase(&(0..5)), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase(0..5), kithara_stream::SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -582,7 +574,7 @@ mod tests {
         progress.timeline().set_total_bytes(Some(data.len() as u64));
         let source = FileSource::new(res, progress, bus);
 
-        assert_eq!(source.phase(&(100..110)), kithara_stream::SourcePhase::Eof,);
+        assert_eq!(source.phase(100..110), kithara_stream::SourcePhase::Eof,);
     }
 
     #[kithara::test]

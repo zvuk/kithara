@@ -166,6 +166,20 @@ impl Source for TestSource {
         Ok(self.state.lock_sync().seek_anchor)
     }
 
+    fn phase(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+        if self.timeline.is_flushing() {
+            return kithara_stream::SourcePhase::Seeking;
+        }
+        if self
+            .timeline
+            .total_bytes()
+            .is_some_and(|total| total > 0 && range.start >= total)
+        {
+            return kithara_stream::SourcePhase::Eof;
+        }
+        kithara_stream::SourcePhase::Ready
+    }
+
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
