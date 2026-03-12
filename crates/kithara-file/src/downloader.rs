@@ -10,7 +10,7 @@ use kithara_assets::AssetResource;
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
 use kithara_platform::{WasmSend, tokio};
-use kithara_storage::ResourceExt;
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
@@ -81,7 +81,9 @@ impl DownloaderIo for FileIo {
                         Ok(WriterItem::StreamEnded { .. }) => break,
                         Err(e) => {
                             tracing::warn!(?e, "range download failed");
-                            break;
+                            let msg = e.to_string();
+                            self.res.fail(msg.clone());
+                            return Err(FileDownloadError { msg });
                         }
                     }
                 }
@@ -256,6 +258,32 @@ impl FileDownloader {
             msg: "writer initialization failed".to_string(),
         })
     }
+
+    fn switch_phase_for_demand(&mut self) {
+        if matches!(self.phase, FilePhase::Sequential) {
+            tracing::debug!("demand during sequential — switching to gap-filling");
+            self.phase = FilePhase::GapFilling;
+            // Drop the sequential writer to release the HTTP connection.
+            *self.writer.get_mut() = None;
+        } else if matches!(self.phase, FilePhase::Complete) {
+            tracing::debug!("demand after complete — reopening gap-filling");
+            self.phase = FilePhase::GapFilling;
+        }
+    }
+
+    fn reactivate_for_demand(&self) -> Option<()> {
+        if matches!(self.res.status(), ResourceStatus::Committed { .. })
+            && let Err(e) = self.res.reactivate()
+        {
+            let error = format!("failed to reactivate committed resource: {e}");
+            tracing::error!(?e, "reactivate before demand download failed");
+            self.res.fail(error.clone());
+            self.bus.publish(FileEvent::DownloadError { error });
+            return None;
+        }
+
+        Some(())
+    }
 }
 
 impl Downloader for FileDownloader {
@@ -273,12 +301,8 @@ impl Downloader for FileDownloader {
 
         // Cancel sequential download when demand arrives — bandwidth is better
         // spent on the data the reader actually needs (gap-filling).
-        if matches!(self.phase, FilePhase::Sequential) {
-            tracing::debug!("demand during sequential — switching to gap-filling");
-            self.phase = FilePhase::GapFilling;
-            // Drop the sequential writer to release the HTTP connection.
-            *self.writer.get_mut() = None;
-        }
+        self.switch_phase_for_demand();
+        self.reactivate_for_demand()?;
 
         tracing::debug!(
             start = range.start,
@@ -338,7 +362,9 @@ impl Downloader for FileDownloader {
                     PlanOutcome::Batch(plans)
                 }
             }
-            FilePhase::Complete => PlanOutcome::Complete,
+            // A committed remote file may still need future on-demand range
+            // fetches after cache eviction, so stay idle until demand arrives.
+            FilePhase::Complete => PlanOutcome::Idle,
         }
     }
 
@@ -489,6 +515,13 @@ impl Downloader for FileDownloader {
             shared.reader_needs_data.notified().await;
         }
     }
+
+    fn wait_for_work(&self) -> impl Future<Output = ()> {
+        let shared = Arc::clone(&self.shared);
+        async move {
+            shared.reader_needs_data.notified().await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +530,7 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_net::{HttpClient, NetOptions};
+    use kithara_storage::ResourceStatus;
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
@@ -566,6 +600,102 @@ mod tests {
         assert!(
             !matches!(outcome, PlanOutcome::Step),
             "sequential should be cancelled after demand — plan must not return Step"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn poll_demand_reactivates_committed_resource() {
+        let cancel = CancellationToken::new();
+
+        let store = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .asset_root(Some("test"))
+            .cancel(cancel.clone())
+            .build();
+
+        let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
+        let key = ResourceKey::from_url(&url);
+        let res = store.open_resource(&key).unwrap();
+        res.write_at(0, &[0u8; 1024]).unwrap();
+        res.commit(Some(1024)).unwrap();
+
+        let io = FileIo {
+            net_client: HttpClient::new(NetOptions::default()),
+            url,
+            res: res.clone(),
+            cancel: cancel.clone(),
+            headers: None,
+        };
+
+        let shared = Arc::new(SharedFileState::new());
+        let mut dl = FileDownloader {
+            io,
+            writer: WasmSend::new(None),
+            res: res.clone(),
+            progress: Arc::new(Progress::new(Timeline::new())),
+            bus: EventBus::new(16),
+            total: Some(1024),
+            look_ahead_bytes: None,
+            shared: shared.clone(),
+            phase: FilePhase::Complete,
+            sequential_offset: None,
+        };
+
+        shared.request_range(128..256);
+
+        let demand = dl.poll_demand().await;
+        assert!(demand.is_some(), "demand should be available");
+        assert!(
+            matches!(dl.phase, FilePhase::GapFilling),
+            "on-demand fetch must reopen the downloader loop after Complete"
+        );
+        assert!(
+            matches!(res.status(), ResourceStatus::Active),
+            "on-demand fetch must reactivate committed resource before range download"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn complete_phase_waits_for_future_demand() {
+        let cancel = CancellationToken::new();
+
+        let store = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .asset_root(Some("test"))
+            .cancel(cancel.clone())
+            .build();
+
+        let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
+        let key = ResourceKey::from_url(&url);
+        let res = store.open_resource(&key).unwrap();
+        res.write_at(0, &[0u8; 1024]).unwrap();
+        res.commit(Some(1024)).unwrap();
+
+        let io = FileIo {
+            net_client: HttpClient::new(NetOptions::default()),
+            url,
+            res: res.clone(),
+            cancel,
+            headers: None,
+        };
+
+        let mut dl = FileDownloader {
+            io,
+            writer: WasmSend::new(None),
+            res,
+            progress: Arc::new(Progress::new(Timeline::new())),
+            bus: EventBus::new(16),
+            total: Some(1024),
+            look_ahead_bytes: None,
+            shared: Arc::new(SharedFileState::new()),
+            phase: FilePhase::Complete,
+            sequential_offset: None,
+        };
+
+        let outcome = dl.plan().await;
+        assert!(
+            matches!(outcome, PlanOutcome::Idle),
+            "complete remote file downloader must stay idle for future demand requests"
         );
     }
 }
