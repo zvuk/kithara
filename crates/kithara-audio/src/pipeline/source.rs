@@ -1031,68 +1031,66 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     type Item = PcmChunk;
     type Error = DecodeError;
 
+    #[kithara_hang_detector::hang_watchdog]
     fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        kithara_platform::hang_watchdog! {
-            thread: "decode.next";
-            loop {
-                hang_tick!();
-                kithara_platform::thread::yield_now();
+        loop {
+            hang_tick!();
+            kithara_platform::thread::yield_now();
 
-                // Exit immediately when a seek is pending so the worker
-                // loop can call apply_pending_seek().  This guard is
-                // necessary because Symphonia silently retries
-                // io::ErrorKind::Interrupted (standard Rust convention),
-                // so a flushing signal sent from wait_range may never
-                // escape the decoder's internal read loop.
-                if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
-                    return Err(DecodeError::Interrupted);
-                }
+            // Exit immediately when a seek is pending so the worker
+            // loop can call apply_pending_seek().  This guard is
+            // necessary because Symphonia silently retries
+            // io::ErrorKind::Interrupted (standard Rust convention),
+            // so a flushing signal sent from wait_range may never
+            // escape the decoder's internal read loop.
+            if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
+                return Err(DecodeError::Interrupted);
+            }
 
-                self.detect_format_change();
+            self.detect_format_change();
 
-                match self.decoder_next_chunk_safe() {
-                    Ok(Some(chunk)) => {
-                        let current_epoch = self.epoch.load(Ordering::Acquire);
-                        let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
-                            continue;
-                        };
-                        if chunk.pcm.is_empty() {
-                            continue;
-                        }
-                        hang_reset!();
-                        self.pending_seek_recover_target = None;
-                        self.pending_seek_recover_attempts = 0;
-
-                        self.track_chunk(&chunk);
-                        self.detect_format_change();
-
-                        if self.chunks_decoded.is_multiple_of(100) {
-                            trace!(
-                                chunks = self.chunks_decoded,
-                                samples = self.total_samples,
-                                spec = ?chunk.spec(),
-                                "decode progress"
-                            );
-                        }
-
-                        match apply_effects(&mut self.effects, chunk) {
-                            Some(processed) => return Ok(Some(processed)),
-                            None => continue,
-                        }
-                    }
-                    Ok(None) => match self.handle_decode_eof() {
-                        DecodeAction::Continue => continue,
-                        DecodeAction::Return(result) => return result,
-                    },
-                    Err(e) if e.is_interrupted() => {
-                        trace!("decode interrupted by seek, retrying");
+            match self.decoder_next_chunk_safe() {
+                Ok(Some(chunk)) => {
+                    let current_epoch = self.epoch.load(Ordering::Acquire);
+                    let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
+                        continue;
+                    };
+                    if chunk.pcm.is_empty() {
                         continue;
                     }
-                    Err(e) => match self.handle_decode_error(e) {
-                        DecodeAction::Continue => continue,
-                        DecodeAction::Return(result) => return result,
-                    },
+                    hang_reset!();
+                    self.pending_seek_recover_target = None;
+                    self.pending_seek_recover_attempts = 0;
+
+                    self.track_chunk(&chunk);
+                    self.detect_format_change();
+
+                    if self.chunks_decoded.is_multiple_of(100) {
+                        trace!(
+                            chunks = self.chunks_decoded,
+                            samples = self.total_samples,
+                            spec = ?chunk.spec(),
+                            "decode progress"
+                        );
+                    }
+
+                    match apply_effects(&mut self.effects, chunk) {
+                        Some(processed) => return Ok(Some(processed)),
+                        None => continue,
+                    }
                 }
+                Ok(None) => match self.handle_decode_eof() {
+                    DecodeAction::Continue => continue,
+                    DecodeAction::Return(result) => return result,
+                },
+                Err(e) if e.is_interrupted() => {
+                    trace!("decode interrupted by seek, retrying");
+                    continue;
+                }
+                Err(e) => match self.handle_decode_error(e) {
+                    DecodeAction::Continue => continue,
+                    DecodeAction::Return(result) => return result,
+                },
             }
         }
     }

@@ -1,0 +1,21 @@
+[package]
+name = "kithara-hang-detector-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proc-macro crate: #[hang_watchdog] attribute for loop progress detection"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+
+[lints]
+workspace = true

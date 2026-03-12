@@ -295,6 +295,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara_hang_detector::hang_watchdog]
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
@@ -308,74 +309,70 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         }
 
         let mut prev_available_len: u64 = 0;
-        kithara_platform::hang_watchdog! {
-            thread: "storage.wait_range";
-            loop {
-                // Fast path: let the driver check without holding state lock.
-                if self.inner.driver.try_fast_check(&range) {
-                    return Ok(WaitOutcome::Ready);
-                }
-
-                // Slow path: lock state and check coverage, wait if needed.
-                let state = self.inner.state.lock_sync();
-
-                if self.inner.cancel.is_cancelled() {
-                    return Err(StorageError::Cancelled);
-                }
-
-                if let Some(ref reason) = state.failed {
-                    return Err(StorageError::Failed(reason.clone()));
-                }
-
-                if range_covered_by(&state.available, &range) {
-                    return Ok(WaitOutcome::Ready);
-                }
-
-                if state.committed {
-                    let final_len = state.final_len.unwrap_or(0);
-                    if range.start >= final_len {
-                        return Ok(WaitOutcome::Eof);
-                    }
-                    // Clamp range to file size: readers may request beyond
-                    // EOF (e.g., Symphonia probing). Data within 0..final_len
-                    // is what matters.
-                    let clamped = range.start..range.end.min(final_len);
-                    if range_covered_by(&state.available, &clamped) {
-                        return Ok(WaitOutcome::Ready);
-                    }
-                    // For non-ring-buffer drivers, committed means all data
-                    // is available (range_covered_by above may fail if
-                    // available wasn't populated, but the data is on disk).
-                    if self.inner.driver.valid_window().is_none() {
-                        return Ok(WaitOutcome::Ready);
-                    }
-                    // Ring buffer with evicted data: fall through to
-                    // spin-wait. The on-demand mechanism re-downloads
-                    // needed data and notifies the condvar.
-                }
-
-                // Reset hang detector when download makes progress.
-                let current_available_len: u64 =
-                    state.available.iter().map(|r| r.end - r.start).sum();
-                if current_available_len > prev_available_len {
-                    prev_available_len = current_available_len;
-                    hang_reset!();
-                }
-
-                debug!(
-                    range_start = range.start,
-                    range_end = range.end,
-                    committed = state.committed,
-                    final_len = ?state.final_len,
-                    "storage::wait_range spinning"
-                );
-
-                hang_tick!();
-                kithara_platform::thread::yield_now();
-                let deadline = kithara_platform::time::Instant::now()
-                    + kithara_platform::time::Duration::from_millis(50);
-                let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
+        loop {
+            // Fast path: let the driver check without holding state lock.
+            if self.inner.driver.try_fast_check(&range) {
+                return Ok(WaitOutcome::Ready);
             }
+
+            // Slow path: lock state and check coverage, wait if needed.
+            let state = self.inner.state.lock_sync();
+
+            if self.inner.cancel.is_cancelled() {
+                return Err(StorageError::Cancelled);
+            }
+
+            if let Some(ref reason) = state.failed {
+                return Err(StorageError::Failed(reason.clone()));
+            }
+
+            if range_covered_by(&state.available, &range) {
+                return Ok(WaitOutcome::Ready);
+            }
+
+            if state.committed {
+                let final_len = state.final_len.unwrap_or(0);
+                if range.start >= final_len {
+                    return Ok(WaitOutcome::Eof);
+                }
+                // Clamp range to file size: readers may request beyond
+                // EOF (e.g., Symphonia probing). Data within 0..final_len
+                // is what matters.
+                let clamped = range.start..range.end.min(final_len);
+                if range_covered_by(&state.available, &clamped) {
+                    return Ok(WaitOutcome::Ready);
+                }
+                // For non-ring-buffer drivers, committed means all data
+                // is available (range_covered_by above may fail if
+                // available wasn't populated, but the data is on disk).
+                if self.inner.driver.valid_window().is_none() {
+                    return Ok(WaitOutcome::Ready);
+                }
+                // Ring buffer with evicted data: fall through to
+                // spin-wait. The on-demand mechanism re-downloads
+                // needed data and notifies the condvar.
+            }
+
+            // Reset hang detector when download makes progress.
+            let current_available_len: u64 = state.available.iter().map(|r| r.end - r.start).sum();
+            if current_available_len > prev_available_len {
+                prev_available_len = current_available_len;
+                hang_reset!();
+            }
+
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                committed = state.committed,
+                final_len = ?state.final_len,
+                "storage::wait_range spinning"
+            );
+
+            hang_tick!();
+            kithara_platform::thread::yield_now();
+            let deadline = kithara_platform::time::Instant::now()
+                + kithara_platform::time::Duration::from_millis(50);
+            let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }
 

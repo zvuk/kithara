@@ -17,6 +17,7 @@ members = [
     "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-hang-detector",
+    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
@@ -46,6 +47,7 @@ default-members = [
     "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-hang-detector",
+    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
@@ -142,6 +144,7 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-hang-detector = { path = "crates/kithara-hang-detector", version = "0.1.0" }
+kithara-hang-detector-macros = { path = "crates/kithara-hang-detector-macros", version = "0.1.0" }
 kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }

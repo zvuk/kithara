@@ -294,6 +294,7 @@ const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
 ///
 /// Runs on a dedicated OS thread. Drains commands, steps each track
 /// round-robin (one chunk per track per pass), sleeps when idle.
+#[kithara_hang_detector::hang_watchdog]
 fn run_shared_worker_loop(
     cmd_rx: &mpsc::Receiver<WorkerCmd>,
     wake: &WorkerWake,
@@ -303,87 +304,82 @@ fn run_shared_worker_loop(
     let mut tracks: Vec<TrackSlot> = Vec::new();
     let mut cursor: usize = 0;
 
-    kithara_platform::hang_watchdog! {
-        thread: "audio.shared_worker";
-        loop {
-            if cancel.is_cancelled() {
-                trace!("shared worker cancelled");
-                for slot in &mut tracks {
-                    slot.complete_preload();
-                }
-                return;
+    loop {
+        if cancel.is_cancelled() {
+            trace!("shared worker cancelled");
+            for slot in &mut tracks {
+                slot.complete_preload();
             }
+            return;
+        }
 
-            // Phase 1: Drain global commands.
-            let should_stop = drain_worker_commands(cmd_rx, &mut tracks, &mut cursor);
-            if should_stop {
-                return;
-            }
+        // Phase 1: Drain global commands.
+        let should_stop = drain_worker_commands(cmd_rx, &mut tracks, &mut cursor);
+        if should_stop {
+            return;
+        }
 
-            // Phase 2: Round-robin — one step per track.
-            let mut progress = false;
-            let track_count = tracks.len();
+        // Phase 2: Round-robin — one step per track.
+        let mut progress = false;
+        let track_count = tracks.len();
 
-            for _ in 0..track_count {
-                if cursor >= track_count {
-                    cursor = 0;
-                }
-                let slot = &mut tracks[cursor];
-                cursor += 1;
-
-                match catch_unwind(AssertUnwindSafe(|| slot.step())) {
-                    Ok(StepResult::Progress) => progress = true,
-                    Ok(StepResult::NoProgress) => {}
-                    Err(_) => {
-                        warn!(track_id = slot.track_id, "shared worker: track panicked");
-                        slot.phase = TrackPhase::Failed;
-                        slot.complete_preload();
-                        // Push EOF so the consumer stops waiting for chunks.
-                        let epoch = slot.source.timeline().seek_epoch();
-                        let _ = slot.data_tx.try_push(Fetch::new(
-                            PcmChunk::default(),
-                            true,
-                            epoch,
-                        ));
-                    }
-                }
-            }
-
-            // Phase 3: Cleanup failed/cancelled tracks.
-            let before = tracks.len();
-            tracks.retain(|slot| !slot.is_removable());
-            if tracks.len() < before && cursor > tracks.len() {
+        for _ in 0..track_count {
+            if cursor >= track_count {
                 cursor = 0;
             }
+            let slot = &mut tracks[cursor];
+            cursor += 1;
 
-            // Phase 4: Idle.
-            if progress {
-                hang_reset!();
-                kithara_platform::thread::yield_now();
-            } else if tracks.is_empty() {
-                // No tracks registered — the worker is legitimately idle,
-                // not hung. Reset the watchdog to avoid false positives.
-                hang_reset!();
-                wake.wait_timeout(EMPTY_TIMEOUT);
-            } else {
-                // Terminal phases (AtEof/Failed) are legitimately idle:
-                // they wait for an external event (seek command). Reset the
-                // watchdog so it doesn't fire during normal inter-seek gaps.
-                //
-                // Non-terminal phases (Decoding/PendingReset) that report
-                // no progress should tick the watchdog: if the source stays
-                // "not ready" because the downloader is also stalled, the
-                // watchdog will fire after the configured timeout.
-                let all_terminal = tracks.iter().all(|s| {
-                    matches!(s.phase, TrackPhase::AtEof | TrackPhase::Failed)
-                });
-                if all_terminal {
-                    hang_reset!();
-                } else {
-                    hang_tick!();
+            match catch_unwind(AssertUnwindSafe(|| slot.step())) {
+                Ok(StepResult::Progress) => progress = true,
+                Ok(StepResult::NoProgress) => {}
+                Err(_) => {
+                    warn!(track_id = slot.track_id, "shared worker: track panicked");
+                    slot.phase = TrackPhase::Failed;
+                    slot.complete_preload();
+                    // Push EOF so the consumer stops waiting for chunks.
+                    let epoch = slot.source.timeline().seek_epoch();
+                    let _ = slot
+                        .data_tx
+                        .try_push(Fetch::new(PcmChunk::default(), true, epoch));
                 }
-                wake.wait_timeout(IDLE_TIMEOUT);
             }
+        }
+
+        // Phase 3: Cleanup failed/cancelled tracks.
+        let before = tracks.len();
+        tracks.retain(|slot| !slot.is_removable());
+        if tracks.len() < before && cursor > tracks.len() {
+            cursor = 0;
+        }
+
+        // Phase 4: Idle.
+        if progress {
+            hang_reset!();
+            kithara_platform::thread::yield_now();
+        } else if tracks.is_empty() {
+            // No tracks registered — the worker is legitimately idle,
+            // not hung. Reset the watchdog to avoid false positives.
+            hang_reset!();
+            wake.wait_timeout(EMPTY_TIMEOUT);
+        } else {
+            // Terminal phases (AtEof/Failed) are legitimately idle:
+            // they wait for an external event (seek command). Reset the
+            // watchdog so it doesn't fire during normal inter-seek gaps.
+            //
+            // Non-terminal phases (Decoding/PendingReset) that report
+            // no progress should tick the watchdog: if the source stays
+            // "not ready" because the downloader is also stalled, the
+            // watchdog will fire after the configured timeout.
+            let all_terminal = tracks
+                .iter()
+                .all(|s| matches!(s.phase, TrackPhase::AtEof | TrackPhase::Failed));
+            if all_terminal {
+                hang_reset!();
+            } else {
+                hang_tick!();
+            }
+            wake.wait_timeout(IDLE_TIMEOUT);
         }
     }
 }

@@ -3789,6 +3789,7 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-file",
+ "kithara-hang-detector",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
@@ -3964,11 +3965,22 @@ name = "kithara-hang-detector"
 version = "0.1.0"
 dependencies = [
  "kithara-hang-detector",
+ "kithara-hang-detector-macros",
  "kithara-test-macros",
  "kithara-workspace-hack",
  "tracing",
  "wasm-bindgen-test",
  "web-time",
+]
+
+[[package]]
+name = "kithara-hang-detector-macros"
+version = "0.1.0"
+dependencies = [
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3988,6 +4000,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-drm",
  "kithara-events",
+ "kithara-hang-detector",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
@@ -4162,6 +4175,7 @@ dependencies = [
  "derivative",
  "hotpath",
  "kithara-bufpool",
+ "kithara-hang-detector",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4187,6 +4201,7 @@ dependencies = [
  "derive_setters",
  "futures",
  "hotpath",
+ "kithara-hang-detector",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",

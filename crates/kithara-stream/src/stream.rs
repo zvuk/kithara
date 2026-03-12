@@ -153,6 +153,7 @@ const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara_hang_detector::hang_watchdog]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -161,63 +162,60 @@ impl<T: StreamType> Read for Stream<T> {
         // Retry loop: ReadOutcome::Retry means a resource was evicted between
         // wait_range (metadata ready) and read_at (actual I/O). Go back to
         // wait_range so the downloader can re-fetch.
-        kithara_platform::hang_watchdog! {
-            thread: "stream.read";
-            loop {
-                let pos = self.timeline.byte_position();
-                let range = pos..pos.saturating_add(buf.len() as u64);
+        loop {
+            let pos = self.timeline.byte_position();
+            let range = pos..pos.saturating_add(buf.len() as u64);
 
-                // Wait for data to be available (blocking)
-                match self
-                    .source
-                    .wait_range(range, WAIT_RANGE_TIMEOUT)
-                    .map_err(|e| io::Error::other(e.to_string()))?
-                {
-                    WaitOutcome::Ready => {}
-                    WaitOutcome::Eof => return Ok(0),
-                    WaitOutcome::Interrupted => {
-                        if !self.timeline.is_flushing() {
-                            // Some sources use Interrupted as a recoverable
-                            // "retry wait_range" signal when seek is not active.
-                            hang_tick!();
-                            kithara_platform::thread::yield_now();
-                            continue;
-                        }
-                        // Use `Other` instead of `Interrupted` because Symphonia
-                        // silently retries `Interrupted` errors (standard Rust I/O
-                        // convention).  `Other` propagates through the decoder and
-                        // becomes `DecodeError::Io`, which `handle_decode_error`
-                        // can recover from by exiting to the worker loop.
-                        return Err(io::Error::other("seek pending"));
-                    }
-                }
-
-                // Read data directly from source.
-                // No flushing check here: wait_range already handles interruption,
-                // and the decoder must be able to read during apply_pending_seek().
-                match self
-                    .source
-                    .read_at(pos, buf)
-                    .map_err(|e| io::Error::other(e.to_string()))?
-                {
-                    ReadOutcome::Data(n) => {
-                        hang_reset!();
-                        self.timeline
-                            .set_byte_position(pos.saturating_add(n as u64));
-                        return Ok(n);
-                    }
-                    ReadOutcome::VariantChange => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Interrupted,
-                            "variant change: decoder recreation required",
-                        ));
-                    }
-                    ReadOutcome::Retry => {
-                        // Resource evicted — go back to wait_range.
+            // Wait for data to be available (blocking)
+            match self
+                .source
+                .wait_range(range, WAIT_RANGE_TIMEOUT)
+                .map_err(|e| io::Error::other(e.to_string()))?
+            {
+                WaitOutcome::Ready => {}
+                WaitOutcome::Eof => return Ok(0),
+                WaitOutcome::Interrupted => {
+                    if !self.timeline.is_flushing() {
+                        // Some sources use Interrupted as a recoverable
+                        // "retry wait_range" signal when seek is not active.
                         hang_tick!();
                         kithara_platform::thread::yield_now();
                         continue;
                     }
+                    // Use `Other` instead of `Interrupted` because Symphonia
+                    // silently retries `Interrupted` errors (standard Rust I/O
+                    // convention).  `Other` propagates through the decoder and
+                    // becomes `DecodeError::Io`, which `handle_decode_error`
+                    // can recover from by exiting to the worker loop.
+                    return Err(io::Error::other("seek pending"));
+                }
+            }
+
+            // Read data directly from source.
+            // No flushing check here: wait_range already handles interruption,
+            // and the decoder must be able to read during apply_pending_seek().
+            match self
+                .source
+                .read_at(pos, buf)
+                .map_err(|e| io::Error::other(e.to_string()))?
+            {
+                ReadOutcome::Data(n) => {
+                    hang_reset!();
+                    self.timeline
+                        .set_byte_position(pos.saturating_add(n as u64));
+                    return Ok(n);
+                }
+                ReadOutcome::VariantChange => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "variant change: decoder recreation required",
+                    ));
+                }
+                ReadOutcome::Retry => {
+                    // Resource evicted — go back to wait_range.
+                    hang_tick!();
+                    kithara_platform::thread::yield_now();
+                    continue;
                 }
             }
         }

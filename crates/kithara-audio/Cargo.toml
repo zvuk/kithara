@@ -27,6 +27,7 @@ tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
@@ -48,6 +49,7 @@ memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 apple = ["kithara-decode/apple"]
 # Disable hang-loop detection in wait loops (fallback to no-op detector)
 disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
     "kithara-stream/disable-hang-detector",
 ]

@@ -318,6 +318,7 @@ impl<S> Audio<S> {
     ///
     /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
     #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara_hang_detector::hang_watchdog]
     pub fn read(&mut self, buf: &mut [f32]) -> usize {
         if self.eof || buf.is_empty() {
             return 0;
@@ -326,37 +327,33 @@ impl<S> Audio<S> {
         let mut written = 0;
         let mut last_output_meta: Option<PcmMeta> = None;
 
-        kithara_platform::hang_watchdog! {
-            thread: "audio.read";
+        while written < buf.len() {
+            hang_tick!();
 
-            while written < buf.len() {
-                hang_tick!();
-
-                // Try to read from current chunk
-                if let Some(ref chunk) = self.current_chunk {
-                    let remaining_in_chunk = chunk.pcm.len() - self.chunk_offset;
-                    let to_copy = (buf.len() - written).min(remaining_in_chunk);
-                    if to_copy > 0 {
-                        hang_reset!();
-                    }
-
-                    buf[written..written + to_copy]
-                        .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
-                    last_output_meta = Some(chunk.meta);
-
-                    written += to_copy;
-                    self.chunk_offset += to_copy;
-
-                    if self.chunk_offset >= chunk.pcm.len() {
-                        self.current_chunk = None; // auto-recycles via Drop
-                        self.chunk_offset = 0;
-                    }
+            // Try to read from current chunk
+            if let Some(ref chunk) = self.current_chunk {
+                let remaining_in_chunk = chunk.pcm.len() - self.chunk_offset;
+                let to_copy = (buf.len() - written).min(remaining_in_chunk);
+                if to_copy > 0 {
+                    hang_reset!();
                 }
 
-                // Need more data - fetch next chunk
-                if !self.fill_buffer() {
-                    break;
+                buf[written..written + to_copy]
+                    .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
+                last_output_meta = Some(chunk.meta);
+
+                written += to_copy;
+                self.chunk_offset += to_copy;
+
+                if self.chunk_offset >= chunk.pcm.len() {
+                    self.current_chunk = None; // auto-recycles via Drop
+                    self.chunk_offset = 0;
                 }
+            }
+
+            // Need more data - fetch next chunk
+            if !self.fill_buffer() {
+                break;
             }
         }
 
@@ -378,6 +375,7 @@ impl<S> Audio<S> {
     ///
     /// This method is infallible in practice but returns `DecodeResult` for
     /// API compatibility.
+    #[kithara_hang_detector::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
         // 1. Atomic write to Timeline — FLUSH_START
         let epoch = self.timeline.initiate_seek(position);
@@ -389,12 +387,8 @@ impl<S> Audio<S> {
         self.eof = false;
 
         // 3. Drain stale chunks from pcm channel to unblock worker
-        kithara_platform::hang_watchdog! {
-            thread: "audio.seek";
-
-            while self.pcm_rx.try_pop().is_some() {
-                hang_tick!();
-            }
+        while self.pcm_rx.try_pop().is_some() {
+            hang_tick!();
         }
 
         // 4. Wake blocked wait_range() calls for instant seek response
@@ -425,30 +419,28 @@ impl<S> Audio<S> {
         }
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.eof {
             return None;
         }
 
-        kithara_platform::hang_watchdog! {
-            thread: "audio.recv_chunk";
-            loop {
-                match self.recv_outcome() {
-                    RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                        ChunkOutcome::Continue => {
-                            hang_tick!();
-                            continue;
-                        }
-                        ChunkOutcome::Return(chunk) => {
-                            hang_reset!();
-                            return chunk;
-                        }
-                    },
-                    RecvOutcome::Empty => return None,
-                    RecvOutcome::Closed => {
-                        hang_reset!();
-                        return self.close_channel_and_mark_eof();
+        loop {
+            match self.recv_outcome() {
+                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
+                    ChunkOutcome::Continue => {
+                        hang_tick!();
+                        continue;
                     }
+                    ChunkOutcome::Return(chunk) => {
+                        hang_reset!();
+                        return chunk;
+                    }
+                },
+                RecvOutcome::Empty => return None,
+                RecvOutcome::Closed => {
+                    hang_reset!();
+                    return self.close_channel_and_mark_eof();
                 }
             }
         }
@@ -466,26 +458,24 @@ impl<S> Audio<S> {
         self.recv_outcome_blocking()
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
-        kithara_platform::hang_watchdog! {
-            thread: "audio.recv_chunk";
-            loop {
-                if let Some(fetch) = self.pcm_rx.try_pop() {
-                    hang_reset!();
-                    self.wake_worker();
-                    return RecvOutcome::Item(fetch);
-                }
-                if self
-                    .cancel
-                    .as_ref()
-                    .is_some_and(CancellationToken::is_cancelled)
-                {
-                    hang_reset!();
-                    return RecvOutcome::Closed;
-                }
-                hang_tick!();
-                kithara_platform::thread::sleep(RECV_BACKOFF);
+        loop {
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
             }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
+            hang_tick!();
+            kithara_platform::thread::sleep(RECV_BACKOFF);
         }
     }
 
@@ -1031,7 +1021,7 @@ mod tests {
 
     #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
     #[kithara::test(env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-    #[should_panic(expected = "audio.recv_chunk")]
+    #[should_panic(expected = "recv_outcome_blocking")]
     fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
         let mut audio = empty_audio();
         let _ = audio.recv_valid_chunk();

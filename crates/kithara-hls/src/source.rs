@@ -618,6 +618,7 @@ impl Source for HlsSource {
         clippy::significant_drop_tightening,
         reason = "lock must be held for condvar wait"
     )]
+    #[kithara_hang_detector::hang_watchdog(timeout = timeout)]
     fn wait_range(
         &mut self,
         range: Range<u64>,
@@ -627,119 +628,118 @@ impl Source for HlsSource {
         let mut on_demand_epoch: Option<u64> = None;
         let started_at = Instant::now();
 
-        kithara_platform::hang_watchdog! {
-            timeout: timeout;
-            thread: "hls.wait_range";
-            loop {
-                let mut segments = self.shared.segments.lock_sync();
-                let seek_epoch = self.shared.timeline.seek_epoch();
+        loop {
+            let mut segments = self.shared.segments.lock_sync();
+            let seek_epoch = self.shared.timeline.seek_epoch();
 
-                // Reset on-demand tracking if seek epoch changed.
-                if on_demand_epoch.is_some_and(|epoch| epoch != seek_epoch) {
-                    on_demand_epoch = None;
-                }
+            // Reset on-demand tracking if seek epoch changed.
+            if on_demand_epoch.is_some_and(|epoch| epoch != seek_epoch) {
+                on_demand_epoch = None;
+            }
 
-                // Compute phase inline — priority order matches SourcePhase::classify.
-                let cancelled = self.shared.cancel.is_cancelled();
-                let stopped = self.shared.stopped.load(Ordering::Acquire);
-                let range_ready = self.range_ready_from_segments(&segments, &range);
-                let seeking = self.shared.timeline.is_flushing();
-                let past_eof = self.is_past_eof(&segments, &range);
-                let waiting_demand =
-                    on_demand_epoch.is_some_and(|epoch| epoch == seek_epoch);
-                let waiting_metadata = metadata_miss_count > 0 && !waiting_demand;
+            // Compute phase inline — priority order matches SourcePhase::classify.
+            let cancelled = self.shared.cancel.is_cancelled();
+            let stopped = self.shared.stopped.load(Ordering::Acquire);
+            let range_ready = self.range_ready_from_segments(&segments, &range);
+            let seeking = self.shared.timeline.is_flushing();
+            let past_eof = self.is_past_eof(&segments, &range);
+            let waiting_demand = on_demand_epoch.is_some_and(|epoch| epoch == seek_epoch);
+            let waiting_metadata = metadata_miss_count > 0 && !waiting_demand;
 
-                if range_ready {
-                    hang_reset!();
-                }
+            if range_ready {
+                hang_reset!();
+            }
 
-                // Priority dispatch (highest wins).
-                if cancelled || (stopped && !range_ready) {
-                    return if stopped && past_eof {
-                        Ok(WaitOutcome::Eof)
-                    } else {
-                        Err(StreamError::Source(HlsError::Cancelled))
-                    };
-                }
-                if range_ready {
-                    return Ok(WaitOutcome::Ready);
-                }
-                if seeking {
-                    return Ok(WaitOutcome::Interrupted);
-                }
-                if past_eof {
-                    debug!(
-                        range_start = range.start,
-                        total_bytes = segments.max_end_offset(),
-                        num_entries = segments.num_entries(),
-                        "wait_range: EOF"
-                    );
-                    return Ok(WaitOutcome::Eof);
-                }
-
-                // Waiting sub-states — log and continue spinning.
-                let phase = if waiting_metadata {
-                    kithara_stream::SourcePhase::WaitingMetadata
-                } else if waiting_demand {
-                    kithara_stream::SourcePhase::WaitingDemand
+            // Priority dispatch (highest wins).
+            if cancelled || (stopped && !range_ready) {
+                return if stopped && past_eof {
+                    Ok(WaitOutcome::Eof)
                 } else {
-                    kithara_stream::SourcePhase::Waiting
+                    Err(StreamError::Source(HlsError::Cancelled))
                 };
+            }
+            if range_ready {
+                return Ok(WaitOutcome::Ready);
+            }
+            if seeking {
+                return Ok(WaitOutcome::Interrupted);
+            }
+            if past_eof {
                 debug!(
                     range_start = range.start,
-                    range_end = range.end,
-                    ?phase,
-                    "wait_range: spinning"
+                    total_bytes = segments.max_end_offset(),
+                    num_entries = segments.num_entries(),
+                    "wait_range: EOF"
                 );
+                return Ok(WaitOutcome::Eof);
+            }
 
-                if self.shared.timeline.eof() && !range_ready {
-                    on_demand_epoch = None;
+            // Waiting sub-states — log and continue spinning.
+            let phase = if waiting_metadata {
+                kithara_stream::SourcePhase::WaitingMetadata
+            } else if waiting_demand {
+                kithara_stream::SourcePhase::WaitingDemand
+            } else {
+                kithara_stream::SourcePhase::Waiting
+            };
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                ?phase,
+                "wait_range: spinning"
+            );
+
+            if self.shared.timeline.eof() && !range_ready {
+                on_demand_epoch = None;
+            }
+
+            // A midstream variant switch drains all segment_requests.
+            // Clear on-demand tracking so we can re-push for the new variant.
+            if self
+                .shared
+                .had_midstream_switch
+                .swap(false, Ordering::AcqRel)
+            {
+                on_demand_epoch = None;
+            }
+
+            drop(segments);
+
+            // Request on-demand segment if not already pending.
+            if on_demand_epoch.is_none_or(|epoch| epoch != seek_epoch) {
+                let requested = self.request_on_demand_segment(
+                    range.start,
+                    seek_epoch,
+                    &mut metadata_miss_count,
+                    WAIT_RANGE_MAX_METADATA_MISS_SPINS,
+                )?;
+                if requested {
+                    on_demand_epoch = Some(seek_epoch);
                 }
+            }
 
-                // A midstream variant switch drains all segment_requests.
-                // Clear on-demand tracking so we can re-push for the new variant.
-                if self.shared.had_midstream_switch.swap(false, Ordering::AcqRel) {
-                    on_demand_epoch = None;
-                }
+            // Honour the overall time budget.  Placed after decision logic
+            // and on-demand requests so that errors (e.g. SegmentNotFound)
+            // always take priority over the timeout fallback.
+            if started_at.elapsed() > timeout {
+                return Err(StreamError::Source(HlsError::Timeout(format!(
+                    "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={timeout:?}",
+                    range.start,
+                    range.end,
+                    started_at.elapsed(),
+                ))));
+            }
 
-                drop(segments);
+            segments = self.shared.segments.lock_sync();
 
-                // Request on-demand segment if not already pending.
-                if on_demand_epoch.is_none_or(|epoch| epoch != seek_epoch) {
-                    let requested = self.request_on_demand_segment(
-                        range.start,
-                        seek_epoch,
-                        &mut metadata_miss_count,
-                        WAIT_RANGE_MAX_METADATA_MISS_SPINS,
-                    )?;
-                    if requested {
-                        on_demand_epoch = Some(seek_epoch);
-                    }
-                }
+            hang_tick!();
+            kithara_platform::thread::yield_now();
+            let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
+            let (_segments, _wait_result) =
+                self.shared.condvar.wait_sync_timeout(segments, deadline);
 
-                // Honour the overall time budget.  Placed after decision logic
-                // and on-demand requests so that errors (e.g. SegmentNotFound)
-                // always take priority over the timeout fallback.
-                if started_at.elapsed() > timeout {
-                    return Err(StreamError::Source(HlsError::Timeout(format!(
-                        "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={timeout:?}",
-                        range.start,
-                        range.end,
-                        started_at.elapsed(),
-                    ))));
-                }
-
-                segments = self.shared.segments.lock_sync();
-
-                hang_tick!();
-                kithara_platform::thread::yield_now();
-                let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
-                let (_segments, _wait_result) =
-                    self.shared.condvar.wait_sync_timeout(segments, deadline);
-
-                if self.shared.timeline.is_flushing() {
-                    return Ok(WaitOutcome::Interrupted);
-                }
+            if self.shared.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
             }
         }
     }
@@ -915,6 +915,7 @@ impl Source for HlsSource {
         }))
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
         // Non-destructive: does NOT clear DownloadState or download_position.
         // seek_time_anchor → classify_seek → apply_seek_plan handles that
@@ -924,12 +925,8 @@ impl Source for HlsSource {
             .had_midstream_switch
             .store(false, Ordering::Release);
 
-        kithara_platform::hang_watchdog! {
-            thread: "hls.set_seek_epoch";
-
-            while self.shared.segment_requests.pop().is_some() {
-                hang_tick!();
-            }
+        while self.shared.segment_requests.pop().is_some() {
+            hang_tick!();
         }
 
         self.shared.reader_advanced.notify_one();

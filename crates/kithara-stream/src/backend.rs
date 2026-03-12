@@ -106,84 +106,78 @@ impl Backend {
         }
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     async fn run_downloader<D: Downloader>(mut dl: D, cancel: CancellationToken) {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;
         let mut steps_since_yield: usize = 0;
-        kithara_platform::hang_watchdog! {
-            thread: "stream.downloader";
-            loop {
-                if cancel.is_cancelled() {
-                    debug!("Downloader cancelled");
-                    return;
+        loop {
+            if cancel.is_cancelled() {
+                debug!("Downloader cancelled");
+                return;
+            }
+
+            // Drain demand BEFORE throttle check: a demand request may
+            // reset the download cursor (reset_for_seek_epoch), which
+            // relieves segment-based throttle pressure. Without this,
+            // handle_idle can consume the Notify permit, and the
+            // subsequent wait_while_throttled blocks forever because
+            // the demand (still in the queue) would have un-throttled
+            // the downloader.
+            let Ok(mut made_progress) = Self::drain_demand_requests(&mut dl, &cancel).await else {
+                return;
+            };
+            let Ok(throttle_progress) = Self::wait_while_throttled(&mut dl, &cancel).await else {
+                return;
+            };
+            made_progress |= throttle_progress;
+
+            hang_tick!();
+            kithara_platform::thread::yield_now();
+            let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
+                return;
+            };
+
+            let control = match outcome {
+                PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
+                PlanOutcome::Step => Self::handle_step(&mut dl, &cancel).await,
+                PlanOutcome::Complete => {
+                    debug!("Downloader complete");
+                    LoopControl::Exit
                 }
+                PlanOutcome::Idle => Self::handle_idle(&mut dl, &cancel).await,
+            };
 
-                // Drain demand BEFORE throttle check: a demand request may
-                // reset the download cursor (reset_for_seek_epoch), which
-                // relieves segment-based throttle pressure. Without this,
-                // handle_idle can consume the Notify permit, and the
-                // subsequent wait_while_throttled blocks forever because
-                // the demand (still in the queue) would have un-throttled
-                // the downloader.
-                let Ok(mut made_progress) =
-                    Self::drain_demand_requests(&mut dl, &cancel).await
-                else {
-                    return;
-                };
-                let Ok(throttle_progress) =
-                    Self::wait_while_throttled(&mut dl, &cancel).await
-                else {
-                    return;
-                };
-                made_progress |= throttle_progress;
-
-                hang_tick!();
-                kithara_platform::thread::yield_now();
-                let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
-                    return;
-                };
-
-                let control = match outcome {
-                    PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
-                    PlanOutcome::Step => Self::handle_step(&mut dl, &cancel).await,
-                    PlanOutcome::Complete => {
-                        debug!("Downloader complete");
-                        LoopControl::Exit
-                    }
-                    PlanOutcome::Idle => Self::handle_idle(&mut dl, &cancel).await,
-                };
-
-                match control {
-                    LoopControl::Exit => return,
-                    LoopControl::Restart => {
-                        if made_progress {
-                            hang_reset!();
-                            steps_since_yield += 1;
-                        } else {
-                            steps_since_yield = 0;
-                        }
-                        continue;
-                    }
-                    LoopControl::Continue {
-                        made_progress: loop_progress,
-                    } => {
-                        made_progress |= loop_progress;
-                    }
-                }
-
-                if made_progress {
+            match control {
+                LoopControl::Exit => return,
+                LoopControl::Restart => {
+                    if made_progress {
                         hang_reset!();
                         steps_since_yield += 1;
-                } else {
-                    steps_since_yield = 0;
+                    } else {
+                        steps_since_yield = 0;
+                    }
+                    continue;
                 }
+                LoopControl::Continue {
+                    made_progress: loop_progress,
+                } => {
+                    made_progress |= loop_progress;
+                }
+            }
 
-                // 4. Periodic yield (only when not throttled — backpressure loop
-                //    already yields to runtime via wait_ready).
-                if made_progress && !dl.should_throttle() && steps_since_yield >= yield_interval {
-                    tokio::task::yield_now().await;
-                    steps_since_yield = 0;
-                }
+            if made_progress {
+                hang_reset!();
+                steps_since_yield += 1;
+            } else {
+                steps_since_yield = 0;
+            }
+
+            // 4. Periodic yield (only when not throttled — backpressure loop
+            //    already yields to runtime via wait_ready).
+            if made_progress && !dl.should_throttle() && steps_since_yield >= yield_interval {
+                tokio::task::yield_now().await;
+                steps_since_yield = 0;
             }
         }
     }

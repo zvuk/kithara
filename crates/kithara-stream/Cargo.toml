@@ -17,6 +17,7 @@ delegate = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
 kithara-net = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 thiserror = { workspace = true }
@@ -31,6 +32,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
 internal = []
 disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
     "kithara-storage/disable-hang-detector",
 ]
