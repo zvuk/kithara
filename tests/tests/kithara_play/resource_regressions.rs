@@ -166,6 +166,7 @@ async fn warm_hls_worker(url: &url::Url, store: StoreOptions, worker: AudioWorke
     let deadline = Instant::now() + READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
+        audio.preload();
         let read = audio.read(&mut buf);
         if read > 0 {
             break;
@@ -187,6 +188,7 @@ async fn warm_hls_worker(url: &url::Url, store: StoreOptions, worker: AudioWorke
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
+        audio.preload();
         let read = audio.read(&mut buf);
         if read > 0 {
             return audio.position().as_secs_f64();
@@ -221,6 +223,7 @@ async fn warm_hls_worker_without_seek(
     let deadline = Instant::now() + READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
+        audio.preload();
         let read = audio.read(&mut buf);
         if read > 0 {
             return audio.position().as_secs_f64();
@@ -614,6 +617,7 @@ async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session
 
 #[kithara::test(
     tokio,
+    multi_thread,
     browser,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
