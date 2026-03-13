@@ -2646,6 +2646,46 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
+    async fn build_demand_plan_initial_nonzero_segment_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            4,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(0, 2);
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 2,
+                variant: 0,
+                seek_epoch: 0,
+            },
+            is_variant_switch,
+        );
+
+        assert!(
+            !plan.need_init,
+            "fresh direct demand on init-less playlist must not inject init"
+        );
+    }
+
+    #[kithara::test(tokio)]
     async fn build_batch_plans_same_codec_variant_change_keeps_metadata_layout() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -2682,6 +2722,46 @@ mod tests {
         assert!(
             !plans[0].need_init,
             "same-codec variant change must not inject init into batch plan"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_seek_into_init_less_playlist_starts_at_target_segment() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            6,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.prefetch_count = 2;
+        downloader.reset_for_seek_epoch(1, 0, 2);
+        let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 2);
+        let (plans, _batch_end) =
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+
+        assert_eq!(
+            plans.first().map(|plan| plan.segment_index),
+            Some(2),
+            "seek batch must start from the requested segment"
+        );
+        assert!(
+            plans.iter().all(|plan| !plan.need_init),
+            "seek batch on init-less playlist must not inject init"
         );
     }
 
