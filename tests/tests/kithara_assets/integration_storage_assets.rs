@@ -82,7 +82,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
     // Keep the handle alive while we check the persisted pins file.
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     res.write_all(&payload).unwrap();
 
@@ -115,7 +115,7 @@ fn atomic_resource_persistence(
     let key = ResourceKey::new(rel_path);
 
     {
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(payload).unwrap();
     }
 
@@ -138,7 +138,7 @@ fn streaming_resource_persistence(
     let key = ResourceKey::new(rel_path);
 
     {
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, payload).unwrap();
         res.commit(Some(payload.len() as u64)).unwrap();
         res.wait_range(0..payload.len() as u64).unwrap();
@@ -160,10 +160,10 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_test_utils::TestTe
     let streaming_payload = b"stream-bytes-123".to_vec();
 
     {
-        let atomic = store.open_resource(&atomic_key).unwrap();
+        let atomic = store.acquire_resource(&atomic_key).unwrap();
         atomic.write_all(&atomic_payload).unwrap();
 
-        let streaming = store.open_resource(&streaming_key).unwrap();
+        let streaming = store.acquire_resource(&streaming_key).unwrap();
         streaming.write_at(0, &streaming_payload).unwrap();
         streaming
             .commit(Some(streaming_payload.len() as u64))
@@ -216,7 +216,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let payload_writer = payload.clone();
     let key_writer = key;
     let writer = thread::spawn(move || {
-        let res = store_writer.open_resource(&key_writer).unwrap();
+        let res = store_writer.acquire_resource(&key_writer).unwrap();
         res.write_at(0, &payload_writer).unwrap();
         res.commit(Some(payload_writer.len() as u64)).unwrap();
         res.wait_range(0..payload_writer.len() as u64).unwrap();
@@ -249,7 +249,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let playlist_key = ResourceKey::new("master.m3u8");
     let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
 
-    let playlist = store.open_resource(&playlist_key).unwrap();
+    let playlist = store.acquire_resource(&playlist_key).unwrap();
     playlist.write_all(&playlist_bytes).unwrap();
     let mut playlist_read = byte_pool().get();
     playlist.read_into(&mut playlist_read).unwrap();
@@ -260,7 +260,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     for i in 0..segment_count.min(2) {
         let seg_key = ResourceKey::new(format!("segments/{:04}.m4s", i + 1));
 
-        let seg = store.open_resource(&seg_key).unwrap();
+        let seg = store.acquire_resource(&seg_key).unwrap();
         segments.push((seg, i));
     }
 
@@ -321,7 +321,7 @@ fn atomic_resource_roundtrip_with_different_paths(
     let key = ResourceKey::new(rel_path);
     let payload = b"test data for atomic resource".to_vec();
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     res.write_all(&payload).unwrap();
 
@@ -343,7 +343,7 @@ fn streaming_resource_write_read_at_different_positions(
     let store = asset_store_with_root(&temp_dir, "streaming-test");
 
     let key = ResourceKey::new("data.bin");
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Create test data
     let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
@@ -384,7 +384,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
 
     let mut resources = Vec::new();
     for (i, key) in keys.iter().enumerate() {
-        let res = store.open_resource(key).unwrap();
+        let res = store.acquire_resource(key).unwrap();
 
         let data = format!("data for file {}", i).into_bytes();
         res.write_all(&data).unwrap();
@@ -418,7 +418,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let store = asset_store_with_root(&temp_dir, asset_root);
         let key = ResourceKey::new("data.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(payloads[i]).unwrap();
     }
 
@@ -452,7 +452,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
     {
         let store = asset_store_with_root(&temp_dir, "asset-alpha");
         let key = ResourceKey::new("data.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         let mut buf = byte_pool().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
@@ -466,7 +466,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
     {
         let store = asset_store_with_root(&temp_dir, "asset-gamma");
         let key = ResourceKey::new("data.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         let mut buf = byte_pool().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[2], "asset-gamma data should be intact");
@@ -488,7 +488,7 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let store = asset_store_with_root(&temp_dir, asset_root);
         let key = ResourceKey::new(format!("file{}.bin", i));
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("content {}", i).as_bytes()).unwrap();
     }
 
@@ -552,7 +552,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTemp
     {
         let store = asset_store_with_root(&temp_dir, "existing-asset");
         let key = ResourceKey::new("data.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"existing data").unwrap();
     }
 

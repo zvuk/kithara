@@ -64,7 +64,7 @@ fn eviction_max_assets_skips_pinned_assets(
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
 
         // Keep handle for the last asset to pin it
@@ -88,7 +88,7 @@ fn eviction_max_assets_skips_pinned_assets(
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_store = asset_store_with_root(&temp_dir, &trigger_root, Some(max_assets));
             let key_trigger = ResourceKey::new("media/trigger.bin");
-            let res_trigger = trigger_store.open_resource(&key_trigger).unwrap();
+            let res_trigger = trigger_store.acquire_resource(&key_trigger).unwrap();
             res_trigger.write_all(b"trigger").unwrap();
 
             assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
@@ -137,7 +137,7 @@ fn eviction_ignores_missing_index(
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new(format!("data/{}.bin", i));
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
     }
 
@@ -170,7 +170,7 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new("empty.bin");
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"").unwrap();
     }
 
@@ -211,7 +211,7 @@ fn eviction_respects_max_assets_limit(
         let asset_root = format!("asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"DATA").unwrap();
 
         // Keep handle for the newest `pinned_count` assets to pin them

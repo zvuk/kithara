@@ -78,7 +78,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_a = ResourceKey::new("media/a.bin");
-        let res_a = store_a.open_resource(&key_a).unwrap();
+        let res_a = store_a.acquire_resource(&key_a).unwrap();
 
         res_a
             .write_all(&Bytes::from(vec![0xAAu8; bytes_a]))
@@ -97,7 +97,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_b = ResourceKey::new("media/b.bin");
-        let res_b = store_b.open_resource(&key_b).unwrap();
+        let res_b = store_b.acquire_resource(&key_b).unwrap();
 
         res_b
             .write_all(&Bytes::from(vec![0xBBu8; bytes_b]))
@@ -116,7 +116,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_c = ResourceKey::new("media/c.bin");
-        let res_c = store_c.open_resource(&key_c).unwrap();
+        let res_c = store_c.acquire_resource(&key_c).unwrap();
 
         res_c.write_all(b"C").unwrap();
     }
@@ -181,7 +181,7 @@ fn eviction_corner_cases_different_byte_limits(
         );
         let key = ResourceKey::new(format!("data{}.bin", i));
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
             .unwrap();
     }
@@ -196,7 +196,7 @@ fn eviction_corner_cases_different_byte_limits(
         );
         let trigger_key = ResourceKey::new("trigger.bin");
 
-        let res = store.open_resource(&trigger_key).unwrap();
+        let res = store.acquire_resource(&trigger_key).unwrap();
         res.write_all(&Bytes::from(vec![0xFF; new_asset_size]))
             .unwrap();
     }
@@ -210,7 +210,7 @@ fn eviction_corner_cases_different_byte_limits(
             cancel.clone(),
         );
         let probe_key = ResourceKey::new("probe.bin");
-        let probe = store.open_resource(&probe_key).unwrap();
+        let probe = store.acquire_resource(&probe_key).unwrap();
         probe.write_all(b"P").unwrap();
     }
 

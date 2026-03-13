@@ -94,7 +94,7 @@ pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
     let backend = source.fetch.backend();
     let media_key = ResourceKey::from_url(&seg.media_url);
     let res = backend
-        .open_resource(&media_key)
+        .acquire_resource(&media_key)
         .expect("open media resource");
     res.write_at(0, &vec![0u8; seg.media_len as usize])
         .expect("write media");
@@ -103,7 +103,7 @@ pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
     if let Some(ref init_url) = seg.init_url {
         let init_key = ResourceKey::from_url(init_url);
         let init_res = backend
-            .open_resource(&init_key)
+            .acquire_resource(&init_key)
             .expect("open init resource");
         init_res
             .write_at(0, &vec![0u8; seg.init_len as usize])

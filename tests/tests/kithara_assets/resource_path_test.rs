@@ -32,7 +32,7 @@ fn asset_resource_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("metadata.json");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     // Write some data to ensure the resource is properly initialized
@@ -64,7 +64,7 @@ fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("media.bin");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     // Write some data to ensure the resource is properly initialized
@@ -99,7 +99,7 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("data.bin");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     let asset_path = asset_resource.path().unwrap();

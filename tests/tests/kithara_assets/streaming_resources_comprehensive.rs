@@ -57,7 +57,7 @@ fn streaming_resource_complex_write_patterns(
 
     let key = ResourceKey::new("data.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write data in chunks at different positions
     let total_chunks = total_size / chunk_size;
@@ -93,7 +93,7 @@ fn streaming_resource_concurrent_writes(
 
     let key = ResourceKey::new("concurrent.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Spawn concurrent writes
     let mut handles = Vec::new();
@@ -136,7 +136,7 @@ fn streaming_resource_edge_case_reads(
 
     let key = ResourceKey::new("edge.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write initial data
     let data_size = 6144; // Total data size
@@ -171,7 +171,7 @@ fn streaming_resource_multiple_range_operations(
 
     let key = ResourceKey::new("multi.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write multiple ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
@@ -208,7 +208,7 @@ fn streaming_resource_commit_behavior(
 
     let key = ResourceKey::new("commit.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write some data
     let data = vec![0xAB; 4096];
@@ -250,7 +250,7 @@ fn streaming_resource_zero_length_operations(
 
     let key = ResourceKey::new("zero.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write some data first
     let data = vec![0xCC; 2048];
