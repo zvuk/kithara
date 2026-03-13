@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use std::num::NonZeroUsize;
 
 use axum::{
@@ -14,13 +16,22 @@ use axum::{
 use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
-    play::{Resource, ResourceConfig},
+    audio::{Audio, AudioConfig},
+    hls::{Hls, HlsConfig},
+    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{TestHttpServer, TestTempDir, temp_dir};
+use kithara_test_utils::{TestHttpServer, TestTempDir, create_saw_wav, temp_dir};
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const HLS_SEGMENT_COUNT: usize = 3;
+const HLS_SEGMENT_SIZE: usize = 200_000;
+const HLS_TOTAL_BYTES: usize = HLS_SEGMENT_COUNT * HLS_SEGMENT_SIZE;
+const HLS_SAMPLE_RATE: f64 = 44_100.0;
+const HLS_CHANNELS: f64 = 2.0;
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -117,10 +128,95 @@ fn resource_config(url: &url::Url, store: StoreOptions) -> ResourceConfig {
         .with_store(store)
 }
 
+fn resource_config_with_worker(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: kithara::play::AudioWorkerHandle,
+) -> ResourceConfig {
+    resource_config(url, store).with_worker(worker)
+}
+
 async fn open_resource(url: &url::Url, store: StoreOptions) -> Resource {
     Resource::new(resource_config(url, store))
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
+}
+
+async fn open_resource_with_worker(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: kithara::play::AudioWorkerHandle,
+) -> Resource {
+    Resource::new(resource_config_with_worker(url, store, worker))
+        .await
+        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
+}
+
+async fn warm_hls_worker(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: kithara::play::AudioWorkerHandle,
+) -> f64 {
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let hls_config = HlsConfig::new(url.clone()).with_store(store);
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_media_info(wav_info)
+        .with_worker(worker);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
+
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let mut buf = [0.0f32; 4096];
+    loop {
+        let read = audio.read(&mut buf);
+        if read > 0 {
+            break;
+        }
+
+        assert!(
+            !audio.is_eof(),
+            "unexpected EOF while warming HLS worker for {url}"
+        );
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for HLS warmup data at {url}"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    audio
+        .seek(Duration::from_secs(2))
+        .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
+
+    loop {
+        let read = audio.read(&mut buf);
+        if read > 0 {
+            return audio.position().as_secs_f64();
+        }
+
+        assert!(
+            !audio.is_eof(),
+            "unexpected EOF after HLS warmup seek for {url}"
+        );
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for HLS post-seek data at {url}"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn open_audio_hls_server() -> HlsTestServer {
+    let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
+    HlsTestServer::new(HlsTestServerConfig {
+        custom_data: Some(Arc::new(create_saw_wav(HLS_TOTAL_BYTES))),
+        segment_duration_secs: segment_duration,
+        segment_size: HLS_SEGMENT_SIZE,
+        segments_per_variant: HLS_SEGMENT_COUNT,
+        ..Default::default()
+    })
+    .await
 }
 
 async fn read_some(resource: &mut Resource, stage: &str) -> usize {
@@ -240,5 +336,139 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     assert!(
         !second.is_eof(),
         "reopened session must not be EOF after backward seek"
+    );
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
+#[case::ephemeral(true)]
+async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
+    #[case] ephemeral: bool,
+    temp_dir: TestTempDir,
+) {
+    let hls_server = open_audio_hls_server().await;
+    let file_server = TestHttpServer::new(test_app()).await;
+    let player = PlayerImpl::new(PlayerConfig::default());
+    let worker = player.worker().clone();
+    let store = store_options(&temp_dir, ephemeral);
+    let hls_url = hls_server.url("/master.m3u8").unwrap();
+    let ok_url = file_server.url("/ok.mp3");
+    let bad_url = file_server.url("/gone.mp3");
+
+    let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone()).await;
+    assert!(
+        hls_pos > 1.0,
+        "HLS warmup seek should advance playback position, got {hls_pos}"
+    );
+
+    for attempt in 0..2 {
+        let result = Resource::new(resource_config_with_worker(
+            &bad_url,
+            store.clone(),
+            worker.clone(),
+        ))
+        .await;
+        assert!(
+            result.is_err(),
+            "unavailable mp3 attempt {attempt} must return error"
+        );
+    }
+
+    let mut ok = open_resource_with_worker(&ok_url, store, worker).await;
+    assert!(read_some(&mut ok, "mp3_after_hls_initial").await > 0);
+    let forward = seek_and_read(
+        &mut ok,
+        Duration::from_secs(3),
+        "mp3_after_hls_seek_forward",
+    )
+    .await;
+    let backward = seek_and_read(
+        &mut ok,
+        Duration::from_millis(500),
+        "mp3_after_hls_seek_backward",
+    )
+    .await;
+    assert!(
+        backward < forward,
+        "mp3 recovery path must keep backward seek after HLS transition (forward={forward}, backward={backward})"
+    );
+    assert!(
+        !ok.is_eof(),
+        "recovered mp3 session must not be EOF after backward seek"
+    );
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
+#[case::ephemeral(true)]
+async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
+    #[case] ephemeral: bool,
+    temp_dir: TestTempDir,
+) {
+    let hls_server = open_audio_hls_server().await;
+    let file_server = TestHttpServer::new(test_app()).await;
+    let player = PlayerImpl::new(PlayerConfig::default());
+    let worker = player.worker().clone();
+    let store = store_options(&temp_dir, ephemeral);
+    let hls_url = hls_server.url("/master.m3u8").unwrap();
+    let ok_url = file_server.url("/ok.mp3");
+
+    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone()).await;
+    assert!(
+        hls_seek > 1.0,
+        "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
+    );
+
+    let mut first = open_resource_with_worker(&ok_url, store.clone(), worker.clone()).await;
+    assert!(read_some(&mut first, "mp3_first_initial").await > 0);
+    let first_forward = seek_and_read(
+        &mut first,
+        Duration::from_secs(3),
+        "mp3_first_forward_after_hls",
+    )
+    .await;
+    let first_backward = seek_and_read(
+        &mut first,
+        Duration::from_millis(500),
+        "mp3_first_backward_after_hls",
+    )
+    .await;
+    assert!(
+        first_backward < first_forward,
+        "first mp3 session after HLS must keep backward seek (forward={first_forward}, backward={first_backward})"
+    );
+    drop(first);
+
+    let mut second = open_resource_with_worker(&ok_url, store, worker).await;
+    assert!(read_some(&mut second, "mp3_second_initial").await > 0);
+    let second_forward = seek_and_read(
+        &mut second,
+        Duration::from_secs(3),
+        "mp3_second_forward_after_hls",
+    )
+    .await;
+    let second_backward = seek_and_read(
+        &mut second,
+        Duration::from_millis(500),
+        "mp3_second_backward_after_hls",
+    )
+    .await;
+    assert!(
+        second_backward < second_forward,
+        "reopened mp3 session after HLS must keep backward seek (forward={second_forward}, backward={second_backward})"
+    );
+    assert!(
+        !second.is_eof(),
+        "reopened mp3 session must not be EOF after backward seek"
     );
 }
