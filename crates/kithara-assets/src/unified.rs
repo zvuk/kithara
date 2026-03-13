@@ -7,6 +7,7 @@ use std::{fmt::Debug, hash::Hash, path::Path};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::store::DiskStore;
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::AssetsResult,
     key::ResourceKey,
@@ -46,6 +47,23 @@ where
         }
     }
 
+    /// Acquire a resource explicitly for mutation.
+    ///
+    /// This is an alias for callers that want to make write intent explicit
+    /// at the call site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
+    pub fn acquire_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.acquire_resource(key),
+            Self::Mem(s) => s.acquire_resource(key),
+        }
+    }
+
     /// Open a resource with processing context.
     ///
     /// When `ctx` is `Some`, the resource will be processed on commit
@@ -67,6 +85,37 @@ where
         }
     }
 
+    /// Acquire a resource with processing context for an explicit write path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
+    pub fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Ctx>,
+    ) -> AssetsResult<AssetResource<Ctx>> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.acquire_resource_with_ctx(key, ctx),
+            Self::Mem(s) => s.acquire_resource_with_ctx(key, ctx),
+        }
+    }
+
+    /// Inspect the current resource state without creating or mutating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the key is invalid or the backend cannot inspect it.
+    pub fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.resource_state(key),
+            Self::Mem(s) => s.resource_state(key),
+        }
+    }
+
     /// Return the asset root identifier.
     #[must_use]
     pub fn asset_root(&self) -> &str {
@@ -83,18 +132,13 @@ where
         matches!(self, Self::Mem(_))
     }
 
-    /// Check whether a resource is currently in the LRU cache.
-    ///
-    /// Both Disk and Mem backends use the same `CachedAssets` LRU layer.
-    /// Resources can be evicted from either (Mem loses data, Disk loses files
-    /// via the `EvictAssets` decorator). Uses LRU peek (no promotion).
+    /// Compatibility helper for callers that only care about committed resources.
     #[must_use]
     pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk(s) => s.has_resource(key),
-            Self::Mem(s) => s.has_resource(key),
-        }
+        matches!(
+            self.resource_state(key),
+            Ok(AssetResourceState::Committed { .. })
+        )
     }
 
     /// Remove a single resource from the store.

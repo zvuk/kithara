@@ -18,7 +18,8 @@ use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex, key::ResourceKey,
+    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
+    key::ResourceKey,
 };
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
@@ -44,6 +45,19 @@ where
     inner: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
     pool: BytePool,
+}
+
+impl<A> Debug for LeaseAssets<A>
+where
+    A: Assets,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pin_count = self.pins.try_lock().ok().map(|pins| pins.len());
+        f.debug_struct("LeaseAssets")
+            .field("dirty", &self.dirty.load(Ordering::Acquire))
+            .field("pin_count", &pin_count)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<A> LeaseAssets<A>
@@ -201,16 +215,17 @@ where
     delegate::delegate! {
         to self.inner {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn fail(&self, reason: String);
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
-            fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
             fn contains_range(&self, range: Range<u64>) -> bool;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -226,6 +241,14 @@ where
         }
 
         Ok(())
+    }
+
+    fn fail(&self, reason: String) {
+        self.inner.fail(reason);
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        self.inner.reactivate()
     }
 }
 
@@ -244,6 +267,7 @@ where
             fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
@@ -254,6 +278,19 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
+        self.wrap_resource(key, ctx)
+    }
+}
+
+impl<A> LeaseAssets<A>
+where
+    A: Assets,
+{
+    fn wrap_resource(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<A::Context>,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
         let inner = self.inner.open_resource_with_ctx(key, ctx)?;
 
         if !self.is_active() {
@@ -273,6 +310,31 @@ where
             asset_root: self.inner.asset_root().to_string(),
             byte_recorder: self.byte_recorder.clone(),
         })
+    }
+
+    /// Open a resource through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource(
+        &self,
+        key: &ResourceKey,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        self.acquire_resource_with_ctx(key, None)
+    }
+
+    /// Open a resource with context through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<A::Context>,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        self.wrap_resource(key, ctx)
     }
 }
 

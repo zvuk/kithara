@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, hash::Hash, path::Path};
 
-use crate::{error::AssetsResult, key::ResourceKey};
+use crate::{error::AssetsResult, key::ResourceKey, state::AssetResourceState};
 
 bitflags::bitflags! {
     /// Decorator capabilities advertised by a base store.
@@ -72,6 +72,14 @@ pub trait Assets: Clone + Send + Sync + 'static {
     fn open_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
         self.open_resource_with_ctx(key, None)
     }
+
+    /// Inspect the current resource state without creating or mutating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the backend
+    /// cannot inspect the resource.
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
 
     /// Open the resource used for persisting the pins index.
     ///

@@ -96,14 +96,14 @@ impl StoreOptions {
 /// - `DiskAssetStore` (base disk I/O)
 /// - `EvictAssets` (LRU eviction)
 /// - `ProcessingAssets` (transformation with context, uses Default if no context)
-/// - `LeaseAssets` (RAII pinning)
-/// - `CachedAssets` (caches `LeaseResource` with guards, outermost)
+/// - `CachedAssets` (reuses opened resources)
+/// - `LeaseAssets` (RAII pinning, outermost)
 ///
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type DiskStore<Ctx = ()> =
-    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Resource handle returned by [`AssetStore::open_resource`].
 ///
@@ -117,7 +117,7 @@ pub type AssetResource<Ctx = ()> =
 ///
 /// Internal chain used for `AssetStore::Mem`.
 pub(crate) type MemStore<Ctx = ()> =
-    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -301,7 +301,7 @@ where
         // Use provided pool or global pool
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
+        // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
         // Each decorator checks `capabilities()` to decide whether to activate.
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(
@@ -315,11 +315,11 @@ where
             process_fn,
             pool.clone(),
         ));
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        let cached = Arc::new(CachedAssets::new(processing, capacity));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        let lease = LeaseAssets::with_byte_recorder(processing, cancel, byte_recorder, pool);
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::new(Arc::new(lease), capacity)
+        LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool)
     }
 
     /// Build ephemeral (in-memory) asset store.
@@ -347,14 +347,14 @@ where
             cancel.clone(),
             pool.clone(),
         ));
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
         let processing = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
             process_fn,
             pool.clone(),
         ));
-        let lease = LeaseAssets::new(processing, cancel, pool);
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::new(Arc::new(lease), capacity)
+        let cached = Arc::new(CachedAssets::new(processing, capacity));
+        LeaseAssets::new(cached, cancel, pool)
     }
 }
 
@@ -422,7 +422,7 @@ mod tests {
             .build();
 
         let key = ResourceKey::new("test.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"hello").unwrap();
 
         let mut buf = [0u8; 5];
@@ -535,7 +535,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.open_resource(key).unwrap();
+            let res = backend.acquire_resource(key).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }
@@ -564,7 +564,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.open_resource(key).unwrap();
+            let res = backend.acquire_resource(key).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }

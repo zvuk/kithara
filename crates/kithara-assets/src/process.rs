@@ -11,7 +11,7 @@ use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use crate::{AssetsResult, ResourceKey, base::Assets};
+use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
 
 /// Chunk size for streaming processing (64KB, multiple of AES block size 16).
 const PROCESS_CHUNK_SIZE: usize = 64 * 1024;
@@ -252,6 +252,7 @@ where
             fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }

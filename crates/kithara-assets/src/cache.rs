@@ -7,6 +7,7 @@ use kithara_storage::{ResourceExt, ResourceStatus};
 use lru::LruCache;
 
 use crate::{
+    AssetResourceState,
     base::{Assets, Capabilities},
     error::AssetsResult,
     key::ResourceKey,
@@ -77,24 +78,54 @@ where
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
-    /// Check whether a committed resource is currently in the LRU cache.
-    ///
-    /// Uses `peek` (no LRU promotion) to avoid side effects.
-    /// Returns `false` for `Active` (empty) placeholders created after eviction.
-    /// Returns `true` for non-cached backends (disk always has resources).
+    fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
+        let (committed, has_active) = {
+            let cache = self.cache.lock_sync();
+            let mut committed = None;
+            let mut has_active = false;
+
+            for (cache_key, entry) in cache.iter() {
+                let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res)) =
+                    (cache_key, entry)
+                else {
+                    continue;
+                };
+
+                if resource_key != key {
+                    continue;
+                }
+
+                match res.status() {
+                    ResourceStatus::Failed(reason) => {
+                        return Some(AssetResourceState::Failed(reason));
+                    }
+                    ResourceStatus::Active => has_active = true,
+                    ResourceStatus::Committed { final_len } => {
+                        if committed.is_none() {
+                            committed = Some(AssetResourceState::Committed { final_len });
+                        }
+                    }
+                }
+            }
+
+            drop(cache);
+            (committed, has_active)
+        };
+
+        if has_active {
+            return Some(AssetResourceState::Active);
+        }
+
+        committed
+    }
+
+    /// Compatibility helper for callers that only care about committed resources.
     #[must_use]
     pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        if !self.is_active() {
-            return true;
-        }
-        self.cache.lock_sync().iter().any(|(cache_key, entry)| {
-            matches!(
-                (cache_key, entry),
-                (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
-                    if resource_key == key
-                        && matches!(res.status(), ResourceStatus::Committed { .. })
-            )
-        })
+        matches!(
+            self.resource_state(key),
+            Ok(AssetResourceState::Committed { .. })
+        )
     }
 }
 
@@ -112,6 +143,18 @@ where
             fn root_dir(&self) -> &Path;
             fn asset_root(&self) -> &str;
         }
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if !self.is_active() {
+            return self.inner.resource_state(key);
+        }
+
+        if let Some(state) = self.cached_state(key) {
+            return Ok(state);
+        }
+
+        self.inner.resource_state(key)
     }
 
     fn open_resource_with_ctx(
@@ -323,6 +366,10 @@ mod tests {
 
         fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
             self.inner.open_lru_index_resource()
+        }
+
+        fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+            self.inner.resource_state(key)
         }
 
         fn delete_asset(&self) -> AssetsResult<()> {

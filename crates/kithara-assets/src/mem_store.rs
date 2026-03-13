@@ -8,6 +8,7 @@ use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
@@ -89,6 +90,16 @@ impl Assets for MemAssetStore {
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(MemResource::new(self.cancel.clone()))
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if let ResourceKey::Relative(rel) = key
+            && rel.is_empty()
+        {
+            return Err(AssetsError::InvalidKey);
+        }
+
+        Ok(AssetResourceState::Missing)
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {

@@ -39,7 +39,7 @@ impl FileStreamState {
         timeline.set_total_bytes(expected_len);
 
         let key = ResourceKey::from_url(&url);
-        let res = assets.open_resource(&key).map_err(SourceError::Assets)?;
+        let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
 
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
 
@@ -463,7 +463,7 @@ mod tests {
             .build();
 
         let key = ResourceKey::new("test.dat");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, data).unwrap();
         res.commit(Some(data.len() as u64)).unwrap();
         res

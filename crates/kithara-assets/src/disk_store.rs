@@ -10,6 +10,7 @@ use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageReso
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
@@ -143,6 +144,19 @@ impl Assets for DiskAssetStore {
     fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.lru_index_path();
         self.open_index_resource(path)
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        let path = self.resource_path(key)?;
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(AssetResourceState::Committed {
+                final_len: Some(metadata.len()),
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(AssetResourceState::Missing)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
