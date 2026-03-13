@@ -13,6 +13,7 @@
 #[cfg(test)]
 use std::future::Future;
 
+use futures::{StreamExt, stream::FuturesUnordered};
 use kithara_platform::{JoinHandle, tokio};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -130,13 +131,13 @@ impl Backend {
             let Ok(throttle_progress) = Self::wait_while_throttled(&mut dl, &cancel).await else {
                 return;
             };
-            made_progress |= throttle_progress;
-
-            hang_tick!();
-            kithara_platform::thread::yield_now();
             let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
                 return;
             };
+
+            hang_tick!();
+            kithara_platform::thread::yield_now();
+            made_progress |= throttle_progress;
 
             let control = match outcome {
                 PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
@@ -279,6 +280,7 @@ impl Backend {
         }
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     async fn handle_batch<D: Downloader>(
         dl: &mut D,
         cancel: &CancellationToken,
@@ -290,42 +292,59 @@ impl Backend {
         }
 
         let io = dl.io().clone();
-        let futures: Vec<_> = plans
+        let plan_count = plans.len();
+        let mut pending = plans
             .into_iter()
-            .map(|plan| {
+            .enumerate()
+            .map(|(index, plan)| {
                 let io = io.clone();
-                async move { io.fetch(plan).await }
+                async move { (index, io.fetch(plan).await) }
             })
-            .collect();
-
-        let results = tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
-                debug!("Downloader cancelled during batch fetch");
-                return LoopControl::Exit;
-            }
-            results = futures::future::join_all(futures) => results,
-        };
+            .collect::<FuturesUnordered<_>>();
 
         let mut made_progress = false;
-        for result in results {
-            match result {
-                Ok(fetch) => {
-                    dl.commit(fetch);
-                    made_progress = true;
-                }
-                Err(e) => debug!(?e, "batch fetch error"),
-            }
+        let mut next_commit = 0usize;
+        let mut results: Vec<Option<Result<D::Fetch, D::Error>>> =
+            std::iter::repeat_with(|| None).take(plan_count).collect();
 
-            if let Some(plan) = Self::try_poll_demand(dl, cancel).await
-                && Self::fetch_and_commit_demand(dl, plan, cancel)
-                    .await
-                    .map(|progress| {
-                        made_progress |= progress;
-                    })
-                    .is_err()
-            {
-                return LoopControl::Exit;
+        while next_commit < plan_count {
+            let Some((index, result)) = (tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    debug!("Downloader cancelled during batch fetch");
+                    return LoopControl::Exit;
+                }
+                item = pending.next() => item,
+            }) else {
+                break;
+            };
+            results[index] = Some(result);
+            hang_reset!();
+
+            while next_commit < plan_count {
+                let Some(result) = results[next_commit].take() else {
+                    break;
+                };
+
+                match result {
+                    Ok(fetch) => {
+                        dl.commit(fetch);
+                        made_progress = true;
+                    }
+                    Err(e) => debug!(?e, "batch fetch error"),
+                }
+                next_commit += 1;
+
+                if let Some(plan) = Self::try_poll_demand(dl, cancel).await
+                    && Self::fetch_and_commit_demand(dl, plan, cancel)
+                        .await
+                        .map(|progress| {
+                            made_progress |= progress;
+                        })
+                        .is_err()
+                {
+                    return LoopControl::Exit;
+                }
             }
         }
 
@@ -633,6 +652,105 @@ mod tests {
 
         cancel.cancel();
         wake_task.abort();
+        let _ = handle.await;
+    }
+
+    #[derive(Clone)]
+    struct BatchProgressIo {
+        release_slow: Arc<Notify>,
+    }
+
+    impl DownloaderIo for BatchProgressIo {
+        type Plan = u64;
+        type Fetch = u64;
+        type Error = MockError;
+
+        async fn fetch(&self, plan: u64) -> Result<u64, MockError> {
+            if plan == 1 {
+                self.release_slow.notified().await;
+            }
+            Ok(plan)
+        }
+    }
+
+    struct BatchProgressDownloader {
+        commits: Arc<Mutex<Vec<u64>>>,
+        first_commit: Arc<Notify>,
+        io: BatchProgressIo,
+        plan_sent: bool,
+    }
+
+    impl Downloader for BatchProgressDownloader {
+        type Plan = u64;
+        type Fetch = u64;
+        type Error = MockError;
+        type Io = BatchProgressIo;
+
+        fn io(&self) -> &Self::Io {
+            &self.io
+        }
+
+        async fn poll_demand(&mut self) -> Option<u64> {
+            None
+        }
+
+        async fn plan(&mut self) -> PlanOutcome<u64> {
+            if self.plan_sent {
+                PlanOutcome::Idle
+            } else {
+                self.plan_sent = true;
+                PlanOutcome::Batch(vec![0, 1])
+            }
+        }
+
+        fn commit(&mut self, fetch: u64) {
+            self.commits.lock_sync().push(fetch);
+            if fetch == 0 {
+                self.first_commit.notify_one();
+            }
+        }
+
+        fn should_throttle(&self) -> bool {
+            false
+        }
+
+        fn wait_ready(&self) -> impl Future<Output = ()> {
+            future::pending()
+        }
+
+        fn wait_for_work(&self) -> impl Future<Output = ()> {
+            future::pending()
+        }
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+    async fn batch_commits_ready_prefix_without_waiting_for_slowest_fetch() {
+        let release_slow = Arc::new(Notify::new());
+        let first_commit = Arc::new(Notify::new());
+        let commits = Arc::new(Mutex::new(Vec::new()));
+        let downloader = BatchProgressDownloader {
+            commits: Arc::clone(&commits),
+            first_commit: Arc::clone(&first_commit),
+            io: BatchProgressIo {
+                release_slow: Arc::clone(&release_slow),
+            },
+            plan_sent: false,
+        };
+
+        let cancel = CancellationToken::new();
+        let handle = tokio::spawn(Backend::run_downloader(downloader, cancel.clone()));
+
+        tokio::time::timeout(Duration::from_millis(250), first_commit.notified())
+            .await
+            .expect("first batch item must commit before the slowest fetch completes");
+        assert_eq!(
+            commits.lock_sync().as_slice(),
+            &[0],
+            "only the ready prefix should be committed before the slow fetch completes"
+        );
+
+        cancel.cancel();
+        release_slow.notify_one();
         let _ = handle.await;
     }
 }
