@@ -2380,8 +2380,8 @@ mod tests {
         assert_eq!(plans[0].variant, 0);
         assert_eq!(plans[0].segment_index, 0);
         assert!(
-            plans[0].need_init,
-            "segment zero must preserve normal init semantics even in the single-segment case"
+            !plans[0].need_init,
+            "single-segment init-less playlist must not request synthetic init"
         );
     }
 
