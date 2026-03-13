@@ -7,7 +7,7 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::{error::Error as StdError, ops::Range};
+use std::{error::Error as StdError, fmt, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -59,6 +59,18 @@ pub enum ReadOutcome {
     /// `read_at` (actual I/O). Caller should retry from `wait_range`.
     Retry,
 }
+
+/// Non-retriable cross-variant boundary signal from [`ReadOutcome::VariantChange`].
+#[derive(Debug)]
+pub struct VariantChangeError;
+
+impl fmt::Display for VariantChangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("variant change: decoder recreation required")
+    }
+}
+
+impl StdError for VariantChangeError {}
 
 /// Time-first seek anchor resolved by a segmented source.
 ///
@@ -225,6 +237,14 @@ pub trait Source: Send + 'static {
     ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
         Ok(None)
     }
+
+    /// Commit the actual post-seek landing after `decoder.seek(...)`.
+    ///
+    /// Segmented sources can use this hook to reconcile source-local state
+    /// with the authoritative landed reader position in [`Timeline`].
+    ///
+    /// Default no-op for sources that do not need post-seek reconciliation.
+    fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ use kithara_storage::WaitOutcome;
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
-    source::{ReadOutcome, Source},
+    source::{ReadOutcome, Source, VariantChangeError},
 };
 
 /// Defines a stream type and how to create it.
@@ -128,10 +128,12 @@ impl<T: StreamType> Stream<T> {
             pub fn notify_waiting(&self);
             /// Create a lock-free callback for waking blocked `wait_range()`.
             pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>>;
+            /// Commit the actual post-seek landing after `decoder.seek(...)`.
+            pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
         }
     }
 
-    /// Resolve a deterministic time-based seek anchor and move the stream position.
+    /// Resolve a deterministic time-based seek anchor.
     ///
     /// Returns `None` for sources without segmented time mapping.
     ///
@@ -142,14 +144,9 @@ impl<T: StreamType> Stream<T> {
         &mut self,
         position: Duration,
     ) -> Result<Option<SourceSeekAnchor>, io::Error> {
-        let anchor = self
-            .source
+        self.source
             .seek_time_anchor(position)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        if let Some(anchor) = anchor {
-            self.timeline.set_byte_position(anchor.byte_offset);
-        }
-        Ok(anchor)
+            .map_err(|e| io::Error::other(e.to_string()))
     }
 }
 
@@ -167,6 +164,7 @@ impl<T: StreamType> Read for Stream<T> {
         // wait_range (metadata ready) and read_at (actual I/O). Go back to
         // wait_range so the downloader can re-fetch.
         loop {
+            let read_epoch = self.timeline.seek_epoch();
             let pos = self.timeline.byte_position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
@@ -195,6 +193,10 @@ impl<T: StreamType> Read for Stream<T> {
                 }
             }
 
+            if self.timeline.seek_epoch() != read_epoch {
+                return Err(io::Error::other("seek pending"));
+            }
+
             // Read data directly from source.
             // No flushing check here: wait_range already handles interruption,
             // and the decoder must be able to read during apply_pending_seek().
@@ -204,16 +206,16 @@ impl<T: StreamType> Read for Stream<T> {
                 .map_err(|e| io::Error::other(e.to_string()))?
             {
                 ReadOutcome::Data(n) => {
+                    if self.timeline.seek_epoch() != read_epoch {
+                        return Err(io::Error::other("seek pending"));
+                    }
                     hang_reset!();
                     self.timeline
                         .set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
                 ReadOutcome::VariantChange => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Interrupted,
-                        "variant change: decoder recreation required",
-                    ));
+                    return Err(io::Error::other(VariantChangeError));
                 }
                 ReadOutcome::Retry => {
                     // Resource evicted — go back to wait_range.
@@ -284,6 +286,7 @@ mod tests {
     }
 
     struct ScriptSource {
+        anchor: Option<SourceSeekAnchor>,
         data: Vec<u8>,
         reads: VecDeque<ReadOutcome>,
         timeline: Timeline,
@@ -298,6 +301,7 @@ mod tests {
             data: Vec<u8>,
         ) -> Self {
             Self {
+                anchor: None,
                 data,
                 reads: reads.into_iter().collect(),
                 timeline,
@@ -343,6 +347,13 @@ mod tests {
             Some(self.data.len() as u64)
         }
 
+        fn seek_time_anchor(
+            &mut self,
+            _position: Duration,
+        ) -> crate::StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+            Ok(self.anchor)
+        }
+
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
         }
@@ -358,6 +369,58 @@ mod tests {
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(io::Error::other("not used in unit tests"))
+        }
+    }
+
+    struct SeekDuringWaitType;
+
+    impl StreamType for SeekDuringWaitType {
+        type Config = ();
+        type Error = io::Error;
+        type Events = ();
+        type Source = SeekDuringWaitSource;
+
+        async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
+            Err(io::Error::other("not used in unit tests"))
+        }
+    }
+
+    struct SeekDuringWaitSource {
+        read_calls: usize,
+        timeline: Timeline,
+    }
+
+    impl Source for SeekDuringWaitSource {
+        type Error = io::Error;
+
+        fn wait_range(
+            &mut self,
+            _range: Range<u64>,
+            _timeout: Duration,
+        ) -> crate::StreamResult<WaitOutcome, Self::Error> {
+            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
+            Ok(WaitOutcome::Ready)
+        }
+
+        fn read_at(
+            &mut self,
+            _offset: u64,
+            _buf: &mut [u8],
+        ) -> crate::StreamResult<ReadOutcome, Self::Error> {
+            self.read_calls += 1;
+            Ok(ReadOutcome::Data(4))
+        }
+
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            SourcePhase::Ready
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(4)
+        }
+
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
         }
     }
 
@@ -397,6 +460,25 @@ mod tests {
     }
 
     #[kithara::test]
+    fn read_aborts_when_seek_epoch_changes_after_wait() {
+        let timeline = Timeline::new();
+        let source = SeekDuringWaitSource {
+            read_calls: 0,
+            timeline: timeline.clone(),
+        };
+        let mut stream = Stream::<SeekDuringWaitType> { source, timeline };
+        let mut buf = [0u8; 4];
+
+        let err = stream
+            .read(&mut buf)
+            .expect_err("seek epoch change must abort stale read");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(stream.source.read_calls, 0);
+        assert_eq!(stream.position(), 0);
+    }
+
+    #[kithara::test]
     fn seek_updates_position() {
         let timeline = Timeline::new();
         let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
@@ -406,5 +488,32 @@ mod tests {
 
         assert_eq!(pos, 3);
         assert_eq!(stream.position(), 3);
+    }
+
+    #[kithara::test]
+    fn seek_time_anchor_does_not_move_position() {
+        let timeline = Timeline::new();
+        timeline.set_byte_position(11);
+        let mut source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        source.anchor = Some(SourceSeekAnchor {
+            byte_offset: 3,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(2),
+            variant_index: Some(1),
+        });
+        let mut stream = Stream::<DummyType> { source, timeline };
+
+        let anchor = stream
+            .seek_time_anchor(Duration::from_millis(8_500))
+            .expect("anchor resolution should succeed")
+            .expect("stream should return the resolved anchor");
+
+        assert_eq!(anchor.byte_offset, 3);
+        assert_eq!(
+            stream.position(),
+            11,
+            "anchor resolution must not eagerly commit stream position"
+        );
     }
 }
