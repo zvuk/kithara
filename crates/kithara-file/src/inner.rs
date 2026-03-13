@@ -15,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{FileConfig, FileSrc},
+    coord::FileCoord,
     downloader::FileDownloader,
     error::SourceError,
-    session::{FileSource, FileStreamState, Progress, SharedFileState},
+    session::{FileSource, FileStreamState},
 };
 
 /// Marker type for file streaming.
@@ -25,9 +26,13 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
+    type Coord = Arc<FileCoord>;
+    type Demand = std::ops::Range<u64>;
     type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;
+    type Layout = ();
+    type Topology = ();
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
@@ -76,13 +81,13 @@ impl File {
 
         let timeline = Timeline::new();
         timeline.set_total_bytes(len);
-        let progress = Arc::new(Progress::new(timeline.clone()));
+        let coord = Arc::new(FileCoord::new(timeline.clone()));
         // Local file is fully available — mark download as complete.
         let total = len.unwrap_or(0);
-        progress.set_download_pos(total);
+        coord.set_download_pos(total);
         bus.publish(FileEvent::DownloadComplete { total_bytes: total });
 
-        Ok(FileSource::new(res, progress, bus))
+        Ok(FileSource::new(res, coord, bus))
     }
 
     /// Create a source for a remote file (HTTP/HTTPS).
@@ -139,9 +144,9 @@ impl File {
             expected_len,
         )?;
 
-        let timeline = state.timeline();
-        let progress = Arc::new(Progress::new(timeline));
-        let shared = Arc::new(SharedFileState::new());
+        let timeline = Timeline::new();
+        timeline.set_total_bytes(state.len());
+        let coord = Arc::new(FileCoord::new(timeline));
 
         // Determine if the resource is a complete cache or needs downloading.
         let is_partial = match state.res().status() {
@@ -159,7 +164,7 @@ impl File {
             // Fully cached — no download needed.
             tracing::debug!("file already cached, skipping download");
             let total = state.len().unwrap_or(0);
-            progress.set_download_pos(total);
+            coord.set_download_pos(total);
             state
                 .bus()
                 .publish(FileEvent::DownloadComplete { total_bytes: total });
@@ -174,10 +179,9 @@ impl File {
             let downloader = FileDownloader::new(
                 &net_client,
                 &state,
-                progress.clone(),
+                Arc::clone(&coord),
                 state.bus().clone(),
                 config.look_ahead_bytes,
-                shared.clone(),
             );
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -195,19 +199,14 @@ impl File {
             let backend = Backend::new(downloader, &cancel);
 
             // Create source with shared state and backend for on-demand loading.
-            let source = FileSource::with_shared(
-                state.res().clone(),
-                progress,
-                state.bus().clone(),
-                shared,
-                backend,
-            );
+            let source =
+                FileSource::with_backend(state.res().clone(), coord, state.bus().clone(), backend);
 
             return Ok(source);
         }
 
         // Fully cached — create source without backend (no downloader needed).
-        let source = FileSource::new(state.res().clone(), progress, state.bus().clone());
+        let source = FileSource::new(state.res().clone(), coord, state.bus().clone());
 
         Ok(source)
     }

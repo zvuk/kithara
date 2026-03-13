@@ -2,18 +2,16 @@
 
 use std::{ops::Range, sync::Arc};
 
-use crossbeam_queue::SegQueue;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::Headers;
-use kithara_platform::{time::Duration, tokio, tokio::sync::Notify};
+use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::Timeline;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
 
-use crate::error::SourceError;
+use crate::{coord::FileCoord, error::SourceError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
@@ -22,7 +20,7 @@ pub(crate) struct FileStreamState {
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
     pub(crate) headers: Option<Headers>,
-    pub(crate) timeline: Timeline,
+    pub(crate) total_bytes: Option<u64>,
 }
 
 impl FileStreamState {
@@ -35,9 +33,6 @@ impl FileStreamState {
         headers: Option<Headers>,
         expected_len: Option<u64>,
     ) -> Result<Arc<Self>, SourceError> {
-        let timeline = Timeline::new();
-        timeline.set_total_bytes(expected_len);
-
         let key = ResourceKey::from_url(&url);
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
 
@@ -49,7 +44,7 @@ impl FileStreamState {
             res,
             bus,
             headers,
-            timeline,
+            total_bytes: expected_len,
         }))
     }
 
@@ -70,101 +65,11 @@ impl FileStreamState {
     }
 
     pub(crate) fn len(&self) -> Option<u64> {
-        self.timeline.total_bytes()
+        self.total_bytes.or_else(|| self.res.len())
     }
 
     pub(crate) fn cancel(&self) -> &CancellationToken {
         &self.cancel
-    }
-
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
-
-/// Progress tracker for download and playback positions.
-pub(crate) struct Progress {
-    timeline: Timeline,
-    /// Source -> Downloader: reader advanced, may resume downloading.
-    reader_advanced: Notify,
-}
-
-impl Progress {
-    #[must_use]
-    pub(crate) fn new(timeline: Timeline) -> Self {
-        Self {
-            timeline,
-            reader_advanced: Notify::new(),
-        }
-    }
-
-    delegate::delegate! {
-        to self.timeline {
-            #[call(byte_position)]
-            #[cfg_attr(feature = "perf", hotpath::measure)]
-            pub(crate) fn read_pos(&self) -> u64;
-            #[call(download_position)]
-            pub(crate) fn download_pos(&self) -> u64;
-            #[call(set_download_position)]
-            pub(crate) fn set_download_pos(&self, v: u64);
-            #[call(clone)]
-            pub(crate) fn timeline(&self) -> Timeline;
-        }
-        to self.reader_advanced {
-            #[call(notified)]
-            /// Register for reader advance notification.
-            /// Must be called BEFORE checking positions to avoid race.
-            pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_>;
-        }
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub(crate) fn set_read_pos(&self, v: u64) {
-        self.timeline.set_byte_position(v);
-        self.reader_advanced.notify_one();
-    }
-}
-
-impl Default for Progress {
-    fn default() -> Self {
-        Self::new(Timeline::new())
-    }
-}
-
-/// Shared state between `FileSource` (sync reader) and `FileDownloader` (async).
-///
-/// Enables on-demand Range requests: when the reader needs data beyond what
-/// the sequential download has fetched, it pushes a range request here.
-/// The downloader picks it up and fetches via HTTP Range.
-///
-/// Data availability signaling relies on `StorageResource`'s internal condvar:
-/// when the downloader writes data via `write_at`, the resource notifies waiters,
-/// so `FileSource::wait_range()` unblocks automatically.
-#[derive(Debug)]
-pub(crate) struct SharedFileState {
-    /// Queue of on-demand range requests from Source to Downloader.
-    range_requests: SegQueue<Range<u64>>,
-    /// Notify from Source → Downloader when reader needs data.
-    pub(crate) reader_needs_data: Notify,
-}
-
-impl SharedFileState {
-    pub(crate) fn new() -> Self {
-        Self {
-            range_requests: SegQueue::new(),
-            reader_needs_data: Notify::new(),
-        }
-    }
-
-    /// Request on-demand download of a range.
-    pub(crate) fn request_range(&self, range: Range<u64>) {
-        self.range_requests.push(range);
-        self.reader_needs_data.notify_one();
-    }
-
-    /// Pop next on-demand range request (for Downloader).
-    pub(crate) fn pop_range_request(&self) -> Option<Range<u64>> {
-        self.range_requests.pop()
     }
 }
 
@@ -175,39 +80,35 @@ impl SharedFileState {
 /// downloader lifecycle: when this source is dropped, the backend is dropped,
 /// cancelling the downloader task automatically.
 pub struct FileSource {
+    coord: Arc<FileCoord>,
     res: AssetResource,
-    progress: Arc<Progress>,
     bus: EventBus,
-    shared: Option<Arc<SharedFileState>>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
     _backend: Option<kithara_stream::Backend>,
 }
 
 impl FileSource {
     /// Create new file source (no on-demand support — for local files).
-    pub(crate) fn new(res: AssetResource, progress: Arc<Progress>, bus: EventBus) -> Self {
+    pub(crate) fn new(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> Self {
         Self {
+            coord,
             res,
-            progress,
             bus,
-            shared: None,
             _backend: None,
         }
     }
 
-    /// Create new file source with shared state and backend (for remote files).
-    pub(crate) fn with_shared(
+    /// Create new file source with backend (for remote files).
+    pub(crate) fn with_backend(
         res: AssetResource,
-        progress: Arc<Progress>,
+        coord: Arc<FileCoord>,
         bus: EventBus,
-        shared: Arc<SharedFileState>,
         backend: kithara_stream::Backend,
     ) -> Self {
         Self {
+            coord,
             res,
-            progress,
             bus,
-            shared: Some(shared),
             _backend: Some(backend),
         }
     }
@@ -215,6 +116,22 @@ impl FileSource {
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
+    type Topology = ();
+    type Layout = ();
+    type Coord = Arc<FileCoord>;
+    type Demand = Range<u64>;
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_range(
@@ -237,8 +154,8 @@ impl kithara_stream::Source for FileSource {
         // Update read position so downloader knows where reader needs data.
         // This prevents backpressure deadlock when symphonia seeks ahead
         // (e.g., SeekFrom::End) while downloader is still near the beginning.
-        if range.start > self.progress.read_pos() {
-            self.progress.set_read_pos(range.start);
+        if range.start > self.coord.read_pos() {
+            self.coord.set_read_pos(range.start);
         }
 
         // If shared state exists, check if on-demand download is needed
@@ -253,15 +170,13 @@ impl kithara_stream::Source for FileSource {
         //
         // No Committed guard — ring buffer resources lose data after commit
         // when capacity < total, so contains_range() is the only reliable check.
-        if let Some(ref shared) = self.shared
-            && !self.res.contains_range(range.clone())
-        {
+        if !self.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,
                 range_end = range.end,
                 "file_source::wait_range requesting on-demand download"
             );
-            shared.request_range(range.clone());
+            self.coord.request_range(range.clone());
         }
 
         // Wait on the resource. If on-demand was requested, the downloader
@@ -277,7 +192,7 @@ impl kithara_stream::Source for FileSource {
 
         const WINDOW: u64 = 32 * 1024; // 32 KB look-ahead
 
-        let timeline = self.progress.timeline();
+        let timeline = self.coord.timeline();
         let pos = timeline.byte_position();
         let total = timeline.total_bytes().unwrap_or(u64::MAX);
 
@@ -300,7 +215,7 @@ impl kithara_stream::Source for FileSource {
 
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         use kithara_stream::SourcePhase;
-        let timeline = self.progress.timeline();
+        let timeline = self.coord.timeline();
         let past_eof = timeline
             .total_bytes()
             .is_some_and(|total| total > 0 && range.start >= total);
@@ -330,10 +245,8 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
 
         if n > 0 {
-            // Update progress
             let new_pos = offset.saturating_add(n as u64);
-            self.progress.set_read_pos(new_pos);
-            let total = self.progress.timeline().total_bytes();
+            let total = self.coord.timeline().total_bytes();
 
             self.bus.publish(FileEvent::ByteProgress {
                 position: new_pos,
@@ -347,7 +260,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        self.progress
+        self.coord
             .timeline()
             .total_bytes()
             .or_else(|| self.res.len())
@@ -359,97 +272,94 @@ impl kithara_stream::Source for FileSource {
         }
         self.res.contains_range(range)
     }
-
-    fn timeline(&self) -> Timeline {
-        self.progress.timeline()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{ops::Range, sync::Arc};
+    use std::sync::Arc;
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_platform::time::{Duration, sleep, timeout};
-    use kithara_stream::{ReadOutcome, Source};
+    use kithara_stream::{ReadOutcome, Source, Timeline};
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
+        Arc::new(FileCoord::new(timeline))
+    }
 
-    // Progress
+    fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
+        FileSource::new(res, coord, bus)
+    }
+
+    // FileCoord
 
     #[kithara::test]
-    fn test_progress_initial_state() {
-        let p = Progress::new(Timeline::new());
-        assert_eq!(p.read_pos(), 0);
-        assert_eq!(p.download_pos(), 0);
+    fn test_file_coord_initial_state() {
+        let coord = FileCoord::new(Timeline::new());
+        assert_eq!(coord.read_pos(), 0);
+        assert_eq!(coord.download_pos(), 0);
     }
 
     #[kithara::test]
     #[case::read(100, true)]
     #[case::download(500, false)]
-    fn test_progress_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
-        let p = Progress::new(Timeline::new());
+    fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
+        let coord = FileCoord::new(Timeline::new());
         if read_pos {
-            p.set_read_pos(value);
-            assert_eq!(p.read_pos(), value);
-            assert_eq!(p.download_pos(), 0);
+            coord.set_read_pos(value);
+            assert_eq!(coord.read_pos(), value);
+            assert_eq!(coord.download_pos(), 0);
         } else {
-            p.set_download_pos(value);
-            assert_eq!(p.download_pos(), value);
-            assert_eq!(p.timeline().download_position(), value);
-            assert_eq!(p.read_pos(), 0);
+            coord.set_download_pos(value);
+            assert_eq!(coord.download_pos(), value);
+            assert_eq!(coord.timeline().download_position(), value);
+            assert_eq!(coord.read_pos(), 0);
         }
     }
 
     #[kithara::test(tokio)]
-    async fn test_progress_signal_reader_advanced() {
-        let progress = Arc::new(Progress::new(Timeline::new()));
+    async fn test_file_coord_signal_reader_advanced() {
+        let coord = Arc::new(FileCoord::new(Timeline::new()));
 
-        let notified = progress.notified_reader_advance();
-        let notified_progress = Arc::clone(&progress);
+        let notified = coord.notified_reader_advance();
+        let notified_coord = Arc::clone(&coord);
         timeout(Duration::from_secs(2), async move {
             sleep(Duration::from_millis(10)).await;
-            notified_progress.set_read_pos(42);
+            notified_coord.set_read_pos(42);
             notified.await;
         })
         .await
         .unwrap();
 
-        assert_eq!(progress.read_pos(), 42);
+        assert_eq!(coord.read_pos(), 42);
     }
 
-    // SharedFileState
+    // Demand slot
 
     #[kithara::test]
-    #[case::empty(vec![], vec![])]
-    #[case::single(vec![100..200], vec![100..200])]
-    #[case::fifo(vec![0..10, 10..20, 20..30], vec![0..10, 10..20, 20..30])]
-    fn test_shared_file_state_pop_order(
-        #[case] requests: Vec<Range<u64>>,
-        #[case] expected: Vec<Range<u64>>,
-    ) {
-        let state = SharedFileState::new();
-        for range in requests {
-            state.request_range(range);
-        }
-
-        for range in expected {
-            assert_eq!(state.pop_range_request(), Some(range));
-        }
-        assert_eq!(state.pop_range_request(), None);
+    fn file_coord_range_request_starts_empty() {
+        let coord = FileCoord::new(Timeline::new());
+        assert_eq!(coord.take_range_request(), None);
     }
 
     #[kithara::test]
-    fn test_shared_file_state_multiple_pops() {
-        let state = SharedFileState::new();
-        state.request_range(0..50);
-        state.request_range(50..100);
+    fn file_coord_range_request_replaces_previous() {
+        let coord = FileCoord::new(Timeline::new());
+        assert!(coord.request_range(0..50));
+        assert!(coord.request_range(50..100));
+        assert_eq!(coord.take_range_request(), Some(50..100));
+        assert_eq!(coord.take_range_request(), None);
+    }
 
-        assert!(state.pop_range_request().is_some());
-        assert!(state.pop_range_request().is_some());
-        assert!(state.pop_range_request().is_none());
+    #[kithara::test]
+    fn file_coord_range_request_dedupes_identical_request() {
+        let coord = FileCoord::new(Timeline::new());
+        assert!(coord.request_range(0..50));
+        assert!(!coord.request_range(0..50));
+        assert_eq!(coord.take_range_request(), Some(0..50));
+        assert_eq!(coord.take_range_request(), None);
     }
 
     // FileSource
@@ -474,11 +384,11 @@ mod tests {
         let data = b"hello world from kithara";
         let res = create_committed_resource(data);
 
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
 
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
-        let mut source = FileSource::new(res, Arc::clone(&progress), bus);
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        let mut source = make_source(res, Arc::clone(&coord), bus);
 
         let mut buf = [0u8; 11];
         assert_eq!(
@@ -486,9 +396,11 @@ mod tests {
             ReadOutcome::Data(11)
         );
         assert_eq!(&buf[..11], b"hello world");
-
-        // Progress should be updated to offset + bytes_read.
-        assert_eq!(progress.read_pos(), 11);
+        assert_eq!(
+            coord.read_pos(),
+            0,
+            "read_at must not advance the reader cursor outside Stream::read"
+        );
 
         // Read from an offset.
         let mut buf2 = [0u8; 7];
@@ -497,7 +409,7 @@ mod tests {
             ReadOutcome::Data(7)
         );
         assert_eq!(&buf2[..7], b"world f");
-        assert_eq!(progress.read_pos(), 13);
+        assert_eq!(coord.read_pos(), 0);
     }
 
     #[kithara::test]
@@ -505,12 +417,12 @@ mod tests {
         let data = b"abcdef";
         let res = create_committed_resource(data);
 
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
         let mut events = bus.subscribe();
 
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
-        let mut source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        let mut source = make_source(res, coord, bus);
 
         let mut buf = [0u8; 3];
         assert_eq!(
@@ -532,11 +444,11 @@ mod tests {
     fn test_file_source_len() {
         let res = create_committed_resource(b"abc");
 
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
 
-        progress.timeline().set_total_bytes(Some(12345));
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(12345));
+        let source = make_source(res, coord, bus);
 
         // len() should return the explicit value provided at construction.
         assert_eq!(Source::len(&source), Some(12345));
@@ -548,10 +460,10 @@ mod tests {
     fn file_source_phase_ready_when_range_present() {
         let data = b"hello world";
         let res = create_committed_resource(data);
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = make_source(res, coord, bus);
 
         assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
     }
@@ -561,10 +473,10 @@ mod tests {
         let data = b"hello world";
         let res = create_committed_resource(data);
         let timeline = Timeline::new();
-        let progress = Arc::new(Progress::new(timeline.clone()));
+        let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(100)); // larger than actual data
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(100)); // larger than actual data
+        let source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
@@ -581,10 +493,10 @@ mod tests {
         let data = b"hello world";
         let res = create_committed_resource(data);
         let timeline = Timeline::new();
-        let progress = Arc::new(Progress::new(timeline.clone()));
+        let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
@@ -597,10 +509,10 @@ mod tests {
     fn file_source_phase_eof_past_known_length() {
         let data = b"abc";
         let res = create_committed_resource(data);
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        let source = make_source(res, coord, bus);
 
         assert_eq!(source.phase_at(100..110), kithara_stream::SourcePhase::Eof,);
     }
@@ -612,11 +524,11 @@ mod tests {
         // 64 KB resource — enough for the 32 KB look-ahead window.
         let data = vec![0xABu8; 64 * 1024];
         let res = create_committed_resource(&data);
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
         // Position stays at 0, so window is 0..32KB — all present.
-        let source = FileSource::new(res, progress, bus);
+        let source = make_source(res, coord, bus);
 
         assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Ready);
     }
@@ -625,12 +537,12 @@ mod tests {
     fn file_source_phase_parameterless_eof_at_end() {
         let data = b"tiny";
         let res = create_committed_resource(data);
-        let progress = Arc::new(Progress::new(Timeline::new()));
+        let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.timeline().set_total_bytes(Some(data.len() as u64));
         // Move position to end-of-file.
-        progress.set_read_pos(data.len() as u64);
-        let source = FileSource::new(res, progress, bus);
+        coord.timeline().set_byte_position(data.len() as u64);
+        let source = make_source(res, coord, bus);
 
         assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Eof);
     }
@@ -640,10 +552,10 @@ mod tests {
         let data = b"hello world from kithara";
         let res = create_committed_resource(data);
         let timeline = Timeline::new();
-        let progress = Arc::new(Progress::new(timeline.clone()));
+        let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(100)); // larger than data
-        let mut source = FileSource::new(res, progress, bus);
+        coord.timeline().set_total_bytes(Some(100)); // larger than data
+        let mut source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
@@ -654,14 +566,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn file_source_uses_progress_timeline_as_single_source_of_truth() {
+    fn file_source_read_at_does_not_advance_timeline_position() {
         let res = create_committed_resource(b"abcdef");
 
         let timeline = Timeline::new();
-        let progress = Arc::new(Progress::new(timeline.clone()));
+        let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        progress.timeline().set_total_bytes(Some(6));
-        let mut source = FileSource::new(res, Arc::clone(&progress), bus);
+        coord.timeline().set_total_bytes(Some(6));
+        let mut source = make_source(res, Arc::clone(&coord), bus);
 
         let mut buf = [0u8; 2];
         assert_eq!(
@@ -669,10 +581,15 @@ mod tests {
             ReadOutcome::Data(2)
         );
 
-        assert_eq!(progress.read_pos(), 2);
-        assert_eq!(Source::timeline(&source).byte_position(), 2);
+        assert_eq!(
+            coord.read_pos(),
+            0,
+            "FileSource read_at must not commit the reader cursor outside Stream::read"
+        );
+        assert_eq!(Source::timeline(&source).byte_position(), 0);
 
-        progress.set_read_pos(5);
-        assert_eq!(Source::timeline(&source).byte_position(), 5);
+        coord.set_read_pos(5);
+        assert_eq!(coord.read_pos(), 5);
+        assert_eq!(Source::timeline(&source).byte_position(), 0);
     }
 }

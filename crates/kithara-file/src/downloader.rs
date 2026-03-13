@@ -11,10 +11,12 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
 use kithara_platform::{WasmSend, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
+use kithara_stream::{
+    DownloadCursor, Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::session::{FileStreamState, Progress, SharedFileState};
+use crate::{coord::FileCoord, session::FileStreamState};
 
 // FileIo — pure I/O executor (Clone, no &mut self)
 
@@ -100,16 +102,6 @@ impl DownloaderIo for FileIo {
 
 // FileDownloader — mutable state (plan + commit)
 
-/// Current phase of file download.
-enum FilePhase {
-    /// Sequential download from start.
-    Sequential,
-    /// Filling gaps after sequential ended (partial/error).
-    GapFilling,
-    /// Download complete.
-    Complete,
-}
-
 /// Background file downloader implementing `Downloader`.
 ///
 /// Supports three phases:
@@ -130,27 +122,22 @@ pub(crate) struct FileDownloader {
     /// worker via `ensure_writer()`.
     writer: WasmSend<Option<Writer>>,
     res: AssetResource,
-    progress: Arc<Progress>,
     bus: EventBus,
+    coord: Arc<FileCoord>,
     total: Option<u64>,
     /// Backpressure threshold. None = no backpressure.
     look_ahead_bytes: Option<u64>,
-    shared: Arc<SharedFileState>,
-    /// Current download phase.
-    phase: FilePhase,
-    /// Start offset for restarted sequential download (backward seek).
-    /// When set, `ensure_writer()` opens a Range GET from this offset.
-    sequential_offset: Option<u64>,
+    /// Generic ordered-download cursor.
+    cursor: DownloadCursor<u64>,
 }
 
 impl FileDownloader {
     pub(crate) fn new(
         net_client: &HttpClient,
         state: &Arc<FileStreamState>,
-        progress: Arc<Progress>,
+        coord: Arc<FileCoord>,
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
-        shared: Arc<SharedFileState>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -170,13 +157,11 @@ impl FileDownloader {
             io,
             writer: WasmSend::new(None), // Created lazily on first step()
             res,
-            progress,
             bus,
+            coord,
             total,
             look_ahead_bytes,
-            shared,
-            phase: FilePhase::Sequential,
-            sequential_offset: None,
+            cursor: DownloadCursor::stream(0),
         }
     }
 
@@ -195,12 +180,12 @@ impl FileDownloader {
     /// When a pre-opened writer was set via `with_initial_writer()`, returns
     /// it directly. Otherwise falls back to opening a new HTTP stream.
     ///
-    /// If `sequential_offset` is set (backward seek restart), opens a Range
-    /// GET from that offset instead of streaming from the beginning.
+    /// If `cursor` is in `Stream { from }`, opens a Range GET from that offset
+    /// instead of streaming from the beginning.
     async fn ensure_writer(&mut self) -> Result<&mut Writer, FileDownloadError> {
         let slot = self.writer.get_mut();
         if slot.is_none() {
-            let start_offset = self.sequential_offset.take().unwrap_or(0);
+            let start_offset = self.cursor.stream_from().unwrap_or(0);
             let result = if start_offset > 0 {
                 // Backward seek restart: open Range GET from the seek position.
                 let spec = RangeSpec::from_start(start_offset);
@@ -232,7 +217,7 @@ impl FileDownloader {
                             "discovered total from stream headers"
                         );
                         self.total = Some(cl);
-                        self.progress.timeline().set_total_bytes(Some(cl));
+                        self.coord.timeline().set_total_bytes(Some(cl));
                     }
 
                     *slot = Some(Writer::with_offset(
@@ -260,14 +245,14 @@ impl FileDownloader {
     }
 
     fn switch_phase_for_demand(&mut self) {
-        if matches!(self.phase, FilePhase::Sequential) {
+        if self.cursor.is_stream() {
             tracing::debug!("demand during sequential — switching to gap-filling");
-            self.phase = FilePhase::GapFilling;
+            self.cursor.reopen_fill(0, 0);
             // Drop the sequential writer to release the HTTP connection.
             *self.writer.get_mut() = None;
-        } else if matches!(self.phase, FilePhase::Complete) {
+        } else if self.cursor.is_complete() {
             tracing::debug!("demand after complete — reopening gap-filling");
-            self.phase = FilePhase::GapFilling;
+            self.cursor.reopen_fill(0, 0);
         }
     }
 
@@ -297,7 +282,7 @@ impl Downloader for FileDownloader {
     }
 
     async fn poll_demand(&mut self) -> Option<FilePlan> {
-        let range = self.shared.pop_range_request()?;
+        let range = self.coord.take_range_request()?;
 
         // Cancel sequential download when demand arrives — bandwidth is better
         // spent on the data the reader actually needs (gap-filling).
@@ -313,9 +298,9 @@ impl Downloader for FileDownloader {
     }
 
     async fn plan(&mut self) -> PlanOutcome<FilePlan> {
-        match self.phase {
-            FilePhase::Sequential => PlanOutcome::Step,
-            FilePhase::GapFilling => {
+        match &self.cursor {
+            DownloadCursor::Stream { from: _ } => PlanOutcome::Step,
+            DownloadCursor::Fill { floor: _, next: _ } => {
                 // Collect up to 4 gaps, each up to 2MB.
                 let mut plans = Vec::new();
                 let gap_chunk_size: u64 = 2 * 1024 * 1024;
@@ -347,13 +332,13 @@ impl Downloader for FileDownloader {
                             self.bus
                                 .publish(FileEvent::DownloadComplete { total_bytes: total });
                         }
-                        self.phase = FilePhase::Complete;
+                        self.cursor.mark_complete();
                         PlanOutcome::Complete
                     } else {
                         // No gaps found but not complete — wait for on-demand requests.
                         // This can happen when total_size is unknown.
                         tokio::select! {
-                            () = self.shared.reader_needs_data.notified() => {
+                            () = self.coord.notified_downloader_wake() => {
                                 PlanOutcome::Step // Re-check on next iteration
                             }
                         }
@@ -364,13 +349,13 @@ impl Downloader for FileDownloader {
             }
             // A committed remote file may still need future on-demand range
             // fetches after cache eviction, so stay idle until demand arrives.
-            FilePhase::Complete => PlanOutcome::Idle,
+            DownloadCursor::Complete => PlanOutcome::Idle,
         }
     }
 
     async fn step(&mut self) -> Result<StepResult<FileFetch>, FileDownloadError> {
         // If sequential ended, wait for on-demand or transition.
-        if matches!(self.phase, FilePhase::GapFilling | FilePhase::Complete) {
+        if !self.cursor.is_stream() {
             return Ok(StepResult::PhaseChange);
         }
 
@@ -380,7 +365,7 @@ impl Downloader for FileDownloader {
         // Sequential download continues.
         let Some(result) = writer.next().await else {
             // Writer exhausted (empty stream case).
-            self.phase = FilePhase::Complete;
+            self.cursor.mark_complete();
             return Ok(StepResult::PhaseChange);
         };
 
@@ -402,7 +387,7 @@ impl Downloader for FileDownloader {
                 });
                 // Transition to gap-filling on error.
                 if self.total.is_some() {
-                    self.phase = FilePhase::GapFilling;
+                    self.cursor.reopen_fill(0, 0);
                     Ok(StepResult::PhaseChange)
                 } else {
                     Err(FileDownloadError { msg: e.to_string() })
@@ -416,7 +401,7 @@ impl Downloader for FileDownloader {
             FileFetch::Chunk { offset, len } => {
                 let download_offset = offset + len;
                 // write_at already updates Resource.available — no coverage mark needed.
-                self.progress.set_download_pos(download_offset);
+                self.coord.set_download_pos(download_offset);
                 self.bus.publish(FileEvent::DownloadProgress {
                     offset: download_offset,
                     total: self.total,
@@ -427,7 +412,7 @@ impl Downloader for FileDownloader {
                 let total = self.total.unwrap_or(0);
                 if total > 0 && self.res.next_gap(0, total).is_none() {
                     // Only commit + emit event on first completion.
-                    if !matches!(self.phase, FilePhase::Complete) {
+                    if !self.cursor.is_complete() {
                         if let Err(e) = self.res.commit(self.total) {
                             tracing::error!(?e, "failed to commit resource after range done");
                             self.res.fail(format!("commit failed: {e}"));
@@ -439,7 +424,7 @@ impl Downloader for FileDownloader {
                                 .publish(FileEvent::DownloadComplete { total_bytes: total });
                         }
                     }
-                    self.phase = FilePhase::Complete;
+                    self.cursor.mark_complete();
                 }
             }
             FileFetch::StreamEnded { total_bytes } => {
@@ -461,7 +446,7 @@ impl Downloader for FileDownloader {
                         self.bus
                             .publish(FileEvent::DownloadComplete { total_bytes });
                     }
-                    self.phase = FilePhase::Complete;
+                    self.cursor.mark_complete();
                 } else {
                     // Partial download — switch to gap-filling.
                     tracing::warn!(
@@ -473,7 +458,7 @@ impl Downloader for FileDownloader {
                         offset: total_bytes,
                         total: self.total,
                     });
-                    self.phase = FilePhase::GapFilling;
+                    self.cursor.reopen_fill(0, 0);
                 }
             }
         }
@@ -482,7 +467,7 @@ impl Downloader for FileDownloader {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn should_throttle(&self) -> bool {
         // Only throttle during sequential phase.
-        if !matches!(self.phase, FilePhase::Sequential) {
+        if !self.cursor.is_stream() {
             return false;
         }
 
@@ -490,8 +475,8 @@ impl Downloader for FileDownloader {
             return false;
         };
 
-        let download_pos = self.progress.download_pos();
-        let reader_pos = self.progress.read_pos();
+        let download_pos = self.coord.download_pos();
+        let reader_pos = self.coord.read_pos();
 
         download_pos.saturating_sub(reader_pos) > limit
     }
@@ -499,27 +484,26 @@ impl Downloader for FileDownloader {
     fn wait_ready(&self) -> impl Future<Output = ()> {
         // Extract Arc references to avoid capturing &self (which is not Send
         // because Writer contains a non-Sync dyn Stream).
-        let progress = Arc::clone(&self.progress);
-        let shared = Arc::clone(&self.shared);
+        let coord = Arc::clone(&self.coord);
         async move {
             tokio::select! {
-                () = progress.notified_reader_advance() => {}
-                () = shared.reader_needs_data.notified() => {}
+                () = coord.notified_reader_advance() => {}
+                () = coord.notified_downloader_wake() => {}
             }
         }
     }
 
     fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
-        let shared = Arc::clone(&self.shared);
+        let coord = Arc::clone(&self.coord);
         async move {
-            shared.reader_needs_data.notified().await;
+            coord.notified_downloader_wake().await;
         }
     }
 
     fn wait_for_work(&self) -> impl Future<Output = ()> {
-        let shared = Arc::clone(&self.shared);
+        let coord = Arc::clone(&self.coord);
         async move {
-            shared.reader_needs_data.notified().await;
+            coord.notified_downloader_wake().await;
         }
     }
 }
@@ -536,6 +520,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    fn make_coord() -> Arc<FileCoord> {
+        Arc::new(FileCoord::new(Timeline::new()))
+    }
 
     /// After a demand (on-demand range request) is polled during Sequential phase,
     /// the downloader should cancel sequential and switch to gap-filling.
@@ -554,7 +542,7 @@ mod tests {
 
         let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
         let key = ResourceKey::from_url(&url);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
 
         let total: u64 = 10_000;
 
@@ -566,7 +554,7 @@ mod tests {
             headers: None,
         };
 
-        let shared = Arc::new(SharedFileState::new());
+        let coord = make_coord();
 
         // Write first 1KB to simulate sequential download progress.
         res.write_at(0, &[0u8; 1000]).unwrap();
@@ -579,17 +567,15 @@ mod tests {
             io,
             writer: WasmSend::new(Some(writer)),
             res,
-            progress: Arc::new(Progress::new(Timeline::new())),
+            coord: Arc::clone(&coord),
             bus: EventBus::new(16),
             total: Some(total),
             look_ahead_bytes: None,
-            shared: shared.clone(),
-            phase: FilePhase::Sequential,
-            sequential_offset: None,
+            cursor: DownloadCursor::stream(0),
         };
 
         // Seek far ahead — queue on-demand range request.
-        shared.request_range(8000..9000);
+        coord.request_range(8000..9000);
 
         // Downloader picks up the demand.
         let demand = dl.poll_demand().await;
@@ -615,7 +601,7 @@ mod tests {
 
         let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
         let key = ResourceKey::from_url(&url);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, &[0u8; 1024]).unwrap();
         res.commit(Some(1024)).unwrap();
 
@@ -627,26 +613,24 @@ mod tests {
             headers: None,
         };
 
-        let shared = Arc::new(SharedFileState::new());
+        let coord = make_coord();
         let mut dl = FileDownloader {
             io,
             writer: WasmSend::new(None),
             res: res.clone(),
-            progress: Arc::new(Progress::new(Timeline::new())),
+            coord: Arc::clone(&coord),
             bus: EventBus::new(16),
             total: Some(1024),
             look_ahead_bytes: None,
-            shared: shared.clone(),
-            phase: FilePhase::Complete,
-            sequential_offset: None,
+            cursor: DownloadCursor::complete(),
         };
 
-        shared.request_range(128..256);
+        coord.request_range(128..256);
 
         let demand = dl.poll_demand().await;
         assert!(demand.is_some(), "demand should be available");
         assert!(
-            matches!(dl.phase, FilePhase::GapFilling),
+            dl.cursor.is_fill(),
             "on-demand fetch must reopen the downloader loop after Complete"
         );
         assert!(
@@ -667,7 +651,7 @@ mod tests {
 
         let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
         let key = ResourceKey::from_url(&url);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, &[0u8; 1024]).unwrap();
         res.commit(Some(1024)).unwrap();
 
@@ -679,17 +663,16 @@ mod tests {
             headers: None,
         };
 
+        let coord = make_coord();
         let mut dl = FileDownloader {
             io,
             writer: WasmSend::new(None),
             res,
-            progress: Arc::new(Progress::new(Timeline::new())),
+            coord,
             bus: EventBus::new(16),
             total: Some(1024),
             look_ahead_bytes: None,
-            shared: Arc::new(SharedFileState::new()),
-            phase: FilePhase::Complete,
-            sequential_offset: None,
+            cursor: DownloadCursor::complete(),
         };
 
         let outcome = dl.plan().await;

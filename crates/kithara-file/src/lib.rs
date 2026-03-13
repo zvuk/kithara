@@ -14,6 +14,7 @@
 //! ```
 
 mod config;
+mod coord;
 mod downloader;
 mod error;
 mod inner;
