@@ -105,6 +105,10 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug,
 {
+    fn is_readable(&self) -> bool {
+        self.ctx.is_none() || *self.processed.lock_sync()
+    }
+
     /// Process content chunk-by-chunk and write back to disk.
     ///
     /// Returns the total number of bytes written after processing.
@@ -160,7 +164,6 @@ where
 {
     delegate::delegate! {
         to self.inner {
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
             fn fail(&self, reason: String);
@@ -168,9 +171,21 @@ where
             fn len(&self) -> Option<u64>;
             fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
-            fn contains_range(&self, range: Range<u64>) -> bool;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::Failed(
+                "processed resource is not readable before commit".to_string(),
+            ));
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.is_readable() && self.inner.contains_range(range)
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -410,5 +425,28 @@ mod tests {
         let n = processed.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
         assert_eq!(&buf, b"test content");
+    }
+
+    #[kithara::test]
+    fn encrypted_resource_is_not_readable_before_commit() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+
+        let (resource, _dir) = mock_resource(b"test content");
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+
+        assert!(
+            !processed.contains_range(0..12),
+            "encrypted active resource must not advertise readable ranges before processing"
+        );
+
+        let mut buf = vec![0u8; 12];
+        let err = processed
+            .read_at(0, &mut buf)
+            .expect_err("encrypted active resource must reject reads before commit");
+        assert!(
+            err.to_string().contains("not readable before commit"),
+            "read guard must explain that commit is required before reads"
+        );
     }
 }
