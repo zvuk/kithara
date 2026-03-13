@@ -5,7 +5,8 @@ use std::{io, ops::Range};
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    DemandSlot, ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    TransferCoordination,
 };
 
 /// Error type for memory-backed sources.
@@ -19,8 +20,8 @@ pub struct MemorySourceError;
 /// Set `report_len` to `false` to simulate sources without known length
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
+    coord: MemoryCoord,
     data: Vec<u8>,
-    timeline: Timeline,
     report_len: bool,
 }
 
@@ -28,8 +29,8 @@ impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self {
+            coord: MemoryCoord::default(),
             data,
-            timeline: Timeline::new(),
             report_len: true,
         }
     }
@@ -38,8 +39,8 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
+            coord: MemoryCoord::default(),
             data,
-            timeline: Timeline::new(),
             report_len: false,
         }
     }
@@ -47,6 +48,22 @@ impl MemorySource {
 
 impl Source for MemorySource {
     type Error = MemorySourceError;
+    type Topology = ();
+    type Layout = ();
+    type Coord = MemoryCoord;
+    type Demand = ();
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     fn wait_range(
         &mut self,
@@ -92,10 +109,6 @@ impl Source for MemorySource {
         // Empty range or position at/past EOF — non-blocking (returns 0 or Eof)
         range.is_empty() || range.start < self.data.len() as u64
     }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
 }
 
 /// Backwards-compatible alias for `MemorySource::without_len`.
@@ -103,14 +116,42 @@ pub type UnknownLenSource = MemorySource;
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
 
+pub struct MemoryCoord {
+    demand: DemandSlot<()>,
+    timeline: Timeline,
+}
+
+impl Default for MemoryCoord {
+    fn default() -> Self {
+        Self {
+            demand: DemandSlot::new(),
+            timeline: Timeline::new(),
+        }
+    }
+}
+
+impl TransferCoordination<()> for MemoryCoord {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn demand(&self) -> &DemandSlot<()> {
+        &self.demand
+    }
+}
+
 /// `StreamType` using `MemorySource` (known length).
 pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
+    type Coord = MemoryCoord;
+    type Demand = ();
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
+    type Layout = ();
+    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| io::Error::other("no source"))
@@ -127,9 +168,13 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
+    type Coord = MemoryCoord;
+    type Demand = ();
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
+    type Layout = ();
+    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| io::Error::other("no source"))

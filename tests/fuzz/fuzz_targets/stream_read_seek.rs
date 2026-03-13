@@ -11,8 +11,8 @@ use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
-    Timeline,
+    DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -97,18 +97,34 @@ impl<'a> Arbitrary<'a> for Input {
 }
 
 struct ScriptSource {
+    coord: ScriptCoord,
     data: Vec<u8>,
     reads: VecDeque<ReadOutcome>,
-    timeline: Timeline,
     waits: VecDeque<WaitOutcome>,
+}
+
+#[derive(Default)]
+struct ScriptCoord {
+    demand: DemandSlot<()>,
+    timeline: Timeline,
+}
+
+impl TransferCoordination<()> for ScriptCoord {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn demand(&self) -> &DemandSlot<()> {
+        &self.demand
+    }
 }
 
 impl Default for ScriptSource {
     fn default() -> Self {
         Self {
+            coord: ScriptCoord::default(),
             data: Vec::new(),
             reads: VecDeque::new(),
-            timeline: Timeline::new(),
             waits: VecDeque::new(),
         }
     }
@@ -116,6 +132,22 @@ impl Default for ScriptSource {
 
 impl Source for ScriptSource {
     type Error = io::Error;
+    type Topology = ();
+    type Layout = ();
+    type Coord = ScriptCoord;
+    type Demand = ();
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     fn wait_range(
         &mut self,
@@ -148,19 +180,19 @@ impl Source for ScriptSource {
     fn len(&self) -> Option<u64> {
         Some(self.data.len() as u64)
     }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
 }
 
 struct DummyType;
 
 impl StreamType for DummyType {
     type Config = ScriptSource;
+    type Coord = ScriptCoord;
+    type Demand = ();
     type Error = io::Error;
     type Events = ();
+    type Layout = ();
     type Source = ScriptSource;
+    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         Ok(config)
@@ -185,9 +217,12 @@ fuzz_target!(|input: Input| {
 
     let timeline = Timeline::new();
     let source = ScriptSource {
+        coord: ScriptCoord {
+            demand: DemandSlot::new(),
+            timeline: timeline.clone(),
+        },
         data: input.data,
         reads: reads.collect(),
-        timeline: timeline.clone(),
         waits: waits.collect(),
     };
     let runtime = match Builder::new_current_thread().enable_all().build() {

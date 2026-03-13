@@ -14,7 +14,10 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{Timeline, error::StreamResult, media::MediaInfo};
+use crate::{
+    Timeline, coordination::TransferCoordination, error::StreamResult, layout::LayoutIndex,
+    media::MediaInfo, topology::Topology,
+};
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -92,11 +95,38 @@ pub struct SourceSeekAnchor {
 ///
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = SourceMock, type Error = std::io::Error;))]
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock(
+        api = SourceMock,
+        type Error = std::io::Error;
+        type Topology = ();
+        type Layout = ();
+        type Coord = ();
+        type Demand = ();
+    )
+)]
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
     /// Error type.
     type Error: StdError + Send + Sync + 'static;
+    /// Read-only media structure for this source.
+    type Topology: Topology;
+    /// Committed placement of logical items in the virtual byte space.
+    type Layout: LayoutIndex;
+    /// Shared runtime coordination between source and downloader.
+    type Coord: TransferCoordination<Self::Demand>;
+    /// On-demand request type used by the source-specific coordinator.
+    type Demand: Clone + Send + Sync + 'static;
+
+    /// Read-only media structure for this source.
+    fn topology(&self) -> &Self::Topology;
+
+    /// Committed placement handle for this source.
+    fn layout(&self) -> &Self::Layout;
+
+    /// Shared runtime coordination for this source.
+    fn coord(&self) -> &Self::Coord;
 
     /// Wait for data in range to be available.
     ///
@@ -218,7 +248,9 @@ pub trait Source: Send + 'static {
     ///
     /// Timeline is the single source of truth for playback state across all
     /// stream types (segmented and non-segmented).
-    fn timeline(&self) -> Timeline;
+    fn timeline(&self) -> Timeline {
+        self.coord().timeline()
+    }
 
     /// Resolve `position` to a source-specific seek anchor.
     ///
@@ -249,11 +281,29 @@ pub trait Source: Send + 'static {
 
 #[cfg(test)]
 mod tests {
+    use crate::DemandSlot;
+
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
 
     use super::*;
+
+    #[derive(Default)]
+    struct TestCoord {
+        demand: DemandSlot<()>,
+        timeline: Timeline,
+    }
+
+    impl TransferCoordination<()> for TestCoord {
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
+        }
+
+        fn demand(&self) -> &DemandSlot<()> {
+            &self.demand
+        }
+    }
 
     // Dummy test to verify trait compiles
     #[kithara::test]
@@ -272,9 +322,16 @@ mod tests {
     fn is_range_ready_default_empty_returns_true() {
         use kithara_storage::WaitOutcome;
 
-        struct StubSource;
+        #[derive(Default)]
+        struct StubSource {
+            coord: TestCoord,
+        }
         impl Source for StubSource {
             type Error = std::io::Error;
+            type Topology = ();
+            type Layout = ();
+            type Coord = TestCoord;
+            type Demand = ();
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,
@@ -295,11 +352,20 @@ mod tests {
             fn len(&self) -> Option<u64> {
                 Some(100)
             }
-            fn timeline(&self) -> Timeline {
-                Timeline::new()
+
+            fn topology(&self) -> &Self::Topology {
+                &()
+            }
+
+            fn layout(&self) -> &Self::Layout {
+                &()
+            }
+
+            fn coord(&self) -> &Self::Coord {
+                &self.coord
             }
         }
-        let source = StubSource;
+        let source = StubSource::default();
         assert!(source.is_range_ready(0..0));
         assert!(!source.is_range_ready(0..10));
     }
@@ -308,9 +374,16 @@ mod tests {
     fn phase_default_delegates_to_phase_at() {
         use kithara_storage::WaitOutcome;
 
-        struct ReadySource;
+        #[derive(Default)]
+        struct ReadySource {
+            coord: TestCoord,
+        }
         impl Source for ReadySource {
             type Error = std::io::Error;
+            type Topology = ();
+            type Layout = ();
+            type Coord = TestCoord;
+            type Demand = ();
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,
@@ -331,11 +404,20 @@ mod tests {
             fn len(&self) -> Option<u64> {
                 Some(100)
             }
-            fn timeline(&self) -> Timeline {
-                Timeline::new()
+
+            fn topology(&self) -> &Self::Topology {
+                &()
+            }
+
+            fn layout(&self) -> &Self::Layout {
+                &()
+            }
+
+            fn coord(&self) -> &Self::Coord {
+                &self.coord
             }
         }
-        let source = ReadySource;
+        let source = ReadySource::default();
         // Default phase() delegates to phase_at(0..1) since timeline position is 0.
         assert_eq!(source.phase(), SourcePhase::Ready);
     }

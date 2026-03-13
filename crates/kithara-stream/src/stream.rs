@@ -20,7 +20,10 @@ use kithara_storage::WaitOutcome;
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
+    coordination::TransferCoordination,
+    layout::LayoutIndex,
     source::{ReadOutcome, Source, VariantChangeError},
+    topology::Topology,
 };
 
 /// Defines a stream type and how to create it.
@@ -32,9 +35,22 @@ use crate::{
 pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
+    /// Read-only media structure for this stream type.
+    type Topology: Topology;
+    /// Committed placement of logical items in the virtual byte space.
+    type Layout: LayoutIndex;
+    /// Shared runtime coordination between source and downloader.
+    type Coord: TransferCoordination<Self::Demand>;
+    /// On-demand request type used by the stream-specific coordinator.
+    type Demand: Clone + Send + Sync + 'static;
 
     /// Source implementing `Source`.
-    type Source: Source;
+    type Source: Source<
+            Topology = Self::Topology,
+            Layout = Self::Layout,
+            Coord = Self::Coord,
+            Demand = Self::Demand,
+        >;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -75,7 +91,6 @@ pub trait StreamType: MaybeSend + 'static {
 /// `Source::wait_range()` and `Source::read_at()`.
 pub struct Stream<T: StreamType> {
     source: T::Source,
-    timeline: Timeline,
 }
 
 impl<T: StreamType> Stream<T> {
@@ -86,18 +101,17 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
-        let timeline = source.timeline();
-        Ok(Self { source, timeline })
+        Ok(Self { source })
     }
 
     /// Get current read position.
     pub fn position(&self) -> u64 {
-        self.timeline.byte_position()
+        self.source.timeline().byte_position()
     }
 
     /// Get stream timeline.
     pub fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+        self.source.timeline()
     }
 
     /// Get shared reference to inner source.
@@ -109,10 +123,11 @@ impl<T: StreamType> Stream<T> {
         to self.source {
             /// Overall source readiness at current position.
             pub fn phase(&self) -> SourcePhase;
+            /// Point-in-time readiness for a specific byte range.
+            pub fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             /// Get current media info if known.
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Get total length if known.
-            #[expect(clippy::len_without_is_empty)]
             pub fn len(&self) -> Option<u64>;
             /// Get current segment byte range (for segmented sources like HLS).
             pub fn current_segment_range(&self) -> Option<Range<u64>>;
@@ -164,8 +179,9 @@ impl<T: StreamType> Read for Stream<T> {
         // wait_range (metadata ready) and read_at (actual I/O). Go back to
         // wait_range so the downloader can re-fetch.
         loop {
-            let read_epoch = self.timeline.seek_epoch();
-            let pos = self.timeline.byte_position();
+            let timeline = self.source.timeline();
+            let read_epoch = timeline.seek_epoch();
+            let pos = timeline.byte_position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
             // Wait for data to be available (blocking)
@@ -177,7 +193,7 @@ impl<T: StreamType> Read for Stream<T> {
                 WaitOutcome::Ready => {}
                 WaitOutcome::Eof => return Ok(0),
                 WaitOutcome::Interrupted => {
-                    if !self.timeline.is_flushing() {
+                    if !timeline.is_flushing() {
                         // Some sources use Interrupted as a recoverable
                         // "retry wait_range" signal when seek is not active.
                         hang_tick!();
@@ -193,7 +209,7 @@ impl<T: StreamType> Read for Stream<T> {
                 }
             }
 
-            if self.timeline.seek_epoch() != read_epoch {
+            if timeline.seek_epoch() != read_epoch {
                 return Err(io::Error::other("seek pending"));
             }
 
@@ -206,12 +222,11 @@ impl<T: StreamType> Read for Stream<T> {
                 .map_err(|e| io::Error::other(e.to_string()))?
             {
                 ReadOutcome::Data(n) => {
-                    if self.timeline.seek_epoch() != read_epoch {
+                    if timeline.seek_epoch() != read_epoch {
                         return Err(io::Error::other("seek pending"));
                     }
                     hang_reset!();
-                    self.timeline
-                        .set_byte_position(pos.saturating_add(n as u64));
+                    timeline.set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
                 ReadOutcome::VariantChange => {
@@ -229,8 +244,10 @@ impl<T: StreamType> Read for Stream<T> {
 }
 
 impl<T: StreamType> Seek for Stream<T> {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let current = self.timeline.byte_position();
+        let timeline = self.source.timeline();
+        let current = timeline.byte_position();
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => i128::from(p),
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
@@ -267,7 +284,7 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        self.timeline.set_byte_position(new_pos);
+        timeline.set_byte_position(new_pos);
         Ok(new_pos)
     }
 }
@@ -279,17 +296,33 @@ mod tests {
     use kithara_storage::WaitOutcome;
 
     use super::*;
-    use crate::{ReadOutcome, Source, SourcePhase};
+    use crate::{DemandSlot, ReadOutcome, Source, SourcePhase};
 
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
 
+    #[derive(Default)]
+    struct TestCoord {
+        demand: DemandSlot<()>,
+        timeline: Timeline,
+    }
+
+    impl TransferCoordination<()> for TestCoord {
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
+        }
+
+        fn demand(&self) -> &DemandSlot<()> {
+            &self.demand
+        }
+    }
+
     struct ScriptSource {
         anchor: Option<SourceSeekAnchor>,
+        coord: TestCoord,
         data: Vec<u8>,
         reads: VecDeque<ReadOutcome>,
-        timeline: Timeline,
         waits: VecDeque<WaitOutcome>,
     }
 
@@ -302,9 +335,12 @@ mod tests {
         ) -> Self {
             Self {
                 anchor: None,
+                coord: TestCoord {
+                    demand: DemandSlot::new(),
+                    timeline,
+                },
                 data,
                 reads: reads.into_iter().collect(),
-                timeline,
                 waits: waits.into_iter().collect(),
             }
         }
@@ -312,6 +348,22 @@ mod tests {
 
     impl Source for ScriptSource {
         type Error = io::Error;
+        type Topology = ();
+        type Layout = ();
+        type Coord = TestCoord;
+        type Demand = ();
+
+        fn topology(&self) -> &Self::Topology {
+            &()
+        }
+
+        fn layout(&self) -> &Self::Layout {
+            &()
+        }
+
+        fn coord(&self) -> &Self::Coord {
+            &self.coord
+        }
 
         fn wait_range(
             &mut self,
@@ -353,19 +405,19 @@ mod tests {
         ) -> crate::StreamResult<Option<SourceSeekAnchor>, Self::Error> {
             Ok(self.anchor)
         }
-
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
-        }
     }
 
     struct DummyType;
 
     impl StreamType for DummyType {
         type Config = ();
+        type Coord = TestCoord;
+        type Demand = ();
         type Error = io::Error;
         type Events = ();
+        type Layout = ();
         type Source = ScriptSource;
+        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(io::Error::other("not used in unit tests"))
@@ -376,9 +428,13 @@ mod tests {
 
     impl StreamType for SeekDuringWaitType {
         type Config = ();
+        type Coord = TestCoord;
+        type Demand = ();
         type Error = io::Error;
         type Events = ();
+        type Layout = ();
         type Source = SeekDuringWaitSource;
+        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(io::Error::other("not used in unit tests"))
@@ -386,19 +442,35 @@ mod tests {
     }
 
     struct SeekDuringWaitSource {
+        coord: TestCoord,
         read_calls: usize,
-        timeline: Timeline,
     }
 
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
+        type Topology = ();
+        type Layout = ();
+        type Coord = TestCoord;
+        type Demand = ();
+
+        fn topology(&self) -> &Self::Topology {
+            &()
+        }
+
+        fn layout(&self) -> &Self::Layout {
+            &()
+        }
+
+        fn coord(&self) -> &Self::Coord {
+            &self.coord
+        }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Duration,
         ) -> crate::StreamResult<WaitOutcome, Self::Error> {
-            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
+            let _ = self.coord.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
 
@@ -418,10 +490,6 @@ mod tests {
         fn len(&self) -> Option<u64> {
             Some(4)
         }
-
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
-        }
     }
 
     #[kithara::test]
@@ -433,7 +501,7 @@ mod tests {
             [ReadOutcome::Data(4)],
             b"ABCD".to_vec(),
         );
-        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
         let n = stream
@@ -448,7 +516,7 @@ mod tests {
         let timeline = Timeline::new();
         let _ = timeline.initiate_seek(Duration::from_millis(10));
         let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
-        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
         let err = stream
@@ -463,10 +531,13 @@ mod tests {
     fn read_aborts_when_seek_epoch_changes_after_wait() {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
+            coord: TestCoord {
+                demand: DemandSlot::new(),
+                timeline: timeline.clone(),
+            },
             read_calls: 0,
-            timeline: timeline.clone(),
         };
-        let mut stream = Stream::<SeekDuringWaitType> { source, timeline };
+        let mut stream = Stream::<SeekDuringWaitType> { source };
         let mut buf = [0u8; 4];
 
         let err = stream
@@ -482,7 +553,7 @@ mod tests {
     fn seek_updates_position() {
         let timeline = Timeline::new();
         let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
-        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut stream = Stream::<DummyType> { source };
 
         let pos = stream.seek(SeekFrom::Start(3)).expect("seek must succeed");
 
@@ -502,7 +573,7 @@ mod tests {
             segment_index: Some(2),
             variant_index: Some(1),
         });
-        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut stream = Stream::<DummyType> { source };
 
         let anchor = stream
             .seek_time_anchor(Duration::from_millis(8_500))
