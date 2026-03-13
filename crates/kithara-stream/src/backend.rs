@@ -335,16 +335,15 @@ impl Backend {
                 }
                 next_commit += 1;
 
-                if let Some(plan) = Self::try_poll_demand(dl, cancel).await
-                    && Self::fetch_and_commit_demand(dl, plan, cancel)
-                        .await
-                        .map(|progress| {
-                            made_progress |= progress;
-                        })
-                        .is_err()
-                {
-                    return LoopControl::Exit;
-                }
+                // NOTE: demand processing is intentionally NOT done here.
+                // Fetching a demand segment inside handle_batch can deadlock
+                // when the demand targets a segment still pending in the batch's
+                // FuturesUnordered — both share the same OnceCell, and the
+                // demand's get_or_try_init blocks waiting for the batch future
+                // that is not being polled.
+                //
+                // Demand is processed at the top of the main loop via
+                // drain_demand_requests() and during wait_while_throttled().
             }
         }
 
