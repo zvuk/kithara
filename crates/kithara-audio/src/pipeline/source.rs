@@ -62,6 +62,8 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.
             fn phase(&self) -> kithara_stream::SourcePhase;
+            /// Point-in-time readiness for a specific byte range.
+            fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase;
             /// Check whether a byte range can be read without blocking.
             fn is_range_ready(&self, range: Range<u64>) -> bool;
             /// Wake blocked `wait_range()` calls and downstream waiters.
@@ -423,6 +425,23 @@ impl<T: StreamType> StreamAudioSource<T> {
         match &self.state {
             TrackState::SeekRequested(request) => Some(request.seek.epoch),
             TrackState::ApplyingSeek(state) => Some(state.request.seek.epoch),
+            TrackState::WaitingForSource {
+                context: WaitContext::Seek(request),
+                ..
+            } => Some(request.seek.epoch),
+            TrackState::WaitingForSource {
+                context: WaitContext::ApplySeek(applying),
+                ..
+            } => Some(applying.request.seek.epoch),
+            TrackState::WaitingForSource {
+                context: WaitContext::Recreation(recreate),
+                ..
+            } => match &recreate.next {
+                RecreateNext::Decode => None,
+                RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => {
+                    Some(request.seek.epoch)
+                }
+            },
             TrackState::AwaitingResume(state) => Some(state.seek.epoch),
             TrackState::RecreatingDecoder(state) => match &state.next {
                 RecreateNext::Decode => None,
@@ -580,7 +599,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?position,
             anchor_start = ?anchor.segment_start,
             target_offset = anchor.byte_offset,
-            "seek anchor path: starting exact decoder seek after anchor preparation"
+            "seek anchor path: starting exact decoder seek"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
             self.fail_seek(request, err, "seek anchor path: exact decoder seek failed");
@@ -937,10 +956,21 @@ impl<T: StreamType> StreamAudioSource<T> {
 // ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
+    fn source_ready_for_range(&self, range: Range<u64>) -> bool {
+        if self.shared_stream.is_range_ready(range.clone()) {
+            return true;
+        }
+        matches!(
+            self.shared_stream.phase_at(range),
+            kithara_stream::SourcePhase::Ready
+                | kithara_stream::SourcePhase::Eof
+                | kithara_stream::SourcePhase::Seeking
+        )
+    }
+
     /// Check whether the underlying source has data ready for a non-blocking
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
-        use kithara_stream::SourcePhase;
         let pos = self.shared_stream.position();
         let check_end = self
             .shared_stream
@@ -951,13 +981,38 @@ impl<T: StreamType> StreamAudioSource<T> {
             .shared_stream
             .len()
             .map_or(check_end, |len| check_end.min(len));
-        if self.shared_stream.is_range_ready(pos..check_end) {
-            return true;
+        self.source_ready_for_range(pos..check_end)
+    }
+
+    fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
+        match applying.mode {
+            SeekMode::Anchor(anchor) => {
+                let start = anchor.byte_offset;
+                let end = self.shared_stream.len().map_or_else(
+                    || start.saturating_add(32 * 1024),
+                    |len| start.saturating_add(32 * 1024).min(len),
+                );
+                self.source_ready_for_range(start..end)
+            }
+            SeekMode::Direct => self.source_is_ready(),
         }
-        matches!(
-            self.shared_stream.phase(),
-            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
-        )
+    }
+
+    fn source_phase_for_wait_context(&self, context: &WaitContext) -> kithara_stream::SourcePhase {
+        match context {
+            WaitContext::ApplySeek(applying) => match applying.mode {
+                SeekMode::Anchor(anchor) => {
+                    let start = anchor.byte_offset;
+                    let end = self.shared_stream.len().map_or_else(
+                        || start.saturating_add(32 * 1024),
+                        |len| start.saturating_add(32 * 1024).min(len),
+                    );
+                    self.shared_stream.phase_at(start..end)
+                }
+                SeekMode::Direct => self.shared_stream.phase(),
+            },
+            _ => self.shared_stream.phase(),
+        }
     }
 
     /// Decode one chunk using the decode loop.
@@ -1137,6 +1192,27 @@ impl<T: StreamType> StreamAudioSource<T> {
             TrackState::ApplyingSeek(state) => *state,
             _ => return TrackStep::StateChanged,
         };
+        if !self.source_is_ready_for_apply_seek(applying) {
+            let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
+            if let Some(reason) = map_source_phase(phase) {
+                self.state = TrackState::WaitingForSource {
+                    context: WaitContext::ApplySeek(applying),
+                    reason,
+                };
+                return TrackStep::Blocked(reason);
+            }
+            match phase {
+                kithara_stream::SourcePhase::Cancelled => {
+                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                    return TrackStep::Failed;
+                }
+                kithara_stream::SourcePhase::Stopped => {
+                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
+                    return TrackStep::Failed;
+                }
+                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            }
+        }
         let request = applying.request;
         let applied = match applying.mode {
             SeekMode::Anchor(anchor) => self.apply_anchor_seek_with_fallback(request, anchor),
@@ -1160,10 +1236,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn step_waiting_for_source(&mut self) -> TrackStep<PcmChunk> {
         use kithara_stream::SourcePhase;
 
-        let phase = self.shared_stream.phase();
-        let stored_reason = match &self.state {
-            TrackState::WaitingForSource { reason, .. } => Some(*reason),
+        let Some((phase, stored_reason)) = (match &self.state {
+            TrackState::WaitingForSource { context, reason } => {
+                Some((self.source_phase_for_wait_context(context), *reason))
+            }
             _ => None,
+        }) else {
+            return TrackStep::StateChanged;
         };
 
         // Still waiting?
@@ -1209,6 +1288,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                 ..
             } => {
                 self.state = TrackState::SeekRequested(ctx);
+            }
+            TrackState::WaitingForSource {
+                context: WaitContext::ApplySeek(applying),
+                ..
+            } => {
+                self.state = TrackState::ApplyingSeek(applying);
             }
             TrackState::WaitingForSource {
                 context: WaitContext::Recreation(recreate),

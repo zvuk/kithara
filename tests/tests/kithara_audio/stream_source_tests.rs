@@ -32,6 +32,7 @@ struct TestSourceState {
     data: Vec<u8>,
     len: Option<u64>,
     media_info: Option<MediaInfo>,
+    ready_until: Option<u64>,
     segment_range: Option<Range<u64>>,
     /// Range of the first segment with current format (for ABR switch).
     /// Used by `format_change_segment_range()` to return where init data lives.
@@ -44,6 +45,7 @@ struct TestSourceState {
     seek_landing_anchor: Option<SourceSeekAnchor>,
     seek_anchor_error: Option<String>,
     seek_anchor: Option<SourceSeekAnchor>,
+    seek_anchor_sets_position: bool,
 }
 
 struct TestSource {
@@ -58,6 +60,7 @@ impl TestSource {
                 data,
                 len,
                 media_info: None,
+                ready_until: None,
                 segment_range: None,
                 format_change_range: None,
                 variant_fence: None,
@@ -66,6 +69,7 @@ impl TestSource {
                 seek_landing_anchor: None,
                 seek_anchor_error: None,
                 seek_anchor: None,
+                seek_anchor_sets_position: false,
             })),
             timeline: Timeline::new(),
         }
@@ -175,7 +179,13 @@ impl Source for TestSource {
                 error.clone(),
             )));
         }
-        Ok(state.seek_anchor)
+        let anchor = state.seek_anchor;
+        let set_position = state.seek_anchor_sets_position;
+        drop(state);
+        if set_position && let Some(anchor) = anchor {
+            self.timeline.set_byte_position(anchor.byte_offset);
+        }
+        Ok(anchor)
     }
 
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
@@ -187,6 +197,14 @@ impl Source for TestSource {
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         if self.timeline.is_flushing() {
             return kithara_stream::SourcePhase::Seeking;
+        }
+        if self
+            .state
+            .lock_sync()
+            .ready_until
+            .is_some_and(|ready_until| range.start >= ready_until)
+        {
+            return kithara_stream::SourcePhase::Waiting;
         }
         if self
             .timeline
@@ -570,6 +588,149 @@ fn seek_uses_exact_target_after_anchor_preparation_without_decoder_recreate() {
         fetch.data.pcm.len(),
         100,
         "exact decoder seek must not trim the first decoded PCM chunk in software"
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_waits_for_anchor_range_before_calling_decoder_seek() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(v0_info());
+        s.ready_until = Some(128);
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    timeline(&source).set_total_bytes(Some(2000));
+    timeline(&source).set_byte_position(2000);
+    timeline(&source).set_eof(true);
+
+    let _ = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::SeekRequested);
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::ApplyingSeek);
+
+    assert!(matches!(
+        step_track(&mut source),
+        TrackStep::Blocked(WaitingReason::Waiting)
+    ));
+    assert_eq!(track_state(&source), TrackPhaseTag::WaitingForSource);
+    assert!(
+        seek_log.lock().is_empty(),
+        "decoder.seek must not run before anchor bytes are ready"
+    );
+
+    state.lock_sync().ready_until = Some(2_000);
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::ApplyingSeek);
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::AwaitingResume);
+    assert_eq!(
+        seek_log.lock().as_slice(),
+        &[Duration::from_millis(8_250)],
+        "decoder.seek must run once after the anchor range becomes ready"
+    );
+
+    assert!(
+        offsets.lock_sync().is_empty(),
+        "same-codec anchor seek must still avoid decoder recreation"
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_does_not_move_stream_before_exact_decoder_seek_from_eof() {
+    let (shared, state) = make_shared_stream(vec![1u8; 2_000], Some(2_000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder = ProbeBeforeSeekDecoder::new(new_offset_reader(shared.clone(), 0), seek_spec, 640);
+    let probe_log = decoder.probe_log();
+    let seek_log = decoder.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        Box::new(decoder),
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(v0_info());
+        s.ready_until = Some(2_000);
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 512,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    timeline(&source).set_total_bytes(Some(2_000));
+    timeline(&source).set_byte_position(2_000);
+    timeline(&source).set_eof(true);
+
+    let _ = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::SeekRequested);
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::ApplyingSeek);
+
+    assert!(matches!(step_track(&mut source), TrackStep::StateChanged));
+    assert_eq!(track_state(&source), TrackPhaseTag::AwaitingResume);
+    assert_eq!(
+        probe_log.lock_sync().as_slice(),
+        &[2_000],
+        "anchor seek must not mutate the reader cursor before decoder.seek runs"
+    );
+    assert_eq!(
+        seek_log.lock_sync().as_slice(),
+        &[Duration::from_millis(8_250)],
+        "decoder.seek must still receive the exact time target"
+    );
+    assert!(
+        offsets.lock_sync().is_empty(),
+        "same-codec anchor seek must not recreate decoder"
     );
 }
 
@@ -1562,6 +1723,61 @@ impl InnerDecoder for MisalignedAnchorSeekDecoder {
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
         self.seek_log.lock_sync().push(pos);
+        self.reader
+            .seek(SeekFrom::Start(self.landed_offset))
+            .map_err(DecodeError::Io)?;
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
+struct ProbeBeforeSeekDecoder {
+    landed_offset: u64,
+    probe_log: Arc<Mutex<Vec<u64>>>,
+    reader: OffsetReader<TestStream>,
+    seek_log: Arc<Mutex<Vec<Duration>>>,
+    spec: PcmSpec,
+}
+
+impl ProbeBeforeSeekDecoder {
+    fn new(reader: OffsetReader<TestStream>, spec: PcmSpec, landed_offset: u64) -> Self {
+        Self {
+            landed_offset,
+            probe_log: Arc::new(Mutex::new(Vec::new())),
+            reader,
+            seek_log: Arc::new(Mutex::new(Vec::new())),
+            spec,
+        }
+    }
+
+    fn probe_log(&self) -> Arc<Mutex<Vec<u64>>> {
+        Arc::clone(&self.probe_log)
+    }
+
+    fn seek_log(&self) -> Arc<Mutex<Vec<Duration>>> {
+        Arc::clone(&self.seek_log)
+    }
+}
+
+impl InnerDecoder for ProbeBeforeSeekDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        Ok(Some(make_chunk(self.spec, 64)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        self.seek_log.lock_sync().push(pos);
+        let probe_pos = self.reader.stream_position().map_err(DecodeError::Io)?;
+        self.probe_log.lock_sync().push(probe_pos);
+
         self.reader
             .seek(SeekFrom::Start(self.landed_offset))
             .map_err(DecodeError::Io)?;

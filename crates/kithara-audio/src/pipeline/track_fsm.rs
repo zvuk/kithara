@@ -103,6 +103,8 @@ pub(crate) enum WaitContext {
     Playback,
     /// Seek-initiated wait (source not ready for seek).
     Seek(SeekRequest),
+    /// Anchor/direct seek resolved, waiting for source bytes before `decoder.seek()`.
+    ApplySeek(ApplySeekState),
     /// Init bytes unavailable for decoder recreation.
     Recreation(RecreateState),
 }
