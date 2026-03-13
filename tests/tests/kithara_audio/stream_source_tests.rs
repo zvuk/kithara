@@ -21,8 +21,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream, StreamResult, StreamType,
-    Timeline,
+    AudioCodec, DemandSlot, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream,
+    StreamResult, StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -50,11 +50,36 @@ struct TestSourceState {
 
 struct TestSource {
     state: Arc<Mutex<TestSourceState>>,
+    coord: TestCoord,
+}
+
+struct TestCoord {
+    demand: DemandSlot<()>,
     timeline: Timeline,
+}
+
+impl TestCoord {
+    fn new(timeline: Timeline) -> Self {
+        Self {
+            demand: DemandSlot::new(),
+            timeline,
+        }
+    }
+}
+
+impl TransferCoordination<()> for TestCoord {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn demand(&self) -> &DemandSlot<()> {
+        &self.demand
+    }
 }
 
 impl TestSource {
     fn new(data: Vec<u8>, len: Option<u64>) -> Self {
+        let timeline = Timeline::new();
         Self {
             state: Arc::new(Mutex::new(TestSourceState {
                 data,
@@ -71,7 +96,7 @@ impl TestSource {
                 seek_anchor: None,
                 seek_anchor_sets_position: false,
             })),
-            timeline: Timeline::new(),
+            coord: TestCoord::new(timeline),
         }
     }
 
@@ -82,6 +107,22 @@ impl TestSource {
 
 impl Source for TestSource {
     type Error = io::Error;
+    type Topology = ();
+    type Layout = ();
+    type Coord = TestCoord;
+    type Demand = ();
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     fn wait_range(
         &mut self,
@@ -89,12 +130,13 @@ impl Source for TestSource {
         timeout: Duration,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
-        if self.timeline.is_flushing() {
+        if self.coord.timeline.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
         }
 
-        if self.timeline.eof()
+        if self.coord.timeline.eof()
             && self
+                .coord
                 .timeline
                 .total_bytes()
                 .is_some_and(|total| total > 0 && range.start >= total)
@@ -183,19 +225,19 @@ impl Source for TestSource {
         let set_position = state.seek_anchor_sets_position;
         drop(state);
         if set_position && let Some(anchor) = anchor {
-            self.timeline.set_byte_position(anchor.byte_offset);
+            self.coord.timeline.set_byte_position(anchor.byte_offset);
         }
         Ok(anchor)
     }
 
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
         let mut state = self.state.lock_sync();
-        state.seek_landing = Some(self.timeline.byte_position());
+        state.seek_landing = Some(self.coord.timeline.byte_position());
         state.seek_landing_anchor = anchor;
     }
 
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
-        if self.timeline.is_flushing() {
+        if self.coord.timeline.is_flushing() {
             return kithara_stream::SourcePhase::Seeking;
         }
         if self
@@ -207,6 +249,7 @@ impl Source for TestSource {
             return kithara_stream::SourcePhase::Waiting;
         }
         if self
+            .coord
             .timeline
             .total_bytes()
             .is_some_and(|total| total > 0 && range.start >= total)
@@ -214,10 +257,6 @@ impl Source for TestSource {
             return kithara_stream::SourcePhase::Eof;
         }
         kithara_stream::SourcePhase::Ready
-    }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
     }
 }
 
@@ -230,6 +269,10 @@ struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
+    type Topology = ();
+    type Layout = ();
+    type Coord = TestCoord;
+    type Demand = ();
     type Source = TestSource;
     type Error = io::Error;
     type Events = ();
@@ -1462,13 +1505,13 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let source = TestSource::new(vec![0u8; 200], Some(200));
     let total_bytes = 200u64;
 
-    source.timeline.set_eof(true);
-    source.timeline.set_total_bytes(Some(total_bytes));
-    source.timeline.set_byte_position(total_bytes);
+    source.timeline().set_eof(true);
+    source.timeline().set_total_bytes(Some(total_bytes));
+    source.timeline().set_byte_position(total_bytes);
 
     for idx in 0..12u64 {
         let _ = source
-            .timeline
+            .timeline()
             .initiate_seek(Duration::from_millis(idx + 1));
     }
 

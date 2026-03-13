@@ -41,26 +41,50 @@ use std::{
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
-    Timeline,
+    DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
 /// Minimal mock source with known length.
 struct MockSource {
+    coord: MockCoord,
     data: Vec<u8>,
     /// Reported length (may differ from actual data size).
     /// Simulates `expected_total_length` in HLS which is metadata-derived.
     reported_len: u64,
+}
+
+struct MockCoord {
+    demand: DemandSlot<()>,
     timeline: Timeline,
+}
+
+impl MockCoord {
+    fn new() -> Self {
+        Self {
+            demand: DemandSlot::new(),
+            timeline: Timeline::new(),
+        }
+    }
+}
+
+impl TransferCoordination<()> for MockCoord {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn demand(&self) -> &DemandSlot<()> {
+        &self.demand
+    }
 }
 
 impl MockSource {
     fn new(len: usize) -> Self {
         Self {
+            coord: MockCoord::new(),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
-            timeline: Timeline::new(),
         }
     }
 
@@ -68,15 +92,31 @@ impl MockSource {
     /// Avoids allocating huge buffers when only testing seek bounds.
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
+            coord: MockCoord::new(),
             data: Vec::new(),
             reported_len,
-            timeline: Timeline::new(),
         }
     }
 }
 
 impl Source for MockSource {
     type Error = io::Error;
+    type Topology = ();
+    type Layout = ();
+    type Coord = MockCoord;
+    type Demand = ();
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     fn wait_range(
         &mut self,
@@ -107,10 +147,6 @@ impl Source for MockSource {
     fn len(&self) -> Option<u64> {
         Some(self.reported_len)
     }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
 }
 
 /// `StreamType` marker for `MockSource`.
@@ -118,6 +154,10 @@ struct MockStream;
 
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
+    type Topology = ();
+    type Layout = ();
+    type Coord = MockCoord;
+    type Demand = ();
     type Source = MockSource;
     type Error = io::Error;
     type Events = ();
