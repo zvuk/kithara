@@ -15,13 +15,11 @@ pub trait LayoutIndex: Send + Sync + 'static {
 impl LayoutIndex for () {
     type Item = ();
 
-    fn item_at_offset(&self, offset: u64) -> Option<Self::Item> {
-        let _ = offset;
+    fn item_at_offset(&self, _offset: u64) -> Option<Self::Item> {
         Some(())
     }
 
-    fn item_range(&self, item: Self::Item) -> Option<Range<u64>> {
-        let _ = item;
+    fn item_range(&self, (): Self::Item) -> Option<Range<u64>> {
         None
     }
 }

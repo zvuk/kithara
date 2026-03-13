@@ -139,18 +139,22 @@ impl HlsSource {
     fn byte_offset_for_segment(&self, variant: usize, segment_index: usize) -> Option<u64> {
         let allow_infer = self.current_layout_variant() == Some(variant);
         let had_midstream_switch = self.coord.had_midstream_switch.load(Ordering::Acquire);
-        let segments = self.segments.lock_sync();
-        if let Some(seg) = segments.find_loaded_segment(variant, segment_index) {
-            return Some(seg.byte_offset);
+        {
+            let segments = self.segments.lock_sync();
+            if let Some(seg) = segments.find_loaded_segment(variant, segment_index) {
+                return Some(seg.byte_offset);
+            }
+            let offset = expected_layout_offset(
+                &self.playlist_state,
+                &segments,
+                variant,
+                segment_index,
+                allow_infer,
+                had_midstream_switch,
+            );
+            drop(segments);
+            offset
         }
-        expected_layout_offset(
-            &self.playlist_state,
-            &segments,
-            variant,
-            segment_index,
-            allow_infer,
-            had_midstream_switch,
-        )
     }
 
     fn metadata_range_for_segment(
@@ -208,12 +212,13 @@ impl HlsSource {
     /// Check committed `DownloadState` for the segment covering `range_start`.
     /// Returns `Some(segment_index)` if a request should be issued.
     fn committed_segment_for_offset(&self, range_start: u64, variant: usize) -> Option<usize> {
-        let segments = self.segments.lock_sync();
-
-        if let Some(seg) = segments.find_at_offset(range_start)
-            && seg.variant == variant
         {
-            return Some(seg.segment_index);
+            let segments = self.segments.lock_sync();
+            if let Some(seg) = segments.find_at_offset(range_start)
+                && seg.variant == variant
+            {
+                return Some(seg.segment_index);
+            }
         }
 
         None
@@ -273,7 +278,6 @@ impl HlsSource {
 
     fn resource_covers_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         match self.fetch.backend().resource_state(key) {
-            Ok(AssetResourceState::Missing | AssetResourceState::Failed(_)) => false,
             Ok(AssetResourceState::Committed {
                 final_len: Some(final_len),
             }) => range.end <= final_len,
@@ -282,8 +286,7 @@ impl HlsSource {
                 .backend()
                 .open_resource(key)
                 .is_ok_and(|resource| resource.contains_range(range)),
-            Ok(_) => false,
-            Err(_) => false,
+            _ => false,
         }
     }
 
@@ -310,7 +313,6 @@ impl HlsSource {
             let key = ResourceKey::from_url(init_url);
             if self.fetch.backend().is_ephemeral() {
                 match self.fetch.backend().resource_state(&key)? {
-                    AssetResourceState::Missing | AssetResourceState::Failed(_) => return Ok(None),
                     AssetResourceState::Active | AssetResourceState::Committed { .. } => {}
                     _ => return Ok(None),
                 }
@@ -351,7 +353,6 @@ impl HlsSource {
         let key = ResourceKey::from_url(&seg.media_url);
         if self.fetch.backend().is_ephemeral() {
             match self.fetch.backend().resource_state(&key)? {
-                AssetResourceState::Missing | AssetResourceState::Failed(_) => return Ok(None),
                 AssetResourceState::Active | AssetResourceState::Committed { .. } => {}
                 _ => return Ok(None),
             }
@@ -543,12 +544,16 @@ impl HlsSource {
     }
 
     fn loaded_segment_ready(&self, variant: usize, segment_index: usize) -> bool {
-        let segments = self.segments.lock_sync();
-        let Some(seg) = segments.find_loaded_segment(variant, segment_index) else {
-            return false;
-        };
-        let range = seg.byte_offset..seg.end_offset();
-        self.range_ready_from_segments(&segments, &range)
+        {
+            let segments = self.segments.lock_sync();
+            let Some(seg) = segments.find_loaded_segment(variant, segment_index) else {
+                return false;
+            };
+            let range = seg.byte_offset..seg.end_offset();
+            let ready = self.range_ready_from_segments(&segments, &range);
+            drop(segments);
+            ready
+        }
     }
 
     #[expect(

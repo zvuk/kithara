@@ -230,8 +230,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
 
     let mut second = open_resource(&ok_url, store).await;
     assert!(read_some(&mut second, "second_initial").await > 0);
-    let second_forward =
-        seek_and_read(&mut second, Duration::from_secs(3), "second_forward").await;
+    let second_forward = seek_and_read(&mut second, Duration::from_secs(3), "second_forward").await;
     let second_backward =
         seek_and_read(&mut second, Duration::from_millis(500), "second_backward").await;
     assert!(

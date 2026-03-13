@@ -1,6 +1,5 @@
 use std::{
-    ops::Range,
-    ops::Deref,
+    ops::{Deref, Range},
     sync::{Arc, atomic::Ordering},
 };
 
@@ -8,8 +7,8 @@ use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
-    AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsError,
-    HlsCoord, HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, VariantId,
+    AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsCoord,
+    HlsError, HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, VariantId,
     VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
     make_test_fetch_manager, make_test_source as make_internal_test_source,
     make_test_source_with_fetch as make_internal_test_source_with_fetch, set_source_variant_fence,
@@ -40,14 +39,13 @@ impl SegmentRequests {
         self.coord.demand().take()
     }
 
-    fn push(&self, request: SegmentRequest) {
-        self.coord.demand().replace(request);
+    fn peek(&self) -> Option<SegmentRequest> {
+        self.coord.demand().peek()
     }
 }
 
 struct SharedSegments {
     coord: Arc<HlsCoord>,
-    current_segment_index: Arc<std::sync::atomic::AtomicU32>,
     playlist_state: Arc<PlaylistState>,
     segment_requests: SegmentRequests,
     segments: Arc<Mutex<DownloadState>>,
@@ -55,7 +53,11 @@ struct SharedSegments {
 }
 
 impl SharedSegments {
-    fn new(cancel: CancellationToken, playlist_state: Arc<PlaylistState>, timeline: Timeline) -> Self {
+    fn new(
+        cancel: CancellationToken,
+        playlist_state: Arc<PlaylistState>,
+        timeline: Timeline,
+    ) -> Self {
         let abr_variant_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let coord = Arc::new(HlsCoord::new(
             cancel,
@@ -64,7 +66,6 @@ impl SharedSegments {
         ));
         Self {
             coord: Arc::clone(&coord),
-            current_segment_index: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             playlist_state,
             segment_requests: SegmentRequests::new(coord),
             segments: Arc::new(Mutex::new(DownloadState::new())),
@@ -299,7 +300,6 @@ fn seek_time_anchor_does_not_commit_reader_position_before_decoder_lands() {
         Timeline::new(),
     ));
     shared.timeline.set_byte_position(100);
-    shared.current_segment_index.store(1, Ordering::Relaxed);
     shared.abr_variant_index.store(0, Ordering::Relaxed);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
@@ -434,11 +434,6 @@ fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
         "seek landing must resolve demand from the decoder-landed byte offset"
     );
     assert_eq!(
-        shared.current_segment_index.load(Ordering::Relaxed),
-        1,
-        "current segment hint must follow the landed segment"
-    );
-    assert_eq!(
         shared.timeline.byte_position(),
         150,
         "commit_seek_landing must not mutate the reader cursor outside Stream::seek"
@@ -469,9 +464,9 @@ fn commit_seek_landing_skips_request_when_landed_segment_is_ready() {
         "ready landed segment must not enqueue redundant downloader work"
     );
     assert_eq!(
-        shared.current_segment_index.load(Ordering::Relaxed),
-        1,
-        "current segment hint must still be updated from landed offset"
+        Source::current_segment_range(&source),
+        Some(100..200),
+        "landed ready segment must be derived from canonical layout and reader offset"
     );
 }
 
@@ -708,10 +703,10 @@ fn set_seek_epoch_is_non_destructive() {
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     Source::set_seek_epoch(&mut source, 4);
 
-    // Non-destructive: segments and download_position are NOT cleared.
-    // Only eof and had_midstream_switch are reset.
+    // Non-destructive: segments, download_position, and exact-EOF visibility
+    // are preserved. Only the midstream-switch coordination flag is reset.
     assert_eq!(shared.timeline.seek_epoch(), 3);
-    assert!(!shared.timeline.eof());
+    assert!(shared.timeline.eof());
     assert_eq!(shared.timeline.download_position(), 200);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
     assert_eq!(shared.segments.lock_sync().num_entries(), 2);
@@ -1524,7 +1519,7 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
-        if let Some(request) = shared.segment_requests.pop() {
+        if let Some(request) = shared.segment_requests.peek() {
             break request;
         }
         sleep(Duration::from_millis(10)).await;
@@ -1539,8 +1534,8 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     let dedupe_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() <= dedupe_deadline {
         assert!(
-            shared.segment_requests.pop().is_none(),
-            "wait_range should not duplicate on-demand requests while stalled"
+            shared.segment_requests.peek() == Some(first_request),
+            "wait_range should keep a single stable on-demand request while stalled"
         );
         shared.condvar.notify_all();
         sleep(Duration::from_millis(10)).await;
@@ -1568,7 +1563,7 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
-        if let Some(request) = shared.segment_requests.pop() {
+        if let Some(request) = shared.segment_requests.peek() {
             break request;
         }
         sleep(Duration::from_millis(10)).await;
@@ -1583,8 +1578,8 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     let dedupe_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() <= dedupe_deadline {
         assert!(
-            shared.segment_requests.pop().is_none(),
-            "midstream-switch repush must happen once per switch generation"
+            shared.segment_requests.peek() == Some(first_request),
+            "midstream-switch wake storms must not replace the stable demand slot"
         );
         shared.condvar.notify_all();
         sleep(Duration::from_millis(10)).await;

@@ -96,6 +96,7 @@ impl<'a> Arbitrary<'a> for Input {
     }
 }
 
+#[derive(Default)]
 struct ScriptSource {
     coord: ScriptCoord,
     data: Vec<u8>,
@@ -116,17 +117,6 @@ impl TransferCoordination<()> for ScriptCoord {
 
     fn demand(&self) -> &DemandSlot<()> {
         &self.demand
-    }
-}
-
-impl Default for ScriptSource {
-    fn default() -> Self {
-        Self {
-            coord: ScriptCoord::default(),
-            data: Vec::new(),
-            reads: VecDeque::new(),
-            waits: VecDeque::new(),
-        }
     }
 }
 

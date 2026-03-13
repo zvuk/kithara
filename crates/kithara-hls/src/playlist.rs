@@ -372,7 +372,8 @@ impl Topology for PlaylistState {
     fn media_info(&self, variant: usize) -> Option<MediaInfo> {
         let codec = self.variant_codec(variant);
         let container = self.variant_container(variant);
-        Some(MediaInfo::new(codec, container).with_variant_index(variant as u32))
+        let variant = u32::try_from(variant).ok()?;
+        Some(MediaInfo::new(codec, container).with_variant_index(variant))
     }
 
     fn seek_anchor(&self, variant: usize, target: Duration) -> Option<SourceSeekAnchor> {

@@ -43,6 +43,7 @@ where
         self.inner.lock_sync().clone()
     }
 
+    #[must_use]
     pub fn take(&self) -> Option<D> {
         self.inner.lock_sync().take()
     }

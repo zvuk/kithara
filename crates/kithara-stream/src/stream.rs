@@ -148,6 +148,10 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
+    pub fn is_empty(&self) -> Option<bool> {
+        self.len().map(|len| len == 0)
+    }
+
     /// Resolve a deterministic time-based seek anchor.
     ///
     /// Returns `None` for sources without segmented time mapping.

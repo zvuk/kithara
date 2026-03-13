@@ -222,10 +222,14 @@ impl HlsDownloader {
 
     fn switched_layout_anchor(&self) -> Option<(usize, u64)> {
         let variant = self.last_committed_variant?;
-        let segments = self.segments.lock_sync();
-        let anchor = segments.first_segment_of_variant(variant)?;
-        ((anchor.segment_index > 0) || (anchor.byte_offset > 0))
-            .then_some((variant, anchor.byte_offset))
+        let (segment_index, byte_offset) = {
+            let segments = self.segments.lock_sync();
+            let anchor = segments.first_segment_of_variant(variant)?;
+            let tuple = (anchor.segment_index, anchor.byte_offset);
+            drop(segments);
+            tuple
+        };
+        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
     }
 
     fn is_stale_cross_codec_fetch(&self, fetch: &HlsFetch) -> bool {
@@ -364,7 +368,9 @@ impl HlsDownloader {
             if prev_contiguous || next_contiguous {
                 return None;
             }
-            segment.byte_offset
+            let byte_offset = segment.byte_offset;
+            drop(segments);
+            byte_offset
         };
         let expected_offset = self.expected_layout_offset(variant, segment_index)?;
         (contiguous_layout != expected_offset).then_some((contiguous_layout, expected_offset))
@@ -1364,8 +1370,8 @@ impl HlsDownloader {
         }
 
         if !plans.is_empty() && plans.len() <= 4 {
-            let first = plans.first().map(|plan| plan.segment_index).unwrap_or(0);
-            let last = plans.last().map(|plan| plan.segment_index).unwrap_or(0);
+            let first = plans.first().map_or(0, |plan| plan.segment_index);
+            let last = plans.last().map_or(0, |plan| plan.segment_index);
             debug!(
                 variant,
                 current_segment_index = self.current_segment_index(),

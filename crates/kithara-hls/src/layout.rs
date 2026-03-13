@@ -33,7 +33,7 @@ pub(crate) fn expected_layout_offset(
             if shifted < 0 || shifted > i128::from(u64::MAX) {
                 metadata_offset
             } else {
-                shifted as u64
+                u64::try_from(shifted).unwrap_or(metadata_offset)
             }
         }
         _ => metadata_offset,
@@ -72,7 +72,10 @@ pub(crate) fn find_segment_at_layout_offset(
         return playlist_state.find_segment_at_offset(variant, offset);
     }
 
-    playlist_state.find_segment_at_offset(variant, translated as u64)
+    u64::try_from(translated).ok().map_or_else(
+        || playlist_state.find_segment_at_offset(variant, offset),
+        |translated| playlist_state.find_segment_at_offset(variant, translated),
+    )
 }
 
 pub(crate) fn inferred_layout_anchor(
@@ -109,11 +112,10 @@ pub(crate) fn inferred_layout_anchor(
 
     let post_anchor_delta = playlist_state
         .segment_byte_offset(variant, first.segment_index.saturating_add(1))
-        .map(|next_metadata| {
+        .map_or(first_delta, |next_metadata| {
             i128::from(first.byte_offset.saturating_add(first.total_len()))
                 - i128::from(next_metadata)
-        })
-        .unwrap_or(first_delta);
+        });
 
     Some(LayoutAnchor {
         segment_index: first.segment_index,

@@ -423,12 +423,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn active_seek_epoch(&self) -> Option<u64> {
         match &self.state {
-            TrackState::SeekRequested(request) => Some(request.seek.epoch),
-            TrackState::ApplyingSeek(state) => Some(state.request.seek.epoch),
             TrackState::WaitingForSource {
                 context: WaitContext::Seek(request),
                 ..
-            } => Some(request.seek.epoch),
+            }
+            | TrackState::SeekRequested(request) => Some(request.seek.epoch),
+            TrackState::ApplyingSeek(state) => Some(state.request.seek.epoch),
             TrackState::WaitingForSource {
                 context: WaitContext::ApplySeek(applying),
                 ..

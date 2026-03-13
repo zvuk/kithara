@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
-
 #[cfg(any(test, feature = "test-utils"))]
 use std::sync::OnceLock;
 

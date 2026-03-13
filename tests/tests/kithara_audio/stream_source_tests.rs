@@ -21,8 +21,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, DemandSlot, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream,
-    StreamResult, StreamType, Timeline, TransferCoordination,
+    AudioCodec, DemandSlot, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
