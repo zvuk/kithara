@@ -104,11 +104,6 @@ impl Source for MemorySource {
             None
         }
     }
-
-    fn is_range_ready(&self, range: Range<u64>) -> bool {
-        // Empty range or position at/past EOF — non-blocking (returns 0 or Eof)
-        range.is_empty() || range.start < self.data.len() as u64
-    }
 }
 
 /// Backwards-compatible alias for `MemorySource::without_len`.

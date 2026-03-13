@@ -64,8 +64,8 @@ impl<T: StreamType> SharedStream<T> {
             fn phase(&self) -> kithara_stream::SourcePhase;
             /// Point-in-time readiness for a specific byte range.
             fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase;
-            /// Check whether a byte range can be read without blocking.
-            fn is_range_ready(&self, range: Range<u64>) -> bool;
+            /// Signal that the given byte range will be needed soon.
+            fn demand_range(&self, range: Range<u64>);
             /// Wake blocked `wait_range()` calls and downstream waiters.
             ///
             /// Safe to call outside of `read()`; briefly takes the inner mutex.
@@ -957,9 +957,6 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
-        if self.shared_stream.is_range_ready(range.clone()) {
-            return true;
-        }
         matches!(
             self.shared_stream.phase_at(range),
             kithara_stream::SourcePhase::Ready
@@ -1013,6 +1010,25 @@ impl<T: StreamType> StreamAudioSource<T> {
             },
             _ => self.shared_stream.phase(),
         }
+    }
+
+    /// Submit a demand signal for the byte range corresponding to the
+    /// current `WaitingForSource` state.  This is a non-blocking hint
+    /// that tells the source (and transitively the downloader) which
+    /// data the worker needs next.
+    fn submit_demand_for_current_state(&self) {
+        let TrackState::WaitingForSource { context, .. } = &self.state else {
+            return;
+        };
+        let start = if let WaitContext::ApplySeek(applying) = context
+            && let SeekMode::Anchor(anchor) = applying.mode
+        {
+            anchor.byte_offset
+        } else {
+            self.shared_stream.position()
+        };
+        self.shared_stream
+            .demand_range(start..start.saturating_add(1));
     }
 
     /// Decode one chunk using the decode loop.
@@ -1247,6 +1263,11 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         // Still waiting?
         if let Some(reason) = map_source_phase(phase) {
+            // Submit demand so the downloader knows which data we need.
+            // Without this, the worker can deadlock after seek: it polls
+            // phase_at() (pure query) but nobody tells the downloader to
+            // fetch the target segment.
+            self.submit_demand_for_current_state();
             trace!(
                 ?phase,
                 ?reason,

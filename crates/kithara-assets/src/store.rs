@@ -382,7 +382,10 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
 
     use kithara_platform::time::Duration;
     use kithara_storage::ResourceExt;
@@ -391,6 +394,16 @@ mod tests {
 
     use super::*;
     use crate::{base::Assets, key::ResourceKey};
+
+    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(msg) = err.downcast_ref::<String>() {
+            return msg.clone();
+        }
+        if let Some(msg) = err.downcast_ref::<&str>() {
+            return (*msg).to_string();
+        }
+        "<non-string panic>".to_string()
+    }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
@@ -429,6 +442,69 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"hello");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_resource_write_ops_panic() {
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .ephemeral(true)
+            .build();
+        let key = ResourceKey::new("test.bin");
+
+        let read_handle = store.open_resource(&key).unwrap();
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.write_at(0, b"x");
+        }))
+        .expect_err("write_at via open_resource must panic");
+        assert!(
+            panic_message(err).contains("write_at requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            read_handle.fail("boom".to_string());
+        }))
+        .expect_err("fail via open_resource must panic");
+        assert!(
+            panic_message(err).contains("fail requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_resource_commit_and_reactivate_panic() {
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .ephemeral(true)
+            .build();
+        let key = ResourceKey::new("test.bin");
+
+        let write_handle = store.acquire_resource(&key).unwrap();
+        write_handle.write_at(0, b"abcd").unwrap();
+        write_handle.commit(Some(4)).unwrap();
+        drop(write_handle);
+
+        let read_handle = store.open_resource(&key).unwrap();
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.commit(Some(4));
+        }))
+        .expect_err("commit via open_resource must panic");
+        assert!(
+            panic_message(err).contains("commit requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.reactivate();
+        }))
+        .expect_err("reactivate via open_resource must panic");
+        assert!(
+            panic_message(err).contains("reactivate requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]

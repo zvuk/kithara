@@ -1088,34 +1088,12 @@ impl Source for HlsSource {
         );
     }
 
-    fn is_range_ready(&self, range: Range<u64>) -> bool {
+    fn demand_range(&self, range: Range<u64>) {
         if range.is_empty() {
-            return true;
+            return;
         }
-        let segments = self.segments.lock_sync();
-        if self.range_ready_from_segments(&segments, &range) {
-            return true;
-        }
-
         let seek_epoch = self.coord.timeline().seek_epoch();
-        let committed_segment = segments
-            .find_at_offset(range.start)
-            .map(|seg| (seg.variant, seg.segment_index));
-        drop(segments);
-
-        // Worker-side polling happens before `wait_range()`. If we return
-        // `false` here without issuing a demand, a seeked decoder can stall
-        // forever on an unloaded byte position because nobody ever enters the
-        // blocking path that normally queues the segment request.
-        if let Some((variant, segment_index)) = committed_segment {
-            if self.fetch.backend().is_ephemeral() {
-                self.push_segment_request(variant, segment_index, seek_epoch);
-            }
-        } else {
-            let _ = self.queue_segment_request_for_offset(range.start, seek_epoch);
-        }
-
-        false
+        self.queue_segment_request_for_offset(range.start, seek_epoch);
     }
 }
 
@@ -1429,7 +1407,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn is_range_ready_queues_request_for_unloaded_offset() {
+    fn demand_range_queues_request_for_unloaded_offset() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
             0, 3,
@@ -1452,18 +1430,18 @@ mod tests {
         let (_downloader, source) =
             build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
 
-        assert!(!source.is_range_ready(150..151));
+        source.demand_range(150..151);
 
         let req = source
             .coord
             .take_segment_request()
-            .expect("is_range_ready must queue an on-demand segment request");
+            .expect("demand_range must queue an on-demand segment request");
         assert_eq!(req.variant, 0);
         assert_eq!(req.segment_index, 1);
     }
 
     #[kithara::test]
-    fn is_range_ready_does_not_queue_last_segment_at_exact_total_bytes() {
+    fn demand_range_does_not_queue_last_segment_at_exact_total_bytes() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
             0, 3,
@@ -1487,7 +1465,7 @@ mod tests {
             build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
         source.coord.timeline().set_total_bytes(Some(300));
 
-        assert!(!source.is_range_ready(300..301));
+        source.demand_range(300..301);
         assert!(
             source.coord.take_segment_request().is_none(),
             "offset at exact total_bytes must not fallback to the last segment"

@@ -231,18 +231,18 @@ pub trait Source: Send + 'static {
     /// to previous seeks. Non-seek-aware sources keep the default no-op.
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
 
-    /// Check whether all bytes in `range` are available for non-blocking read.
+    /// Signal that the given byte range will be needed soon.
     ///
-    /// Used by the shared audio worker to decide whether `fetch_next()` can
-    /// proceed without blocking. Conservative: returning `false` when data
-    /// is actually available is safe (the track is simply skipped this
-    /// iteration), but returning `true` when data is missing would block
-    /// the shared worker thread.
+    /// Non-blocking hint that allows the source to enqueue background
+    /// fetch requests without entering the blocking [`wait_range`](Self::wait_range)
+    /// path.  Called by the audio worker FSM when it discovers that a
+    /// range is not ready and cannot block to wait for it.
     ///
-    /// Default returns `true` for empty ranges, `false` otherwise.
-    fn is_range_ready(&self, range: Range<u64>) -> bool {
-        range.is_empty()
-    }
+    /// Segmented sources (HLS) use this to issue on-demand segment
+    /// requests that wake the downloader.  Non-segmented sources
+    /// (File) keep the default no-op because their downloader fetches
+    /// sequentially and does not need explicit demand signals.
+    fn demand_range(&self, _range: Range<u64>) {}
 
     /// Get shared playback timeline.
     ///
@@ -316,58 +316,6 @@ mod tests {
     #[kithara::test]
     fn source_phase_defaults_to_waiting() {
         assert_eq!(SourcePhase::default(), SourcePhase::Waiting);
-    }
-
-    #[kithara::test]
-    fn is_range_ready_default_empty_returns_true() {
-        use kithara_storage::WaitOutcome;
-
-        #[derive(Default)]
-        struct StubSource {
-            coord: TestCoord,
-        }
-        impl Source for StubSource {
-            type Error = std::io::Error;
-            type Topology = ();
-            type Layout = ();
-            type Coord = TestCoord;
-            type Demand = ();
-            fn wait_range(
-                &mut self,
-                _range: Range<u64>,
-                _timeout: Duration,
-            ) -> StreamResult<WaitOutcome, Self::Error> {
-                Ok(WaitOutcome::Ready)
-            }
-            fn read_at(
-                &mut self,
-                _offset: u64,
-                _buf: &mut [u8],
-            ) -> StreamResult<ReadOutcome, Self::Error> {
-                Ok(ReadOutcome::Data(0))
-            }
-            fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-                SourcePhase::Waiting
-            }
-            fn len(&self) -> Option<u64> {
-                Some(100)
-            }
-
-            fn topology(&self) -> &Self::Topology {
-                &()
-            }
-
-            fn layout(&self) -> &Self::Layout {
-                &()
-            }
-
-            fn coord(&self) -> &Self::Coord {
-                &self.coord
-            }
-        }
-        let source = StubSource::default();
-        assert!(source.is_range_ready(0..0));
-        assert!(!source.is_range_ready(0..10));
     }
 
     #[kithara::test]

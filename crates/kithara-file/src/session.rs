@@ -265,13 +265,6 @@ impl kithara_stream::Source for FileSource {
             .total_bytes()
             .or_else(|| self.res.len())
     }
-
-    fn is_range_ready(&self, range: Range<u64>) -> bool {
-        if range.is_empty() {
-            return true;
-        }
-        self.res.contains_range(range)
-    }
 }
 
 #[cfg(test)]

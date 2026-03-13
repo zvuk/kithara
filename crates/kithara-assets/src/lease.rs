@@ -22,6 +22,12 @@ use crate::{
     key::ResourceKey,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AccessMode {
+    Read,
+    Write,
+}
+
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
 /// ## Normative behavior
@@ -191,6 +197,7 @@ where
 pub struct LeaseResource<R, L> {
     inner: R,
     _lease: L,
+    mode: AccessMode,
     asset_root: String,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
 }
@@ -202,8 +209,18 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaseResource")
             .field("inner", &self.inner)
+            .field("mode", &self.mode)
             .field("asset_root", &self.asset_root)
             .finish_non_exhaustive()
+    }
+}
+
+impl<R, L> LeaseResource<R, L> {
+    fn write_guard(&self, op: &str) {
+        assert!(
+            matches!(self.mode, AccessMode::Write),
+            "{op} requires acquire_resource*(); handle was opened via open_resource*()"
+        );
     }
 }
 
@@ -225,10 +242,12 @@ where
     }
 
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.write_guard("write_at");
         self.inner.write_at(offset, data)
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.write_guard("commit");
         self.inner.commit(final_len)?;
 
         // Record bytes if recorder is set (best-effort)
@@ -244,10 +263,12 @@ where
     }
 
     fn fail(&self, reason: String) {
+        self.write_guard("fail");
         self.inner.fail(reason);
     }
 
     fn reactivate(&self) -> StorageResult<()> {
+        self.write_guard("reactivate");
         self.inner.reactivate()
     }
 }
@@ -278,7 +299,7 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, ctx)
+        self.wrap_resource(key, ctx, AccessMode::Read)
     }
 }
 
@@ -290,6 +311,7 @@ where
         &self,
         key: &ResourceKey,
         ctx: Option<A::Context>,
+        mode: AccessMode,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
         let inner = self.inner.open_resource_with_ctx(key, ctx)?;
 
@@ -297,6 +319,7 @@ where
             return Ok(LeaseResource {
                 inner,
                 _lease: LeaseGuard { inner: None },
+                mode,
                 asset_root: self.inner.asset_root().to_string(),
                 byte_recorder: None,
             });
@@ -307,6 +330,7 @@ where
         Ok(LeaseResource {
             inner,
             _lease: lease,
+            mode,
             asset_root: self.inner.asset_root().to_string(),
             byte_recorder: self.byte_recorder.clone(),
         })
@@ -334,7 +358,7 @@ where
         key: &ResourceKey,
         ctx: Option<A::Context>,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.wrap_resource(key, ctx)
+        self.wrap_resource(key, ctx, AccessMode::Write)
     }
 }
 

@@ -347,7 +347,7 @@ fn seek_time_anchor_uses_shifted_layout_for_unloaded_tail_segment() {
 }
 
 #[kithara::test]
-fn is_range_ready_uses_shifted_layout_for_unloaded_tail_offset() {
+fn demand_range_uses_shifted_layout_for_unloaded_tail_offset() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(
@@ -365,12 +365,12 @@ fn is_range_ready_uses_shifted_layout_for_unloaded_tail_offset() {
     shared.timeline.set_byte_position(560);
 
     let source = make_test_source(Arc::clone(&shared), cancel);
-    assert!(!Source::is_range_ready(&source, 650..651));
+    Source::demand_range(&source, 650..651);
 
     let req = shared
         .segment_requests
         .pop()
-        .expect("is_range_ready must queue an on-demand segment request");
+        .expect("demand_range must queue an on-demand segment request");
     assert_eq!(req.variant, 0);
     assert_eq!(
         req.segment_index, 7,

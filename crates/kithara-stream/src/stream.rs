@@ -137,8 +137,8 @@ impl<T: StreamType> Stream<T> {
             pub fn clear_variant_fence(&mut self);
             /// Set seek epoch for stale request invalidation.
             pub fn set_seek_epoch(&mut self, seek_epoch: u64);
-            /// Check whether all bytes in `range` are available for non-blocking read.
-            pub fn is_range_ready(&self, range: Range<u64>) -> bool;
+            /// Signal that the given byte range will be needed soon.
+            pub fn demand_range(&self, range: Range<u64>);
             /// Wake any blocked `wait_range()` calls.
             pub fn notify_waiting(&self);
             /// Create a lock-free callback for waking blocked `wait_range()`.
