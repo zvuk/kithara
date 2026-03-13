@@ -356,6 +356,10 @@ impl<S> Audio<S> {
                 }
             }
 
+            if written >= buf.len() {
+                break;
+            }
+
             // Need more data - fetch next chunk
             if !self.fill_buffer() {
                 break;
@@ -1124,6 +1128,16 @@ mod tests {
         chunk
     }
 
+    fn make_spec_chunk(samples: &[f32], spec: PcmSpec) -> PcmChunk {
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                ..Default::default()
+            },
+            pcm_pool().attach(samples.to_vec()),
+        )
+    }
+
     // ---- ConsumerPhase transition tests ----
 
     #[kithara::test]
@@ -1142,6 +1156,42 @@ mod tests {
 
         assert!(audio.fill_buffer());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn read_preserves_partial_chunk_tail_across_calls() {
+        use ringbuf::traits::Producer;
+
+        let (mut audio, mut tx) = audio_with_channel();
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44_100,
+        };
+
+        let first: Vec<f32> = (0..4608).map(|i| i as f32).collect();
+        let second: Vec<f32> = (4608..9216).map(|i| i as f32).collect();
+
+        tx.try_push(Fetch::new(make_spec_chunk(&first, spec), false, 0))
+            .unwrap();
+        tx.try_push(Fetch::new(make_spec_chunk(&second, spec), false, 0))
+            .unwrap();
+
+        let mut buf_a = vec![0.0; 4410];
+        let mut buf_b = vec![0.0; 4410];
+
+        let n_a = audio.read(&mut buf_a);
+        let n_b = audio.read(&mut buf_b);
+
+        assert_eq!(n_a, 4410);
+        assert_eq!(n_b, 4410);
+        assert_eq!(buf_a, first[..4410]);
+
+        let mut expected_b = first[4410..].to_vec();
+        expected_b.extend_from_slice(&second[..(4410 - 198)]);
+        assert_eq!(
+            buf_b, expected_b,
+            "read() must consume the tail of the partially-read chunk before pulling a new one"
+        );
     }
 
     #[kithara::test]
