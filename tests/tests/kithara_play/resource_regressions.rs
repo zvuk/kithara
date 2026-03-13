@@ -22,7 +22,10 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::{
+    time::{Duration, Instant, sleep},
+    tokio,
+};
 use kithara_test_utils::{TestHttpServer, TestTempDir, create_saw_wav, temp_dir};
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
@@ -224,7 +227,9 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        resource.preload().await;
+        tokio::time::timeout(READ_TIMEOUT, resource.preload())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"));
         let read = resource.read(&mut buf);
         if read > 0 {
             return read;
