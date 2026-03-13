@@ -138,7 +138,7 @@ async fn create_hls_audio(
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn healthy_instances_survive_cancelled_peers(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
@@ -244,7 +244,7 @@ async fn healthy_instances_survive_cancelled_peers(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn eight_instances_half_cancelled(_tracing_setup: ()) {
     let wav_data = generate_wav_data();

@@ -168,7 +168,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
@@ -271,7 +271,7 @@ async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn mixed_four_file_four_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();

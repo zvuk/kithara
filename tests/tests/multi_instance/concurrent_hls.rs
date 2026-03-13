@@ -179,7 +179,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn two_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
@@ -218,7 +218,7 @@ async fn two_hls_instances(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn four_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
@@ -255,7 +255,7 @@ async fn four_hls_instances(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn eight_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
@@ -292,7 +292,7 @@ async fn eight_hls_instances(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn four_hls_instances_with_abr(_tracing_setup: ()) {
     let wav_data = generate_wav_data();

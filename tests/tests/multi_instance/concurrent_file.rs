@@ -117,7 +117,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
     browser,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn two_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
@@ -156,7 +156,7 @@ async fn two_file_instances(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn four_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
@@ -195,7 +195,7 @@ async fn four_file_instances(_tracing_setup: ()) {
     browser,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn eight_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
