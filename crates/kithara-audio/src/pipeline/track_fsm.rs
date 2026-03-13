@@ -75,13 +75,6 @@ pub(crate) struct ResumeState {
     pub skip: Option<Duration>,
 }
 
-/// Post-recreation resume task for an already-applied seek.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResumeRequest {
-    pub position: Duration,
-    pub state: ResumeState,
-}
-
 /// What to do once decoder recreation succeeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RecreateNext {
@@ -91,8 +84,6 @@ pub(crate) enum RecreateNext {
     Seek(SeekRequest),
     /// Finish seek application by seeking the recreated decoder.
     ApplySeek(SeekRequest),
-    /// Resume decoding after a post-seek recovery seek.
-    Resume(ResumeRequest),
 }
 
 /// Decoder recreation task tracked by the FSM.
@@ -142,8 +133,6 @@ pub(crate) enum SeekMode {
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
-    /// Seek failed, recovery via decoder recreation.
-    SeekRecovery,
     /// ABR switch changed the codec.
     CodecChange,
 }
@@ -376,17 +365,13 @@ mod tests {
         assert_eq!(
             TrackState::RecreatingDecoder(RecreateState {
                 attempt: 1,
-                cause: RecreateCause::SeekRecovery,
+                cause: RecreateCause::CodecChange,
                 media_info: MediaInfo::default(),
-                next: RecreateNext::Resume(ResumeRequest {
-                    position: Duration::ZERO,
-                    state: ResumeState {
-                        recover_attempts: 1,
-                        seek: SeekContext {
-                            epoch: 1,
-                            target: Duration::from_secs(10),
-                        },
-                        skip: None,
+                next: RecreateNext::ApplySeek(SeekRequest {
+                    attempt: 1,
+                    seek: SeekContext {
+                        epoch: 1,
+                        target: Duration::from_secs(10),
                     },
                 }),
                 offset: 100,

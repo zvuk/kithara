@@ -53,7 +53,7 @@ pub mod source {
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
     use crate::{
-        pipeline::{source::RecoveryAction, track_fsm, worker::AudioWorkerSource},
+        pipeline::{track_fsm, worker::AudioWorkerSource},
         traits::AudioEffect,
     };
 
@@ -241,14 +241,6 @@ pub mod source {
             seek: track_fsm::SeekContext { epoch, target },
             skip,
         });
-    }
-
-    pub fn retry_decode_error_after_seek<T: StreamType>(source: &mut StreamAudioSource<T>) -> bool {
-        match source.0.retry_decode_error_after_seek() {
-            RecoveryAction::Continue => true,
-            RecoveryAction::Yield => matches!(step_track(source), TrackStep::StateChanged),
-            RecoveryAction::None => false,
-        }
     }
 }
 
