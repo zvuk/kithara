@@ -158,6 +158,7 @@ struct TrackSlot {
     chunks_sent: usize,
     preloaded: bool,
     cancel: CancellationToken,
+    seek_epoch: u64,
     /// Set when `step_track()` returns `Failed` — truly terminal.
     terminal: bool,
     /// Set when EOF fetch has been pushed to the consumer.
@@ -166,6 +167,7 @@ struct TrackSlot {
 
 impl TrackSlot {
     fn from_registration(track_id: TrackId, reg: TrackRegistration) -> Self {
+        let seek_epoch = reg.source.timeline().seek_epoch();
         Self {
             consumer_wake: reg.consumer_wake,
             track_id,
@@ -179,6 +181,7 @@ impl TrackSlot {
             chunks_sent: 0,
             preloaded: false,
             cancel: reg.cancel,
+            seek_epoch,
             terminal: false,
             eof_sent: false,
         }
@@ -195,6 +198,8 @@ impl TrackSlot {
         if self.cancel.is_cancelled() || self.terminal {
             return StepResult::NoProgress;
         }
+
+        self.sync_seek_epoch();
 
         // Drain per-track commands.
         while let Some(cmd) = self.cmd_rx.try_pop() {
@@ -283,6 +288,19 @@ impl TrackSlot {
             self.preload_notify.notify_one();
             self.preloaded = true;
         }
+    }
+
+    fn sync_seek_epoch(&mut self) {
+        let current = self.source.timeline().seek_epoch();
+        if current == self.seek_epoch {
+            return;
+        }
+
+        self.seek_epoch = current;
+        self.pending_fetch = None;
+        self.chunks_sent = 0;
+        self.preloaded = false;
+        self.eof_sent = false;
     }
 }
 
@@ -738,6 +756,28 @@ mod tests {
         // Give worker time to produce 3+ chunks.
         // The preload_notify fires internally; we verify it doesn't deadlock.
         kithara_platform::thread::sleep(Duration::from_millis(200));
+
+        handle.shutdown();
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_notify_rearms_after_seek() {
+        let handle = AudioWorkerHandle::new();
+
+        let (reg, _rx, preload_notify, _cancel) = make_registration(MockSource::new(10), 32, 1);
+        let timeline = reg.source.timeline().clone();
+        let _id = handle.register_track(reg);
+
+        kithara_platform::time::timeout(Duration::from_secs(1), preload_notify.notified())
+            .await
+            .expect("initial preload notify must fire");
+
+        let _ = timeline.initiate_seek(Duration::from_secs(1));
+        handle.wake();
+
+        kithara_platform::time::timeout(Duration::from_secs(1), preload_notify.notified())
+            .await
+            .expect("seek must re-arm preload notify");
 
         handle.shutdown();
     }
