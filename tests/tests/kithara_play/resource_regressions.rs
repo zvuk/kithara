@@ -1,9 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
-use std::num::NonZeroUsize;
+use std::{io::Read, num::NonZeroUsize, sync::Arc};
 
 use axum::{
     Router,
@@ -204,6 +202,51 @@ async fn warm_hls_worker(url: &url::Url, store: StoreOptions, worker: AudioWorke
         );
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+async fn warm_hls_worker_without_seek(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: AudioWorkerHandle,
+) -> f64 {
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let hls_config = HlsConfig::new(url.clone()).with_store(store);
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_media_info(wav_info)
+        .with_worker(worker);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
+
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let mut buf = [0.0f32; 4096];
+    loop {
+        let read = audio.read(&mut buf);
+        if read > 0 {
+            return audio.position().as_secs_f64();
+        }
+
+        assert!(
+            !audio.is_eof(),
+            "unexpected EOF while warming HLS worker without seek for {url}"
+        );
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for HLS warmup data without seek at {url}"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
+    let config = HlsConfig::new(url.clone()).with_store(store);
+    let mut stream = Stream::<Hls>::new(config)
+        .await
+        .unwrap_or_else(|err| panic!("HLS stream should open for {}: {err}", url));
+    let mut buf = [0_u8; 4096];
+    stream
+        .read(&mut buf)
+        .unwrap_or_else(|err| panic!("HLS stream should read for {}: {err}", url))
 }
 
 async fn open_audio_hls_server() -> HlsTestServer {
@@ -501,6 +544,95 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
         "second HLS warmup after a prior session must still advance playback position, got {second_pos}"
     );
     worker_b.shutdown();
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session() {
+    let server_a = open_audio_hls_server().await;
+    let server_b = open_audio_hls_server().await;
+    let temp_a = TestTempDir::new();
+    let temp_b = TestTempDir::new();
+    let worker_a = AudioWorkerHandle::new();
+    let worker_b = AudioWorkerHandle::new();
+    let store_a = store_options(&temp_a, false);
+    let store_b = store_options(&temp_b, true);
+    let hls_url_a = server_a.url("/master.m3u8").unwrap();
+    let hls_url_b = server_b.url("/master.m3u8").unwrap();
+
+    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone()).await;
+    assert!(
+        first_pos > 1.0,
+        "first HLS warmup must advance playback position, got {first_pos}"
+    );
+    drop(worker_a);
+
+    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone()).await;
+    assert!(
+        second_pos > 1.0,
+        "second HLS warmup after only dropping the first worker must still advance playback position, got {second_pos}"
+    );
+    worker_b.shutdown();
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session() {
+    let server_a = open_audio_hls_server().await;
+    let server_b = open_audio_hls_server().await;
+    let temp_a = TestTempDir::new();
+    let temp_b = TestTempDir::new();
+    let worker_a = AudioWorkerHandle::new();
+    let worker_b = AudioWorkerHandle::new();
+    let store_a = store_options(&temp_a, false);
+    let store_b = store_options(&temp_b, true);
+    let hls_url_a = server_a.url("/master.m3u8").unwrap();
+    let hls_url_b = server_b.url("/master.m3u8").unwrap();
+
+    let first_pos = warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone()).await;
+    assert!(
+        first_pos >= 0.0,
+        "first HLS read-only warmup must produce samples, got {first_pos}"
+    );
+    drop(worker_a);
+
+    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone()).await;
+    assert!(
+        second_pos > 1.0,
+        "second HLS warmup after a read-only first session must still advance playback position, got {second_pos}"
+    );
+    worker_b.shutdown();
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
+    let server_a = open_audio_hls_server().await;
+    let server_b = open_audio_hls_server().await;
+    let temp_a = TestTempDir::new();
+    let temp_b = TestTempDir::new();
+    let store_a = store_options(&temp_a, false);
+    let store_b = store_options(&temp_b, true);
+    let hls_url_a = server_a.url("/master.m3u8").unwrap();
+    let hls_url_b = server_b.url("/master.m3u8").unwrap();
+
+    let first_read = read_hls_stream_some(&hls_url_a, store_a).await;
+    assert!(first_read > 0, "first HLS stream session must read bytes");
+
+    let second_read = read_hls_stream_some(&hls_url_b, store_b).await;
+    assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
 #[kithara::test(
