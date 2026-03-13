@@ -218,7 +218,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
 
 #[kithara::test(tokio)]
 async fn test_seek_emits_matching_playback_progress() {
-    let (_tmp, config) = test_wav_config(10_000);
+    let (_tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -248,7 +248,7 @@ async fn test_seek_emits_matching_playback_progress() {
 
 #[kithara::test(tokio)]
 async fn test_seek_complete_emitted_only_after_output_commit() {
-    let (_tmp, config) = test_wav_config(10_000);
+    let (_tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
