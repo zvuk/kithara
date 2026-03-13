@@ -13,10 +13,13 @@ use kithara_stream::{StreamContext, StreamType, Timeline};
 use crate::{
     HlsStreamContext,
     config::HlsConfig,
+    coord::{HlsCoord, SegmentRequest},
+    download_state::DownloadState,
     error::HlsError,
     fetch::FetchManager,
     keys::KeyManager,
     parsing::variant_info_from_master,
+    playlist::PlaylistState,
     source::{HlsSource, build_pair},
 };
 
@@ -25,9 +28,13 @@ pub struct Hls;
 
 impl StreamType for Hls {
     type Config = HlsConfig;
+    type Coord = Arc<HlsCoord>;
+    type Demand = SegmentRequest;
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;
+    type Layout = Arc<kithara_platform::Mutex<DownloadState>>;
+    type Topology = Arc<PlaylistState>;
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
@@ -94,7 +101,7 @@ impl StreamType for Hls {
             media_playlists.push((media_url, playlist));
         }
 
-        let playlist_state = Arc::new(crate::playlist::PlaylistState::from_parsed(
+        let playlist_state = Arc::new(PlaylistState::from_parsed(
             &master.variants,
             &media_playlists,
         ));
@@ -142,8 +149,8 @@ impl StreamType for Hls {
     fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
         Arc::new(HlsStreamContext::new(
             timeline,
-            source.segment_index_handle(),
-            source.variant_index_handle(),
+            Arc::clone(&source.segments),
+            Arc::clone(&source.coord.abr_variant_index),
         ))
     }
 }

@@ -2,10 +2,7 @@
 
 use std::{
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize},
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 pub use kithara_abr::{AbrMode, AbrOptions};
@@ -19,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::source::build_pair;
 pub use crate::{
     config::HlsConfig,
+    coord::{HlsCoord, SegmentRequest},
     download_state::{DownloadState, LoadedSegment},
     error::HlsError,
     fetch::{DefaultFetchManager, FetchManager},
@@ -28,7 +26,7 @@ pub use crate::{
         parse_media_playlist, variant_info_from_master,
     },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
-    source::{HlsSource, SegmentRequest, SharedSegments},
+    source::HlsSource,
 };
 
 fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
@@ -46,21 +44,26 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
     Arc::new(FetchManager::new(backend, net, cancel))
 }
 
-/// Build a test-friendly `HlsSource` with an in-memory backend.
-pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
+pub fn make_test_source(
+    playlist_state: Arc<PlaylistState>,
+    segments: Arc<kithara_platform::Mutex<DownloadState>>,
+    coord: Arc<HlsCoord>,
+    cancel: CancellationToken,
+) -> HlsSource {
     let fetch = make_test_fetch(cancel);
-    make_test_source_with_fetch(shared, fetch)
+    make_test_source_with_fetch(playlist_state, segments, coord, fetch)
 }
 
-/// Build a test-friendly `HlsSource` with a given fetch manager.
 pub fn make_test_source_with_fetch(
-    shared: Arc<SharedSegments>,
+    playlist_state: Arc<PlaylistState>,
+    segments: Arc<kithara_platform::Mutex<DownloadState>>,
+    coord: Arc<HlsCoord>,
     fetch: Arc<DefaultFetchManager>,
 ) -> HlsSource {
-    let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
+        coord,
         fetch,
-        shared,
+        segments,
         playlist_state,
         bus: EventBus::new(16),
         variant_fence: None,
@@ -149,11 +152,6 @@ pub fn source_range_ready_from_segments(
 }
 
 #[must_use]
-pub fn source_segment_index_handle(source: &HlsSource) -> Arc<AtomicU32> {
-    source.segment_index_handle()
-}
-
-#[must_use]
 pub fn source_variant_index_handle(source: &HlsSource) -> Arc<AtomicUsize> {
-    source.variant_index_handle()
+    Arc::clone(&source.coord.abr_variant_index)
 }

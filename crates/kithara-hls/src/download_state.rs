@@ -10,8 +10,9 @@ use std::{
     ops::Range,
 };
 
+use kithara_stream::LayoutIndex;
 use rangemap::RangeSet;
-use tracing::debug;
+use tracing::trace;
 use url::Url;
 
 // LoadedSegment
@@ -109,7 +110,7 @@ impl DownloadState {
         let end = segment.end_offset();
         let key = (segment.variant, segment.segment_index);
 
-        debug!(
+        trace!(
             variant = segment.variant,
             segment_index = segment.segment_index,
             byte_offset = offset,
@@ -218,19 +219,19 @@ impl DownloadState {
             .map_or(0, LoadedSegment::end_offset)
     }
 
-    /// Remove entries from other variants at or past the fence offset.
+    /// Remove entries from other variants that could be visible at or after the fence offset.
     ///
     /// Keeps all entries of `keep_variant` regardless of offset, and all entries
-    /// from other variants that are strictly before the fence. Rebuilds
+    /// from other variants that end at or before the fence. Rebuilds
     /// `loaded_keys` and `loaded_ranges` from remaining entries.
     pub fn fence_at(&mut self, offset: u64, keep_variant: usize) {
         let before = self.entries.len();
         self.entries
-            .retain(|_, seg| seg.byte_offset < offset || seg.variant == keep_variant);
+            .retain(|_, seg| seg.variant == keep_variant || seg.end_offset() <= offset);
 
         self.rebuild_indexes();
 
-        debug!(
+        trace!(
             offset,
             keep_variant,
             before,
@@ -241,7 +242,7 @@ impl DownloadState {
 
     /// Remove all indexed segments while keeping persisted byte-cache intact.
     pub fn clear(&mut self) {
-        debug!(entries = self.entries.len(), "download_state::clear called");
+        trace!(entries = self.entries.len(), "download_state::clear called");
         self.entries.clear();
         self.loaded_keys.clear();
         self.loaded_ranges.clear();
@@ -288,6 +289,20 @@ impl DownloadProgress for DownloadState {
 
     fn total_loaded_bytes(&self) -> u64 {
         self.loaded_ranges.iter().map(|r| r.end - r.start).sum()
+    }
+}
+
+impl LayoutIndex for DownloadState {
+    type Item = (usize, usize);
+
+    fn item_at_offset(&self, offset: u64) -> Option<Self::Item> {
+        self.find_at_offset(offset)
+            .map(|seg| (seg.variant, seg.segment_index))
+    }
+
+    fn item_range(&self, item: Self::Item) -> Option<Range<u64>> {
+        self.find_loaded_segment(item.0, item.1)
+            .map(|seg| seg.byte_offset..seg.end_offset())
     }
 }
 
@@ -491,6 +506,23 @@ mod tests {
 
         // total_loaded_bytes reflects removals
         assert_eq!(state.total_loaded_bytes(), 300); // 200 (V0) + 100 (V3)
+    }
+
+    #[kithara::test]
+    fn test_fence_at_removes_overlapping_stale_segment() {
+        let mut state = DownloadState::new();
+
+        state.push(make_segment(0, 0, 0, 0, 100));
+        state.push(make_segment(3, 5, 500, 0, 100));
+
+        state.fence_at(50, 3);
+
+        assert!(
+            !state.is_segment_loaded(0, 0),
+            "old-variant segment overlapping the fence offset must be removed"
+        );
+        assert!(state.find_at_offset(50).is_none());
+        assert!(state.is_segment_loaded(3, 5));
     }
 
     // Test 6: first_segment_of_variant

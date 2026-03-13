@@ -1,5 +1,6 @@
 use std::{
     ops::Range,
+    ops::Deref,
     sync::{Arc, atomic::Ordering},
 };
 
@@ -8,22 +9,98 @@ use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
     AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsError,
-    HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, SharedSegments,
-    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
-    make_test_fetch_manager, make_test_source, make_test_source_with_fetch,
-    set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
-    subscribe_source_events,
+    HlsCoord, HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, VariantId,
+    VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
+    make_test_fetch_manager, make_test_source as make_internal_test_source,
+    make_test_source_with_fetch as make_internal_test_source_with_fetch, set_source_variant_fence,
+    source_can_cross_variant, source_variant_index_handle, subscribe_source_events,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
+    Mutex,
     time::{Duration, Instant, sleep, timeout},
     tokio::task::spawn_blocking,
 };
 use kithara_storage::WaitOutcome;
-use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
+use kithara_stream::{AudioCodec, Source, StreamError, Timeline, TransferCoordination};
 use kithara_test_utils::{kithara, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+struct SegmentRequests {
+    coord: Arc<HlsCoord>,
+}
+
+impl SegmentRequests {
+    fn new(coord: Arc<HlsCoord>) -> Self {
+        Self { coord }
+    }
+
+    fn pop(&self) -> Option<SegmentRequest> {
+        self.coord.demand().take()
+    }
+
+    fn push(&self, request: SegmentRequest) {
+        self.coord.demand().replace(request);
+    }
+}
+
+struct SharedSegments {
+    coord: Arc<HlsCoord>,
+    current_segment_index: Arc<std::sync::atomic::AtomicU32>,
+    playlist_state: Arc<PlaylistState>,
+    segment_requests: SegmentRequests,
+    segments: Arc<Mutex<DownloadState>>,
+    timeline: Timeline,
+}
+
+impl SharedSegments {
+    fn new(cancel: CancellationToken, playlist_state: Arc<PlaylistState>, timeline: Timeline) -> Self {
+        let abr_variant_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let coord = Arc::new(HlsCoord::new(
+            cancel,
+            timeline.clone(),
+            Arc::clone(&abr_variant_index),
+        ));
+        Self {
+            coord: Arc::clone(&coord),
+            current_segment_index: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            playlist_state,
+            segment_requests: SegmentRequests::new(coord),
+            segments: Arc::new(Mutex::new(DownloadState::new())),
+            timeline,
+        }
+    }
+}
+
+impl Deref for SharedSegments {
+    type Target = HlsCoord;
+
+    fn deref(&self) -> &Self::Target {
+        &self.coord
+    }
+}
+
+fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
+    make_internal_test_source(
+        Arc::clone(&shared.playlist_state),
+        Arc::clone(&shared.segments),
+        Arc::clone(&shared.coord),
+        cancel,
+    )
+}
+
+fn make_test_source_with_fetch(
+    shared: Arc<SharedSegments>,
+    fetch: Arc<DefaultFetchManager>,
+) -> HlsSource {
+    make_internal_test_source_with_fetch(
+        Arc::clone(&shared.playlist_state),
+        Arc::clone(&shared.segments),
+        Arc::clone(&shared.coord),
+        fetch,
+    )
+}
 
 #[derive(Clone, Copy)]
 enum WaitRangeUnblock {
@@ -179,7 +256,7 @@ async fn wait_range_and_take_request(
 }
 
 #[kithara::test(tokio, browser)]
-async fn seek_time_anchor_resolves_segment_and_queues_request() {
+async fn seek_time_anchor_resolves_segment_without_queuing_request() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(
@@ -206,13 +283,249 @@ async fn seek_time_anchor_resolves_segment_and_queues_request() {
     assert_eq!(anchor.segment_start, Duration::from_secs(8));
     assert_eq!(anchor.segment_end, Some(Duration::from_secs(12)));
 
+    assert!(
+        shared.segment_requests.pop().is_none(),
+        "anchor resolution must not speculatively queue demand before decoder landing is known"
+    );
+}
+
+#[kithara::test]
+fn seek_time_anchor_does_not_commit_reader_position_before_decoder_lands() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.timeline.set_byte_position(100);
+    shared.current_segment_index.store(1, Ordering::Relaxed);
+    shared.abr_variant_index.store(0, Ordering::Relaxed);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
+        .expect("seek anchor resolution should succeed")
+        .expect("HLS source should resolve anchor");
+
+    assert_eq!(anchor.segment_index, Some(2));
+    assert_eq!(anchor.byte_offset, 200);
+    assert_eq!(
+        shared.timeline.byte_position(),
+        100,
+        "anchor resolution must not eagerly commit reader position before decoder landing is known"
+    );
+}
+
+#[kithara::test]
+fn seek_time_anchor_uses_shifted_layout_for_unloaded_tail_segment() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(0, Ordering::Relaxed);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.push(make_loaded_segment(0, 5, 450, 100));
+        segments.push(make_loaded_segment(0, 6, 550, 100));
+    }
+    shared.timeline.set_byte_position(560);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(28_500))
+        .expect("seek anchor resolution should succeed")
+        .expect("HLS source should resolve anchor");
+
+    assert_eq!(anchor.segment_index, Some(7));
+    assert_eq!(
+        anchor.byte_offset, 650,
+        "seek anchor must follow the shifted committed layout, not raw metadata offsets"
+    );
+}
+
+#[kithara::test]
+fn is_range_ready_uses_shifted_layout_for_unloaded_tail_offset() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(0, Ordering::Relaxed);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.push(make_loaded_segment(0, 5, 450, 100));
+        segments.push(make_loaded_segment(0, 6, 550, 100));
+    }
+    shared.timeline.set_byte_position(560);
+
+    let source = make_test_source(Arc::clone(&shared), cancel);
+    assert!(!Source::is_range_ready(&source, 650..651));
+
     let req = shared
         .segment_requests
         .pop()
-        .expect("anchor seek should enqueue request");
+        .expect("is_range_ready must queue an on-demand segment request");
     assert_eq!(req.variant, 0);
-    assert_eq!(req.segment_index, 2);
-    assert_eq!(req.seek_epoch, 9);
+    assert_eq!(
+        req.segment_index, 7,
+        "tail demand must follow the shifted layout, not raw metadata offsets"
+    );
+}
+
+#[kithara::test(tokio, browser)]
+async fn wait_range_uses_shifted_layout_for_unloaded_tail_offset() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(0, Ordering::Relaxed);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.push(make_loaded_segment(0, 5, 450, 100));
+        segments.push(make_loaded_segment(0, 6, 550, 100));
+    }
+    shared.timeline.set_byte_position(560);
+
+    let source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 650..651).await;
+    assert_eq!(request.variant, 0);
+    assert_eq!(
+        request.segment_index, 7,
+        "wait_range demand must follow the shifted layout, not raw metadata offsets"
+    );
+}
+
+#[kithara::test]
+fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(1, Ordering::Relaxed);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
+        .expect("seek anchor resolution should succeed")
+        .expect("HLS source should resolve anchor");
+
+    shared.timeline.set_byte_position(150);
+    Source::commit_seek_landing(&mut source, Some(anchor));
+
+    let req = shared
+        .segment_requests
+        .pop()
+        .expect("seek landing must enqueue request for the landed segment");
+    assert_eq!(req.variant, 1);
+    assert_eq!(
+        req.segment_index, 1,
+        "seek landing must resolve demand from the decoder-landed byte offset"
+    );
+    assert_eq!(
+        shared.current_segment_index.load(Ordering::Relaxed),
+        1,
+        "current segment hint must follow the landed segment"
+    );
+    assert_eq!(
+        shared.timeline.byte_position(),
+        150,
+        "commit_seek_landing must not mutate the reader cursor outside Stream::seek"
+    );
+}
+
+#[kithara::test]
+fn commit_seek_landing_skips_request_when_landed_segment_is_ready() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(1, Ordering::Relaxed);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let segment = make_loaded_segment(1, 1, 100, 100);
+    commit_dummy_resource(&source, &segment);
+    shared.segments.lock_sync().push(segment);
+    shared.timeline.set_byte_position(150);
+
+    Source::commit_seek_landing(&mut source, None);
+
+    assert!(
+        shared.segment_requests.pop().is_none(),
+        "ready landed segment must not enqueue redundant downloader work"
+    );
+    assert_eq!(
+        shared.current_segment_index.load(Ordering::Relaxed),
+        1,
+        "current segment hint must still be updated from landed offset"
+    );
+}
+
+#[kithara::test]
+fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(1, Ordering::Relaxed);
+    shared.timeline.set_byte_position(550);
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.push(make_loaded_segment(0, 0, 0, 100));
+        segments.push(make_loaded_segment(0, 1, 100, 100));
+        segments.push(make_loaded_segment(1, 5, 500, 100));
+    }
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(500))
+        .expect("seek anchor resolution should succeed")
+        .expect("HLS source should resolve anchor");
+
+    assert_eq!(anchor.variant_index, Some(1));
+    assert_eq!(anchor.segment_index, Some(0));
+    assert_eq!(anchor.byte_offset, 0);
+
+    shared.timeline.set_byte_position(0);
+    Source::commit_seek_landing(&mut source, Some(anchor));
+
+    let segments = shared.segments.lock_sync();
+    assert!(
+        !segments.is_segment_loaded(0, 0),
+        "stale old-variant segment at landed offset must be fenced out after seek landing"
+    );
+    assert!(
+        !segments.is_segment_loaded(0, 1),
+        "stale old-variant entries at/after landed offset must be fenced out after seek landing"
+    );
+    assert!(
+        segments.is_segment_loaded(1, 5),
+        "target-variant entries must remain available after fencing"
+    );
+    drop(segments);
+
+    let request = shared
+        .segment_requests
+        .pop()
+        .expect("landed segment should be requested after fencing stale data");
+    assert_eq!(request.variant, 1);
+    assert_eq!(request.segment_index, 0);
 }
 
 #[kithara::test]
@@ -955,6 +1268,55 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
         .expect("wait_range task should complete")
         .expect("wait_range task should not panic");
     assert!(result.is_err(), "wait_range should stop after cancellation");
+}
+
+#[kithara::test(tokio, browser)]
+async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+    let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
+    shared.timeline.complete_seek(first_epoch);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+
+    let first_deadline = Instant::now() + Duration::from_millis(300);
+    let first_request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        assert!(
+            Instant::now() <= first_deadline,
+            "expected initial on-demand request"
+        );
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(first_request.seek_epoch, first_epoch);
+
+    let second_epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
+    shared.timeline.set_byte_position(50);
+    shared.timeline.complete_seek(second_epoch);
+    shared.timeline.clear_seek_pending(second_epoch);
+    shared.condvar.notify_all();
+
+    let result = timeout(Duration::from_millis(400), handle)
+        .await
+        .expect("wait_range task should complete")
+        .expect("wait_range task should not panic")
+        .expect("wait_range should exit after applied seek");
+    assert!(
+        matches!(result, WaitOutcome::Interrupted),
+        "old wait_range must interrupt after a newer seek has already been applied"
+    );
+    assert!(
+        shared
+            .segment_requests
+            .pop()
+            .is_none_or(|request| request.seek_epoch != second_epoch),
+        "stale range must not enqueue a new on-demand request for the newer seek epoch"
+    );
 }
 
 #[kithara::test(tokio, browser)]
