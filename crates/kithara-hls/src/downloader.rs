@@ -343,6 +343,10 @@ impl HlsDownloader {
             .is_some_and(|previous| is_cross_codec_switch(&self.playlist_state, previous, variant))
     }
 
+    fn variant_has_init(&self, variant: usize) -> bool {
+        self.playlist_state.init_url(variant).is_some()
+    }
+
     fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
         self.bus.publish(HlsEvent::DownloadError {
@@ -1148,11 +1152,13 @@ impl HlsDownloader {
             byte_offset: self.coord.timeline().download_position(),
         });
 
-        let need_init = self.force_init_for_seek
-            || should_request_init(
-                self.switch_needs_init(req.variant, is_variant_switch),
-                req.segment_index,
-            );
+        let has_init = self.variant_has_init(req.variant);
+        let need_init = has_init
+            && (self.force_init_for_seek
+                || should_request_init(
+                    self.switch_needs_init(req.variant, is_variant_switch),
+                    req.segment_index,
+                ));
         if need_init {
             self.force_init_for_seek = false;
         }
@@ -1342,8 +1348,9 @@ impl HlsDownloader {
             batch_end = batch_end.min(self.current_segment_index().saturating_add(1));
         }
         let mut plans = Vec::new();
-        let mut need_init =
-            self.force_init_for_seek || self.switch_needs_init(variant, is_variant_switch);
+        let has_init = self.variant_has_init(variant);
+        let mut need_init = has_init
+            && (self.force_init_for_seek || self.switch_needs_init(variant, is_variant_switch));
 
         for seg_idx in self.current_segment_index()..batch_end {
             if self.should_skip_planned_segment(variant, seg_idx, is_midstream_switch) {
@@ -1356,7 +1363,7 @@ impl HlsDownloader {
                 byte_offset: self.coord.timeline().download_position(),
             });
 
-            let plan_need_init = should_request_init(need_init, seg_idx);
+            let plan_need_init = has_init && should_request_init(need_init, seg_idx);
             plans.push(HlsPlan {
                 variant,
                 segment_index: seg_idx,
@@ -2686,6 +2693,46 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
+    async fn build_demand_plan_initial_segment_zero_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            4,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(0, 0);
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 0,
+                variant: 0,
+                seek_epoch: 0,
+            },
+            is_variant_switch,
+        );
+
+        assert!(
+            !plan.need_init,
+            "init-less playlist must not request init on initial segment zero"
+        );
+    }
+
+    #[kithara::test(tokio)]
     async fn build_batch_plans_same_codec_variant_change_keeps_metadata_layout() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -2762,6 +2809,45 @@ mod tests {
         assert!(
             plans.iter().all(|plan| !plan.need_init),
             "seek batch on init-less playlist must not inject init"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_initial_segment_zero_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            6,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.prefetch_count = 2;
+        let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 0);
+        let (plans, _batch_end) =
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+
+        assert_eq!(
+            plans.first().map(|plan| plan.segment_index),
+            Some(0),
+            "initial batch must start from segment zero"
+        );
+        assert!(
+            plans.iter().all(|plan| !plan.need_init),
+            "init-less playlist must not inject init into initial batch"
         );
     }
 
