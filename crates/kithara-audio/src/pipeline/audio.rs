@@ -409,7 +409,7 @@ impl<S> Audio<S> {
         // Reset preload flag — first read after seek will be blocking if needed
         self.preloaded = false;
 
-        debug!(?position, epoch, "seek initiated via Timeline");
+        trace!(?position, epoch, "seek initiated via Timeline");
         Ok(())
     }
 

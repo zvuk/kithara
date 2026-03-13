@@ -14,7 +14,7 @@ use kithara_platform::tokio;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{trace, warn};
 
 /// Error type for the generic writer (fetch loop).
 ///
@@ -127,7 +127,7 @@ where
                 biased;
 
                 () = cancel.cancelled() => {
-                    debug!(offset, "writer cancelled");
+                    trace!(offset, "writer cancelled");
                     return;
                 }
 
@@ -135,7 +135,7 @@ where
                     let Some(next) = next else {
                         // Stream ended — do NOT commit.
                         // Caller decides whether to commit based on context.
-                        debug!(offset, "writer stream ended");
+                        trace!(offset, "writer stream ended");
                         yield Ok(WriterItem::StreamEnded { total_bytes: offset });
                         return;
                     };
@@ -175,7 +175,7 @@ where
                     }
 
                     if first_chunk {
-                        debug!(offset, "writer first chunk written");
+                        trace!(offset, "writer first chunk written");
                         first_chunk = false;
                     }
 

@@ -526,7 +526,7 @@ impl SymphoniaInner {
             track_id: Some(self.track_id),
         };
 
-        tracing::debug!(
+        tracing::trace!(
             position_secs = pos.as_secs_f64(),
             track_id = self.track_id,
             "sending seek to symphonia"
