@@ -1,132 +1,143 @@
 package com.kithara.example
 
 import android.app.Application
-import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kithara.Kithara
 import com.kithara.KitharaError
 import com.kithara.KitharaPlayer
+import com.kithara.KitharaPlayerEvent
 import com.kithara.KitharaPlayerItem
+import com.kithara.LogLevel
 import com.kithara.PlayerStatus
 import java.io.File
 import java.io.IOException
-import java.util.UUID
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import androidx.core.net.toUri
+import java.util.UUID
 
 private const val TAG = "KitharaExample"
-private const val DefaultTrackTitle = "No Track"
 
 internal class PlayerViewModel(application: Application) : AndroidViewModel(application) {
-    private val _uiState = MutableStateFlow(PlayerUiState(trackTitle = DefaultTrackTitle))
+    private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState = _uiState.asStateFlow()
 
-    private var localError: String? = null
-    private var player: KitharaPlayer
-    private var playerJob: Job? = null
+    private val player = KitharaPlayer().apply { defaultRate = _uiState.value.selectedRate }
     private var itemJob: Job? = null
-    private var sourceUrl: String? = null
+    private var shouldReloadCurrentTrack = false
 
     init {
-        Kithara.initialize(application)
-        player = KitharaPlayer().apply { defaultRate = _uiState.value.selectedRate }
+        Kithara.initialize(application, logLevel = LogLevel.Debug)
         observePlayer()
+        observeEvents()
     }
 
     fun onUrlChanged(value: String) {
-        localError = null
-        _uiState.update { state -> state.copy(errorMessage = null, url = value) }
+        _uiState.update { it.copy(url = value, errorMessage = null) }
     }
 
-    fun loadAndPlay() {
-        val trimmed = _uiState.value.url.trim()
-        if (trimmed.isEmpty()) {
+    fun addTrack() {
+        val url = _uiState.value.url.trim()
+        if (url.isEmpty()) {
             setLocalError("Enter an audio URL or pick a file")
             return
         }
 
-        viewModelScope.launch(Dispatchers.Default) {
-            try {
-                prepareAndPlay(trimmed)
-            } catch (error: KitharaError) {
-                Log.e(TAG, "Load/play failed for source: $trimmed", error)
-                setPlaybackError(error)
-            }
-        }
+        _uiState.update { it.copy(url = "", errorMessage = null) }
+        enqueue(url)
     }
 
     fun onFilePicked(uri: Uri) {
-        localError = null
         viewModelScope.launch {
-            val localPath = try {
+            val file = try {
                 copyDocumentToCache(getApplication(), uri)
-            } catch (error: IOException) {
-                Log.e(TAG, "Failed to copy file: $uri", error)
-                setLocalError(error.message ?: error::class.simpleName.orEmpty())
+            } catch (e: IOException) {
+                Log.e(TAG, "Failed to copy file: $uri", e)
+                setLocalError(e.message ?: e::class.simpleName.orEmpty())
                 return@launch
             }
-            _uiState.update { state -> state.copy(url = localPath) }
-            withContext(Dispatchers.Default) {
-                try {
-                    prepareAndPlay(localPath)
-                } catch (error: KitharaError) {
-                    Log.e(TAG, "Load/play failed for selected file: $uri", error)
-                    setPlaybackError(error)
-                }
-            }
+
+            enqueue(file.path, file.displayName)
         }
     }
 
-
     fun playPause() {
-        if (_uiState.value.isPlaying) {
+        val state = _uiState.value
+        if (state.isPlaying) {
             player.pause()
             return
         }
 
-        if (player.items.isEmpty() && _uiState.value.url.isNotBlank()) {
-            loadAndPlay()
+        trackToReplay(state, shouldReloadCurrentTrack)?.let { track ->
+            loadTrack(track, force = true)
             return
         }
 
         player.play()
     }
 
-    fun setRate(rate: Float) {
-        _uiState.update { state -> state.copy(selectedRate = rate) }
-        player.defaultRate = rate
-        if (_uiState.value.isPlaying) {
-            player.play()
+    fun playNext() {
+        val state = _uiState.value
+        val current = state.currentTrackIndex
+        if (current < 0) return
+        if (current >= state.playlist.lastIndex) {
+            player.pause()
+            return
         }
+        loadTrack(state.playlist[current + 1])
+    }
+
+    fun playPrev() {
+        val state = _uiState.value
+        val current = state.currentTrackIndex
+        if (current < 0) return
+        val prev = current.dec().coerceAtLeast(0)
+        loadTrack(state.playlist[prev])
+    }
+
+
+    fun selectTrack(trackId: UUID) {
+        val state = _uiState.value
+        val track = state.playlist.single { it.id == trackId }
+        loadTrack(
+            track = track,
+            force = shouldReloadSelectedTrack(state, trackId, shouldReloadCurrentTrack),
+        )
+    }
+
+    fun setRate(rate: Float) {
+        _uiState.update { it.copy(selectedRate = rate) }
+        player.defaultRate = rate
+        if (_uiState.value.isPlaying) player.play()
     }
 
     fun onSeekStarted() {
-        _uiState.update { state -> state.copy(isSeeking = true) }
+        _uiState.update { it.copy(isSeeking = true) }
     }
 
     fun onSeekChanged(value: Float) {
-        _uiState.update { state -> state.copy(currentTimeSeconds = value) }
+        _uiState.update { it.copy(currentTimeSeconds = value) }
     }
 
     fun onSeekFinished() {
         val target = _uiState.value.currentTimeSeconds.toDouble()
-        player.seek(target) { finished ->
-            if (finished) {
-                _uiState.update { state -> state.copy(isSeeking = false) }
+        player.seek(target) { ok ->
+            if (ok) {
+                _uiState.update { it.copy(isSeeking = false) }
             } else {
-                Log.e(TAG, "Seek failed for source: $sourceUrl")
-                setLocalError("Seek failed")
+                Log.e(TAG, "Seek failed")
+                _uiState.update {
+                    it.copy(
+                        errorMessage = "Seek failed",
+                        isSeeking = false,
+                    )
+                }
             }
         }
     }
@@ -134,9 +145,48 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     override fun onCleared() {
         super.onCleared()
         itemJob?.cancel()
-        playerJob?.cancel()
         player.pause()
         player.removeAllItems()
+    }
+
+    private fun enqueue(url: String, name: String = resolveTrackTitle(url)) {
+        val wasEmpty = _uiState.value.playlist.isEmpty()
+        val entry = PlaylistEntry(url = url, name = name)
+
+        _uiState.update { it.copy(playlist = it.playlist + entry) }
+
+        if (wasEmpty) {
+            loadTrack(entry)
+        }
+    }
+
+    private fun loadTrack(track: PlaylistEntry, force: Boolean = false) {
+        if (!force && _uiState.value.currentTrackId == track.id) return
+
+        val item = KitharaPlayerItem(track.url).also { it.load() }
+        observeItem(item)
+
+        player.removeAllItems()
+        try {
+            player.insert(item)
+        } catch (e: KitharaError) {
+            Log.e(TAG, "Failed to insert: ${track.url}", e)
+            setLocalError(e.message ?: e::class.simpleName.orEmpty())
+            return
+        }
+        player.play()
+        shouldReloadCurrentTrack = false
+
+        _uiState.update {
+            it.copy(
+                currentTimeSeconds = 0f,
+                currentTrackId = track.id,
+                durationSeconds = null,
+                errorMessage = null,
+                isSeeking = false,
+                status = PlayerStatus.Unknown,
+            )
+        }
     }
 
     private fun observeItem(item: KitharaPlayerItem) {
@@ -144,122 +194,72 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         itemJob = viewModelScope.launch {
             item.state.collectLatest { state ->
                 val error = state.error ?: return@collectLatest
-                Log.e(TAG, "Item error for source: $sourceUrl — ${error.message}")
-                setPlaybackError(error)
+                Log.e(TAG, "Item error for source: ${item.url}", error)
+                setLocalError(error.message ?: error::class.simpleName.orEmpty())
             }
         }
     }
 
     private fun observePlayer() {
-        playerJob?.cancel()
-        playerJob = viewModelScope.launch {
+        viewModelScope.launch {
             player.state.collectLatest { state ->
                 _uiState.update { current ->
-                    val playerTime = if (current.isSeeking) {
-                        current.currentTimeSeconds
-                    } else {
-                        state.currentTime.toFloat()
-                    }
+                    val time = if (current.isSeeking) current.currentTimeSeconds
+                    else state.currentTime.toFloat()
                     val duration = state.duration?.toFloat()
                     current.copy(
-                        currentTimeSeconds = duration?.let { playerTime.coerceIn(0f, it) }
-                            ?: playerTime,
+                        currentTimeSeconds = duration?.let { time.coerceIn(0f, it) } ?: time,
                         durationSeconds = duration,
-                        errorMessage = localError ?: state.error?.message,
                         isPlaying = state.rate > 0f,
                         status = state.status,
-                        trackTitle = sourceUrl?.let(::resolveTrackTitle) ?: DefaultTrackTitle,
                     )
                 }
             }
         }
     }
 
-    private fun prepareAndPlay(source: String) {
-        resetPlayer()
-        localError = null
-        sourceUrl = source
-        _uiState.update { state ->
-            state.copy(
-                currentTimeSeconds = 0f,
-                durationSeconds = null,
-                errorMessage = null,
-                isPlaying = false,
-                isSeeking = false,
-                status = PlayerStatus.Unknown,
-                trackTitle = resolveTrackTitle(source),
-                url = source,
-            )
+    private fun observeEvents() {
+        viewModelScope.launch {
+            player.events.collect { event ->
+                when (event) {
+                    is KitharaPlayerEvent.CurrentItemChanged -> Unit
+                    is KitharaPlayerEvent.PlayedToEnd -> {
+                        shouldReloadCurrentTrack = true
+                        playNext()
+                    }
+                }
+            }
         }
-
-        val item = KitharaPlayerItem(source)
-        observeItem(item)
-        item.load()
-        player.removeAllItems()
-        player.insert(item)
-        player.play()
-    }
-
-    private fun resetPlayer() {
-        itemJob?.cancel()
-        player.pause()
-        player.removeAllItems()
     }
 
     private fun setLocalError(message: String) {
-        localError = message
-        _uiState.update { state ->
-            state.copy(
+        _uiState.update {
+            it.copy(
                 errorMessage = message,
                 isSeeking = false,
-                status = PlayerStatus.Failed,
+                status = PlayerStatus.Failed
             )
         }
     }
 
-    private fun setPlaybackError(error: KitharaError) {
-        setLocalError(error.message ?: error::class.simpleName.orEmpty())
-    }
-
     private fun resolveTrackTitle(source: String): String {
-        val parsed = source.toUri().lastPathSegment?.substringAfterLast('/')
-        val fallback = source.substringAfterLast('/').substringAfterLast(File.separatorChar)
-        return (parsed ?: fallback).ifBlank { source }
-    }
-
-    // "content://" URIs can only be read via ContentResolver; Kithara needs a file path.
-    private suspend fun copyDocumentToCache(context: Context, uri: Uri): String =
-        withContext(Dispatchers.IO) {
-            val fileName = queryDisplayName(context, uri)
-                ?.takeIf(String::isNotBlank)
-                ?: uri.lastPathSegment?.substringAfterLast('/')
-                ?: "selected-audio"
-            val importDir = File(context.cacheDir, "imports")
-            if (!importDir.exists() && !importDir.mkdirs()) {
-                throw IOException("Unable to create import directory")
-            }
-            val outputFile = File(importDir, "${UUID.randomUUID()}-$fileName")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                outputFile.outputStream().use { output -> input.copyTo(output) }
-            } ?: throw IOException("Unable to open selected file")
-            outputFile.absolutePath
-        }
-
-    private fun queryDisplayName(context: Context, uri: Uri): String? =
-        context.contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (nameColumn < 0 || !cursor.moveToFirst()) return@use null
-            cursor.getString(nameColumn)
-        }
-
-    internal companion object {
-        const val DefaultRate = 1.0f
-        val AvailableRates: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.2f, 1.5f, 2.0f)
+        return source.substringAfterLast(File.separatorChar).ifBlank { source }
     }
 }
+
+internal fun trackToReplay(
+    state: PlayerUiState,
+    shouldReloadCurrentTrack: Boolean,
+): PlaylistEntry? {
+    if (state.isPlaying || !shouldReloadCurrentTrack) {
+        return null
+    }
+
+    return state.playlist.getOrNull(state.currentTrackIndex)
+}
+
+internal fun shouldReloadSelectedTrack(
+    state: PlayerUiState,
+    trackId: UUID,
+    shouldReloadCurrentTrack: Boolean,
+): Boolean = shouldReloadCurrentTrack && state.currentTrackId == trackId

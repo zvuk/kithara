@@ -2,6 +2,18 @@ import Combine
 import Foundation
 import Kithara
 
+struct PlaylistEntry: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let url: String
+
+    init(url: String, name: String? = nil, id: UUID = UUID()) {
+        self.id = id
+        self.url = url
+        self.name = name ?? trackName(for: url)
+    }
+}
+
 @MainActor
 final class PlayerViewModel: ObservableObject {
     @Published var status: PlayerStatus = .unknown
@@ -11,17 +23,21 @@ final class PlayerViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var urlText = ""
     @Published var isSeeking = false
-    @Published var currentItemId: String?
+    @Published private(set) var playlist: [PlaylistEntry] = []
+    @Published private(set) var currentTrackId: UUID?
     @Published var volume: Float = 1.0
     @Published var isMuted = false
     @Published var selectedRate: Float = 1.0
 
     private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
+    private var itemCancellable: AnyCancellable?
+    private var shouldReloadCurrentTrack = false
 
     init() {
         volume = player.volume
         isMuted = player.isMuted
+        player.defaultRate = selectedRate
 
         player.eventPublisher
             .receive(on: DispatchQueue.main)
@@ -41,12 +57,14 @@ final class PlayerViewModel: ObservableObject {
                 case let .error(message):
                     self.errorMessage = message
                     self.status = .failed
-                case let .currentItemChanged(itemId):
-                    self.currentItemId = itemId
+                case .currentItemChanged:
+                    break
                 case let .volumeChanged(vol):
                     self.volume = vol
                 case let .muteChanged(muted):
                     self.isMuted = muted
+                case .itemDidPlayToEnd:
+                    self.playNext(afterPlaybackEnded: true)
                 case .timeControlStatusChanged, .bufferedDurationChanged:
                     break
                 }
@@ -57,25 +75,11 @@ final class PlayerViewModel: ObservableObject {
     // MARK: - Track info
 
     var trackName: String {
-        guard let itemId = currentItemId else {
-            if !urlText.isEmpty {
-                return "Press Play to reload"
-            }
-            return "No Track"
-        }
-        if let item = player.items.first(where: { $0.id == itemId }) {
-            if let url = URL(string: item.url) {
-                let name = url.lastPathComponent
-                return name.isEmpty ? item.url : name
-            }
-            return item.url
-        }
-        // Track was consumed (played to end).
-        if let url = URL(string: urlText), !urlText.isEmpty {
-            let name = url.lastPathComponent
-            return name.isEmpty ? "Press Play to reload" : "\(name) (ended)"
-        }
-        return "Press Play to reload"
+        playlist[safe: currentTrackIndex]?.name ?? "No Track"
+    }
+
+    var currentTrackIndex: Int {
+        playlist.firstIndex { $0.id == currentTrackId } ?? -1
     }
 
     // MARK: - Time formatting
@@ -112,41 +116,22 @@ final class PlayerViewModel: ObservableObject {
 
     // MARK: - Load & Play
 
-    func loadAndPlay() {
+    func addTrack() {
         let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else {
             errorMessage = "Enter a URL"
             return
         }
 
-        // Reset stale state from previous session.
+        let entry = PlaylistEntry(url: url)
+        let shouldStartPlayback = playlist.isEmpty
+
+        playlist.append(entry)
+        urlText = ""
         errorMessage = nil
-        currentTime = 0
-        duration = nil
-        currentItemId = nil
 
-        let item = KitharaPlayerItem(url: url)
-
-        // Subscribe to item errors (network failures, invalid format, etc.).
-        item.eventPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] event in
-                if case let .error(message) = event {
-                    self?.errorMessage = message
-                    self?.status = .failed
-                }
-            }
-            .store(in: &cancellables)
-
-        item.load()
-
-        do {
-            player.removeAllItems()
-            try player.insert(item)
-            player.play()
-        } catch {
-            self.errorMessage = "\(error)"
-            self.status = .failed
+        if shouldStartPlayback {
+            loadTrack(entry, force: true)
         }
     }
 
@@ -168,13 +153,38 @@ final class PlayerViewModel: ObservableObject {
         if isPlaying {
             player.pause()
         } else {
-            // If the queue is empty (track played to end or never loaded), re-load.
-            if player.items.isEmpty && !urlText.isEmpty {
-                loadAndPlay()
-            } else {
-                player.play()
+            if let track = currentTrack, shouldReloadCurrentTrack {
+                loadTrack(track, force: true)
+                return
             }
+
+            if currentTrack == nil, let firstTrack = playlist.first {
+                loadTrack(firstTrack, force: true)
+                return
+            }
+
+            player.play()
         }
+    }
+
+    func playNext() {
+        playNext(afterPlaybackEnded: false)
+    }
+
+    func playPrev() {
+        guard let track = playlist[safe: max(currentTrackIndex - 1, 0)] else {
+            return
+        }
+        loadTrack(track)
+    }
+
+    func selectTrack(_ trackId: UUID) {
+        guard let track = playlist.first(where: { $0.id == trackId }) else {
+            return
+        }
+
+        let forceReload = shouldReloadCurrentTrack && currentTrackId == trackId
+        loadTrack(track, force: forceReload)
     }
 
     // MARK: - Seek
@@ -193,6 +203,62 @@ final class PlayerViewModel: ObservableObject {
                 }
             }
         })
+    }
+
+    private var currentTrack: PlaylistEntry? {
+        playlist[safe: currentTrackIndex]
+    }
+
+    private func playNext(afterPlaybackEnded: Bool) {
+        guard currentTrackIndex >= 0 else {
+            return
+        }
+
+        let nextIndex = currentTrackIndex + 1
+        if let track = playlist[safe: nextIndex] {
+            loadTrack(track, force: true)
+            return
+        }
+
+        if afterPlaybackEnded {
+            shouldReloadCurrentTrack = true
+            player.pause()
+        }
+    }
+
+    private func loadTrack(_ track: PlaylistEntry, force: Bool = false) {
+        if !force && currentTrackId == track.id {
+            return
+        }
+
+        currentTime = 0
+        duration = nil
+        errorMessage = nil
+        isSeeking = false
+        status = .unknown
+        shouldReloadCurrentTrack = false
+
+        let item = KitharaPlayerItem(url: track.url)
+        itemCancellable = item.eventPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                if case let .error(message) = event {
+                    self?.errorMessage = message
+                    self?.status = .failed
+                }
+            }
+
+        item.load()
+
+        do {
+            player.removeAllItems()
+            try player.insert(item)
+            currentTrackId = track.id
+            player.play()
+        } catch {
+            errorMessage = "\(error)"
+            status = .failed
+        }
     }
 }
 
@@ -216,4 +282,25 @@ private func formatTime(_ seconds: TimeInterval) -> String {
     let mins = Int(seconds) / 60
     let secs = Int(seconds) % 60
     return String(format: "%d:%02d", mins, secs)
+}
+
+private func trackName(for source: String) -> String {
+    if let url = URL(string: source) {
+        let name = url.lastPathComponent
+        if !name.isEmpty {
+            return name
+        }
+    }
+
+    let name = source.split(separator: "/").last.map(String.init) ?? source
+    return name.isEmpty ? source : name
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else {
+            return nil
+        }
+        return self[index]
+    }
 }

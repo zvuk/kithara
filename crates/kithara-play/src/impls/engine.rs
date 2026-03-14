@@ -381,6 +381,22 @@ impl Engine for EngineImpl {
     }
 }
 
+impl EngineImpl {
+    /// Inject a test slot handle without starting the audio session.
+    #[cfg(test)]
+    pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {
+        use ringbuf::{HeapRb, traits::Split};
+
+        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
+        self.slot_handles.lock_sync().push(SlotHandle {
+            slot_id,
+            cmd_tx,
+            eq: SharedEq::new(0),
+            shared_state,
+        });
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
     use std::sync::OnceLock;

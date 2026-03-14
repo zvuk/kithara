@@ -24,7 +24,7 @@ struct KitharaDemoApp: App {
             TextEditingCommands()
         }
         // Quit the process when the last window is closed.
-        .defaultSize(width: 500, height: 600)
+        .defaultSize(width: 520, height: 760)
         #endif
     }
 }

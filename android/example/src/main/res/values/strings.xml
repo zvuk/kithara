@@ -4,12 +4,11 @@
     <string name="app_title">Kithara</string>
     <string name="audio_url_hint">Audio URL</string>
     <string name="demo_label">Demo</string>
-    <string name="load_action">Load</string>
     <string name="no_track">No Track</string>
     <string name="open_local_file">Open local file</string>
-    <string name="pause_action">Pause</string>
-    <string name="play_action">Play</string>
     <string name="status_failed">Failed</string>
     <string name="status_not_ready">Not Ready</string>
     <string name="status_ready">Ready</string>
+    <string name="add_action">Add</string>
+    <string name="playlist_empty">No tracks in playlist</string>
 </resources>

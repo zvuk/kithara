@@ -194,6 +194,7 @@ impl From<TimeRange> for FfiTimeRange {
 /// thread-safe delivery internally.
 #[derive(Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[rustfmt::skip]
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
@@ -205,6 +206,7 @@ pub enum FfiPlayerEvent {
     BufferedDurationChanged { seconds: f64 },
     VolumeChanged { volume: f32 },
     MuteChanged { muted: bool },
+    ItemDidPlayToEnd,
 }
 
 /// Typed item event dispatched through [`ItemObserver::on_event`].

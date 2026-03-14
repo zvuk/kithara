@@ -1,15 +1,35 @@
 package com.kithara.example
 
 import com.kithara.PlayerStatus
+import java.util.UUID
+
+internal data class PlaylistEntry(
+    val name: String,
+    val url: String,
+    val id: UUID = UUID.randomUUID(),
+)
 
 internal data class PlayerUiState(
     val currentTimeSeconds: Float = 0f,
+    val currentTrackId: UUID? = null,
     val durationSeconds: Float? = null,
     val errorMessage: String? = null,
     val isPlaying: Boolean = false,
     val isSeeking: Boolean = false,
-    val selectedRate: Float = PlayerViewModel.DefaultRate,
+    val playlist: List<PlaylistEntry> = emptyList(),
+    val selectedRate: Float = DefaultRate,
+    val availableRates: List<Float> = AvailableRates,
     val status: PlayerStatus = PlayerStatus.Unknown,
-    val trackTitle: String = "",
     val url: String = "",
-)
+) {
+
+    val currentTrackIndex: Int = playlist.indexOfFirst { it.id == currentTrackId }
+
+    val trackTitle: String
+        get() = playlist.getOrNull(currentTrackIndex)?.name ?: "No Track"
+
+    companion object {
+        private const val DefaultRate = 1.0f
+        private val AvailableRates: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.2f, 1.5f, 2.0f)
+    }
+}

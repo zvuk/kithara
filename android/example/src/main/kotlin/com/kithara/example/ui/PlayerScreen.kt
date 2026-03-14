@@ -2,6 +2,7 @@ package com.kithara.example.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,12 +25,15 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,34 +50,43 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.kithara.PlayerStatus
+import com.kithara.example.PlaylistEntry
 import com.kithara.example.PlayerUiState
-import com.kithara.example.PlayerViewModel
 import com.kithara.example.R
 import com.kithara.example.ui.theme.AccentGold
 import com.kithara.example.ui.theme.KitharaBackground
 import com.kithara.example.ui.theme.KitharaDanger
 import com.kithara.example.ui.theme.KitharaMuted
 import com.kithara.example.ui.theme.KitharaSuccess
+import com.kithara.example.ui.theme.KitharaTheme
 import com.kithara.example.ui.theme.PanelBackground
 import com.kithara.example.ui.theme.PanelBorder
 import com.kithara.example.ui.theme.PrimaryText
 import com.kithara.example.ui.theme.SecondaryText
-import com.kithara.example.ui.theme.KitharaTheme
+import java.util.UUID
+
+internal sealed interface PlayerScreenEvent {
+    data class UrlChanged(val url: String) : PlayerScreenEvent
+    data object AddClick : PlayerScreenEvent
+    data object PickFileClick : PlayerScreenEvent
+    data object PlayPauseClick : PlayerScreenEvent
+    data object PrevClick : PlayerScreenEvent
+    data object NextClick : PlayerScreenEvent
+    data class TrackClick(val uuid: UUID) : PlayerScreenEvent
+    data class RateClick(val rate: Float) : PlayerScreenEvent
+    data object SeekStarted : PlayerScreenEvent
+    data class SeekChanged(val value: Float) : PlayerScreenEvent
+    data object SeekFinished : PlayerScreenEvent
+}
 
 @Composable
 internal fun PlayerScreen(
     uiState: PlayerUiState,
-    onUrlChanged: (String) -> Unit,
-    onLoadClick: () -> Unit,
-    onPickFileClick: () -> Unit,
-    onPlayPauseClick: () -> Unit,
-    onRateClick: (Float) -> Unit,
-    onSeekStarted: () -> Unit,
-    onSeekChanged: (Float) -> Unit,
-    onSeekFinished: () -> Unit,
+    onEvent: (PlayerScreenEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val duration = uiState.durationSeconds ?: 0f
@@ -93,47 +108,43 @@ internal fun PlayerScreen(
                 start = 20.dp,
                 end = 20.dp,
             ),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        HeaderSection(
-            isPlaying = uiState.isPlaying,
-            status = uiState.status,
-        )
+        HeaderSection(isPlaying = uiState.isPlaying, status = uiState.status)
         UrlSection(
             url = uiState.url,
-            onUrlChanged = onUrlChanged,
-            onLoadClick = onLoadClick,
+            onEvent = onEvent,
         )
-        LocalFileAction(onPickFileClick = onPickFileClick)
+        LocalFileAction(onEvent = onEvent)
         NowPlayingSection(trackTitle = uiState.trackTitle)
         SeekSection(
             currentTimeSeconds = sliderValue,
             durationSeconds = uiState.durationSeconds,
             enabled = sliderEnabled,
             isSeeking = uiState.isSeeking,
-            onSeekStarted = onSeekStarted,
-            onSeekChanged = onSeekChanged,
-            onSeekFinished = onSeekFinished,
+            onEvent = onEvent,
         )
         TransportSection(
             isPlaying = uiState.isPlaying,
-            onPlayPauseClick = onPlayPauseClick,
+            onEvent = onEvent,
         )
         RateSection(
             selectedRate = uiState.selectedRate,
-            onRateClick = onRateClick,
+            availableRates = uiState.availableRates,
+            onEvent = onEvent,
         )
-        uiState.errorMessage?.let { message ->
-            ErrorSection(message = message)
-        }
+        PlaylistSection(
+            playlist = uiState.playlist,
+            currentTrackId = uiState.currentTrackId,
+            onEvent = onEvent,
+            modifier = Modifier.weight(1f),
+        )
+        uiState.errorMessage?.let { ErrorSection(message = it) }
     }
 }
 
 @Composable
-private fun HeaderSection(
-    isPlaying: Boolean,
-    status: PlayerStatus,
-) {
+private fun HeaderSection(isPlaying: Boolean, status: PlayerStatus) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -191,11 +202,7 @@ private fun StatusBadge(status: PlayerStatus) {
 }
 
 @Composable
-private fun UrlSection(
-    url: String,
-    onUrlChanged: (String) -> Unit,
-    onLoadClick: () -> Unit,
-) {
+private fun UrlSection(url: String, onEvent: (PlayerScreenEvent) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -203,13 +210,10 @@ private fun UrlSection(
     ) {
         OutlinedTextField(
             value = url,
-            onValueChange = onUrlChanged,
+            onValueChange = { onEvent(PlayerScreenEvent.UrlChanged(it)) },
             modifier = Modifier.weight(1f),
             placeholder = {
-                Text(
-                    text = stringResource(R.string.audio_url_hint),
-                    color = KitharaMuted,
-                )
+                Text(text = stringResource(R.string.audio_url_hint), color = KitharaMuted)
             },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -226,7 +230,7 @@ private fun UrlSection(
             shape = RoundedCornerShape(16.dp),
         )
         Button(
-            onClick = onLoadClick,
+            onClick = { onEvent(PlayerScreenEvent.AddClick) },
             enabled = url.isNotBlank(),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
@@ -236,22 +240,19 @@ private fun UrlSection(
                 disabledContentColor = KitharaBackground.copy(alpha = 0.7f),
             ),
         ) {
-            Text(text = stringResource(R.string.load_action))
+            Text(text = stringResource(R.string.add_action))
         }
     }
 }
 
 @Composable
-private fun LocalFileAction(onPickFileClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-    ) {
-        TextButton(onClick = onPickFileClick) {
+private fun LocalFileAction(onEvent: (PlayerScreenEvent) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        TextButton(onClick = { onEvent(PlayerScreenEvent.PickFileClick) }) {
             Icon(
                 imageVector = Icons.Rounded.FolderOpen,
                 contentDescription = null,
-                tint = AccentGold,
+                tint = AccentGold
             )
             Text(
                 text = stringResource(R.string.open_local_file),
@@ -272,20 +273,21 @@ private fun NowPlayingSection(trackTitle: String) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 18.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = Icons.Rounded.MusicNote,
                 contentDescription = null,
-                tint = AccentGold,
+                tint = AccentGold
             )
             Text(
                 text = trackTitle.ifBlank { stringResource(R.string.no_track) },
                 color = PrimaryText,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -297,26 +299,19 @@ private fun SeekSection(
     durationSeconds: Float?,
     enabled: Boolean,
     isSeeking: Boolean,
-    onSeekStarted: () -> Unit,
-    onSeekChanged: (Float) -> Unit,
-    onSeekFinished: () -> Unit,
+    onEvent: (PlayerScreenEvent) -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Slider(
             value = currentTimeSeconds,
             onValueChange = { value ->
-                if (!isSeeking) {
-                    onSeekStarted()
-                }
-                onSeekChanged(value)
+                if (!isSeeking) onEvent(PlayerScreenEvent.SeekStarted)
+                onEvent(PlayerScreenEvent.SeekChanged(value))
             },
             modifier = Modifier.fillMaxWidth(),
             valueRange = 0f..(durationSeconds ?: 1f),
             enabled = enabled,
-            onValueChangeFinished = onSeekFinished,
+            onValueChangeFinished = { onEvent(PlayerScreenEvent.SeekFinished) },
             colors = SliderDefaults.colors(
                 thumbColor = PrimaryText,
                 activeTrackColor = AccentGold,
@@ -326,10 +321,7 @@ private fun SeekSection(
                 disabledThumbColor = PanelBorder,
             ),
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = formatTime(currentTimeSeconds),
                 color = SecondaryText,
@@ -346,17 +338,25 @@ private fun SeekSection(
 }
 
 @Composable
-private fun TransportSection(
-    isPlaying: Boolean,
-    onPlayPauseClick: () -> Unit,
-) {
+private fun TransportSection(isPlaying: Boolean, onEvent: (PlayerScreenEvent) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        IconButton(onClick = { onEvent(PlayerScreenEvent.PrevClick) }) {
+            Icon(
+                imageVector = Icons.Rounded.SkipPrevious,
+                contentDescription = null,
+                tint = PrimaryText,
+                modifier = Modifier.size(32.dp),
+            )
+        }
         FilledTonalButton(
-            onClick = onPlayPauseClick,
-            modifier = Modifier.size(96.dp),
+            onClick = { onEvent(PlayerScreenEvent.PlayPauseClick) },
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .size(64.dp),
             shape = CircleShape,
             colors = ButtonDefaults.filledTonalButtonColors(
                 containerColor = AccentGold,
@@ -365,12 +365,16 @@ private fun TransportSection(
         ) {
             Icon(
                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (isPlaying) {
-                    stringResource(R.string.pause_action)
-                } else {
-                    stringResource(R.string.play_action)
-                },
-                modifier = Modifier.size(40.dp),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+            )
+        }
+        IconButton(onClick = { onEvent(PlayerScreenEvent.NextClick) }) {
+            Icon(
+                imageVector = Icons.Rounded.SkipNext,
+                contentDescription = null,
+                tint = PrimaryText,
+                modifier = Modifier.size(32.dp),
             )
         }
     }
@@ -379,16 +383,14 @@ private fun TransportSection(
 @Composable
 private fun RateSection(
     selectedRate: Float,
-    onRateClick: (Float) -> Unit,
+    availableRates: List<Float>,
+    onEvent: (PlayerScreenEvent) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        PlayerViewModel.AvailableRates.forEach { rate ->
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        availableRates.forEach { rate ->
             val selected = selectedRate == rate
             OutlinedButton(
-                onClick = { onRateClick(rate) },
+                onClick = { onEvent(PlayerScreenEvent.RateClick(rate)) },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(10.dp),
                 border = BorderStroke(
@@ -410,6 +412,77 @@ private fun RateSection(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PlaylistSection(
+    playlist: List<PlaylistEntry>,
+    currentTrackId: UUID?,
+    onEvent: (PlayerScreenEvent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (playlist.isEmpty()) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                text = stringResource(R.string.playlist_empty),
+                color = KitharaMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        itemsIndexed(playlist, key = { _, entry -> entry.id }) { index, entry ->
+            PlaylistItem(
+                index = index,
+                entry = entry,
+                isCurrent = entry.id == currentTrackId,
+                onClick = { onEvent(PlayerScreenEvent.TrackClick(entry.id)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaylistItem(
+    index: Int,
+    entry: PlaylistEntry,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val background = if (isCurrent) AccentGold.copy(alpha = 0.18f) else KitharaBackground
+    val indexColor = if (isCurrent) AccentGold else KitharaMuted
+    val nameColor = if (isCurrent) PrimaryText else SecondaryText
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "%02d".format(index + 1),
+            color = indexColor,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            text = entry.name,
+            color = nameColor,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -436,35 +509,34 @@ private fun formatTime(seconds: Float?): String {
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
-private fun rateLabel(rate: Float): String {
-    return if (rate == rate.toInt().toFloat()) {
-        "${rate.toInt()}x"
-    } else {
-        "${rate}x"
-    }
-}
+private fun rateLabel(rate: Float): String =
+    if (rate == rate.toInt().toFloat()) "${rate.toInt()}x" else "${rate}x"
 
-@Preview(showBackground = true, backgroundColor = 0xFF050507)
+@Preview(
+    showBackground = true,
+    backgroundColor = 0xFF050507,
+    heightDp = 900,
+)
 @Composable
 private fun PlayerScreenPreview() {
+    val playlist = listOf(
+        PlaylistEntry(url = "", name = "song.mp3"),
+        PlaylistEntry(url = "", name = "another-long-track-name-that-gets-truncated.mp3"),
+        PlaylistEntry(url = "", name = "third-track.mp3"),
+    )
+
     KitharaTheme {
         PlayerScreen(
             uiState = PlayerUiState(
                 currentTimeSeconds = 42f,
                 durationSeconds = 180f,
                 selectedRate = 1f,
-                status = PlayerStatus.Unknown,
-                trackTitle = "No Track",
-                url = "https://example.com/song.mp3",
+                status = PlayerStatus.ReadyToPlay,
+                url = "",
+                playlist = playlist,
+                currentTrackId = playlist.first().id,
             ),
-            onUrlChanged = {},
-            onLoadClick = {},
-            onPickFileClick = {},
-            onPlayPauseClick = {},
-            onRateClick = {},
-            onSeekStarted = {},
-            onSeekChanged = {},
-            onSeekFinished = {},
+            onEvent = {},
         )
     }
 }
