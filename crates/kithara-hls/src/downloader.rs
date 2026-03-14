@@ -450,6 +450,32 @@ impl HlsDownloader {
         )
     }
 
+    /// Check whether a previously-committed segment's init resource has been
+    /// evicted from the ephemeral cache.  When true, the next demand download
+    /// must include `need_init = true` so the init resource is re-fetched.
+    fn demand_init_evicted(&self, variant: usize, segment_index: usize) -> bool {
+        if !self.fetch.backend().is_ephemeral() {
+            return false;
+        }
+        let segments = self.segments.lock_sync();
+        let Some(seg) = segments.find_loaded_segment(variant, segment_index) else {
+            return false;
+        };
+        if seg.init_len == 0 {
+            return false;
+        }
+        let Some(init_url) = seg.init_url.clone() else {
+            return false;
+        };
+        drop(segments);
+        !matches!(
+            self.fetch
+                .backend()
+                .resource_state(&ResourceKey::from_url(&init_url)),
+            Ok(AssetResourceState::Committed { .. })
+        )
+    }
+
     /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
     async fn calculate_size_map(
         playlist_state: &PlaylistState,
@@ -738,10 +764,22 @@ impl HlsDownloader {
         }
         self.last_committed_variant = Some(dl.variant);
 
-        let actual_init_len = if is_midstream_switch || is_variant_switch || dl.segment_index == 0 {
+        let fresh_init_len = if is_midstream_switch || is_variant_switch || dl.segment_index == 0 {
             dl.init_len
         } else {
             0
+        };
+
+        // Preserve init_len from an existing entry when re-downloading after
+        // eviction.  The init resource may still be available even though it
+        // was not re-fetched with this media segment.
+        let actual_init_len = if fresh_init_len == 0 {
+            self.segments
+                .lock_sync()
+                .find_loaded_segment(dl.variant, dl.segment_index)
+                .map_or(0, |existing| existing.init_len)
+        } else {
+            fresh_init_len
         };
 
         let byte_offset = self.resolve_byte_offset(&dl, is_midstream_switch);
@@ -755,7 +793,16 @@ impl HlsDownloader {
             byte_offset,
             init_len: actual_init_len,
             media_len,
-            init_url: dl.init_url,
+            init_url: if actual_init_len > 0 {
+                dl.init_url.or_else(|| {
+                    self.segments
+                        .lock_sync()
+                        .find_loaded_segment(dl.variant, dl.segment_index)
+                        .and_then(|existing| existing.init_url.clone())
+                })
+            } else {
+                dl.init_url
+            },
             media_url: media_url.clone(),
         };
 
@@ -1183,7 +1230,8 @@ impl HlsDownloader {
                 || should_request_init(
                     self.switch_needs_init(req.variant, is_variant_switch),
                     req.segment_index,
-                ));
+                )
+                || self.demand_init_evicted(req.variant, req.segment_index));
         if need_init {
             self.force_init_for_seek = false;
         }
