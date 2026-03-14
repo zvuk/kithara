@@ -691,15 +691,13 @@ impl HlsDownloader {
     /// Once the shifted layout is established, both sequential loads and
     /// revisits must resolve to the segment's inferred shifted offset.
     ///
-    /// If the segment is already loaded but its offset drifted after DRM
-    /// size reconciliation (detected by `loaded_segment_offset_mismatch`),
-    /// the stale offset is discarded and the reconciled position is used.
+    /// When the segment is already loaded, its current offset is preserved.
+    /// Stale offsets from demand downloads are corrected earlier by
+    /// `cascade_contiguity` (on commit) and demand relocation (in
+    /// `handle_batch`), so by the time a re-commit reaches this function
+    /// the loaded offset is already authoritative.
     fn resolve_byte_offset(&self, dl: &HlsFetch, is_midstream_switch: bool) -> u64 {
-        if let Some(loaded_offset) = self.loaded_segment_offset(dl.variant, dl.segment_index)
-            && self
-                .loaded_segment_offset_mismatch(dl.variant, dl.segment_index)
-                .is_none()
-        {
+        if let Some(loaded_offset) = self.loaded_segment_offset(dl.variant, dl.segment_index) {
             return loaded_offset;
         }
 

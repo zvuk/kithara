@@ -736,7 +736,8 @@ impl Source for HlsSource {
             if past_eof {
                 debug!(
                     range_start = range.start,
-                    total_bytes = segments.max_end_offset(),
+                    max_end = segments.max_end_offset(),
+                    known_total = ?self.coord.timeline().total_bytes(),
                     num_entries = segments.num_entries(),
                     "wait_range: EOF"
                 );

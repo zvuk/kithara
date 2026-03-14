@@ -566,12 +566,14 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         self.update_decoder_len_for_seek();
 
-        debug!(
+        let stream_len = self.shared_stream.len();
+        warn!(
             ?position,
             epoch,
             stream_pos,
             ?segment_range,
             base_offset = self.session.base_offset,
+            ?stream_len,
             "seek: about to call decoder.seek()"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
@@ -596,6 +598,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let epoch = request.seek.epoch;
         let position = request.seek.target;
         self.shared_stream.clear_variant_fence();
+        self.update_decoder_len_for_seek();
         trace!(
             ?position,
             anchor_start = ?anchor.segment_start,
@@ -698,15 +701,17 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn update_decoder_len_for_seek(&self) {
-        // Only update byte_len for original decoder (no ABR switch).
-        // After ABR switch (base_offset > 0), the factory sets the correct
-        // relative byte_len at creation time. Updating here would overwrite
-        // the factory's value with a potentially stale relative length.
-        if self.session.base_offset == 0
-            && let Some(len) = self.shared_stream.len()
+        // Refresh the decoder's byte_len from the current total_bytes.
+        // For base_offset > 0 (after ABR switch), subtract base_offset
+        // so Symphonia sees the relative length from the switch point.
+        // Without this, DRM reconciliation can shrink total_bytes after
+        // decoder creation, leaving Symphonia with a stale (too large)
+        // byte_len that causes SeekFailed at high seek targets.
+        if let Some(len) = self.shared_stream.len()
             && len > 0
         {
-            self.session.decoder.update_byte_len(len);
+            let relative = len.saturating_sub(self.session.base_offset);
+            self.session.decoder.update_byte_len(relative);
         }
     }
 
