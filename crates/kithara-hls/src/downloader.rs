@@ -664,8 +664,16 @@ impl HlsDownloader {
     /// A fresh midstream switch appends at the current download cursor.
     /// Once the shifted layout is established, both sequential loads and
     /// revisits must resolve to the segment's inferred shifted offset.
+    ///
+    /// If the segment is already loaded but its offset drifted after DRM
+    /// size reconciliation (detected by `loaded_segment_offset_mismatch`),
+    /// the stale offset is discarded and the reconciled position is used.
     fn resolve_byte_offset(&self, dl: &HlsFetch, is_midstream_switch: bool) -> u64 {
-        if let Some(loaded_offset) = self.loaded_segment_offset(dl.variant, dl.segment_index) {
+        if let Some(loaded_offset) = self.loaded_segment_offset(dl.variant, dl.segment_index)
+            && self
+                .loaded_segment_offset_mismatch(dl.variant, dl.segment_index)
+                .is_none()
+        {
             return loaded_offset;
         }
 
@@ -769,6 +777,7 @@ impl HlsDownloader {
                 segments.fence_at(byte_offset, dl.variant);
             }
             segments.push(segment);
+            segments.cascade_contiguity(dl.variant, dl.segment_index);
         }
         self.coord.condvar.notify_all();
     }
@@ -1072,6 +1081,22 @@ impl HlsDownloader {
         if let Some((loaded_offset, expected_offset)) =
             self.loaded_segment_offset_mismatch(variant, segment_index)
         {
+            let mut segments = self.segments.lock_sync();
+            if segments.relocate_segment(variant, segment_index, expected_offset) {
+                segments.cascade_contiguity(variant, segment_index);
+                debug!(
+                    variant,
+                    segment_index,
+                    loaded_offset,
+                    expected_offset,
+                    "relocated demand segment to reconciled offset"
+                );
+                drop(segments);
+                self.coord.condvar.notify_all();
+                return true;
+            }
+            drop(segments);
+
             debug!(
                 variant,
                 segment_index,

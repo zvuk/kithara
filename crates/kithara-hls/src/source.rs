@@ -248,8 +248,8 @@ impl HlsSource {
         };
 
         let range_end = range.end.min(seg.end_offset());
-        let local_start = range.start - seg.byte_offset;
-        let local_end = range_end - seg.byte_offset;
+        let local_start = range.start.saturating_sub(seg.byte_offset);
+        let local_end = range_end.saturating_sub(seg.byte_offset);
 
         let init_end = seg.init_len.min(local_end);
         if local_start < init_end {

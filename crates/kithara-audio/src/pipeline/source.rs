@@ -149,7 +149,8 @@ impl<T: StreamType> Seek for OffsetReader<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         match pos {
             SeekFrom::Start(p) => {
-                let real_pos = self.shared.seek(SeekFrom::Start(self.base_offset + p))?;
+                let abs = self.base_offset + p;
+                let real_pos = self.shared.seek(SeekFrom::Start(abs))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::Current(delta) => {
@@ -698,9 +699,9 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn update_decoder_len_for_seek(&self) {
         // Only update byte_len for original decoder (no ABR switch).
-        // After ABR switch (base_offset > 0), byte_len is intentionally 0
-        // to prevent mismatch between byte_len and moov duration.
-        // Symphonia uses moof seek index for fMP4, not byte_len.
+        // After ABR switch (base_offset > 0), the factory sets the correct
+        // relative byte_len at creation time. Updating here would overwrite
+        // the factory's value with a potentially stale relative length.
         if self.session.base_offset == 0
             && let Some(len) = self.shared_stream.len()
             && len > 0

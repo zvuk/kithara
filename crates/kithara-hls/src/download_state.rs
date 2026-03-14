@@ -135,6 +135,70 @@ impl DownloadState {
         self.rebuild_indexes();
     }
 
+    /// Move an existing segment to a new byte offset.
+    ///
+    /// Used when DRM decryption causes actual segment sizes to differ from
+    /// HEAD-predicted sizes.  Demand-driven fetches can commit a segment
+    /// before earlier segments are reconciled, leaving it at a stale offset.
+    /// This method corrects the placement without re-downloading.
+    ///
+    /// Returns `true` if the segment was found and relocated.
+    pub fn relocate_segment(
+        &mut self,
+        variant: usize,
+        segment_index: usize,
+        new_offset: u64,
+    ) -> bool {
+        let key = (variant, segment_index);
+        let Some(old_offset) = self
+            .entries
+            .iter()
+            .find_map(|(offset, seg)| ((seg.variant, seg.segment_index) == key).then_some(*offset))
+        else {
+            return false;
+        };
+        if old_offset == new_offset {
+            return false;
+        }
+        let Some(mut seg) = self.entries.remove(&old_offset) else {
+            return false;
+        };
+
+        trace!(
+            variant,
+            segment_index, old_offset, new_offset, "download_state::relocate_segment"
+        );
+
+        seg.byte_offset = new_offset;
+        self.entries.insert(new_offset, seg);
+        self.rebuild_indexes();
+        true
+    }
+
+    /// Ensure consecutive loaded segments of `variant` are contiguous from
+    /// `from_segment_index` forward.
+    ///
+    /// After DRM size reconciliation the actual (decrypted) segment size can
+    /// differ from the HEAD-predicted (encrypted) size.  Segments committed
+    /// before their predecessors were reconciled sit at stale byte offsets,
+    /// leaving gaps in the virtual stream.  This method walks forward through
+    /// consecutively-indexed loaded segments and relocates any that are not
+    /// contiguous with the previous one.
+    pub fn cascade_contiguity(&mut self, variant: usize, from_segment_index: usize) {
+        let mut idx = from_segment_index;
+        while let Some(seg) = self.find_loaded_segment(variant, idx) {
+            let current_end = seg.end_offset();
+            let next_idx = idx + 1;
+            let Some(next_seg) = self.find_loaded_segment(variant, next_idx) else {
+                break;
+            };
+            if next_seg.byte_offset != current_end {
+                self.relocate_segment(variant, next_idx, current_end);
+            }
+            idx = next_idx;
+        }
+    }
+
     /// Check if a segment with the given variant and index is already loaded.
     #[must_use]
     pub fn contains_segment(&self, variant: usize, segment_index: usize) -> bool {
