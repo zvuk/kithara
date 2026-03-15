@@ -18,17 +18,24 @@ use crate::{
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
+    key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
     unified::AssetStore,
 };
 
+/// Callback invoked when a cached resource is invalidated (displaced from LRU cache).
+///
+/// In ephemeral mode this means data loss (no disk backing).
+/// In disk mode the data may still be on disk but the handle is gone.
+pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
+
 /// Simplified storage options for creating an asset store.
 ///
 /// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
 /// This provides a user-friendly API that hides internal details like `asset_root`.
-#[derive(Clone, Debug, Setters)]
+#[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
@@ -45,6 +52,25 @@ pub struct StoreOptions {
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
     pub max_bytes: Option<u64>,
+    /// Called when a cached resource is invalidated (displaced from LRU cache).
+    #[setters(skip)]
+    pub on_invalidated: Option<OnInvalidatedFn>,
+}
+
+impl fmt::Debug for StoreOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreOptions")
+            .field("cache_dir", &self.cache_dir)
+            .field("cache_capacity", &self.cache_capacity)
+            .field("ephemeral", &self.ephemeral)
+            .field("max_assets", &self.max_assets)
+            .field("max_bytes", &self.max_bytes)
+            .field(
+                "on_invalidated",
+                &self.on_invalidated.as_ref().map(|_| "..."),
+            )
+            .finish()
+    }
 }
 
 impl Default for StoreOptions {
@@ -58,6 +84,7 @@ impl Default for StoreOptions {
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
+            on_invalidated: None,
         }
     }
 }
@@ -71,6 +98,7 @@ impl StoreOptions {
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
+            on_invalidated: None,
         }
     }
 
@@ -154,6 +182,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
     mem_resource_capacity: Option<usize>,
+    on_invalidated: Option<OnInvalidatedFn>,
     pool: Option<BytePool>,
     process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
@@ -183,6 +212,7 @@ impl AssetStoreBuilder<()> {
             ephemeral: false,
             evict_config: None,
             mem_resource_capacity: None,
+            on_invalidated: None,
             pool: None,
             process_fn: Some(dummy_process),
             root_dir: None,
@@ -316,7 +346,7 @@ where
             pool.clone(),
         ));
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        let cached = Arc::new(CachedAssets::new(processing, capacity));
+        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
         LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool)
@@ -353,7 +383,7 @@ where
             process_fn,
             pool.clone(),
         ));
-        let cached = Arc::new(CachedAssets::new(processing, capacity));
+        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         LeaseAssets::new(cached, cancel, pool)
     }
 }
@@ -372,6 +402,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
             mem_resource_capacity: self.mem_resource_capacity,
+            on_invalidated: self.on_invalidated,
             pool: self.pool,
             process_fn: Some(f),
             root_dir: self.root_dir,

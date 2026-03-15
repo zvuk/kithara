@@ -44,6 +44,7 @@ where
 {
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
+    on_invalidated: Option<crate::store::OnInvalidatedFn>,
 }
 
 impl<A> fmt::Debug for CachedAssets<A>
@@ -62,10 +63,15 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
-    pub fn new(inner: Arc<A>, capacity: NonZeroUsize) -> Self {
+    pub fn new(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+    ) -> Self {
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            on_invalidated,
         }
     }
 
@@ -217,8 +223,15 @@ where
         }
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
-        cache.push(cache_key, CacheEntry::Resource(res.clone()));
+        let displaced = cache.push(cache_key, CacheEntry::Resource(res.clone()));
+        let on_invalidated = self.on_invalidated.clone();
         drop(cache);
+
+        if let Some((CacheKey::Resource(displaced_key, _), _)) = displaced
+            && let Some(cb) = on_invalidated
+        {
+            cb(&displaced_key);
+        }
 
         Ok(res)
     }
@@ -383,13 +396,13 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        CachedAssets::new(disk, capacity)
+        CachedAssets::new(disk, capacity, None)
     }
 
     /// Bypass test: empty asset_root → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
-        CachedAssets::new(disk, NonZeroUsize::new(5).unwrap())
+        CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -488,7 +501,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn has_resource_matches_contextful_entries() {
         let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
         let key = ResourceKey::new("segment-0.m4s");
 
         let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
@@ -504,7 +517,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_without_context_reuses_committed_contextful_resource() {
         let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
         let key = ResourceKey::new("segment-0.m4s");
 
         let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
