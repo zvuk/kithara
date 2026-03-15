@@ -16,7 +16,10 @@ use firewheel::{
 use kithara_platform::Mutex;
 use ringbuf::{HeapProd, traits::Producer};
 
-use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
+use super::{
+    player_notification::{PlayerNotification, TrackStopReason},
+    player_resource::PlayerResource,
+};
 
 /// Default fade duration in seconds.
 pub(crate) const DEFAULT_FADE_DURATION: f32 = 1.0;
@@ -31,7 +34,10 @@ pub(crate) enum TrackState {
     #[default]
     Preloading,
     /// Track is paused (explicit pause by user).
-    #[expect(dead_code, reason = "retained for future explicit-pause support")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "retained for future explicit-pause support")
+    )]
     Paused,
     /// Track is actively playing at full volume.
     Playing,
@@ -84,6 +90,7 @@ pub(crate) struct PlayerTrack {
     ///
     /// This is a fallback value only. Source of truth is `PlayerResource`.
     observed_duration: f64,
+    stop_reason: Option<TrackStopReason>,
     src: Arc<str>,
 }
 
@@ -113,6 +120,7 @@ impl PlayerTrack {
             fade_curve,
             observed_position: 0.0,
             observed_duration: 0.0,
+            stop_reason: None,
             src,
         }
     }
@@ -168,6 +176,9 @@ impl PlayerTrack {
             self.check_notifications(notification_tx);
         } else {
             self.handle_eof(notification_tx);
+            if self.state_dirty {
+                self.notify_state_change(notification_tx);
+            }
             return;
         }
 
@@ -182,17 +193,11 @@ impl PlayerTrack {
     }
 
     /// Handle EOF or read error.
-    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn handle_eof(&mut self, _notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
         if self.state == TrackState::Finished {
             return;
         }
-        self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
-                &self.src,
-            )))
-            .ok();
+        self.finish(TrackStopReason::Eof);
     }
 
     /// Check position-based notifications.
@@ -251,12 +256,11 @@ impl PlayerTrack {
     /// removes the track from the arena. Previously `Paused` left the track
     /// in the arena indefinitely, leaking resources on every crossfade.
     fn update_state_after_fade(&mut self) {
-        let new_state = match self.state {
-            TrackState::FadingIn => TrackState::Playing,
-            TrackState::FadingOut => TrackState::Finished,
-            current => current,
-        };
-        self.set_state(new_state);
+        match self.state {
+            TrackState::FadingIn => self.set_state(TrackState::Playing),
+            TrackState::FadingOut => self.finish(TrackStopReason::FadeOut),
+            current => self.set_state(current),
+        }
     }
 
     /// Emit notification when state changes.
@@ -270,7 +274,10 @@ impl PlayerTrack {
             TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
             TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
             TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
+            TrackState::Finished => PlayerNotification::TrackPlaybackStopped {
+                src: Arc::clone(&self.src),
+                reason: self.stop_reason.unwrap_or(TrackStopReason::Stop),
+            },
         };
 
         if notification_tx.lock_sync().try_push(notification).is_ok() {
@@ -286,8 +293,14 @@ impl PlayerTrack {
         }
     }
 
+    fn finish(&mut self, reason: TrackStopReason) {
+        self.stop_reason = Some(reason);
+        self.set_state(TrackState::Finished);
+    }
+
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
     pub(crate) fn fade_in(&mut self) {
+        self.stop_reason = None;
         self.set_state(TrackState::FadingIn);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
         self.notified_about_to_end = false;
@@ -302,6 +315,7 @@ impl PlayerTrack {
 
     /// Instantly start playing at full volume.
     pub(crate) fn play(&mut self) {
+        self.stop_reason = None;
         self.set_state(TrackState::Playing);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
         self.mix.reset_to_target();
@@ -311,7 +325,7 @@ impl PlayerTrack {
 
     /// Instantly stop (silent, finished state).
     pub(crate) fn stop(&mut self) {
-        self.set_state(TrackState::Finished);
+        self.finish(TrackStopReason::Stop);
         self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
         self.mix.reset_to_target();
     }
@@ -386,6 +400,10 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_test_utils::kithara;
+    use ringbuf::{
+        HeapProd, HeapRb,
+        traits::{Consumer, Split},
+    };
 
     use super::*;
     use crate::impls::resource::Resource;
@@ -417,6 +435,14 @@ mod tests {
         let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
         PlayerTrack::new(arc_resource, src, 1.0, sample_rate, FadeCurve::SquareRoot)
+    }
+
+    fn make_notification_pair() -> (
+        Mutex<HeapProd<PlayerNotification>>,
+        ringbuf::HeapCons<PlayerNotification>,
+    ) {
+        let (tx, rx) = HeapRb::<PlayerNotification>::new(8).split();
+        (Mutex::new(tx), rx)
     }
 
     #[kithara::test(tokio)]
@@ -477,5 +503,45 @@ mod tests {
         let track = make_track();
         assert_eq!(track.position(), 0.0);
         assert!((track.duration() - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_handle_eof_emits_eof_stop_reason() {
+        let mut track = make_track();
+        let (tx, mut rx) = make_notification_pair();
+
+        track.handle_eof(&tx);
+        track.notify_state_change(&tx);
+
+        let notification = rx.try_pop().unwrap();
+        assert!(matches!(
+            notification,
+            PlayerNotification::TrackPlaybackStopped {
+                src,
+                reason: TrackStopReason::Eof,
+            } if &*src == "test.mp3"
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_stop_emits_stop_reason() {
+        let mut track = make_track();
+        let (tx, mut rx) = make_notification_pair();
+
+        track.play();
+        track.notify_state_change(&tx);
+        let _ = rx.try_pop();
+
+        track.stop();
+        track.notify_state_change(&tx);
+
+        let notification = rx.try_pop().unwrap();
+        assert!(matches!(
+            notification,
+            PlayerNotification::TrackPlaybackStopped {
+                src,
+                reason: TrackStopReason::Stop,
+            } if &*src == "test.mp3"
+        ));
     }
 }

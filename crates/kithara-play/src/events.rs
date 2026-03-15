@@ -29,6 +29,7 @@ pub enum PlayerEvent {
     PrerollCompleted {
         success: bool,
     },
+    ItemDidPlayToEnd,
 }
 
 #[derive(Clone, Debug)]

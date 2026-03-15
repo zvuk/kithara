@@ -15,10 +15,11 @@ use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use super::{
     engine::{EngineConfig, EngineImpl},
+    player_notification::{PlayerNotification, TrackStopReason},
     player_processor::PlayerCmd,
     player_resource::PlayerResource,
     player_track::TrackTransition,
@@ -408,20 +409,29 @@ impl PlayerImpl {
         self.engine.tick()
     }
 
-    /// Drain audio-thread notifications for the active slot.
-    pub fn drain_notifications(&self) -> Vec<String> {
+    /// Drain audio-thread notifications for the active slot and broadcast
+    /// corresponding [`PlayerEvent`]s.
+    pub fn process_notifications(&self) {
         let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return Vec::new();
+            return;
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return Vec::new();
+            return;
         };
 
-        let mut out = Vec::new();
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
-            out.push(format!("{notification:?}"));
+            match notification {
+                PlayerNotification::TrackPlaybackStopped {
+                    reason: TrackStopReason::Eof,
+                    ..
+                } => {
+                    let _ = self.events_tx.send(PlayerEvent::ItemDidPlayToEnd);
+                }
+                other => {
+                    trace!(?other, "unhandled player notification");
+                }
+            }
         }
-        out
     }
 
     /// Number of EQ bands available for this player.
@@ -923,5 +933,83 @@ mod tests {
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);
+    }
+
+    #[kithara::test]
+    fn process_notifications_empty_player_no_panic() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        // No slot allocated → should be a no-op.
+        player.process_notifications();
+    }
+
+    #[kithara::test]
+    fn process_notifications_emits_did_play_to_end() {
+        use ringbuf::traits::Producer;
+
+        use crate::impls::{
+            player_notification::{PlayerNotification, TrackStopReason},
+            shared_player_state::SharedPlayerState,
+        };
+
+        let player = PlayerImpl::new(PlayerConfig::default());
+        let shared = Arc::new(SharedPlayerState::new());
+        let slot_id = SlotId(0);
+
+        player
+            .engine()
+            .inject_test_slot(slot_id, Arc::clone(&shared));
+        *player.current_slot.lock_sync() = Some(slot_id);
+
+        shared
+            .notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackPlaybackStopped {
+                src: Arc::from("test.mp3"),
+                reason: TrackStopReason::Eof,
+            })
+            .unwrap();
+
+        let mut rx = player.subscribe();
+        player.process_notifications();
+
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, PlayerEvent::ItemDidPlayToEnd));
+    }
+
+    #[kithara::test]
+    #[case(TrackStopReason::FadeOut)]
+    #[case(TrackStopReason::Stop)]
+    fn process_notifications_ignores_non_eof_stop_reasons(#[case] reason: TrackStopReason) {
+        use ringbuf::traits::Producer;
+
+        use crate::impls::{
+            player_notification::PlayerNotification, shared_player_state::SharedPlayerState,
+        };
+
+        let player = PlayerImpl::new(PlayerConfig::default());
+        let shared = Arc::new(SharedPlayerState::new());
+        let slot_id = SlotId(0);
+
+        player
+            .engine()
+            .inject_test_slot(slot_id, Arc::clone(&shared));
+        *player.current_slot.lock_sync() = Some(slot_id);
+
+        shared
+            .notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackPlaybackStopped {
+                src: Arc::from("test.mp3"),
+                reason,
+            })
+            .unwrap();
+
+        let mut rx = player.subscribe();
+        player.process_notifications();
+
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 }

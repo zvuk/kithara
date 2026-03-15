@@ -6,20 +6,29 @@ use std::sync::{
 use jni::{
     JNIEnv,
     objects::{GlobalRef, JClass, JObject},
+    sys::jint,
 };
 use tracing::error;
+use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
 static ANDROID_CONTEXT_READY: AtomicBool = AtomicBool::new(false);
 static ANDROID_CONTEXT_GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
 
 #[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_kithara_Kithara_nativeInitRustlsPlatformVerifier(
+pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     context: JObject<'_>,
+    log_level: jint,
 ) {
     if !ANDROID_CONTEXT_READY.load(Ordering::Acquire) {
+        let filter = level_filter(log_level);
+        if let Ok(layer) = tracing_android::layer("kithara") {
+            let _ = tracing_subscriber::registry()
+                .with(layer.with_filter(filter))
+                .try_init();
+        }
         match init_android_context(&mut env, &context) {
             Ok(()) => {
                 ANDROID_CONTEXT_READY.store(true, Ordering::Release);
@@ -36,6 +45,17 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInitRustlsPlatformVerifier
         let message = format!("failed to initialize rustls platform verifier: {err}");
         error!(message = %message);
         let _ = env.throw_new("java/lang/IllegalStateException", &message);
+    }
+}
+
+fn level_filter(ordinal: jint) -> LevelFilter {
+    match ordinal {
+        0 => LevelFilter::TRACE,
+        1 => LevelFilter::DEBUG,
+        2 => LevelFilter::INFO,
+        3 => LevelFilter::WARN,
+        4 => LevelFilter::ERROR,
+        _ => LevelFilter::OFF,
     }
 }
 

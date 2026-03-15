@@ -31,7 +31,7 @@ import kotlinx.coroutines.flow.update
 class KitharaPlayer() {
     private val inner: FfiAudioPlayer = FfiAudioPlayer()
     private val observer = PlayerObserverBridge(this)
-    private val currentItemChangesFlow = MutableSharedFlow<String?>(extraBufferCapacity = 1)
+    private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
 
     init {
@@ -44,9 +44,12 @@ class KitharaPlayer() {
     val state: StateFlow<PlayerState> = stateFlow.asStateFlow()
 
     /**
-     * Emits the new current item ID (or null) whenever the current item changes.
+     * One-shot player events: item changes, playback completion, and failures.
+     *
+     * Subscribe with [kotlinx.coroutines.flow.collect] to react to lifecycle transitions
+     * without polling [state].
      */
-    val currentItemChanges: SharedFlow<String?> = currentItemChangesFlow.asSharedFlow()
+    val events: SharedFlow<KitharaPlayerEvent> = eventsFlow.asSharedFlow()
 
     /**
      * Current playback time in seconds.
@@ -195,7 +198,10 @@ class KitharaPlayer() {
                 updateState { it.copy(error = KitharaError.Internal(event.error)) }
 
             is FfiPlayerEvent.CurrentItemChanged ->
-                currentItemChangesFlow.tryEmit(event.itemId)
+                eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId))
+
+            is FfiPlayerEvent.ItemDidPlayToEnd ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.PlayedToEnd)
 
             is FfiPlayerEvent.TimeControlStatusChanged,
             is FfiPlayerEvent.VolumeChanged,
