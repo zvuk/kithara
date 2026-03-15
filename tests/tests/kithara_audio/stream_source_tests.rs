@@ -516,7 +516,7 @@ fn format_change_recreates_decoder() {
 
 #[kithara::test]
 #[case::from_track_start(v0_spec(), v0_info(), 0, 1)]
-#[case::after_abr_switch(v3_spec(), v3_info(), 863_137, 0)]
+#[case::after_abr_switch(v3_spec(), v3_info(), 863_137, 1)]
 fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
     #[case] spec: PcmSpec,
     #[case] media_info: MediaInfo,
@@ -554,7 +554,8 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
     let byte_len_updates = byte_len_log.lock();
     assert_eq!(byte_len_updates.len(), expected_byte_len_updates);
     if expected_byte_len_updates > 0 {
-        assert_eq!(byte_len_updates[0], 1000);
+        let expected_len = 1000u64.saturating_sub(base_offset);
+        assert_eq!(byte_len_updates[0], expected_len);
     }
 }
 

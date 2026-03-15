@@ -719,7 +719,7 @@ impl HlsDownloader {
 
         {
             let mut segments = self.segments.lock_sync();
-            if is_midstream_switch {
+            if is_variant_switch {
                 segments.switch_variant(dl.segment_index, dl.variant);
             }
             segments.commit_segment(dl.variant, dl.segment_index, data);
