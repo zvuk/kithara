@@ -359,7 +359,7 @@ impl HlsDownloader {
         segment_index: usize,
     ) -> Option<(u64, u64)> {
         // `StreamIndex` always maintains contiguous byte offsets via `rebuild_byte_map_from`.
-        // Offset mismatches are a `DownloadState` artifact — `StreamIndex` does not need this.
+        // StreamIndex maintains contiguous byte offsets automatically.
         let _ = (variant, segment_index);
         None
     }
