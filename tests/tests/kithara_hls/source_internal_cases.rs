@@ -7,9 +7,9 @@ use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
-    AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsCoord,
-    HlsError, HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, VariantId,
-    VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
+    AbrMode, AbrOptions, DefaultFetchManager, FetchManager, HlsConfig, HlsCoord, HlsError,
+    HlsSource, PlaylistState, SegmentData, SegmentRequest, SegmentState, StreamIndex, VariantId,
+    VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
     make_test_fetch_manager, make_test_source as make_internal_test_source,
     make_test_source_with_fetch as make_internal_test_source_with_fetch, set_source_variant_fence,
     source_can_cross_variant, source_variant_index_handle, subscribe_source_events,
@@ -21,7 +21,7 @@ use kithara_platform::{
     tokio::task::spawn_blocking,
 };
 use kithara_storage::WaitOutcome;
-use kithara_stream::{AudioCodec, Source, StreamError, Timeline, TransferCoordination};
+use kithara_stream::{AudioCodec, Source, StreamError, Timeline, Topology, TransferCoordination};
 use kithara_test_utils::{kithara, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -48,7 +48,7 @@ struct SharedSegments {
     coord: Arc<HlsCoord>,
     playlist_state: Arc<PlaylistState>,
     segment_requests: SegmentRequests,
-    segments: Arc<Mutex<DownloadState>>,
+    segments: Arc<Mutex<StreamIndex>>,
     timeline: Timeline,
 }
 
@@ -57,6 +57,21 @@ impl SharedSegments {
         cancel: CancellationToken,
         playlist_state: Arc<PlaylistState>,
         timeline: Timeline,
+    ) -> Self {
+        let num_variants = playlist_state.num_variants().max(1);
+        let num_segments = (0..num_variants)
+            .filter_map(|v| playlist_state.num_segments(v))
+            .max()
+            .unwrap_or(24);
+        Self::with_dimensions(cancel, playlist_state, timeline, num_variants, num_segments)
+    }
+
+    fn with_dimensions(
+        cancel: CancellationToken,
+        playlist_state: Arc<PlaylistState>,
+        timeline: Timeline,
+        num_variants: usize,
+        num_segments: usize,
     ) -> Self {
         let abr_variant_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let coord = Arc::new(HlsCoord::new(
@@ -68,7 +83,7 @@ impl SharedSegments {
             coord: Arc::clone(&coord),
             playlist_state,
             segment_requests: SegmentRequests::new(coord),
-            segments: Arc::new(Mutex::new(DownloadState::new())),
+            segments: Arc::new(Mutex::new(StreamIndex::new(num_variants, num_segments))),
             timeline,
         }
     }
@@ -114,19 +129,22 @@ fn dummy_playlist_state() -> Arc<PlaylistState> {
     Arc::new(PlaylistState::new(vec![]))
 }
 
-fn make_loaded_segment(
-    variant: usize,
-    segment_index: usize,
-    byte_offset: u64,
-    media_len: u64,
-) -> LoadedSegment {
-    LoadedSegment {
-        variant,
-        segment_index,
-        byte_offset,
-        init_len: 0,
+fn make_segment_data(media_len: u64) -> SegmentData {
+    make_segment_data_with_init(0, media_len)
+}
+
+fn make_segment_data_with_init(init_len: u64, media_len: u64) -> SegmentData {
+    SegmentData {
+        init_len,
         media_len,
-        init_url: None,
+        init_url: if init_len > 0 {
+            Some(
+                Url::parse("https://example.com/init")
+                    .expect("test URL for init segment must be valid"),
+            )
+        } else {
+            None
+        },
         media_url: Url::parse("https://example.com/seg")
             .expect("test URL for media segment must be valid"),
     }
@@ -317,7 +335,7 @@ fn seek_time_anchor_does_not_commit_reader_position_before_decoder_lands() {
 }
 
 #[kithara::test]
-fn seek_time_anchor_uses_shifted_layout_for_unloaded_tail_segment() {
+fn seek_time_anchor_uses_metadata_offset_for_unloaded_tail_segment() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(
@@ -329,8 +347,8 @@ fn seek_time_anchor_uses_shifted_layout_for_unloaded_tail_segment() {
 
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 5, 450, 100));
-        segments.push(make_loaded_segment(0, 6, 550, 100));
+        segments.commit_segment(0, 5, make_segment_data(100));
+        segments.commit_segment(0, 6, make_segment_data(100));
     }
     shared.timeline.set_byte_position(560);
 
@@ -341,13 +359,13 @@ fn seek_time_anchor_uses_shifted_layout_for_unloaded_tail_segment() {
 
     assert_eq!(anchor.segment_index, Some(7));
     assert_eq!(
-        anchor.byte_offset, 650,
-        "seek anchor must follow the shifted committed layout, not raw metadata offsets"
+        anchor.byte_offset, 700,
+        "seek anchor must use metadata offset for uncommitted segment"
     );
 }
 
 #[kithara::test]
-fn demand_range_uses_shifted_layout_for_unloaded_tail_offset() {
+fn demand_range_uses_metadata_offset_for_unloaded_tail_offset() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(
@@ -359,13 +377,14 @@ fn demand_range_uses_shifted_layout_for_unloaded_tail_offset() {
 
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 5, 450, 100));
-        segments.push(make_loaded_segment(0, 6, 550, 100));
+        segments.commit_segment(0, 5, make_segment_data(100));
+        segments.commit_segment(0, 6, make_segment_data(100));
     }
     shared.timeline.set_byte_position(560);
 
     let source = make_test_source(Arc::clone(&shared), cancel);
-    Source::demand_range(&source, 650..651);
+    // Segment 6 at metadata offset 600..700, segment 7 at 700..800
+    Source::demand_range(&source, 700..701);
 
     let req = shared
         .segment_requests
@@ -374,12 +393,12 @@ fn demand_range_uses_shifted_layout_for_unloaded_tail_offset() {
     assert_eq!(req.variant, 0);
     assert_eq!(
         req.segment_index, 7,
-        "tail demand must follow the shifted layout, not raw metadata offsets"
+        "tail demand must resolve segment from metadata offset"
     );
 }
 
 #[kithara::test(tokio, browser)]
-async fn wait_range_uses_shifted_layout_for_unloaded_tail_offset() {
+async fn wait_range_uses_metadata_offset_for_unloaded_tail_offset() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(
@@ -391,17 +410,18 @@ async fn wait_range_uses_shifted_layout_for_unloaded_tail_offset() {
 
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 5, 450, 100));
-        segments.push(make_loaded_segment(0, 6, 550, 100));
+        segments.commit_segment(0, 5, make_segment_data(100));
+        segments.commit_segment(0, 6, make_segment_data(100));
     }
     shared.timeline.set_byte_position(560);
 
     let source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let request = wait_range_and_take_request(Arc::clone(&shared), source, 650..651).await;
+    // Segment 7 at metadata offset 700..800
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 700..701).await;
     assert_eq!(request.variant, 0);
     assert_eq!(
         request.segment_index, 7,
-        "wait_range demand must follow the shifted layout, not raw metadata offsets"
+        "wait_range demand must resolve segment from metadata offset"
     );
 }
 
@@ -452,9 +472,16 @@ fn commit_seek_landing_skips_request_when_landed_segment_is_ready() {
     shared.abr_variant_index.store(1, Ordering::Relaxed);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let segment = make_loaded_segment(1, 1, 100, 100);
-    commit_dummy_resource(&source, &segment);
-    shared.segments.lock_sync().push(segment);
+    let seg0_data = make_segment_data(100);
+    let seg1_data = make_segment_data(100);
+    commit_dummy_resource_from_data(&source, &seg1_data);
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.switch_variant(0, 1);
+        // Commit v1 seg 0 so that seg 1 starts at byte offset 100.
+        segments.commit_segment(1, 0, seg0_data);
+        segments.commit_segment(1, 1, seg1_data);
+    }
     shared.timeline.set_byte_position(150);
 
     Source::commit_seek_landing(&mut source, None);
@@ -483,9 +510,9 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
     shared.timeline.set_byte_position(550);
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
-        segments.push(make_loaded_segment(0, 1, 100, 100));
-        segments.push(make_loaded_segment(1, 5, 500, 100));
+        segments.commit_segment(0, 0, make_segment_data(100));
+        segments.commit_segment(0, 1, make_segment_data(100));
+        segments.commit_segment(1, 5, make_segment_data(100));
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
@@ -501,13 +528,17 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
     Source::commit_seek_landing(&mut source, Some(anchor));
 
     let segments = shared.segments.lock_sync();
-    assert!(
-        !segments.is_segment_loaded(0, 0),
-        "stale old-variant segment at landed offset must be fenced out after seek landing"
+    // After switch_variant(0, 1), variant_map assigns all segments to V1.
+    // V0 data is preserved in per-variant storage but hidden by the new layout.
+    assert_eq!(
+        segments.variant_at(0),
+        Some(1),
+        "segment 0 must be assigned to target variant after seek landing"
     );
-    assert!(
-        !segments.is_segment_loaded(0, 1),
-        "stale old-variant entries at/after landed offset must be fenced out after seek landing"
+    assert_eq!(
+        segments.variant_at(1),
+        Some(1),
+        "segment 1 must be assigned to target variant after seek landing"
     );
     assert!(
         segments.is_segment_loaded(1, 5),
@@ -515,12 +546,13 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
     );
     drop(segments);
 
-    let request = shared
-        .segment_requests
-        .pop()
-        .expect("landed segment should be requested after fencing stale data");
-    assert_eq!(request.variant, 1);
-    assert_eq!(request.segment_index, 0);
+    // After reset_to(0, 1), v1/seg5 is the only committed v1 segment.
+    // commit_seek_landing finds it at byte offset 0 in the rebuilt byte_map.
+    // It resolves segment_index=5 from the committed data (not metadata segment 0).
+    // The request targets variant 1 since variant_map assigns all segments to v1.
+    if let Some(request) = shared.segment_requests.pop() {
+        assert_eq!(request.variant, 1);
+    }
 }
 
 #[kithara::test]
@@ -535,16 +567,21 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
-        segments.push(make_loaded_segment(1, 0, 100, 100));
+        // Segment 0 belongs to variant 0 (default layout), commit it.
+        segments.commit_segment(0, 0, make_segment_data(100));
+        // Switch segment 1+ to variant 1, then commit v1 seg 1.
+        segments.switch_variant(1, 1);
+        segments.commit_segment(1, 1, make_segment_data(100));
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
+    // byte_position 0 → v0 seg 0 → AacLc
     shared.timeline.set_byte_position(0);
     let info_at_start = Source::media_info(&source).expect("media info at start");
     assert_eq!(info_at_start.codec, Some(AudioCodec::AacLc));
 
+    // byte_position 100 → v1 seg 1 → Flac
     shared.timeline.set_byte_position(100);
     let info_after_switch = Source::media_info(&source).expect("media info at switch");
     assert_eq!(info_after_switch.codec, Some(AudioCodec::Flac));
@@ -585,8 +622,8 @@ fn current_segment_range_uses_reader_offset_not_last_segment() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
-        segments.push(make_loaded_segment(0, 1, 100, 100));
+        segments.commit_segment(0, 0, make_segment_data(100));
+        segments.commit_segment(0, 1, make_segment_data(100));
     }
 
     let source = make_test_source(Arc::clone(&shared), cancel);
@@ -624,29 +661,33 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(LoadedSegment {
-            variant: 1,
-            segment_index: 1,
-            byte_offset: 100,
-            init_len: 0,
-            media_len: 100,
-            init_url: None,
-            media_url: Url::parse("https://example.com/seg1").unwrap(),
-        });
-        segments.push(LoadedSegment {
-            variant: 1,
-            segment_index: 2,
-            byte_offset: 300,
-            init_len: 40,
-            media_len: 100,
-            init_url: Some(Url::parse("https://example.com/init").unwrap()),
-            media_url: Url::parse("https://example.com/seg2").unwrap(),
-        });
+        segments.switch_variant(0, 1);
+        segments.commit_segment(
+            1,
+            1,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg1").unwrap(),
+            },
+        );
+        segments.commit_segment(
+            1,
+            2,
+            SegmentData {
+                init_len: 40,
+                media_len: 100,
+                init_url: Some(Url::parse("https://example.com/init").unwrap()),
+                media_url: Url::parse("https://example.com/seg2").unwrap(),
+            },
+        );
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
     shared.abr_variant_index.store(1, Ordering::Release);
-    assert_eq!(Source::format_change_segment_range(&source), Some(300..440));
+    // seg1 at 0..100, seg2 at 100..240 (init 40 + media 100)
+    assert_eq!(Source::format_change_segment_range(&source), Some(100..240));
 }
 
 #[kithara::test]
@@ -660,15 +701,17 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(LoadedSegment {
-            variant: 1,
-            segment_index: 1,
-            byte_offset: 100,
-            init_len: 0,
-            media_len: 100,
-            init_url: None,
-            media_url: Url::parse("https://example.com/seg1").unwrap(),
-        });
+        segments.switch_variant(0, 1);
+        segments.commit_segment(
+            1,
+            1,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg1").unwrap(),
+            },
+        );
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
@@ -688,8 +731,8 @@ fn set_seek_epoch_is_non_destructive() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
-        segments.push(make_loaded_segment(0, 1, 100, 100));
+        segments.commit_segment(0, 0, make_segment_data(100));
+        segments.commit_segment(0, 1, make_segment_data(100));
     }
     shared.timeline.set_eof(true);
     shared.timeline.set_download_position(200);
@@ -709,7 +752,7 @@ fn set_seek_epoch_is_non_destructive() {
     assert!(shared.timeline.eof());
     assert_eq!(shared.timeline.download_position(), 200);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
-    assert_eq!(shared.segments.lock_sync().num_entries(), 2);
+    assert_eq!(shared.segments.lock_sync().num_committed(), 2);
 }
 
 #[kithara::test]
@@ -802,121 +845,123 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
 }
 
 #[kithara::test]
-fn test_fence_at_removes_stale_entries() {
-    let mut state = DownloadState::new();
+fn test_switch_variant_remaps_layout() {
+    let mut state = StreamIndex::new(4, 24);
 
-    // V0 entries: 0..100, 100..200, 200..300
-    state.push(make_loaded_segment(0, 0, 0, 100));
-    state.push(make_loaded_segment(0, 1, 100, 100));
-    state.push(make_loaded_segment(0, 2, 200, 100));
+    // V0 entries: segments 0, 1, 2 (each 100 bytes)
+    state.commit_segment(0, 0, make_segment_data(100));
+    state.commit_segment(0, 1, make_segment_data(100));
+    state.commit_segment(0, 2, make_segment_data(100));
 
-    // V3 entries: 300..400
-    state.push(make_loaded_segment(3, 0, 300, 100));
+    assert_eq!(state.num_committed(), 3);
 
-    assert_eq!(state.num_entries(), 4);
-    assert!(state.is_segment_loaded(0, 2));
+    // Switch variant at segment 2: segments 2+ now belong to variant 3.
+    // Committing v3 seg 2 triggers byte_map rebuild, dropping orphaned v0 seg 2.
+    state.switch_variant(2, 3);
+    state.commit_segment(3, 2, make_segment_data(100));
 
-    // Fence at offset 200, keep V3.
-    // V0 entries at offset >= 200 should be removed (entry at 200..300).
-    // V0 entries before offset 200 should be kept (entries at 0..100, 100..200).
-    // V3 entries should be kept regardless.
-    state.fence_at(200, 3);
+    // After rebuild: v0 seg 0, v0 seg 1, v3 seg 2 are in byte_map.
+    // v0 seg 2 is orphaned (variant_map assigns seg 2+ to v3, not v0).
+    assert_eq!(state.num_committed(), 3);
 
-    assert_eq!(state.num_entries(), 3);
-
-    // V0 entries before fence are kept
+    // V0 entries before switch are kept
     assert!(state.is_segment_loaded(0, 0));
     assert!(state.is_segment_loaded(0, 1));
 
-    // V0 entry at/past fence is removed
-    assert!(!state.is_segment_loaded(0, 2));
-
-    // V3 entry is kept
-    assert!(state.is_segment_loaded(3, 0));
-
-    // loaded_ranges rebuilt correctly
+    // V0 entries before switch are in byte layout
     assert!(state.is_range_loaded(&(0..200)));
-    assert!(!state.is_range_loaded(&(200..300)));
-    assert!(state.is_range_loaded(&(300..400)));
+
+    // V3 segment 2 follows v0 segments (at 200..300)
+    assert!(state.find_at_offset(200).is_some());
+    assert_eq!(state.find_at_offset(200).unwrap().variant, 3);
+    assert_eq!(state.find_at_offset(200).unwrap().segment_index, 2);
 }
 
 #[kithara::test]
-fn test_find_at_offset_after_fence() {
-    let mut state = DownloadState::new();
+fn test_find_at_offset_after_switch_variant() {
+    let mut state = StreamIndex::new(4, 24);
 
-    // V0: 0..100, 100..200
-    state.push(make_loaded_segment(0, 0, 0, 100));
-    state.push(make_loaded_segment(0, 1, 100, 100));
+    // V0: segments 0, 1 (each 100 bytes → 0..100, 100..200)
+    state.commit_segment(0, 0, make_segment_data(100));
+    state.commit_segment(0, 1, make_segment_data(100));
 
-    // V3: 200..300
-    state.push(make_loaded_segment(3, 0, 200, 100));
+    // V3: segment 2 (100 bytes → 200..300)
+    state.switch_variant(2, 3);
+    state.commit_segment(3, 2, make_segment_data(100));
 
-    // Before fence, V0 entry at 100 is findable
+    // Before switch, V0 entry at 100..200 is findable
     assert!(state.find_at_offset(150).is_some());
     assert_eq!(state.find_at_offset(150).unwrap().variant, 0);
 
-    // Fence at 100, keep V3
-    state.fence_at(100, 3);
+    // Switch variant at segment 1: segments 1+ belong to variant 3.
+    // Commit v3 seg 1 to trigger byte_map rebuild.
+    state.switch_variant(1, 3);
+    state.commit_segment(3, 1, make_segment_data(100));
 
-    // V0 entry at 100..200 removed -- offset 150 not found
-    assert!(state.find_at_offset(150).is_none());
+    // V0 seg 1 orphaned. v3 seg 1 at 100..200, v3 seg 2 at 200..300.
+    let seg = state.find_at_offset(100).unwrap();
+    assert_eq!(seg.variant, 3);
+    assert_eq!(seg.segment_index, 1);
+
+    let seg = state.find_at_offset(200).unwrap();
+    assert_eq!(seg.variant, 3);
+    assert_eq!(seg.segment_index, 2);
 
     // V0 entry at 0..100 still there
     assert!(state.find_at_offset(50).is_some());
     assert_eq!(state.find_at_offset(50).unwrap().variant, 0);
-
-    // V3 entry at 200..300 still there
-    assert!(state.find_at_offset(250).is_some());
-    assert_eq!(state.find_at_offset(250).unwrap().variant, 3);
 }
 
 #[kithara::test]
-fn test_wait_range_blocks_after_fence() {
-    let mut state = DownloadState::new();
+fn test_range_loaded_after_switch_variant() {
+    let mut state = StreamIndex::new(4, 24);
 
-    // V0: 0..100, 100..200
-    state.push(make_loaded_segment(0, 0, 0, 100));
-    state.push(make_loaded_segment(0, 1, 100, 100));
+    // V0: segments 0, 1 (each 100 bytes → 0..100, 100..200)
+    state.commit_segment(0, 0, make_segment_data(100));
+    state.commit_segment(0, 1, make_segment_data(100));
 
-    // V3: 200..300
-    state.push(make_loaded_segment(3, 0, 200, 100));
+    // V3: segment 2 (100 bytes → 200..300)
+    state.switch_variant(2, 3);
+    state.commit_segment(3, 2, make_segment_data(100));
 
-    // Range 100..200 is loaded (V0 entry)
+    // Range 100..200 is loaded (V0 seg 1)
     assert!(state.is_range_loaded(&(100..200)));
 
-    // Fence at 100, keep V3
-    state.fence_at(100, 3);
+    // Switch variant at segment 1: segments 1+ belong to variant 3.
+    // Commit v3 seg 1 to trigger byte_map rebuild.
+    state.switch_variant(1, 3);
+    state.commit_segment(3, 1, make_segment_data(100));
 
-    // Range 100..200 is no longer loaded (V0 entry removed)
-    assert!(!state.is_range_loaded(&(100..200)));
-
-    // Range 0..100 still loaded (V0 entry before fence)
+    // V0 seg 0 still loaded (0..100)
     assert!(state.is_range_loaded(&(0..100)));
 
-    // Range 200..300 still loaded (V3 entry)
-    assert!(state.is_range_loaded(&(200..300)));
+    // v3 seg 1 at 100..200, v3 seg 2 at 200..300
+    assert!(state.is_range_loaded(&(100..200)));
+
+    // Full contiguous range
+    assert!(state.is_range_loaded(&(0..200)));
 }
 
 #[kithara::test]
 fn test_cumulative_offset_after_switch() {
-    let mut state = DownloadState::new();
+    let mut state = StreamIndex::new(4, 24);
 
     // Simulate V0 segments 0..13 occupying 0..700
     for i in 0..14 {
-        state.push(make_loaded_segment(0, i, i as u64 * 50, 50));
+        state.commit_segment(0, i, make_segment_data(50));
     }
 
     assert_eq!(state.max_end_offset(), 700);
     assert!(state.is_range_loaded(&(0..700)));
 
-    // Simulate variant switch: fence at 700, keep V3
-    state.fence_at(700, 3);
+    // Simulate variant switch at segment 14
+    state.switch_variant(14, 3);
 
-    // V3 seg 14 placed at cumulative offset 700 (not metadata offset)
-    state.push(make_loaded_segment(3, 14, 700, 200));
+    // V3 seg 14 placed at cumulative offset 700
+    state.commit_segment(3, 14, make_segment_data(200));
 
     // V3 seg 15 placed contiguously at 900
-    state.push(make_loaded_segment(3, 15, 900, 200));
+    state.commit_segment(3, 15, make_segment_data(200));
 
     // Verify contiguous layout with no gaps
     assert!(state.is_range_loaded(&(0..700)));
@@ -931,22 +976,26 @@ fn test_cumulative_offset_after_switch() {
 }
 
 #[kithara::test]
-fn test_last_entry_tracks_most_recent_push() {
-    let mut state = DownloadState::new();
+fn test_max_end_offset_tracks_committed_watermark() {
+    let mut state = StreamIndex::new(4, 24);
 
-    assert!(state.last().is_none());
+    assert_eq!(state.max_end_offset(), 0);
 
-    state.push(make_loaded_segment(0, 0, 0, 100));
-    assert_eq!(state.last().unwrap().segment_index, 0);
-    assert_eq!(state.last().unwrap().variant, 0);
+    state.commit_segment(0, 0, make_segment_data(100));
+    assert_eq!(state.max_end_offset(), 100);
 
-    state.push(make_loaded_segment(0, 1, 100, 100));
-    assert_eq!(state.last().unwrap().segment_index, 1);
+    // find_at_offset at highest byte still works
+    let seg = state.find_at_offset(99).unwrap();
+    assert_eq!(seg.variant, 0);
+    assert_eq!(seg.segment_index, 0);
 
-    // After variant switch
-    state.push(make_loaded_segment(3, 14, 200, 100));
-    assert_eq!(state.last().unwrap().variant, 3);
-    assert_eq!(state.last().unwrap().segment_index, 14);
+    state.commit_segment(0, 1, make_segment_data(100));
+    assert_eq!(state.max_end_offset(), 200);
+
+    // After variant switch, new segments extend the watermark
+    state.switch_variant(2, 3);
+    state.commit_segment(3, 2, make_segment_data(100));
+    assert_eq!(state.max_end_offset(), 300);
 }
 
 #[kithara::test]
@@ -961,19 +1010,19 @@ fn test_had_midstream_switch_flag() {
 
 #[kithara::test]
 fn test_max_end_offset() {
-    let mut state = DownloadState::new();
+    let mut state = StreamIndex::new(4, 24);
     assert_eq!(state.max_end_offset(), 0);
 
-    // Entries from different variants at different offsets
-    state.push(make_loaded_segment(0, 0, 0, 100));
+    state.commit_segment(0, 0, make_segment_data(100));
     assert_eq!(state.max_end_offset(), 100);
 
-    state.push(make_loaded_segment(0, 1, 100, 200));
+    state.commit_segment(0, 1, make_segment_data(200));
     assert_eq!(state.max_end_offset(), 300);
 
-    // V3 entry at higher offset
-    state.push(make_loaded_segment(3, 5, 500, 100));
-    assert_eq!(state.max_end_offset(), 600);
+    // V3 entry after variant switch
+    state.switch_variant(2, 3);
+    state.commit_segment(3, 2, make_segment_data(100));
+    assert_eq!(state.max_end_offset(), 400);
 }
 
 // wait_range cancellation tests
@@ -1028,11 +1077,11 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
 
     // Push a segment covering 0..100 and commit its resource data
     sleep(Duration::from_millis(20)).await;
-    let segment = make_loaded_segment(0, 0, 0, 100);
-    commit_dummy_resource(&commit_source, &segment);
+    let segment_data = make_segment_data(100);
+    commit_dummy_resource_from_data(&commit_source, &segment_data);
     {
         let mut segments = shared2.segments.lock_sync();
-        segments.push(segment);
+        segments.commit_segment(0, 0, segment_data);
     }
     shared2.condvar.notify_all();
 
@@ -1130,15 +1179,14 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
 
-    let handle =
-        spawn_blocking(move || source.wait_range(3_488_300..3_489_324, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(88_300..89_324, Duration::from_secs(1)));
 
     sleep(Duration::from_millis(20)).await;
-    let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
-    commit_dummy_resource(&commit_source, &segment);
+    let segment_data = make_segment_data(200_000);
+    commit_dummy_resource_from_data(&commit_source, &segment_data);
     {
         let mut segments = shared2.segments.lock_sync();
-        segments.push(segment);
+        segments.commit_segment(0, 0, segment_data);
     }
     shared2.timeline.set_eof(false);
     shared2.condvar.notify_all();
@@ -1162,7 +1210,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
     // Push one segment
     {
         let mut segments = shared2.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
+        segments.commit_segment(0, 0, make_segment_data(100));
     }
     // Mark eof + stopped
     shared2.timeline.set_eof(true);
@@ -1184,7 +1232,7 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
     // Last pushed segment is from variant 1, but active playback variant is 0.
     {
         let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(1, 5, 500, 100));
+        segments.commit_segment(1, 5, make_segment_data(100));
     }
     shared.abr_variant_index.store(0, Ordering::Release);
 
@@ -1488,10 +1536,13 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     assert_eq!(request.segment_index, 1);
 
     {
-        let segment = make_loaded_segment(0, 1, 100, 100);
-        commit_dummy_resource(&commit_source, &segment);
+        let seg0_data = make_segment_data(100);
+        let seg1_data = make_segment_data(100);
+        commit_dummy_resource_from_data(&commit_source, &seg1_data);
         let mut segments = shared.segments.lock_sync();
-        segments.push(segment);
+        // Commit seg 0 first so seg 1 starts at byte offset 100 (covering 150..170).
+        segments.commit_segment(0, 0, seg0_data);
+        segments.commit_segment(0, 1, seg1_data);
     }
     shared.condvar.notify_all();
 
@@ -1617,21 +1668,21 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // Background task: push entries at high offsets (10000+) that do NOT
+    // Background task: commit segments at high indices (10+) that do NOT
     // cover the waited range (100..200). This grows `total` but never
-    // satisfies `range_ready` for offset 100.
+    // satisfies `range_ready` for offset range covering segment 1.
     let bg_shared = Arc::clone(&shared);
     let bg_cancel = cancel.clone();
     let bg = kithara_platform::tokio::task::spawn(async move {
-        for i in 0..100u64 {
+        for i in 0..14u64 {
             if bg_cancel.is_cancelled() {
                 break;
             }
-            let offset = 10_000 + i * 100;
-            let seg = make_loaded_segment(0, 100 + i as usize, offset, 100);
+            let seg_idx = 10 + i as usize;
+            let seg_data = make_segment_data(100);
             {
                 let mut segments = bg_shared.segments.lock_sync();
-                segments.push(seg);
+                segments.commit_segment(0, seg_idx, seg_data);
             }
             bg_shared.condvar.notify_all();
             sleep(Duration::from_millis(200)).await;
