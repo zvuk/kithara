@@ -53,6 +53,7 @@ mod layout;
 mod parsing;
 pub(crate) mod playlist;
 mod source;
+pub(crate) mod stream_index;
 
 // Public API re-exports
 

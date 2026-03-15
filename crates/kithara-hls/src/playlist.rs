@@ -228,6 +228,9 @@ pub(crate) trait PlaylistAccess: Send + Sync {
     /// Total size of a variant in bytes (init + all segments).
     fn total_variant_size(&self, variant: usize) -> Option<u64>;
 
+    /// Size of a specific segment in bytes (from `VariantSizeMap`).
+    fn segment_size(&self, variant: usize, index: usize) -> Option<u64>;
+
     /// Byte offset of a specific segment within the variant's virtual stream.
     fn segment_byte_offset(&self, variant: usize, index: usize) -> Option<u64>;
 
@@ -291,6 +294,17 @@ impl PlaylistAccess for PlaylistState {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.size_map.as_ref().map(|sm| sm.total)
+    }
+
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "size_map borrows the read guard"
+    )]
+    fn segment_size(&self, variant: usize, index: usize) -> Option<u64> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        let size_map = state.size_map.as_ref()?;
+        size_map.segment_sizes.get(index).copied()
     }
 
     #[expect(
