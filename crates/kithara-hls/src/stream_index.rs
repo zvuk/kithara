@@ -323,7 +323,7 @@ impl StreamIndex {
     /// Monotonically converges to the true value as segments download.
     /// DRM streams slightly overestimate (encrypted > decrypted) — safe.
     #[must_use]
-    pub fn total_bytes(&self, playlist: &dyn PlaylistAccess) -> u64 {
+    pub(crate) fn total_bytes(&self, playlist: &dyn PlaylistAccess) -> u64 {
         let mut total = 0u64;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
@@ -338,7 +338,7 @@ impl StreamIndex {
 
     /// Effective total: max of committed watermark and estimated total.
     #[must_use]
-    pub fn effective_total(&self, playlist: &dyn PlaylistAccess) -> u64 {
+    pub(crate) fn effective_total(&self, playlist: &dyn PlaylistAccess) -> u64 {
         self.max_end_offset().max(self.total_bytes(playlist))
     }
 

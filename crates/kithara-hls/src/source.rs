@@ -28,15 +28,15 @@ use kithara_stream::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
+use url::Url;
 
 use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
-    download_state::{DownloadProgress, DownloadState, LoadedSegment},
     downloader::{HlsDownloader, HlsIo},
     fetch::DefaultFetchManager,
-    layout::{expected_layout_offset, find_segment_at_layout_offset},
     playlist::{PlaylistAccess, PlaylistState},
+    stream_index::{SegmentData, SegmentRef, StreamIndex},
 };
 
 /// HLS source: provides random-access reading from loaded segments.
@@ -47,7 +47,7 @@ use crate::{
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) fetch: Arc<DefaultFetchManager>,
-    pub(crate) segments: Arc<Mutex<DownloadState>>,
+    pub(crate) segments: Arc<Mutex<StreamIndex>>,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) bus: EventBus,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
@@ -61,9 +61,9 @@ const WAIT_RANGE_SLEEP_MS: u64 = 50;
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
 enum SeekLayout {
-    /// Same variant — keep `DownloadState`, byte layout unchanged.
+    /// Same variant — keep `StreamIndex`, byte layout unchanged.
     Preserve,
-    /// Different variant — clear `DownloadState`, rebuild layout.
+    /// Different variant — reset `StreamIndex`, rebuild layout.
     Reset,
 }
 
@@ -72,6 +72,36 @@ enum ResolvedSegment {
     Committed(usize),
     Layout(usize),
     Fallback(usize),
+}
+
+/// Snapshot of segment data needed for reading, copied out of the lock.
+struct ReadSegment {
+    variant: usize,
+    segment_index: usize,
+    byte_offset: u64,
+    init_len: u64,
+    media_len: u64,
+    init_url: Option<Url>,
+    media_url: Url,
+}
+
+impl ReadSegment {
+    /// Create from a `SegmentRef` (borrows from the lock — must copy).
+    fn from_ref(seg_ref: &SegmentRef<'_>) -> Self {
+        Self {
+            variant: seg_ref.variant,
+            segment_index: seg_ref.segment_index,
+            byte_offset: seg_ref.byte_offset,
+            init_len: seg_ref.data.init_len,
+            media_len: seg_ref.data.media_len,
+            init_url: seg_ref.data.init_url.clone(),
+            media_url: seg_ref.data.media_url.clone(),
+        }
+    }
+
+    fn end_offset(&self) -> u64 {
+        self.byte_offset + self.init_len + self.media_len
+    }
 }
 
 impl HlsSource {
@@ -111,11 +141,15 @@ impl HlsSource {
     fn current_layout_variant(&self) -> Option<usize> {
         let pos = self.coord.timeline().byte_position();
         let segments = self.segments.lock_sync();
-        if let Some(seg) = segments.find_at_offset(pos) {
-            return Some(seg.variant);
+        if let Some(seg_ref) = segments.find_at_offset(pos) {
+            return Some(seg_ref.variant);
         }
-        if let Some(seg) = segments.last() {
-            return Some(seg.variant);
+        // Fallback: check the last committed segment across all variants
+        if segments.max_end_offset() > 0
+            && let Some(seg_ref) =
+                segments.find_at_offset(segments.max_end_offset().saturating_sub(1))
+        {
+            return Some(seg_ref.variant);
         }
         drop(segments);
         self.variant_fence
@@ -123,38 +157,48 @@ impl HlsSource {
 
     // --- segment lookup ---
 
-    fn current_loaded_segment(&self) -> Option<LoadedSegment> {
+    /// Returns `(variant, segment_index)` for the segment at the current reader position,
+    /// falling back to the last committed segment if no segment covers the exact position.
+    fn current_loaded_segment_key(&self) -> Option<(usize, usize)> {
         let reader_offset = self.coord.timeline().byte_position();
         let segments = self.segments.lock_sync();
-        segments
+        let result = segments
             .find_at_offset(reader_offset)
-            .or_else(|| segments.last())
-            .cloned()
+            .or_else(|| {
+                let max = segments.max_end_offset();
+                (max > 0)
+                    .then(|| segments.find_at_offset(max.saturating_sub(1)))
+                    .flatten()
+            })
+            .map(|seg_ref| (seg_ref.variant, seg_ref.segment_index));
+        drop(segments);
+        result
     }
 
     fn current_segment_index(&self) -> Option<usize> {
-        self.current_loaded_segment().map(|seg| seg.segment_index)
+        self.current_loaded_segment_key()
+            .map(|(_, seg_idx)| seg_idx)
     }
 
     fn byte_offset_for_segment(&self, variant: usize, segment_index: usize) -> Option<u64> {
-        let allow_infer = self.current_layout_variant() == Some(variant);
-        let had_midstream_switch = self.coord.had_midstream_switch.load(Ordering::Acquire);
+        let segments = self.segments.lock_sync();
+        // Check if the segment is committed in StreamIndex — its byte_offset is authoritative
+        if let Some(vs) = segments.variant_segments(variant)
+            && vs.contains(segment_index)
         {
-            let segments = self.segments.lock_sync();
-            if let Some(seg) = segments.find_loaded_segment(variant, segment_index) {
-                return Some(seg.byte_offset);
-            }
-            let offset = expected_layout_offset(
-                &self.playlist_state,
+            // The byte_map holds the computed offset for committed segments.
+            // Search all byte_map entries for this (variant, segment_index).
+            if let Some(range) = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
                 &segments,
-                variant,
-                segment_index,
-                allow_infer,
-                had_midstream_switch,
-            );
-            drop(segments);
-            offset
+                (variant, segment_index),
+            ) {
+                return Some(range.start);
+            }
         }
+        drop(segments);
+        // Fallback to playlist metadata offset
+        self.playlist_state
+            .segment_byte_offset(variant, segment_index)
     }
 
     fn metadata_range_for_segment(
@@ -173,19 +217,23 @@ impl HlsSource {
     }
 
     fn init_segment_range_for_variant(&self, variant: usize) -> Option<Range<u64>> {
-        let init_segment = {
-            let segments = self.segments.lock_sync();
-            segments.first_init_segment_of_variant(variant).cloned()
-        }?;
+        let segments = self.segments.lock_sync();
+        let vs = segments.variant_segments(variant)?;
+        // Find first committed segment with init data
+        let (seg_idx, seg_data) = vs.iter().find(|(_, data)| data.init_len > 0)?;
+        let seg_range = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+            &segments,
+            (variant, seg_idx),
+        )?;
 
-        if init_segment.init_url.is_none()
-            && let Some(metadata_range) =
-                self.metadata_range_for_segment(variant, init_segment.segment_index)
-        {
-            return Some(metadata_range);
+        if seg_data.init_url.is_none() {
+            drop(segments);
+            if let Some(metadata_range) = self.metadata_range_for_segment(variant, seg_idx) {
+                return Some(metadata_range);
+            }
         }
 
-        Some(init_segment.byte_offset..init_segment.end_offset())
+        Some(seg_range.start..seg_range.end)
     }
 
     fn fallback_segment_index_for_offset(&self, variant: usize, offset: u64) -> Option<usize> {
@@ -209,25 +257,20 @@ impl HlsSource {
         Some(hinted.min(num_segments - 1))
     }
 
-    /// Check committed `DownloadState` for the segment covering `range_start`.
+    /// Check committed `StreamIndex` for the segment covering `range_start`.
     /// Returns `Some(segment_index)` if a request should be issued.
     fn committed_segment_for_offset(&self, range_start: u64, variant: usize) -> Option<usize> {
-        {
-            let segments = self.segments.lock_sync();
-            if let Some(seg) = segments.find_at_offset(range_start)
-                && seg.variant == variant
-            {
-                return Some(seg.segment_index);
-            }
-        }
-
-        None
+        self.segments
+            .lock_sync()
+            .find_at_offset(range_start)
+            .filter(|seg_ref| seg_ref.variant == variant)
+            .map(|seg_ref| seg_ref.segment_index)
     }
 
     // --- phase / state ---
 
     /// Check if the read position is past the effective end of stream.
-    fn is_past_eof(&self, segments: &DownloadState, range: &Range<u64>) -> bool {
+    fn is_past_eof(&self, segments: &StreamIndex, range: &Range<u64>) -> bool {
         let known_total = self.coord.timeline().total_bytes();
         let loaded_total = segments.max_end_offset();
         let effective_total = loaded_total.max(known_total.unwrap_or(0));
@@ -240,20 +283,21 @@ impl HlsSource {
 
     pub(crate) fn range_ready_from_segments(
         &self,
-        segments: &DownloadState,
+        segments: &StreamIndex,
         range: &Range<u64>,
     ) -> bool {
-        let Some(seg) = segments.find_at_offset(range.start) else {
+        let Some(seg_ref) = segments.find_at_offset(range.start) else {
             return false;
         };
 
-        let range_end = range.end.min(seg.end_offset());
-        let local_start = range.start.saturating_sub(seg.byte_offset);
-        let local_end = range_end.saturating_sub(seg.byte_offset);
+        let seg_end = seg_ref.byte_offset + seg_ref.data.total_len();
+        let range_end = range.end.min(seg_end);
+        let local_start = range.start.saturating_sub(seg_ref.byte_offset);
+        let local_end = range_end.saturating_sub(seg_ref.byte_offset);
 
-        let init_end = seg.init_len.min(local_end);
+        let init_end = seg_ref.data.init_len.min(local_end);
         if local_start < init_end {
-            let Some(ref init_url) = seg.init_url else {
+            let Some(ref init_url) = seg_ref.data.init_url else {
                 return false;
             };
             if !self.resource_covers_range(&ResourceKey::from_url(init_url), local_start..init_end)
@@ -262,11 +306,13 @@ impl HlsSource {
             }
         }
 
-        let media_start = local_start.max(seg.init_len).saturating_sub(seg.init_len);
-        let media_end = local_end.saturating_sub(seg.init_len);
+        let media_start = local_start
+            .max(seg_ref.data.init_len)
+            .saturating_sub(seg_ref.data.init_len);
+        let media_end = local_end.saturating_sub(seg_ref.data.init_len);
         if media_start < media_end
             && !self.resource_covers_range(
-                &ResourceKey::from_url(&seg.media_url),
+                &ResourceKey::from_url(&seg_ref.data.media_url),
                 media_start..media_end,
             )
         {
@@ -299,7 +345,7 @@ impl HlsSource {
     /// The caller should convert this to `ReadOutcome::Retry`.
     fn read_from_entry(
         &self,
-        seg: &LoadedSegment,
+        seg: &ReadSegment,
         offset: u64,
         buf: &mut [u8],
     ) -> Result<Option<usize>, HlsError> {
@@ -346,7 +392,7 @@ impl HlsSource {
 
     fn read_media_segment_checked(
         &self,
-        seg: &LoadedSegment,
+        seg: &ReadSegment,
         media_offset: u64,
         buf: &mut [u8],
     ) -> Result<Option<usize>, HlsError> {
@@ -438,13 +484,13 @@ impl HlsSource {
                     variant,
                     segment_index,
                     byte_offset = anchor.byte_offset,
-                    "seek plan: Preserve — keeping DownloadState"
+                    "seek plan: Preserve — keeping StreamIndex"
                 );
             }
             SeekLayout::Reset => {
-                // Clear segments — layout changes, decoder will be recreated.
+                // Reset layout — decoder will be recreated.
                 let mut segments = self.segments.lock_sync();
-                segments.clear();
+                segments.reset_to(segment_index, variant);
                 drop(segments);
                 self.coord.timeline().set_download_position(0);
                 debug!(
@@ -452,7 +498,7 @@ impl HlsSource {
                     variant,
                     segment_index,
                     byte_offset = anchor.byte_offset,
-                    "seek plan: Reset — cleared DownloadState"
+                    "seek plan: Reset — reset StreamIndex"
                 );
             }
         }
@@ -516,20 +562,13 @@ impl HlsSource {
             return Some(ResolvedSegment::Committed(segment_index));
         }
 
-        let allow_infer = self.current_layout_variant() == Some(variant);
-        let had_midstream_switch = self.coord.had_midstream_switch.load(Ordering::Acquire);
-        let segments = self.segments.lock_sync();
-        if let Some(segment_index) = find_segment_at_layout_offset(
-            &self.playlist_state,
-            &segments,
-            variant,
-            range_start,
-            allow_infer,
-            had_midstream_switch,
-        ) {
+        // Try playlist metadata for layout-based resolution
+        if let Some(segment_index) = self
+            .playlist_state
+            .find_segment_at_offset(variant, range_start)
+        {
             return Some(ResolvedSegment::Layout(segment_index));
         }
-        drop(segments);
 
         self.fallback_segment_index_for_offset(variant, range_start)
             .map(ResolvedSegment::Fallback)
@@ -543,17 +582,20 @@ impl HlsSource {
         }
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "segments lock must be held for both is_segment_loaded and range_ready_from_segments"
+    )]
     fn loaded_segment_ready(&self, variant: usize, segment_index: usize) -> bool {
-        {
-            let segments = self.segments.lock_sync();
-            let Some(seg) = segments.find_loaded_segment(variant, segment_index) else {
-                return false;
-            };
-            let range = seg.byte_offset..seg.end_offset();
-            let ready = self.range_ready_from_segments(&segments, &range);
-            drop(segments);
-            ready
+        let segments = self.segments.lock_sync();
+        if !segments.is_segment_loaded(variant, segment_index) {
+            return false;
         }
+        <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+            &segments,
+            (variant, segment_index),
+        )
+        .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
     }
 
     #[expect(
@@ -661,7 +703,7 @@ impl HlsSource {
 impl Source for HlsSource {
     type Error = HlsError;
     type Topology = Arc<PlaylistState>;
-    type Layout = Arc<Mutex<DownloadState>>;
+    type Layout = Arc<Mutex<StreamIndex>>;
     type Coord = Arc<HlsCoord>;
     type Demand = SegmentRequest;
 
@@ -738,7 +780,7 @@ impl Source for HlsSource {
                     range_start = range.start,
                     max_end = segments.max_end_offset(),
                     known_total = ?self.coord.timeline().total_bytes(),
-                    num_entries = segments.num_entries(),
+                    num_committed = segments.num_committed(),
                     "wait_range: EOF"
                 );
                 return Ok(WaitOutcome::Eof);
@@ -832,8 +874,8 @@ impl Source for HlsSource {
 
         let (segment_ready, past_eof) = {
             let segments = self.segments.lock_sync();
-            let ready = segments.find_at_offset(pos).is_some_and(|seg| {
-                let seg_range = seg.byte_offset..seg.end_offset();
+            let ready = segments.find_at_offset(pos).is_some_and(|seg_ref| {
+                let seg_range = seg_ref.byte_offset..seg_ref.byte_offset + seg_ref.data.total_len();
                 self.range_ready_from_segments(&segments, &seg_range)
             });
             let eof = self.is_past_eof(&segments, &(pos..pos.saturating_add(1)));
@@ -858,7 +900,9 @@ impl Source for HlsSource {
         let read_epoch = self.coord.timeline().seek_epoch();
         let seg = {
             let segments = self.segments.lock_sync();
-            segments.find_at_offset(offset).cloned()
+            segments
+                .find_at_offset(offset)
+                .map(|r| ReadSegment::from_ref(&r))
         };
 
         let Some(seg) = seg else {
@@ -927,12 +971,12 @@ impl Source for HlsSource {
 
     fn media_info(&self) -> Option<MediaInfo> {
         let hinted_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
-        let reader_variant = self.current_loaded_segment().map(|seg| seg.variant);
+        let reader_variant = self.current_loaded_segment_key().map(|(v, _)| v);
         let has_hinted_variant = self
             .segments
             .lock_sync()
-            .first_segment_of_variant(hinted_variant)
-            .is_some();
+            .variant_segments(hinted_variant)
+            .is_some_and(|vs| !vs.is_empty());
         let variant = match reader_variant {
             Some(reader) if reader == hinted_variant => reader,
             Some(_reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
@@ -948,8 +992,9 @@ impl Source for HlsSource {
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {
-        self.current_loaded_segment()
-            .map(|seg| seg.byte_offset..seg.end_offset())
+        let (variant, seg_idx) = self.current_loaded_segment_key()?;
+        let segments = self.segments.lock_sync();
+        <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, seg_idx))
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
@@ -963,8 +1008,18 @@ impl Source for HlsSource {
             let reader_offset = self.coord.timeline().byte_position();
             segments
                 .find_at_offset(reader_offset)
-                .or_else(|| segments.last())
-                .map(|seg| seg.variant)
+                .map(|seg_ref| seg_ref.variant)
+                .or_else(|| {
+                    // Fallback: last committed segment
+                    let max = segments.max_end_offset();
+                    if max > 0 {
+                        segments
+                            .find_at_offset(max.saturating_sub(1))
+                            .map(|seg_ref| seg_ref.variant)
+                    } else {
+                        None
+                    }
+                })
         };
         if let Some(fallback_variant) = fallback_variant
             && let Some(range) = self.init_segment_range_for_variant(fallback_variant)
@@ -1007,7 +1062,7 @@ impl Source for HlsSource {
 
     #[kithara_hang_detector::hang_watchdog]
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
-        // Non-destructive: does NOT clear DownloadState or download_position.
+        // Non-destructive: does NOT clear StreamIndex or download_position.
         // seek_time_anchor → classify_seek → apply_seek_plan handles that
         // conditionally based on SeekLayout (Preserve vs Reset).
         self.coord
@@ -1042,8 +1097,13 @@ impl Source for HlsSource {
             .resolve_segment_for_offset(landed_offset, variant)
             .map(Self::segment_index);
         {
+            // Resolve the segment at the landed offset to find the right segment_index
+            // for the switch_variant call.
             let mut segments = self.segments.lock_sync();
-            segments.fence_at(landed_offset, variant);
+            if let Some(seg_ref) = segments.find_at_offset(landed_offset) {
+                let switch_seg = seg_ref.segment_index;
+                segments.switch_variant(switch_seg, variant);
+            }
         }
         self.variant_fence = Some(variant);
         let Some(segment_index) = segment_index else {
@@ -1123,7 +1183,9 @@ pub(crate) fn build_pair(
     let timeline = Timeline::new();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
-    let segments = Arc::new(Mutex::new(DownloadState::new()));
+    let num_variants = playlist_state.num_variants();
+    let num_segments = playlist_state.num_segments(0).unwrap_or(0);
+    let segments = Arc::new(Mutex::new(StreamIndex::new(num_variants, num_segments)));
     // Segment-based throttle: only for ephemeral backends where LRU eviction
     // destroys data. Disk backends don't need this — files survive eviction.
     // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
@@ -1179,10 +1241,10 @@ mod tests {
     use super::*;
     use crate::{
         config::HlsConfig,
-        download_state::LoadedSegment,
         fetch::{DefaultFetchManager, FetchManager},
         parsing::{VariantId, VariantStream},
         playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
+        stream_index::SegmentData,
     };
 
     fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
@@ -1257,23 +1319,20 @@ mod tests {
     }
 
     fn push_segment(
-        segments: &Arc<Mutex<DownloadState>>,
+        segments: &Arc<Mutex<StreamIndex>>,
         variant: usize,
         index: usize,
-        offset: u64,
+        _offset: u64,
         len: u64,
     ) {
-        let seg = LoadedSegment {
-            variant,
-            segment_index: index,
-            byte_offset: offset,
+        let data = SegmentData {
             init_len: 0,
             media_len: len,
             init_url: None,
             media_url: Url::parse(&format!("https://example.com/seg-{variant}-{index}.m4s"))
                 .expect("valid segment URL"),
         };
-        segments.lock_sync().push(seg);
+        segments.lock_sync().commit_segment(variant, index, data);
     }
 
     #[expect(
@@ -1475,7 +1534,19 @@ mod tests {
 
     #[kithara::test]
     fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() {
-        let source = build_test_source(1);
+        // Need 3 segments so StreamIndex variant_map covers segment 1
+        let cancel = CancellationToken::new();
+        let variant = make_variant_state_with_segments(0, 3);
+        let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
+        let parsed = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let (_downloader, source) =
+            build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+
         source.playlist_state.set_size_map(
             0,
             VariantSizeMap {
@@ -1486,15 +1557,17 @@ mod tests {
             },
         );
 
-        source.segments.lock_sync().push(LoadedSegment {
-            variant: 0,
-            segment_index: 1,
-            byte_offset: 10,
-            init_len: 25,
-            media_len: 75,
-            init_url: None,
-            media_url: Url::parse("https://example.com/seg-0-1.m4s").expect("valid segment URL"),
-        });
+        source.segments.lock_sync().commit_segment(
+            0,
+            1,
+            SegmentData {
+                init_len: 25,
+                media_len: 75,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg-0-1.m4s")
+                    .expect("valid segment URL"),
+            },
+        );
 
         assert_eq!(source.format_change_segment_range(), Some(100..200));
     }
@@ -1563,7 +1636,7 @@ mod tests {
         let media_res = source.fetch.backend().acquire_resource(&media_key).unwrap();
         media_res.write_at(0, b"media_data").unwrap();
 
-        let seg = LoadedSegment {
+        let seg = ReadSegment {
             variant: 0,
             segment_index: 0,
             byte_offset: 0,
@@ -1591,15 +1664,16 @@ mod tests {
         media_res.write_at(0, b"media_data").unwrap();
         media_res.commit(Some(10)).unwrap();
 
-        source.segments.lock_sync().push(LoadedSegment {
-            variant: 0,
-            segment_index: 0,
-            byte_offset: 0,
-            init_len: 0,
-            media_len: 10,
-            init_url: None,
-            media_url,
-        });
+        source.segments.lock_sync().commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 10,
+                init_url: None,
+                media_url,
+            },
+        );
         source.coord.timeline().set_byte_position(0);
 
         let mut buf = [0u8; 10];
@@ -1625,15 +1699,16 @@ mod tests {
         media_res.write_at(0, &[0u8; 300]).unwrap();
         media_res.commit(Some(300)).unwrap();
 
-        source.segments.lock_sync().push(LoadedSegment {
-            variant: 0,
-            segment_index: 0,
-            byte_offset: 0,
-            init_len: 0,
-            media_len: 300,
-            init_url: None,
-            media_url,
-        });
+        source.segments.lock_sync().commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 300,
+                init_url: None,
+                media_url,
+            },
+        );
 
         let result = source.wait_range(250..350, Duration::from_millis(50));
 

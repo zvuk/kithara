@@ -27,6 +27,7 @@ pub use crate::{
     },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
     source::HlsSource,
+    stream_index::{SegmentData, StreamIndex},
 };
 
 fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
@@ -46,7 +47,7 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
 
 pub fn make_test_source(
     playlist_state: Arc<PlaylistState>,
-    segments: Arc<kithara_platform::Mutex<DownloadState>>,
+    segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     coord: Arc<HlsCoord>,
     cancel: CancellationToken,
 ) -> HlsSource {
@@ -56,7 +57,7 @@ pub fn make_test_source(
 
 pub fn make_test_source_with_fetch(
     playlist_state: Arc<PlaylistState>,
-    segments: Arc<kithara_platform::Mutex<DownloadState>>,
+    segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     coord: Arc<HlsCoord>,
     fetch: Arc<DefaultFetchManager>,
 ) -> HlsSource {
@@ -112,6 +113,37 @@ pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
     }
 }
 
+/// Commit dummy resource from a `SegmentData` reference.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test helper — segment lengths fit in usize"
+)]
+#[expect(clippy::missing_panics_doc, reason = "test-only helper")]
+pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
+    use kithara_assets::ResourceKey;
+    use kithara_storage::ResourceExt;
+
+    let backend = source.fetch.backend();
+    let media_key = ResourceKey::from_url(&data.media_url);
+    let res = backend
+        .acquire_resource(&media_key)
+        .expect("open media resource");
+    res.write_at(0, &vec![0u8; data.media_len as usize])
+        .expect("write media");
+    res.commit(None).expect("commit media");
+
+    if let Some(ref init_url) = data.init_url {
+        let init_key = ResourceKey::from_url(init_url);
+        let init_res = backend
+            .acquire_resource(&init_key)
+            .expect("open init resource");
+        init_res
+            .write_at(0, &vec![0u8; data.init_len as usize])
+            .expect("write init");
+        init_res.commit(None).expect("commit init");
+    }
+}
+
 #[must_use]
 pub fn build_source(
     fetch: Arc<DefaultFetchManager>,
@@ -145,7 +177,7 @@ pub fn source_can_cross_variant(
 #[must_use]
 pub fn source_range_ready_from_segments(
     source: &HlsSource,
-    segments: &DownloadState,
+    segments: &StreamIndex,
     range: &Range<u64>,
 ) -> bool {
     source.range_ready_from_segments(segments, range)

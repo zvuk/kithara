@@ -14,13 +14,13 @@ use crate::{
     HlsStreamContext,
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
-    download_state::DownloadState,
     error::HlsError,
     fetch::FetchManager,
     keys::KeyManager,
     parsing::variant_info_from_master,
     playlist::PlaylistState,
     source::{HlsSource, build_pair},
+    stream_index::StreamIndex,
 };
 
 /// Marker type for HLS streaming.
@@ -33,7 +33,7 @@ impl StreamType for Hls {
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;
-    type Layout = Arc<kithara_platform::Mutex<DownloadState>>;
+    type Layout = Arc<kithara_platform::Mutex<StreamIndex>>;
     type Topology = Arc<PlaylistState>;
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
