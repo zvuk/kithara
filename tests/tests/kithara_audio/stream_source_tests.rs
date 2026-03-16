@@ -835,6 +835,19 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
         &[Duration::from_millis(8_250)],
         "recreated decoder should seek to the exact target position"
     );
+
+    let fetch = fetch_next(&mut source);
+    assert!(!fetch.is_eof, "ideal recreated decoder must produce output");
+    assert_eq!(
+        track_state(&source),
+        TrackPhaseTag::Decoding,
+        "after first recreated chunk the FSM must leave seek states"
+    );
+    assert_eq!(
+        fetch.data.spec(),
+        v3_spec(),
+        "cross-codec seek must decode from the recreated decoder stream"
+    );
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]

@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
@@ -20,8 +20,11 @@ use kithara_platform::{
     time::{Duration, Instant, sleep, timeout},
     tokio::task::spawn_blocking,
 };
-use kithara_storage::WaitOutcome;
-use kithara_stream::{AudioCodec, Source, StreamError, Timeline, Topology, TransferCoordination};
+use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_stream::{
+    AudioCodec, ReadOutcome, Source, SourcePhase, StreamError, Timeline, Topology,
+    TransferCoordination,
+};
 use kithara_test_utils::{kithara, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -147,6 +150,47 @@ fn make_segment_data_with_init(init_len: u64, media_len: u64) -> SegmentData {
         },
         media_url: Url::parse("https://example.com/seg")
             .expect("test URL for media segment must be valid"),
+    }
+}
+
+fn commit_segment_bytes(
+    fetch: &DefaultFetchManager,
+    data: &SegmentData,
+    init_bytes: &[u8],
+    media_bytes: &[u8],
+) {
+    assert_eq!(
+        data.init_len,
+        init_bytes.len() as u64,
+        "test init bytes must match SegmentData::init_len"
+    );
+    assert_eq!(
+        data.media_len,
+        media_bytes.len() as u64,
+        "test media bytes must match SegmentData::media_len"
+    );
+
+    let backend = fetch.backend();
+    let media_key = ResourceKey::from_url(&data.media_url);
+    let media_res = backend
+        .acquire_resource(&media_key)
+        .expect("open media resource");
+    media_res
+        .write_at(0, media_bytes)
+        .expect("write media bytes");
+    media_res
+        .commit(Some(media_bytes.len() as u64))
+        .expect("commit media bytes");
+
+    if let Some(init_url) = &data.init_url {
+        let init_key = ResourceKey::from_url(init_url);
+        let init_res = backend
+            .acquire_resource(&init_key)
+            .expect("open init resource");
+        init_res.write_at(0, init_bytes).expect("write init bytes");
+        init_res
+            .commit(Some(init_bytes.len() as u64))
+            .expect("commit init bytes");
     }
 }
 
@@ -760,6 +804,188 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     shared.abr_variant_index.store(1, Ordering::Release);
     // Metadata for variant 1 is still the source of init-bearing segment range.
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
+}
+
+#[kithara::test]
+fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floor() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let write_fetch = Arc::clone(&fetch);
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let init_bytes = b"v1-init";
+    let media_bytes = b"v1-seg2";
+    let mut expected = Vec::new();
+    expected.extend_from_slice(init_bytes);
+    expected.extend_from_slice(media_bytes);
+    let segment_data =
+        make_segment_data_with_init(init_bytes.len() as u64, media_bytes.len() as u64);
+
+    commit_segment_bytes(write_fetch.as_ref(), &segment_data, init_bytes, media_bytes);
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.reset_to(2, 1, 200);
+        segments.commit_segment(1, 2, segment_data);
+    }
+    shared.abr_variant_index.store(1, Ordering::Release);
+
+    assert_eq!(
+        Source::format_change_segment_range(&source),
+        Some(200..200 + expected.len() as u64),
+        "decoder-start boundary must stay on the reset layout floor in absolute coordinates"
+    );
+
+    let mut buf = vec![0u8; expected.len()];
+    let read = source
+        .read_at(200, &mut buf)
+        .expect("read_at from decoder-start boundary");
+
+    assert_eq!(
+        read,
+        ReadOutcome::Data(expected.len()),
+        "decoder-start boundary must be immediately readable"
+    );
+    assert_eq!(
+        buf, expected,
+        "reading from the reported decoder-start boundary must return init bytes followed by media bytes"
+    );
+}
+
+#[kithara::test]
+fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let write_fetch = Arc::clone(&fetch);
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let segment_data = make_segment_data(100);
+    let expected = b"late-segment";
+
+    commit_segment_bytes(write_fetch.as_ref(), &segment_data, &[], expected);
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.reset_to(2, 1, 200);
+        segments.commit_segment(1, 7, segment_data);
+    }
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.timeline.set_byte_position(750);
+
+    assert_eq!(
+        Source::current_segment_range(&source),
+        Some(700..800),
+        "after SeekLayout::Reset, late loaded segments must keep absolute layout offsets instead of collapsing to the reset floor"
+    );
+    assert_eq!(
+        Source::phase(&source),
+        SourcePhase::Ready,
+        "source readiness at the landed byte position must use the absolute layout offset of the loaded segment"
+    );
+
+    let mut buf = vec![0u8; expected.len()];
+    let read = source
+        .read_at(750, &mut buf)
+        .expect("read_at from absolute late-segment offset");
+
+    assert_eq!(
+        read,
+        ReadOutcome::Data(expected.len()),
+        "read_at must return committed bytes for a late loaded segment at its absolute layout offset"
+    );
+    assert_eq!(
+        buf, expected,
+        "read_at must resolve the committed late segment using absolute layout coordinates"
+    );
+}
+
+#[kithara::test]
+fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let write_fetch = Arc::clone(&fetch);
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+
+    let seg0_bytes = b"v0-seg0|";
+    let seg1_bytes = b"v0-seg1|";
+    let init2_bytes = b"v1-init|";
+    let seg2_bytes = b"v1-seg2|";
+
+    let seg0 = SegmentData {
+        init_len: 0,
+        media_len: seg0_bytes.len() as u64,
+        init_url: None,
+        media_url: Url::parse("https://example.com/v0-seg0").expect("valid URL"),
+    };
+    let seg1 = SegmentData {
+        init_len: 0,
+        media_len: seg1_bytes.len() as u64,
+        init_url: None,
+        media_url: Url::parse("https://example.com/v0-seg1").expect("valid URL"),
+    };
+    let seg2 = SegmentData {
+        init_len: init2_bytes.len() as u64,
+        media_len: seg2_bytes.len() as u64,
+        init_url: Some(Url::parse("https://example.com/v1-init2").expect("valid URL")),
+        media_url: Url::parse("https://example.com/v1-seg2").expect("valid URL"),
+    };
+
+    commit_segment_bytes(write_fetch.as_ref(), &seg0, &[], seg0_bytes);
+    commit_segment_bytes(write_fetch.as_ref(), &seg1, &[], seg1_bytes);
+    commit_segment_bytes(write_fetch.as_ref(), &seg2, init2_bytes, seg2_bytes);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.commit_segment(0, 0, seg0);
+        segments.commit_segment(0, 1, seg1);
+        segments.switch_variant(2, 1);
+        segments.commit_segment(1, 2, seg2);
+    }
+    shared.abr_variant_index.store(1, Ordering::Release);
+
+    let mut expected = Vec::new();
+    expected.extend_from_slice(seg0_bytes);
+    expected.extend_from_slice(seg1_bytes);
+    expected.extend_from_slice(init2_bytes);
+    expected.extend_from_slice(seg2_bytes);
+
+    let mut actual = Vec::new();
+    let mut offset = 0u64;
+    while actual.len() < expected.len() {
+        let mut buf = [0u8; 5];
+        let read = source
+            .read_at(offset, &mut buf)
+            .expect("read_at over mixed layout");
+        match read {
+            ReadOutcome::Data(0) => panic!(
+                "unexpected EOF while reading mixed-layout byte stream at offset {offset}"
+            ),
+            ReadOutcome::Data(n) => {
+                actual.extend_from_slice(&buf[..n]);
+                offset += n as u64;
+            }
+            other => panic!("expected committed bytes from mixed layout, got {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        actual, expected,
+        "mixed layout must expose the exact expected byte stream across the variant switch"
+    );
 }
 
 #[kithara::test]
