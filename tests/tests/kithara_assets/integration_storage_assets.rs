@@ -199,6 +199,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let key = ResourceKey::new("media/concurrent.bin");
     let payload: Vec<u8> = b"concurrent streaming data".to_vec();
     let payload_len = payload.len() as u64;
+    let writer_res = store.acquire_resource(&key).unwrap();
 
     let store_reader = store.clone();
     let key_reader = key.clone();
@@ -212,14 +213,15 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
         buf.to_vec()
     });
 
-    let store_writer = store;
     let payload_writer = payload.clone();
-    let key_writer = key;
     let writer = thread::spawn(move || {
-        let res = store_writer.acquire_resource(&key_writer).unwrap();
-        res.write_at(0, &payload_writer).unwrap();
-        res.commit(Some(payload_writer.len() as u64)).unwrap();
-        res.wait_range(0..payload_writer.len() as u64).unwrap();
+        writer_res.write_at(0, &payload_writer).unwrap();
+        writer_res
+            .commit(Some(payload_writer.len() as u64))
+            .unwrap();
+        writer_res
+            .wait_range(0..payload_writer.len() as u64)
+            .unwrap();
     });
 
     let data = reader.join().unwrap();

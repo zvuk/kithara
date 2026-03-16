@@ -227,15 +227,24 @@ fn streaming_resource_commit_behavior(
     let read_back_again = read_bytes(&res, 0, data.len());
     assert_eq!(read_back_again, data);
 
-    // Drop resource and verify it's still accessible
+    // Drop resource and verify lifecycle contract after the handle is gone.
     drop(res);
 
-    // Reopen the resource
-    let res_reopened = store.open_resource(&key).unwrap();
-
-    // Should be able to read the data (assuming persistence works)
-    let final_read = read_bytes(&res_reopened, 0, data.len());
-    assert_eq!(final_read, data);
+    if explicit_commit {
+        let res_reopened = store.open_resource(&key).unwrap();
+        let final_read = read_bytes(&res_reopened, 0, data.len());
+        assert_eq!(final_read, data);
+    } else {
+        let err = store
+            .open_resource(&key)
+            .expect_err("drop without commit must not leave a ghost resource");
+        assert!(
+            err.to_string().contains("No such file")
+                || err.to_string().contains("not found")
+                || err.to_string().contains("missing"),
+            "uncommitted drop should report missing resource, got: {err}"
+        );
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]

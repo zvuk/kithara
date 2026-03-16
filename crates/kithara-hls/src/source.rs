@@ -1181,10 +1181,26 @@ impl Source for HlsSource {
         let fallback_variant = anchor
             .and_then(|resolved| resolved.variant_index)
             .unwrap_or_else(|| self.resolve_current_variant());
-        let landed_segment = self.layout_segment_for_offset(landed_offset).or_else(|| {
-            self.resolve_segment_for_offset(landed_offset, fallback_variant)
-                .map(|resolved| (fallback_variant, Self::segment_index(resolved)))
-        });
+        let landed_segment = self
+            .layout_segment_for_offset(landed_offset)
+            .filter(|&(variant, segment_index)| {
+                !anchor.is_some_and(|resolved| {
+                    let Some(anchor_variant) = resolved.variant_index else {
+                        return false;
+                    };
+                    let Some(anchor_segment) = resolved.segment_index.map(|index| index as usize)
+                    else {
+                        return false;
+                    };
+                    landed_offset < resolved.byte_offset
+                        && variant == anchor_variant
+                        && segment_index >= anchor_segment
+                })
+            })
+            .or_else(|| {
+                self.resolve_segment_for_offset(landed_offset, fallback_variant)
+                    .map(|resolved| (fallback_variant, Self::segment_index(resolved)))
+            });
         // `apply_seek_plan(...)` already established the authoritative layout
         // for this seek. Rewriting `variant_map` again at the landed offset
         // collapses mixed auto-switch layouts during replay from the prefix.
@@ -1649,6 +1665,30 @@ mod tests {
                 seek_epoch: 0,
             }),
             "seek landing recovery must target the layout variant that owns the missing prefix"
+        );
+    }
+
+    #[kithara::test]
+    fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix() {
+        let mut source = build_test_source_with_segments(2, 4);
+        set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
+        set_variant_size_map(source.playlist_state.as_ref(), 1, &[100, 100, 100, 100]);
+        source.coord.abr_variant_index.store(1, Ordering::Release);
+
+        let anchor = make_anchor(1, 2, 200);
+        source.apply_seek_plan(&anchor, &SeekLayout::Reset);
+        source.coord.timeline().set_byte_position(150);
+
+        source.commit_seek_landing(Some(anchor));
+
+        assert_eq!(
+            source.coord.take_segment_request(),
+            Some(SegmentRequest {
+                variant: 1,
+                segment_index: 1,
+                seek_epoch: 0,
+            }),
+            "decoder landing before the anchor must resolve through target-variant metadata, not the truncated reset layout"
         );
     }
 

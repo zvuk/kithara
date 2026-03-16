@@ -43,7 +43,7 @@ fn ephemeral_backend_creates_mem_resource() {
 
     let key = kithara::assets::ResourceKey::new("seg_0.m4s");
     let res = backend
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("open ephemeral resource");
     assert!(
         res.path().is_none(),
@@ -65,7 +65,7 @@ fn disk_backend_creates_mmap_resource() {
         .build();
 
     let key = kithara::assets::ResourceKey::new("seg_0.m4s");
-    let res = backend.open_resource(&key).expect("open disk resource");
+    let res = backend.acquire_resource(&key).expect("open disk resource");
     assert!(
         res.path().is_some(),
         "disk resource must have file path (MmapResource)"

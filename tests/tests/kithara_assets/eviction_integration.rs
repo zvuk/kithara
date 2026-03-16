@@ -151,7 +151,7 @@ fn eviction_ignores_missing_index(
     let trigger_store = asset_store_with_root(&temp_dir, "trigger-asset", Some(2));
     let trigger_key = ResourceKey::new("data/trigger.bin");
 
-    let res = trigger_store.open_resource(&trigger_key);
+    let res = trigger_store.acquire_resource(&trigger_key);
 
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }

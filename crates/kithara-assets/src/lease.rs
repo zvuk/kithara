@@ -446,6 +446,15 @@ where
             AccessMode::Read => self.inner.open_resource_with_ctx(key, ctx)?,
             AccessMode::Write => self.inner.acquire_resource_with_ctx(key, ctx)?,
         };
+        self.wrap_opened_resource(key, inner, mode)
+    }
+
+    fn wrap_opened_resource(
+        &self,
+        key: &ResourceKey,
+        inner: A::Res,
+        mode: AccessMode,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
         let live = self.open_live_resource(key, inner.status());
 
         if !self.is_active() {
