@@ -297,6 +297,13 @@ where
         self
     }
 
+    /// Set callback invoked when a cached resource is invalidated.
+    #[must_use]
+    pub fn on_invalidated(mut self, callback: OnInvalidatedFn) -> Self {
+        self.on_invalidated = Some(callback);
+        self
+    }
+
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
@@ -482,6 +489,11 @@ mod tests {
             .ephemeral(true)
             .build();
         let key = ResourceKey::new("test.bin");
+
+        let write_handle = store.acquire_resource(&key).unwrap();
+        write_handle.write_at(0, b"x").unwrap();
+        write_handle.commit(Some(1)).unwrap();
+        drop(write_handle);
 
         let read_handle = store.open_resource(&key).unwrap();
 
@@ -676,11 +688,9 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource was evicted from LRU — re-opening creates a fresh empty one.
-        let reopened = backend.open_resource(&keys[0]).unwrap();
-        assert_eq!(
-            reopened.len(),
-            None,
+        // First resource was evicted from LRU — re-opening now reports Missing.
+        assert!(
+            backend.open_resource(&keys[0]).is_err(),
             "evicted resource should be gone in ephemeral mode"
         );
     }

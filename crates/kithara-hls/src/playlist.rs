@@ -8,7 +8,10 @@ use kithara_platform::{RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SourceSeekAnchor, Topology};
 use url::Url;
 
-use crate::parsing::SegmentKey;
+use crate::{
+    ids::{SegmentIndex, VariantIndex},
+    parsing::SegmentKey,
+};
 
 // Types
 
@@ -16,7 +19,7 @@ use crate::parsing::SegmentKey;
 #[derive(Debug, Clone)]
 pub struct SegmentState {
     /// Segment index within the variant's media playlist.
-    pub index: usize,
+    pub index: SegmentIndex,
     /// Absolute URL of the segment.
     pub url: Url,
     /// Duration of the segment.
@@ -45,7 +48,7 @@ pub struct VariantSizeMap {
 #[derive(Debug)]
 pub struct VariantState {
     /// Variant index in the master playlist.
-    pub id: usize,
+    pub id: VariantIndex,
     /// Absolute URL of the variant's media playlist.
     pub uri: Url,
     /// Advertised bandwidth in bits per second.
@@ -140,7 +143,7 @@ impl PlaylistState {
     }
 
     /// Set the size map for a variant (after HEAD requests or first download).
-    pub fn set_size_map(&self, variant: usize, size_map: VariantSizeMap) {
+    pub fn set_size_map(&self, variant: VariantIndex, size_map: VariantSizeMap) {
         if let Some(lock) = self.variants.get(variant) {
             let mut state = lock.lock_sync_write();
             state.size_map = Some(size_map);
@@ -155,7 +158,12 @@ impl PlaylistState {
         clippy::significant_drop_tightening,
         reason = "write guard borrows size_map mutably"
     )]
-    pub fn reconcile_segment_size(&self, variant: usize, segment_index: usize, actual_total: u64) {
+    pub fn reconcile_segment_size(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        actual_total: u64,
+    ) {
         let Some(lock) = self.variants.get(variant) else {
             return;
         };
@@ -208,43 +216,43 @@ pub(crate) trait PlaylistAccess: Send + Sync {
     fn num_variants(&self) -> usize;
 
     /// Number of segments in a variant's media playlist.
-    fn num_segments(&self, variant: usize) -> Option<usize>;
+    fn num_segments(&self, variant: VariantIndex) -> Option<usize>;
 
     /// Audio codec for a variant.
-    fn variant_codec(&self, variant: usize) -> Option<AudioCodec>;
+    fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec>;
 
     /// Container format for a variant.
-    fn variant_container(&self, variant: usize) -> Option<ContainerFormat>;
+    fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat>;
 
     /// Absolute URL of a specific segment.
-    fn segment_url(&self, variant: usize, index: usize) -> Option<Url>;
+    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url>;
 
     /// Absolute URL of the init segment for a variant.
-    fn init_url(&self, variant: usize) -> Option<Url>;
+    fn init_url(&self, variant: VariantIndex) -> Option<Url>;
 
     /// Whether the variant has a size map.
-    fn has_size_map(&self, variant: usize) -> bool;
+    fn has_size_map(&self, variant: VariantIndex) -> bool;
 
     /// Total size of a variant in bytes (init + all segments).
-    fn total_variant_size(&self, variant: usize) -> Option<u64>;
+    fn total_variant_size(&self, variant: VariantIndex) -> Option<u64>;
 
     /// Size of a specific segment in bytes (from `VariantSizeMap`).
-    fn segment_size(&self, variant: usize, index: usize) -> Option<u64>;
+    fn segment_size(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
 
     /// Byte offset of a specific segment within the variant's virtual stream.
-    fn segment_byte_offset(&self, variant: usize, index: usize) -> Option<u64>;
+    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
 
     /// Find which segment contains the given byte offset (binary search on offsets).
-    fn find_segment_at_offset(&self, variant: usize, offset: u64) -> Option<usize>;
+    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex>;
 
     /// Resolve a target time to a deterministic segment.
     ///
     /// Returns segment index and time boundaries of the selected segment.
     fn find_seek_point_for_time(
         &self,
-        variant: usize,
+        variant: VariantIndex,
         target: Duration,
-    ) -> Option<(usize, Duration, Duration)>;
+    ) -> Option<(SegmentIndex, Duration, Duration)>;
 }
 
 impl PlaylistAccess for PlaylistState {
@@ -252,37 +260,37 @@ impl PlaylistAccess for PlaylistState {
         self.variants.len()
     }
 
-    fn num_segments(&self, variant: usize) -> Option<usize> {
+    fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         Some(state.segments.len())
     }
 
-    fn variant_codec(&self, variant: usize) -> Option<AudioCodec> {
+    fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.codec
     }
 
-    fn variant_container(&self, variant: usize) -> Option<ContainerFormat> {
+    fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.container
     }
 
-    fn segment_url(&self, variant: usize, index: usize) -> Option<Url> {
+    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.segments.get(index).map(|s| s.url.clone())
     }
 
-    fn init_url(&self, variant: usize) -> Option<Url> {
+    fn init_url(&self, variant: VariantIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.init_url.clone()
     }
 
-    fn has_size_map(&self, variant: usize) -> bool {
+    fn has_size_map(&self, variant: VariantIndex) -> bool {
         let Some(lock) = self.variants.get(variant) else {
             return false;
         };
@@ -290,7 +298,7 @@ impl PlaylistAccess for PlaylistState {
         state.size_map.is_some()
     }
 
-    fn total_variant_size(&self, variant: usize) -> Option<u64> {
+    fn total_variant_size(&self, variant: VariantIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.size_map.as_ref().map(|sm| sm.total)
@@ -300,7 +308,7 @@ impl PlaylistAccess for PlaylistState {
         clippy::significant_drop_tightening,
         reason = "size_map borrows the read guard"
     )]
-    fn segment_size(&self, variant: usize, index: usize) -> Option<u64> {
+    fn segment_size(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         let size_map = state.size_map.as_ref()?;
@@ -311,7 +319,7 @@ impl PlaylistAccess for PlaylistState {
         clippy::significant_drop_tightening,
         reason = "size_map borrows the read guard"
     )]
-    fn segment_byte_offset(&self, variant: usize, index: usize) -> Option<u64> {
+    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         let size_map = state.size_map.as_ref()?;
@@ -322,7 +330,7 @@ impl PlaylistAccess for PlaylistState {
         clippy::significant_drop_tightening,
         reason = "size_map borrows the read guard"
     )]
-    fn find_segment_at_offset(&self, variant: usize, offset: u64) -> Option<usize> {
+    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         let size_map = state.size_map.as_ref()?;
@@ -349,9 +357,9 @@ impl PlaylistAccess for PlaylistState {
     )]
     fn find_seek_point_for_time(
         &self,
-        variant: usize,
+        variant: VariantIndex,
         target: Duration,
-    ) -> Option<(usize, Duration, Duration)> {
+    ) -> Option<(SegmentIndex, Duration, Duration)> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         if state.segments.is_empty() {

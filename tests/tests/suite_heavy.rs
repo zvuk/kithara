@@ -32,6 +32,7 @@ mod kithara_hls {
     pub(crate) mod fixture;
 
     mod deferred_abr_debug;
+    mod drm_stream_integrity;
     mod live_stress_real_stream;
     mod source_internal_cases;
     mod stress_chunk_integrity;

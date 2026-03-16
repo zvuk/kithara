@@ -70,6 +70,99 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     assert!(!store.has_resource(&key_failed));
 }
 
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
+    let dir = tempdir().unwrap();
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some("disk-asset"))
+        .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .build();
+
+    let key_active = ResourceKey::new("segments/active.bin");
+    let key_other = ResourceKey::new("segments/other.bin");
+
+    let active = store.acquire_resource(&key_active).unwrap();
+    active.write_at(0, b"abcd").unwrap();
+    assert_eq!(
+        store.resource_state(&key_active).unwrap(),
+        AssetResourceState::Active
+    );
+
+    let other = store.acquire_resource(&key_other).unwrap();
+    other.write_at(0, b"wxyz").unwrap();
+
+    assert_eq!(
+        store.resource_state(&key_active).unwrap(),
+        AssetResourceState::Active,
+        "live write handle must stay Active even after its cache entry is evicted"
+    );
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
+    let dir = tempdir().unwrap();
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some("disk-asset"))
+        .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .build();
+
+    let key = ResourceKey::new("segments/ghost.bin");
+    let handle = store.acquire_resource(&key).unwrap();
+    handle.write_at(0, b"abcd").unwrap();
+    assert_eq!(
+        store.resource_state(&key).unwrap(),
+        AssetResourceState::Active
+    );
+
+    drop(handle);
+
+    assert_eq!(
+        store.resource_state(&key).unwrap(),
+        AssetResourceState::Missing,
+        "abandoned writes must not surface as committed ghost files after the handle drops"
+    );
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
+    let dir = tempdir().unwrap();
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some("disk-asset"))
+        .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .build();
+
+    let key = ResourceKey::new("segments/missing.bin");
+    let path = dir.path().join("disk-asset").join("segments/missing.bin");
+
+    assert_eq!(
+        store.resource_state(&key).unwrap(),
+        AssetResourceState::Missing
+    );
+    assert!(!path.exists());
+
+    let err = store
+        .open_resource(&key)
+        .expect_err("read-open on a missing resource must not create it");
+    assert!(
+        err.to_string().contains("No such file")
+            || err.to_string().contains("not found")
+            || err.to_string().contains("missing"),
+        "missing read-open should report absence, got: {err}"
+    );
+
+    assert_eq!(
+        store.resource_state(&key).unwrap(),
+        AssetResourceState::Missing
+    );
+    assert!(
+        !path.exists(),
+        "read-open on a missing disk resource must not leave a zero-filled ghost file"
+    );
+}
+
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     let store = AssetStoreBuilder::new()
@@ -119,6 +212,14 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
     }
+
+    assert_eq!(
+        store.resource_state(&key0).unwrap(),
+        AssetResourceState::Committed { final_len: Some(4) },
+        "live user handle must keep the resource readable even after LRU eviction"
+    );
+
+    drop(res0);
 
     assert_eq!(
         store.resource_state(&key0).unwrap(),

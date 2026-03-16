@@ -36,6 +36,9 @@ tempfile = { workspace = true }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+kithara-drm = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
 kithara-assets = { path = ".", features = ["internal"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }

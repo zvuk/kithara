@@ -86,16 +86,17 @@ where
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    R: Debug,
+    R: ResourceExt + Debug,
     Ctx: Clone + Debug,
 {
     pub fn new(inner: R, ctx: Option<Ctx>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
+        let processed = ctx.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
             inner,
             ctx,
             process,
             pool,
-            processed: Arc::new(Mutex::new(false)),
+            processed: Arc::new(Mutex::new(processed)),
         }
     }
 }
@@ -285,6 +286,19 @@ where
 
         Ok(processed)
     }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        let inner = self.inner.acquire_resource(key)?;
+
+        let processed =
+            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
+
+        Ok(processed)
+    }
 }
 
 #[cfg(test)]
@@ -448,5 +462,26 @@ mod tests {
             err.to_string().contains("not readable before commit"),
             "read guard must explain that commit is required before reads"
         );
+    }
+
+    #[kithara::test]
+    fn reopened_committed_processed_resource_is_readable_immediately() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let already_processed: Vec<u8> = b"test content".iter().map(|b| b ^ 0x42).collect();
+
+        let (resource, _dir) = mock_resource(&already_processed);
+        resource
+            .commit(Some(already_processed.len() as u64))
+            .unwrap();
+
+        let reopened = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+
+        let mut buf = vec![0u8; already_processed.len()];
+        let n = reopened.read_at(0, &mut buf).unwrap();
+
+        assert_eq!(n, already_processed.len());
+        assert_eq!(buf, already_processed);
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
 }

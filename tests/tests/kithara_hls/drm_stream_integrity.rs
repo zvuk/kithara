@@ -53,7 +53,13 @@ fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration)
             Ok(0) => thread::sleep(Duration::from_millis(5)),
             Ok(n) => filled += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(e) => {
+                if e.to_string().contains("variant change") {
+                    stream.clear_variant_fence();
+                    continue;
+                }
+                break;
+            }
         }
     }
     filled
@@ -84,15 +90,21 @@ fn scan_boxes(
             break;
         };
         if size < 8 && size != 0 {
-            let hex: String =
-                header[..8].iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+            let hex: String = header[..8]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
             eprintln!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
             break;
         }
         let tag_str = String::from_utf8_lossy(&tag).to_string();
         if !is_known_box(&tag) {
-            let hex: String =
-                header[..8].iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+            let hex: String = header[..8]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
             eprintln!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
             break;
         }
@@ -186,12 +198,16 @@ async fn drm_stream_byte_integrity(
         let mut buf = vec![0u8; 65536];
         let mut total_read = 0u64;
         let deadline = Instant::now() + Duration::from_secs(25);
+        let mut hit_deadline = false;
+        let mut read_error = None;
+        let mut saw_eof = false;
 
         while Instant::now() < deadline {
             match stream.read(&mut buf) {
                 Ok(0) => {
                     thread::sleep(Duration::from_millis(50));
                     if let Ok(0) = stream.read(&mut buf) {
+                        saw_eof = true;
                         break;
                     }
                 }
@@ -203,9 +219,14 @@ async fn drm_stream_byte_integrity(
                         continue;
                     }
                     eprintln!("[{label}] read error: {e}");
+                    read_error = Some(e.to_string());
                     break;
                 }
             }
+        }
+
+        if !saw_eof && read_error.is_none() && Instant::now() >= deadline {
+            hit_deadline = true;
         }
 
         let stream_len = stream.len().unwrap_or(0);
@@ -244,15 +265,25 @@ async fn drm_stream_byte_integrity(
             "[{label}] Expected at least 4 fMP4 boxes, found {}",
             boxes.len()
         );
-        assert_eq!(
-            moof_count, mdat_count,
-            "[{label}] moof/mdat count mismatch"
-        );
+        assert_eq!(moof_count, mdat_count, "[{label}] moof/mdat count mismatch");
 
         // total_read should match stream_len (what we actually read == declared total).
         // Allow small delta for DRM padding reconciliation timing.
         let read_vs_len = (total_read as i64) - (stream_len as i64);
         eprintln!("[{label}] total_read - stream_len = {read_vs_len}");
+        assert!(
+            !hit_deadline || read_vs_len.unsigned_abs() < 1024,
+            "[{label}] Phase 1 hit deadline before EOF: total_read={total_read} \
+             stream_len={stream_len} delta={read_vs_len}"
+        );
+        if let Some(error) = read_error {
+            panic!("[{label}] Phase 1 ended with read error before EOF: {error}");
+        }
+        assert!(
+            read_vs_len.unsigned_abs() < 1024,
+            "[{label}] Phase 1 did not read full stream: total_read={total_read} \
+             stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
+        );
 
         // fMP4 box coverage should match total_read.
         // last_end = where the last box SAYS it ends (based on box size headers).

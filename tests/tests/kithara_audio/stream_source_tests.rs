@@ -134,13 +134,8 @@ impl Source for TestSource {
             return Ok(WaitOutcome::Interrupted);
         }
 
-        if self.coord.timeline.eof()
-            && self
-                .coord
-                .timeline
-                .total_bytes()
-                .is_some_and(|total| total > 0 && range.start >= total)
-        {
+        let len = self.state.lock_sync().len;
+        if self.coord.timeline.eof() && len.is_some_and(|total| total > 0 && range.start >= total) {
             return Ok(WaitOutcome::Eof);
         }
 
@@ -249,9 +244,9 @@ impl Source for TestSource {
             return kithara_stream::SourcePhase::Waiting;
         }
         if self
-            .coord
-            .timeline
-            .total_bytes()
+            .state
+            .lock_sync()
+            .len
             .is_some_and(|total| total > 0 && range.start >= total)
         {
             return kithara_stream::SourcePhase::Eof;
@@ -671,7 +666,6 @@ fn seek_waits_for_anchor_range_before_calling_decoder_seek() {
         });
     }
 
-    timeline(&source).set_total_bytes(Some(2000));
     timeline(&source).set_byte_position(2000);
     timeline(&source).set_eof(true);
 
@@ -748,7 +742,6 @@ fn seek_anchor_does_not_move_stream_before_exact_decoder_seek_from_eof() {
         });
     }
 
-    timeline(&source).set_total_bytes(Some(2_000));
     timeline(&source).set_byte_position(2_000);
     timeline(&source).set_eof(true);
 
@@ -1507,7 +1500,6 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let total_bytes = 200u64;
 
     source.timeline().set_eof(true);
-    source.timeline().set_total_bytes(Some(total_bytes));
     source.timeline().set_byte_position(total_bytes);
 
     for idx in 0..12u64 {

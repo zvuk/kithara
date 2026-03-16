@@ -1118,7 +1118,6 @@ fn test_wait_range_flushing_overrides_stale_eof() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let total_bytes = 2_400u64;
     shared.timeline.set_eof(true);
-    shared.timeline.set_total_bytes(Some(total_bytes));
     shared.timeline.set_byte_position(total_bytes);
 
     let _ = shared.timeline.initiate_seek(Duration::ZERO);
@@ -1142,7 +1141,6 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
 
     let total_bytes = 2_400u64;
     shared.timeline.set_eof(true);
-    shared.timeline.set_total_bytes(Some(total_bytes));
     shared.timeline.set_byte_position(total_bytes);
 
     // Simulate holding the seek key: multiple seek starts without completing the newest one yet.

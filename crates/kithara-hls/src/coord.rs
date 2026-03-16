@@ -9,11 +9,13 @@ use kithara_platform::{Condvar, tokio, tokio::sync::Notify};
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
 use tokio_util::sync::CancellationToken;
 
+use crate::ids::{SegmentIndex, VariantIndex};
+
 /// Request to load a specific segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentRequest {
-    pub segment_index: usize,
-    pub variant: usize,
+    pub segment_index: SegmentIndex,
+    pub variant: VariantIndex,
     pub seek_epoch: u64,
 }
 

@@ -48,6 +48,8 @@ disable-hang-detector = [
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+aes = { workspace = true }
+cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["internal"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }

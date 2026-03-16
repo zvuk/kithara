@@ -124,7 +124,6 @@ pub(crate) struct FileDownloader {
     res: AssetResource,
     bus: EventBus,
     coord: Arc<FileCoord>,
-    total: Option<u64>,
     /// Backpressure threshold. None = no backpressure.
     look_ahead_bytes: Option<u64>,
     /// Generic ordered-download cursor.
@@ -140,7 +139,6 @@ impl FileDownloader {
         look_ahead_bytes: Option<u64>,
     ) -> Self {
         let url = state.url().clone();
-        let total = state.len();
         let res = state.res().clone();
         let cancel = state.cancel().clone();
         let req_headers = state.headers().cloned();
@@ -159,7 +157,6 @@ impl FileDownloader {
             res,
             bus,
             coord,
-            total,
             look_ahead_bytes,
             cursor: DownloadCursor::stream(0),
         }
@@ -205,7 +202,7 @@ impl FileDownloader {
                     // Discover content-length from response headers if unknown
                     // (fallback path — normally set by create_remote via
                     // with_initial_writer before we reach here).
-                    if self.total.is_none()
+                    if self.coord.total_bytes().is_none()
                         && let Some(cl) = byte_stream
                             .headers
                             .get("content-length")
@@ -216,8 +213,7 @@ impl FileDownloader {
                             content_length = cl,
                             "discovered total from stream headers"
                         );
-                        self.total = Some(cl);
-                        self.coord.timeline().set_total_bytes(Some(cl));
+                        self.coord.set_total_bytes(Some(cl));
                     }
 
                     *slot = Some(Writer::with_offset(
@@ -305,7 +301,7 @@ impl Downloader for FileDownloader {
                 let mut plans = Vec::new();
                 let gap_chunk_size: u64 = 2 * 1024 * 1024;
                 let gap_batch_size: usize = 4;
-                let total = self.total.unwrap_or(0);
+                let total = self.coord.total_bytes().unwrap_or(0);
 
                 let mut gap_cursor: u64 = 0;
                 for _ in 0..gap_batch_size {
@@ -322,13 +318,13 @@ impl Downloader for FileDownloader {
                 if plans.is_empty() {
                     // No more gaps — check if complete.
                     if self.res.next_gap(0, total).is_none() && total > 0 {
-                        if let Err(e) = self.res.commit(self.total) {
+                        if let Err(e) = self.res.commit(self.coord.total_bytes()) {
                             tracing::error!(?e, "failed to commit resource after gap-filling");
                             self.res.fail(format!("commit failed: {e}"));
                             self.bus.publish(FileEvent::DownloadError {
                                 error: format!("commit failed: {e}"),
                             });
-                        } else if let Some(total) = self.total {
+                        } else if let Some(total) = self.coord.total_bytes() {
                             self.bus
                                 .publish(FileEvent::DownloadComplete { total_bytes: total });
                         }
@@ -386,7 +382,7 @@ impl Downloader for FileDownloader {
                     error: e.to_string(),
                 });
                 // Transition to gap-filling on error.
-                if self.total.is_some() {
+                if self.coord.total_bytes().is_some() {
                     self.cursor.reopen_fill(0, 0);
                     Ok(StepResult::PhaseChange)
                 } else {
@@ -404,22 +400,22 @@ impl Downloader for FileDownloader {
                 self.coord.set_download_pos(download_offset);
                 self.bus.publish(FileEvent::DownloadProgress {
                     offset: download_offset,
-                    total: self.total,
+                    total: self.coord.total_bytes(),
                 });
             }
             FileFetch::RangeDone => {
                 // Check if gap-filling completed everything.
-                let total = self.total.unwrap_or(0);
+                let total = self.coord.total_bytes().unwrap_or(0);
                 if total > 0 && self.res.next_gap(0, total).is_none() {
                     // Only commit + emit event on first completion.
                     if !self.cursor.is_complete() {
-                        if let Err(e) = self.res.commit(self.total) {
+                        if let Err(e) = self.res.commit(self.coord.total_bytes()) {
                             tracing::error!(?e, "failed to commit resource after range done");
                             self.res.fail(format!("commit failed: {e}"));
                             self.bus.publish(FileEvent::DownloadError {
                                 error: format!("commit failed: {e}"),
                             });
-                        } else if let Some(total) = self.total {
+                        } else if let Some(total) = self.coord.total_bytes() {
                             self.bus
                                 .publish(FileEvent::DownloadComplete { total_bytes: total });
                         }
@@ -428,11 +424,12 @@ impl Downloader for FileDownloader {
                 }
             }
             FileFetch::StreamEnded { total_bytes } => {
-                if self.total.is_none() {
-                    self.total = Some(total_bytes);
+                if self.coord.total_bytes().is_none() {
+                    self.coord.set_total_bytes(Some(total_bytes));
                 }
 
-                let is_complete = self.total.is_none_or(|expected| total_bytes >= expected);
+                let expected_total = self.coord.total_bytes();
+                let is_complete = expected_total.is_none_or(|expected| total_bytes >= expected);
 
                 if is_complete {
                     // Complete download — commit resource.
@@ -451,12 +448,12 @@ impl Downloader for FileDownloader {
                     // Partial download — switch to gap-filling.
                     tracing::warn!(
                         total_bytes,
-                        expected = ?self.total,
+                        expected = ?expected_total,
                         "stream ended early — switching to gap-filling"
                     );
                     self.bus.publish(FileEvent::DownloadProgress {
                         offset: total_bytes,
-                        total: self.total,
+                        total: expected_total,
                     });
                     self.cursor.reopen_fill(0, 0);
                 }
@@ -555,6 +552,7 @@ mod tests {
         };
 
         let coord = make_coord();
+        coord.set_total_bytes(Some(total));
 
         // Write first 1KB to simulate sequential download progress.
         res.write_at(0, &[0u8; 1000]).unwrap();
@@ -569,7 +567,6 @@ mod tests {
             res,
             coord: Arc::clone(&coord),
             bus: EventBus::new(16),
-            total: Some(total),
             look_ahead_bytes: None,
             cursor: DownloadCursor::stream(0),
         };
@@ -614,13 +611,13 @@ mod tests {
         };
 
         let coord = make_coord();
+        coord.set_total_bytes(Some(1024));
         let mut dl = FileDownloader {
             io,
             writer: WasmSend::new(None),
             res: res.clone(),
             coord: Arc::clone(&coord),
             bus: EventBus::new(16),
-            total: Some(1024),
             look_ahead_bytes: None,
             cursor: DownloadCursor::complete(),
         };
@@ -664,13 +661,13 @@ mod tests {
         };
 
         let coord = make_coord();
+        coord.set_total_bytes(Some(1024));
         let mut dl = FileDownloader {
             io,
             writer: WasmSend::new(None),
             res,
             coord,
             bus: EventBus::new(16),
-            total: Some(1024),
             look_ahead_bytes: None,
             cursor: DownloadCursor::complete(),
         };

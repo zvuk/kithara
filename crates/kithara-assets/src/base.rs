@@ -73,6 +73,32 @@ pub trait Assets: Clone + Send + Sync + 'static {
         self.open_resource_with_ctx(key, None)
     }
 
+    /// Acquire a resource for mutation.
+    ///
+    /// Backends may create the resource when it does not exist yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened or created.
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.open_resource_with_ctx(key, ctx)
+    }
+
+    /// Convenience method - acquire a resource without context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened or created.
+    fn acquire_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
+        self.acquire_resource_with_ctx(key, None)
+    }
+
     /// Inspect the current resource state without creating or mutating it.
     ///
     /// # Errors

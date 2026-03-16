@@ -339,6 +339,15 @@ where
         self.touch_and_maybe_evict(self.inner.asset_root(), None);
         self.inner.open_resource_with_ctx(key, ctx)
     }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.touch_and_maybe_evict(self.inner.asset_root(), None);
+        self.inner.acquire_resource_with_ctx(key, ctx)
+    }
 }
 
 impl<A> ByteRecorder for EvictAssets<A>

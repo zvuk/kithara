@@ -80,8 +80,8 @@ impl File {
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let timeline = Timeline::new();
-        timeline.set_total_bytes(len);
         let coord = Arc::new(FileCoord::new(timeline.clone()));
+        coord.set_total_bytes(len);
         // Local file is fully available — mark download as complete.
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
@@ -141,19 +141,17 @@ impl File {
             config.bus.clone(),
             config.event_channel_capacity,
             config.headers.clone(),
-            expected_len,
         )?;
 
         let timeline = Timeline::new();
-        timeline.set_total_bytes(state.len());
         let coord = Arc::new(FileCoord::new(timeline));
+        coord.set_total_bytes(expected_len.or_else(|| state.res().len()));
 
         // Determine if the resource is a complete cache or needs downloading.
         let is_partial = match state.res().status() {
             ResourceStatus::Committed { final_len } => {
                 // File on disk might be smaller than expected Content-Length → partial.
-                state
-                    .len()
+                expected_len
                     .zip(final_len)
                     .is_some_and(|(expected, actual)| actual < expected)
             }
@@ -163,7 +161,7 @@ impl File {
         if matches!(state.res().status(), ResourceStatus::Committed { .. }) && !is_partial {
             // Fully cached — no download needed.
             tracing::debug!("file already cached, skipping download");
-            let total = state.len().unwrap_or(0);
+            let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
             state
                 .bus()

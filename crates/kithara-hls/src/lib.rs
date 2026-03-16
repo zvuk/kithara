@@ -44,9 +44,9 @@ pub mod internal;
 
 mod context;
 mod coord;
-pub(crate) mod download_state;
 mod downloader;
 mod fetch;
+mod ids;
 mod inner;
 mod keys;
 mod parsing;

@@ -8,12 +8,16 @@
 
 use std::{collections::BTreeMap, ops::Range};
 
+use kithara_assets::ResourceKey;
 use kithara_stream::LayoutIndex;
 use rangemap::RangeMap;
 use tracing::trace;
 use url::Url;
 
-use crate::playlist::PlaylistAccess;
+use crate::{
+    ids::{SegmentIndex, VariantIndex},
+    playlist::PlaylistAccess,
+};
 
 // SegmentData
 
@@ -42,6 +46,12 @@ impl SegmentData {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SegmentSlot {
+    available: bool,
+    data: SegmentData,
+}
+
 // VariantSegments
 
 /// All committed segments for one HLS variant.
@@ -50,7 +60,7 @@ impl SegmentData {
 /// Byte offsets are computed by `StreamIndex` from the stream layout.
 #[derive(Debug, Default)]
 pub struct VariantSegments {
-    segments: BTreeMap<usize, SegmentData>,
+    segments: BTreeMap<SegmentIndex, SegmentSlot>,
 }
 
 impl VariantSegments {
@@ -61,25 +71,46 @@ impl VariantSegments {
     }
 
     /// Insert or replace a committed segment.
-    pub fn insert(&mut self, segment_index: usize, data: SegmentData) {
-        self.segments.insert(segment_index, data);
+    pub fn insert(&mut self, segment_index: SegmentIndex, data: SegmentData) {
+        self.segments.insert(
+            segment_index,
+            SegmentSlot {
+                available: true,
+                data,
+            },
+        );
     }
 
     /// Get segment data by index.
     #[must_use]
-    pub fn get(&self, segment_index: usize) -> Option<&SegmentData> {
-        self.segments.get(&segment_index)
+    pub fn get(&self, segment_index: SegmentIndex) -> Option<&SegmentData> {
+        self.segments
+            .get(&segment_index)
+            .filter(|slot| slot.available)
+            .map(|slot| &slot.data)
     }
 
-    /// Remove a segment (e.g. after cache invalidation).
-    pub fn remove(&mut self, segment_index: usize) {
-        self.segments.remove(&segment_index);
+    #[must_use]
+    fn get_stored(&self, segment_index: SegmentIndex) -> Option<&SegmentData> {
+        self.segments.get(&segment_index).map(|slot| &slot.data)
+    }
+
+    /// Mark a segment unavailable while preserving its last known lengths.
+    pub fn invalidate(&mut self, segment_index: SegmentIndex) -> bool {
+        let Some(slot) = self.segments.get_mut(&segment_index) else {
+            return false;
+        };
+        let was_available = slot.available;
+        slot.available = false;
+        was_available
     }
 
     /// Whether a segment is committed.
     #[must_use]
-    pub fn contains(&self, segment_index: usize) -> bool {
-        self.segments.contains_key(&segment_index)
+    pub fn contains(&self, segment_index: SegmentIndex) -> bool {
+        self.segments
+            .get(&segment_index)
+            .is_some_and(|slot| slot.available)
     }
 
     /// Remove all segments.
@@ -89,25 +120,32 @@ impl VariantSegments {
 
     /// First committed segment (lowest index).
     #[must_use]
-    pub fn first(&self) -> Option<(usize, &SegmentData)> {
-        self.segments.iter().next().map(|(&k, v)| (k, v))
+    pub fn first(&self) -> Option<(SegmentIndex, &SegmentData)> {
+        self.iter().next()
     }
 
     /// Last committed segment (highest index).
     #[must_use]
-    pub fn last(&self) -> Option<(usize, &SegmentData)> {
-        self.segments.iter().next_back().map(|(&k, v)| (k, v))
+    pub fn last(&self) -> Option<(SegmentIndex, &SegmentData)> {
+        self.iter().next_back()
     }
 
     /// Iterate committed segments in order.
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &SegmentData)> {
-        self.segments.iter().map(|(&k, v)| (k, v))
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (SegmentIndex, &SegmentData)> {
+        self.segments
+            .iter()
+            .filter(|(_, slot)| slot.available)
+            .map(|(&k, slot)| (k, &slot.data))
+    }
+
+    fn iter_all(&self) -> impl Iterator<Item = (SegmentIndex, &SegmentSlot)> {
+        self.segments.iter().map(|(&k, slot)| (k, slot))
     }
 
     /// Number of committed segments.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.segments.len()
+        self.iter().count()
     }
 
     /// Whether there are no committed segments.
@@ -125,9 +163,9 @@ impl VariantSegments {
 #[derive(Debug)]
 pub struct SegmentRef<'a> {
     /// Variant index in the master playlist.
-    pub variant: usize,
+    pub variant: VariantIndex,
     /// Segment index within the variant's media playlist.
-    pub segment_index: usize,
+    pub segment_index: SegmentIndex,
     /// Computed byte offset in the virtual stream.
     pub byte_offset: u64,
     /// Actual segment data (sizes, URLs).
@@ -146,10 +184,10 @@ pub struct StreamIndex {
     variants: Vec<VariantSegments>,
     /// Segment-index ranges → variant. Covers all segments (committed + expected).
     /// ABR switch appends a new region; reset replaces all.
-    variant_map: RangeMap<usize, usize>,
+    variant_map: RangeMap<SegmentIndex, VariantIndex>,
     /// Byte-offset ranges → (variant, `segment_index`). Only committed segments.
     /// Updated on every commit/reconcile. Provides O(log n) `find_at_offset`.
-    byte_map: RangeMap<u64, (usize, usize)>,
+    byte_map: RangeMap<u64, (VariantIndex, SegmentIndex)>,
     /// Total number of segments in the playlist.
     num_segments: usize,
 }
@@ -178,7 +216,7 @@ impl StreamIndex {
 
     /// Which variant is assigned to this segment index?
     #[must_use]
-    pub fn variant_at(&self, segment_index: usize) -> Option<usize> {
+    pub fn variant_at(&self, segment_index: SegmentIndex) -> Option<VariantIndex> {
         self.variant_map.get(&segment_index).copied()
     }
 
@@ -193,7 +231,7 @@ impl StreamIndex {
     /// ABR switch: assign new variant from `segment_index` to end.
     ///
     /// `RangeMap::insert` auto-splits/replaces overlapping regions.
-    pub fn switch_variant(&mut self, segment_index: usize, variant: usize) {
+    pub fn switch_variant(&mut self, segment_index: SegmentIndex, variant: VariantIndex) {
         if segment_index < self.num_segments {
             trace!(segment_index, variant, "stream_index::switch_variant");
             self.variant_map
@@ -204,7 +242,7 @@ impl StreamIndex {
     /// Reset seek: replace entire layout with single region.
     ///
     /// Variant data in `VariantSegments` is preserved (can be reused on switch-back).
-    pub fn reset_to(&mut self, segment_index: usize, variant: usize) {
+    pub fn reset_to(&mut self, segment_index: SegmentIndex, variant: VariantIndex) {
         trace!(segment_index, variant, "stream_index::reset_to");
         self.variant_map.clear();
         if segment_index < self.num_segments {
@@ -223,7 +261,12 @@ impl StreamIndex {
     ///
     /// Computes byte offset from preceding committed segments, stores actual
     /// data in per-variant storage, and updates `byte_map`.
-    pub fn commit_segment(&mut self, variant: usize, segment_index: usize, data: SegmentData) {
+    pub fn commit_segment(
+        &mut self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        data: SegmentData,
+    ) {
         trace!(
             variant,
             segment_index,
@@ -240,8 +283,8 @@ impl StreamIndex {
     /// (subsequent committed segments shift to maintain contiguity).
     pub fn reconcile_segment(
         &mut self,
-        variant: usize,
-        segment_index: usize,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
         new_data: SegmentData,
     ) {
         trace!(
@@ -257,7 +300,7 @@ impl StreamIndex {
     /// Cache invalidation: remove a single segment.
     ///
     /// Called by `on_invalidated` callback when `CachedAssets` displaces a resource.
-    pub fn on_segment_invalidated(&mut self, variant: usize, segment_index: usize) {
+    pub fn on_segment_invalidated(&mut self, variant: VariantIndex, segment_index: SegmentIndex) {
         if let Some(vs) = self.variants.get_mut(variant)
             && vs.contains(segment_index)
         {
@@ -265,7 +308,7 @@ impl StreamIndex {
                 variant,
                 segment_index, "stream_index::on_segment_invalidated"
             );
-            vs.remove(segment_index);
+            vs.invalidate(segment_index);
             self.rebuild_byte_map_from(0);
         }
     }
@@ -288,6 +331,28 @@ impl StreamIndex {
         })
     }
 
+    /// Find the visible segment containing the given byte offset.
+    #[must_use]
+    pub fn visible_segment_at(&self, offset: u64) -> Option<SegmentRef<'_>> {
+        self.find_at_offset(offset)
+    }
+
+    /// Byte range of a committed segment in the current composed layout.
+    #[must_use]
+    pub fn range_for(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> Option<Range<u64>> {
+        self.item_range((variant, segment_index))
+    }
+
+    /// Whether a committed segment is visible in the current composed layout.
+    #[must_use]
+    pub fn is_visible(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        self.range_for(variant, segment_index).is_some()
+    }
+
     /// Highest committed byte offset (watermark).
     #[must_use]
     pub fn max_end_offset(&self) -> u64 {
@@ -299,7 +364,7 @@ impl StreamIndex {
 
     /// Whether a segment has been committed.
     #[must_use]
-    pub fn is_segment_loaded(&self, variant: usize, segment_index: usize) -> bool {
+    pub fn is_segment_loaded(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
         self.variants
             .get(variant)
             .is_some_and(|vs| vs.contains(segment_index))
@@ -327,7 +392,7 @@ impl StreamIndex {
         let mut total = 0u64;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
-                total += self.variants[variant].get(seg_idx).map_or_else(
+                total += self.stored_segment(variant, seg_idx).map_or_else(
                     || playlist.segment_size(variant, seg_idx).unwrap_or(0),
                     SegmentData::total_len,
                 );
@@ -342,6 +407,35 @@ impl StreamIndex {
         self.max_end_offset().max(self.total_bytes(playlist))
     }
 
+    #[must_use]
+    pub(crate) fn segment_for_offset(
+        &self,
+        offset: u64,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<(VariantIndex, SegmentIndex)> {
+        if let Some(seg_ref) = self.find_at_offset(offset) {
+            return Some((seg_ref.variant, seg_ref.segment_index));
+        }
+
+        let mut cursor = 0u64;
+        for (seg_range, &variant) in self.variant_map.iter() {
+            for seg_idx in seg_range.clone() {
+                let seg_len = self
+                    .stored_segment(variant, seg_idx)
+                    .map(SegmentData::total_len)
+                    .or_else(|| playlist.segment_size(variant, seg_idx))?;
+
+                let end = cursor.saturating_add(seg_len);
+                if offset < end {
+                    return Some((variant, seg_idx));
+                }
+                cursor = end;
+            }
+        }
+
+        None
+    }
+
     /// Number of committed segments across all variants.
     #[must_use]
     pub fn num_committed(&self) -> usize {
@@ -350,8 +444,58 @@ impl StreamIndex {
 
     /// Access per-variant storage.
     #[must_use]
-    pub fn variant_segments(&self, variant: usize) -> Option<&VariantSegments> {
+    pub fn variant_segments(&self, variant: VariantIndex) -> Option<&VariantSegments> {
         self.variants.get(variant)
+    }
+
+    #[must_use]
+    pub(crate) fn stored_segment(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> Option<&SegmentData> {
+        self.variants.get(variant)?.get_stored(segment_index)
+    }
+
+    /// Remove every committed segment that depends on the invalidated resource.
+    ///
+    /// A shared init resource can invalidate multiple visible segments.
+    /// Returns true if any committed coverage was removed.
+    pub fn remove_resource(&mut self, key: &ResourceKey) -> bool {
+        let mut removed = false;
+        let mut first_removed: Option<SegmentIndex> = None;
+
+        for vs in &mut self.variants {
+            let to_remove: Vec<usize> = vs
+                .iter_all()
+                .filter_map(|(segment_index, slot)| {
+                    let init_matches = slot
+                        .data
+                        .init_url
+                        .as_ref()
+                        .is_some_and(|url| ResourceKey::from_url(url) == *key);
+                    let media_matches = ResourceKey::from_url(&slot.data.media_url) == *key;
+                    (init_matches || media_matches).then_some(segment_index)
+                })
+                .collect();
+
+            if to_remove.is_empty() {
+                continue;
+            }
+
+            removed = true;
+            for segment_index in to_remove {
+                first_removed =
+                    Some(first_removed.map_or(segment_index, |current| current.min(segment_index)));
+                vs.invalidate(segment_index);
+            }
+        }
+
+        if let Some(from_segment) = first_removed {
+            self.rebuild_byte_map_from(from_segment);
+        }
+
+        removed
     }
 
     // --- Internal ---
@@ -360,14 +504,14 @@ impl StreamIndex {
     ///
     /// Walks committed segments in layout order, summing their sizes.
     /// Uncommitted segments contribute 0 (they have no committed data).
-    fn byte_offset_at(&self, target_segment: usize) -> u64 {
+    fn byte_offset_at(&self, target_segment: SegmentIndex) -> u64 {
         let mut offset = 0u64;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
                 if seg_idx >= target_segment {
                     return offset;
                 }
-                if let Some(data) = self.variants[variant].get(seg_idx) {
+                if let Some(data) = self.stored_segment(variant, seg_idx) {
                     offset += data.total_len();
                 }
             }
@@ -380,7 +524,7 @@ impl StreamIndex {
     /// This is the replacement for `cascade_contiguity` — when a segment's size
     /// changes (DRM reconciliation) or a segment is added/removed, all subsequent
     /// byte offsets shift to maintain contiguity.
-    fn rebuild_byte_map_from(&mut self, from_segment: usize) {
+    fn rebuild_byte_map_from(&mut self, from_segment: SegmentIndex) {
         // Remove old entries for segments >= from_segment
         let keys_to_remove: Vec<Range<u64>> = self
             .byte_map
@@ -399,11 +543,17 @@ impl StreamIndex {
                 if seg_idx < from_segment {
                     continue;
                 }
-                if let Some(data) = self.variants[variant].get(seg_idx) {
-                    let end = offset + data.total_len();
+                let Some(total_len) = self
+                    .stored_segment(variant, seg_idx)
+                    .map(SegmentData::total_len)
+                else {
+                    continue;
+                };
+                if self.is_segment_loaded(variant, seg_idx) {
+                    let end = offset + total_len;
                     self.byte_map.insert(offset..end, (variant, seg_idx));
-                    offset = end;
                 }
+                offset += total_len;
             }
         }
     }
@@ -412,7 +562,7 @@ impl StreamIndex {
 // LayoutIndex
 
 impl LayoutIndex for StreamIndex {
-    type Item = (usize, usize);
+    type Item = (VariantIndex, SegmentIndex);
 
     fn item_at_offset(&self, offset: u64) -> Option<Self::Item> {
         self.byte_map.get(&offset).copied()
@@ -428,6 +578,7 @@ impl LayoutIndex for StreamIndex {
 
 #[cfg(test)]
 mod tests {
+    use kithara_assets::ResourceKey;
     use kithara_test_utils::kithara;
     use url::Url;
 
@@ -481,7 +632,7 @@ mod tests {
         let mut vs = VariantSegments::new();
         vs.insert(0, make_segment_data(100, 500));
         vs.insert(1, make_segment_data(0, 400));
-        vs.remove(0);
+        assert!(vs.invalidate(0));
         assert!(!vs.contains(0));
         assert!(vs.contains(1));
     }
@@ -668,8 +819,16 @@ mod tests {
         assert!(!idx.is_segment_loaded(0, 1));
         assert!(idx.is_segment_loaded(0, 0));
         assert!(idx.is_segment_loaded(0, 2));
-        // seg 0 at 0..100, seg 2 at 100..200 (gap closed)
-        assert_eq!(idx.max_end_offset(), 200);
+        assert!(
+            idx.find_at_offset(150).is_none(),
+            "invalidated segment must leave a hole in the byte layout"
+        );
+        let seg = idx
+            .find_at_offset(250)
+            .expect("segment 2 must keep its original offset");
+        assert_eq!(seg.segment_index, 2);
+        assert_eq!(seg.byte_offset, 200);
+        assert_eq!(idx.max_end_offset(), 300);
     }
 
     #[kithara::test]
@@ -678,6 +837,85 @@ mod tests {
         idx.commit_segment(0, 0, make_segment_data(0, 100));
         idx.on_segment_invalidated(0, 5); // unknown
         assert_eq!(idx.max_end_offset(), 100);
+    }
+
+    #[kithara::test]
+    fn remove_resource_invalidates_visible_segment() {
+        let mut idx = StreamIndex::new(1, 2);
+        let media_url = base_url().join("segment-0.m4s").expect("valid url");
+        idx.commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            },
+        );
+
+        let removed = idx.remove_resource(&ResourceKey::from_url(&media_url));
+
+        assert!(
+            removed,
+            "resource invalidation must report that it removed coverage"
+        );
+        assert!(
+            idx.find_at_offset(0).is_none(),
+            "invalidated resource must disappear from visible byte layout"
+        );
+    }
+
+    #[kithara::test]
+    fn remove_resource_preserves_following_segment_offsets() {
+        let mut idx = StreamIndex::new(1, 3);
+        let media_url_0 = base_url().join("segment-0.m4s").expect("valid url");
+        let media_url_1 = base_url().join("segment-1.m4s").expect("valid url");
+        let media_url_2 = base_url().join("segment-2.m4s").expect("valid url");
+
+        idx.commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url_0.clone(),
+            },
+        );
+        idx.commit_segment(
+            0,
+            1,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url_1.clone(),
+            },
+        );
+        idx.commit_segment(
+            0,
+            2,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url_2,
+            },
+        );
+
+        let removed = idx.remove_resource(&ResourceKey::from_url(&media_url_1));
+
+        assert!(removed);
+        assert!(
+            idx.find_at_offset(150).is_none(),
+            "the invalidated segment must leave a hole"
+        );
+        let seg = idx
+            .find_at_offset(250)
+            .expect("segment 2 must keep its original offset");
+        assert_eq!(seg.segment_index, 2);
+        assert_eq!(seg.byte_offset, 200);
     }
 
     // === StreamIndex: multiple switches consistency ===

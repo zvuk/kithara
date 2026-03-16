@@ -2,9 +2,14 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{Arc, Mutex as StdMutex},
+};
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, asset_root_for_url};
+use kithara_assets::{
+    AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
+};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
@@ -25,6 +30,27 @@ use crate::{
 
 /// Marker type for HLS streaming.
 pub struct Hls;
+
+type InvalidationTarget = (Arc<kithara_platform::Mutex<StreamIndex>>, Arc<HlsCoord>);
+
+fn make_invalidation_callback(
+    target: Arc<StdMutex<Option<InvalidationTarget>>>,
+    next: Option<OnInvalidatedFn>,
+) -> OnInvalidatedFn {
+    Arc::new(move |key: &ResourceKey| {
+        if let Some((segments, coord)) = target
+            .lock()
+            .expect("HLS invalidation target lock poisoned")
+            .as_ref()
+            && segments.lock_sync().remove_resource(key)
+        {
+            coord.condvar.notify_all();
+        }
+        if let Some(ref callback) = next {
+            callback(key);
+        }
+    })
+}
 
 impl StreamType for Hls {
     type Config = HlsConfig;
@@ -50,12 +76,18 @@ impl StreamType for Hls {
             Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
                 aes128_cbc_process_chunk(input, output, ctx, is_last)
             });
+        let invalidation_target = Arc::new(StdMutex::new(None));
+        let on_invalidated = make_invalidation_callback(
+            Arc::clone(&invalidation_target),
+            config.store.on_invalidated.clone(),
+        );
 
         // Build storage backend with DRM processing support
         let mut builder = AssetStoreBuilder::new()
             .process_fn(drm_process_fn)
             .asset_root(Some(asset_root.as_str()))
             .cancel(cancel.clone())
+            .on_invalidated(on_invalidated)
             .root_dir(&config.store.cache_dir)
             .evict_config(config.store.to_evict_config())
             .ephemeral(config.store.ephemeral);
@@ -137,6 +169,10 @@ impl StreamType for Hls {
             playlist_state,
             bus,
         );
+        *invalidation_target
+            .lock()
+            .expect("HLS invalidation target lock poisoned") =
+            Some((Arc::clone(&source.segments), Arc::clone(&source.coord)));
 
         // Spawn downloader on a dedicated thread.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.

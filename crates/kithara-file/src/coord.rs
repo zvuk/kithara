@@ -17,9 +17,12 @@ pub struct FileCoord {
     reader_advanced: Notify,
     read_pos: Arc<AtomicU64>,
     timeline: Timeline,
+    total_bytes: Arc<AtomicU64>,
 }
 
 impl FileCoord {
+    const NO_TOTAL_BYTES: u64 = u64::MAX;
+
     #[must_use]
     pub(crate) fn new(timeline: Timeline) -> Self {
         Self {
@@ -28,6 +31,7 @@ impl FileCoord {
             reader_advanced: Notify::new(),
             read_pos: Arc::new(AtomicU64::new(0)),
             timeline,
+            total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
     }
 
@@ -49,6 +53,21 @@ impl FileCoord {
 
     pub(crate) fn set_download_pos(&self, value: u64) {
         self.timeline.set_download_position(value);
+    }
+
+    #[must_use]
+    pub(crate) fn total_bytes(&self) -> Option<u64> {
+        let total = self.total_bytes.load(Ordering::Acquire);
+        if total == Self::NO_TOTAL_BYTES {
+            None
+        } else {
+            Some(total)
+        }
+    }
+
+    pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
+        self.total_bytes
+            .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
     }
 
     #[must_use]

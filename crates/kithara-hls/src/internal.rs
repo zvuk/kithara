@@ -17,7 +17,6 @@ use crate::source::build_pair;
 pub use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
-    download_state::{DownloadState, LoadedSegment},
     error::HlsError,
     fetch::{DefaultFetchManager, FetchManager},
     keys::KeyManager,
@@ -76,41 +75,6 @@ pub fn make_test_source_with_fetch(
 #[must_use]
 pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
     make_test_fetch(cancel)
-}
-
-/// Write a dummy committed resource so `has_resource` returns true for
-/// the media URL of a `LoadedSegment`.
-///
-/// Ephemeral `range_ready_from_segments` verifies LRU presence — tests
-/// that push metadata must also populate the resource.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "test helper — segment lengths fit in usize"
-)]
-#[expect(clippy::missing_panics_doc, reason = "test-only helper")]
-pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
-    use kithara_assets::ResourceKey;
-    use kithara_storage::ResourceExt;
-
-    let backend = source.fetch.backend();
-    let media_key = ResourceKey::from_url(&seg.media_url);
-    let res = backend
-        .acquire_resource(&media_key)
-        .expect("open media resource");
-    res.write_at(0, &vec![0u8; seg.media_len as usize])
-        .expect("write media");
-    res.commit(None).expect("commit media");
-
-    if let Some(ref init_url) = seg.init_url {
-        let init_key = ResourceKey::from_url(init_url);
-        let init_res = backend
-            .acquire_resource(&init_key)
-            .expect("open init resource");
-        init_res
-            .write_at(0, &vec![0u8; seg.init_len as usize])
-            .expect("write init");
-        init_res.commit(None).expect("commit init");
-    }
 }
 
 /// Commit dummy resource from a `SegmentData` reference.

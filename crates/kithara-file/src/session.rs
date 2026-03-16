@@ -20,7 +20,6 @@ pub(crate) struct FileStreamState {
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
     pub(crate) headers: Option<Headers>,
-    pub(crate) total_bytes: Option<u64>,
 }
 
 impl FileStreamState {
@@ -31,7 +30,6 @@ impl FileStreamState {
         bus: Option<EventBus>,
         event_channel_capacity: usize,
         headers: Option<Headers>,
-        expected_len: Option<u64>,
     ) -> Result<Arc<Self>, SourceError> {
         let key = ResourceKey::from_url(&url);
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
@@ -44,7 +42,6 @@ impl FileStreamState {
             res,
             bus,
             headers,
-            total_bytes: expected_len,
         }))
     }
 
@@ -62,10 +59,6 @@ impl FileStreamState {
 
     pub(crate) fn headers(&self) -> Option<&Headers> {
         self.headers.as_ref()
-    }
-
-    pub(crate) fn len(&self) -> Option<u64> {
-        self.total_bytes.or_else(|| self.res.len())
     }
 
     pub(crate) fn cancel(&self) -> &CancellationToken {
@@ -194,7 +187,11 @@ impl kithara_stream::Source for FileSource {
 
         let timeline = self.coord.timeline();
         let pos = timeline.byte_position();
-        let total = timeline.total_bytes().unwrap_or(u64::MAX);
+        let total = self
+            .coord
+            .total_bytes()
+            .or_else(|| self.res.len())
+            .unwrap_or(u64::MAX);
 
         // Check EOF before contains_range: at pos == total the window
         // collapses to an empty range which is trivially "contained".
@@ -216,8 +213,10 @@ impl kithara_stream::Source for FileSource {
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         use kithara_stream::SourcePhase;
         let timeline = self.coord.timeline();
-        let past_eof = timeline
+        let past_eof = self
+            .coord
             .total_bytes()
+            .or_else(|| self.res.len())
             .is_some_and(|total| total > 0 && range.start >= total);
         if self.res.contains_range(range) {
             return SourcePhase::Ready;
@@ -246,7 +245,7 @@ impl kithara_stream::Source for FileSource {
 
         if n > 0 {
             let new_pos = offset.saturating_add(n as u64);
-            let total = self.coord.timeline().total_bytes();
+            let total = self.coord.total_bytes().or_else(|| self.res.len());
 
             self.bus.publish(FileEvent::ByteProgress {
                 position: new_pos,
@@ -260,10 +259,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        self.coord
-            .timeline()
-            .total_bytes()
-            .or_else(|| self.res.len())
+        self.coord.total_bytes().or_else(|| self.res.len())
     }
 }
 
@@ -355,6 +351,16 @@ mod tests {
         assert_eq!(coord.take_range_request(), None);
     }
 
+    #[kithara::test]
+    fn file_coord_total_bytes_roundtrip() {
+        let coord = FileCoord::new(Timeline::new());
+        assert_eq!(coord.total_bytes(), None);
+        coord.set_total_bytes(Some(123));
+        assert_eq!(coord.total_bytes(), Some(123));
+        coord.set_total_bytes(None);
+        assert_eq!(coord.total_bytes(), None);
+    }
+
     // FileSource
 
     /// Helper: create a committed `AssetResource` backed by a file with `data`.
@@ -380,7 +386,7 @@ mod tests {
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
 
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         let mut source = make_source(res, Arc::clone(&coord), bus);
 
         let mut buf = [0u8; 11];
@@ -414,7 +420,7 @@ mod tests {
         let bus = EventBus::new(16);
         let mut events = bus.subscribe();
 
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         let mut source = make_source(res, coord, bus);
 
         let mut buf = [0u8; 3];
@@ -440,7 +446,7 @@ mod tests {
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
 
-        coord.timeline().set_total_bytes(Some(12345));
+        coord.set_total_bytes(Some(12345));
         let source = make_source(res, coord, bus);
 
         // len() should return the explicit value provided at construction.
@@ -455,7 +461,7 @@ mod tests {
         let res = create_committed_resource(data);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
         assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
@@ -468,7 +474,7 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(100)); // larger than actual data
+        coord.set_total_bytes(Some(100)); // larger than actual data
         let source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
@@ -488,7 +494,7 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
@@ -504,7 +510,7 @@ mod tests {
         let res = create_committed_resource(data);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
         assert_eq!(source.phase_at(100..110), kithara_stream::SourcePhase::Eof,);
@@ -519,7 +525,7 @@ mod tests {
         let res = create_committed_resource(&data);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         // Position stays at 0, so window is 0..32KB — all present.
         let source = make_source(res, coord, bus);
 
@@ -532,7 +538,7 @@ mod tests {
         let res = create_committed_resource(data);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(data.len() as u64));
+        coord.set_total_bytes(Some(data.len() as u64));
         // Move position to end-of-file.
         coord.timeline().set_byte_position(data.len() as u64);
         let source = make_source(res, coord, bus);
@@ -547,7 +553,7 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(100)); // larger than data
+        coord.set_total_bytes(Some(100)); // larger than data
         let mut source = make_source(res, coord, bus);
 
         // Initiate seek to make timeline flushing.
@@ -565,7 +571,7 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.timeline().set_total_bytes(Some(6));
+        coord.set_total_bytes(Some(6));
         let mut source = make_source(res, Arc::clone(&coord), bus);
 
         let mut buf = [0u8; 2];

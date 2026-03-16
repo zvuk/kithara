@@ -3785,12 +3785,15 @@ dependencies = [
 name = "kithara-assets"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "bitflags 2.11.0",
+ "cbc",
  "delegate",
  "derive_setters",
  "hex",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-drm",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-utils",
@@ -4030,8 +4033,10 @@ dependencies = [
 name = "kithara-hls"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "axum",
  "bytes",
+ "cbc",
  "crossbeam-queue",
  "derivative",
  "derive_setters",
