@@ -194,23 +194,18 @@ impl HlsSource {
         segment_index: SegmentIndex,
     ) -> Option<u64> {
         let segments = self.segments.lock_sync();
-        // Check if the segment is committed in StreamIndex — its byte_offset is authoritative
-        if let Some(vs) = segments.variant_segments(variant)
-            && vs.contains(segment_index)
-        {
-            // The byte_map holds the computed offset for committed segments.
-            // Search all byte_map entries for this (variant, segment_index).
-            if let Some(range) = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-                &segments,
-                (variant, segment_index),
-            ) {
-                return Some(range.start);
-            }
+        if let Some(range) = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+            &segments,
+            (variant, segment_index),
+        ) {
+            return Some(range.start);
         }
+        let layout_offset =
+            segments.layout_offset_for_segment(segment_index, self.playlist_state.as_ref());
         drop(segments);
-        // Fallback to playlist metadata offset
         self.playlist_state
             .segment_byte_offset(variant, segment_index)
+            .or(layout_offset)
     }
 
     fn metadata_range_for_segment(
@@ -600,7 +595,7 @@ impl HlsSource {
             SeekLayout::Reset => {
                 // Reset layout — decoder will be recreated.
                 let mut segments = self.segments.lock_sync();
-                segments.reset_to(segment_index, variant);
+                segments.reset_to(segment_index, variant, anchor.byte_offset);
                 drop(segments);
                 self.coord.timeline().set_download_position(0);
                 debug!(
@@ -1116,19 +1111,17 @@ impl Source for HlsSource {
         }
 
         // After seek flush, no segments may be loaded yet.
-        // Fall back to metadata offsets so decoder recreation can start
-        // from the variant's init-bearing first segment.
+        // Fall back to metadata for the first logical segment in the
+        // current applied layout rather than variant segment 0.
+        let layout_floor = self.segments.lock_sync().layout_floor_segment();
+        if let Some((variant, segment_index)) = layout_floor {
+            return self.metadata_range_for_segment(variant, segment_index);
+        }
+
         if current_variant >= self.playlist_state.num_variants() {
             return None;
         }
-        let start = self
-            .playlist_state
-            .segment_byte_offset(current_variant, 0)?;
-        let end = self
-            .playlist_state
-            .segment_byte_offset(current_variant, 1)
-            .or_else(|| self.playlist_state.total_variant_size(current_variant))?;
-        if end > start { Some(start..end) } else { None }
+        self.metadata_range_for_segment(current_variant, 0)
     }
 
     fn clear_variant_fence(&mut self) {
@@ -1627,6 +1620,28 @@ mod tests {
     }
 
     #[kithara::test]
+    fn seek_time_anchor_uses_applied_layout_offset_when_abr_target_outpaces_layout() {
+        let mut source = build_test_source_with_segments(2, 4);
+        set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
+        source.coord.abr_variant_index.store(1, Ordering::Release);
+
+        let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
+            .expect("seek anchor resolution should not error")
+            .expect("HLS source should resolve an anchor");
+
+        assert_eq!(
+            anchor.variant_index,
+            Some(1),
+            "anchor still targets the ABR-selected variant"
+        );
+        assert_eq!(anchor.segment_index, Some(2));
+        assert_eq!(
+            anchor.byte_offset, 200,
+            "when target-variant metadata is not ready yet, seek_time_anchor must use the applied layout offset instead of failing"
+        );
+    }
+
+    #[kithara::test]
     fn commit_seek_landing_uses_layout_variant_for_invalidated_prefix() {
         let mut source = build_test_source(2);
         set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
@@ -1930,6 +1945,32 @@ mod tests {
         );
 
         assert_eq!(source.format_change_segment_range(), Some(100..200));
+    }
+
+    #[kithara::test]
+    fn format_change_segment_range_uses_reset_layout_floor_when_no_segments_are_loaded() {
+        let source = build_source_with_size_map(&[100, 100, 100, 100]);
+
+        source.segments.lock_sync().reset_to(2, 0, 200);
+
+        assert_eq!(
+            source.format_change_segment_range(),
+            Some(200..300),
+            "after SeekLayout::Reset, decoder-start fallback must use the reset layout floor, not variant segment 0"
+        );
+    }
+
+    #[kithara::test]
+    fn reset_layout_keeps_absolute_total_length_for_seek_recreate() {
+        let source = build_source_with_size_map(&[100, 100, 100, 100]);
+
+        source.segments.lock_sync().reset_to(2, 0, 200);
+
+        assert_eq!(
+            source.len(),
+            Some(400),
+            "SeekLayout::Reset must preserve absolute stream coordinates; shrinking len() to the tail makes absolute recreate offsets look past-EOF"
+        );
     }
 
     #[kithara::test]

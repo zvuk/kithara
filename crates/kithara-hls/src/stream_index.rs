@@ -180,6 +180,8 @@ pub struct SegmentRef<'a> {
 /// `total_bytes` is derived from committed actual sizes + estimated remaining
 /// from `VariantSizeMap` — no formulas, no delta patching.
 pub struct StreamIndex {
+    /// Absolute byte offset of the first visible logical segment.
+    layout_base_offset: u64,
     /// Per-variant committed segment data, indexed by variant number.
     variants: Vec<VariantSegments>,
     /// Segment-index ranges → variant. Covers all segments (committed + expected).
@@ -205,6 +207,7 @@ impl StreamIndex {
             variant_map.insert(0..num_segments, 0);
         }
         Self {
+            layout_base_offset: 0,
             variants: (0..num_variants).map(|_| VariantSegments::new()).collect(),
             variant_map,
             byte_map: RangeMap::new(),
@@ -242,8 +245,21 @@ impl StreamIndex {
     /// Reset seek: replace entire layout with single region.
     ///
     /// Variant data in `VariantSegments` is preserved (can be reused on switch-back).
-    pub fn reset_to(&mut self, segment_index: SegmentIndex, variant: VariantIndex) {
-        trace!(segment_index, variant, "stream_index::reset_to");
+    pub fn reset_to(
+        &mut self,
+        segment_index: SegmentIndex,
+        variant: VariantIndex,
+        base_offset: u64,
+    ) {
+        trace!(
+            segment_index,
+            variant, base_offset, "stream_index::reset_to"
+        );
+        self.layout_base_offset = if segment_index < self.num_segments {
+            base_offset
+        } else {
+            0
+        };
         self.variant_map.clear();
         if segment_index < self.num_segments {
             self.variant_map
@@ -347,6 +363,37 @@ impl StreamIndex {
         self.item_range((variant, segment_index))
     }
 
+    #[must_use]
+    pub(crate) fn layout_floor_segment(&self) -> Option<(VariantIndex, SegmentIndex)> {
+        self.variant_map
+            .iter()
+            .next()
+            .map(|(seg_range, &variant)| (variant, seg_range.start))
+    }
+
+    /// Byte offset of a logical segment in the current applied layout.
+    #[must_use]
+    pub(crate) fn layout_offset_for_segment(
+        &self,
+        target_segment: SegmentIndex,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<u64> {
+        let mut offset = self.layout_base_offset;
+        for (seg_range, &variant) in self.variant_map.iter() {
+            for seg_idx in seg_range.clone() {
+                if seg_idx == target_segment {
+                    return Some(offset);
+                }
+                let seg_len = self
+                    .stored_segment(variant, seg_idx)
+                    .map(SegmentData::total_len)
+                    .or_else(|| playlist.segment_size(variant, seg_idx))?;
+                offset = offset.saturating_add(seg_len);
+            }
+        }
+        None
+    }
+
     /// Whether a committed segment is visible in the current composed layout.
     #[must_use]
     pub fn is_visible(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
@@ -389,7 +436,7 @@ impl StreamIndex {
     /// DRM streams slightly overestimate (encrypted > decrypted) — safe.
     #[must_use]
     pub(crate) fn total_bytes(&self, playlist: &dyn PlaylistAccess) -> u64 {
-        let mut total = 0u64;
+        let mut total = self.layout_base_offset;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
                 total += self.stored_segment(variant, seg_idx).map_or_else(
@@ -417,7 +464,7 @@ impl StreamIndex {
             return Some((seg_ref.variant, seg_ref.segment_index));
         }
 
-        let mut cursor = 0u64;
+        let mut cursor = self.layout_base_offset;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
                 let seg_len = self
@@ -505,7 +552,7 @@ impl StreamIndex {
     /// Walks committed segments in layout order, summing their sizes.
     /// Uncommitted segments contribute 0 (they have no committed data).
     fn byte_offset_at(&self, target_segment: SegmentIndex) -> u64 {
-        let mut offset = 0u64;
+        let mut offset = self.layout_base_offset;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
                 if seg_idx >= target_segment {
@@ -699,7 +746,7 @@ mod tests {
     fn reset_to_replaces_layout() {
         let mut idx = StreamIndex::new(4, 37);
         idx.switch_variant(3, 3);
-        idx.reset_to(5, 2);
+        idx.reset_to(5, 2, 0);
         assert_eq!(idx.variant_at(4), None);
         assert_eq!(idx.variant_at(5), Some(2));
         assert_eq!(idx.variant_at(36), Some(2));

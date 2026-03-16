@@ -425,6 +425,48 @@ async fn wait_range_uses_metadata_offset_for_unloaded_tail_offset() {
     );
 }
 
+#[kithara::test(tokio, browser)]
+async fn seek_reset_wait_range_uses_same_logical_segment_as_anchor() {
+    let cancel = CancellationToken::new();
+    let playlist_state = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    shared.abr_variant_index.store(1, Ordering::Relaxed);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
+        .expect("seek anchor resolution should succeed")
+        .expect("HLS source should resolve anchor");
+
+    let target_variant = anchor
+        .variant_index
+        .expect("ABR-driven seek anchor must retain target variant");
+    let target_segment = anchor
+        .segment_index
+        .expect("seek anchor must resolve a logical segment");
+    let target_segment =
+        usize::try_from(target_segment).expect("test logical segment index must fit into usize");
+
+    shared
+        .segments
+        .lock_sync()
+        .reset_to(target_segment, target_variant, anchor.byte_offset);
+    shared.timeline.set_byte_position(0);
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..1).await;
+    assert_eq!(
+        request.variant, target_variant,
+        "after reset layout, wait_range must demand the same target variant chosen by seek_time_anchor"
+    );
+    assert_eq!(
+        request.segment_index, target_segment,
+        "after reset layout, wait_range must materialize the same logical segment that seek_time_anchor selected"
+    );
+}
+
 #[kithara::test]
 fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
     let cancel = CancellationToken::new();

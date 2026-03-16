@@ -2985,7 +2985,7 @@ mod tests {
             .timeline()
             .initiate_seek(Duration::from_secs(12));
         downloader.reset_for_seek_epoch(seek_epoch, 1, 3);
-        downloader.segments.lock_sync().reset_to(3, 1);
+        downloader.segments.lock_sync().reset_to(3, 1, 300);
 
         let (is_variant_switch, _is_midstream_switch) =
             downloader.classify_variant_transition(1, 3);
