@@ -617,8 +617,13 @@ impl HlsDownloader {
     // offsets internally via commit_segment → rebuild_byte_map_from.
     /// Commit a downloaded segment to the segment index.
     ///
-    /// `is_variant_switch` / `is_midstream_switch` control init segment inclusion.
-    fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
+    /// `HlsFetch` already encodes whether this decoder-visible segment fetched init.
+    fn commit_segment(
+        &mut self,
+        dl: HlsFetch,
+        is_variant_switch: bool,
+        _is_midstream_switch: bool,
+    ) {
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
         self.bus.publish(HlsEvent::SegmentComplete {
@@ -629,11 +634,7 @@ impl HlsDownloader {
             duration: dl.duration,
         });
 
-        let fresh_init_len = if is_midstream_switch || is_variant_switch || dl.segment_index == 0 {
-            dl.init_len
-        } else {
-            0
-        };
+        let fresh_init_len = dl.init_len;
 
         // Preserve init_len from an existing entry when re-downloading after
         // eviction.  The init resource may still be available even though it
@@ -2930,6 +2931,110 @@ mod tests {
         );
         assert_eq!(downloader.abr.get_current_variant_index(), 1);
         assert_eq!(downloader.gap_scan_start_segment(), 2);
+    }
+
+    #[kithara::test(tokio)]
+    async fn commit_preserves_init_for_first_cross_codec_seek_target_segment() {
+        let cancel = CancellationToken::new();
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        let init_url = base.join("init-1.mp4").expect("valid init URL");
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_size_map(0, Some(AudioCodec::AacLc), 6, 100),
+            VariantState {
+                id: 1,
+                uri: base.join("v1.m3u8").expect("valid playlist URL"),
+                bandwidth: Some(128_000),
+                codec: Some(AudioCodec::Flac),
+                container: None,
+                init_url: Some(init_url.clone()),
+                segments: (0..6)
+                    .map(|index| SegmentState {
+                        index,
+                        url: base
+                            .join(&format!("seg-1-{index}.m4s"))
+                            .expect("valid segment URL"),
+                        duration: Duration::from_secs(4),
+                        key: None,
+                    })
+                    .collect(),
+                size_map: Some(VariantSizeMap {
+                    init_size: 20,
+                    offsets: vec![0, 120, 220, 320, 420, 520],
+                    segment_sizes: vec![120, 100, 100, 100, 100, 100],
+                    total: 620,
+                }),
+            },
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let seek_epoch = downloader
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(12));
+        downloader.reset_for_seek_epoch(seek_epoch, 1, 3);
+        downloader.segments.lock_sync().reset_to(3, 1);
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(1, 3);
+        assert!(
+            !is_variant_switch,
+            "after seek reset the layout already points at the target variant, so this path must not depend on switch detection"
+        );
+
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 3,
+                variant: 1,
+                seek_epoch,
+            },
+            is_variant_switch,
+        );
+        assert!(
+            plan.need_init,
+            "cross-codec seek reset must still request init for the first decoder-visible segment"
+        );
+
+        downloader.commit(HlsFetch {
+            init_len: 20,
+            init_url: Some(init_url),
+            media: SegmentMeta {
+                variant: 1,
+                segment_type: crate::fetch::SegmentType::Media(3),
+                sequence: 3,
+                url: base.join("seg-1-3.m4s").expect("valid segment URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 3,
+            variant: 1,
+            duration: Duration::from_millis(1),
+            seek_epoch,
+        });
+
+        let segments = downloader.segments.lock_sync();
+        let segment = segments
+            .stored_segment(1, 3)
+            .expect("target segment must be committed");
+        assert_eq!(
+            segment.init_len, 20,
+            "the first decoder-visible segment after a cross-codec seek reset must retain init bytes even when the layout already points at the target variant"
+        );
     }
 
     #[kithara::test(tokio)]
