@@ -181,33 +181,9 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase(&self) -> kithara_stream::SourcePhase {
-        use kithara_stream::SourcePhase;
-
-        const WINDOW: u64 = 32 * 1024; // 32 KB look-ahead
-
         let timeline = self.coord.timeline();
         let pos = timeline.byte_position();
-        let total = self
-            .coord
-            .total_bytes()
-            .or_else(|| self.res.len())
-            .unwrap_or(u64::MAX);
-
-        // Check EOF before contains_range: at pos == total the window
-        // collapses to an empty range which is trivially "contained".
-        if total > 0 && total < u64::MAX && pos >= total {
-            return SourcePhase::Eof;
-        }
-
-        let check_end = pos.saturating_add(WINDOW).min(total);
-
-        if self.res.contains_range(pos..check_end) {
-            return SourcePhase::Ready;
-        }
-        if timeline.is_flushing() {
-            return SourcePhase::Seeking;
-        }
-        SourcePhase::Waiting
+        self.phase_at(pos..pos.saturating_add(1))
     }
 
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
@@ -260,6 +236,10 @@ impl kithara_stream::Source for FileSource {
 
     fn len(&self) -> Option<u64> {
         self.coord.total_bytes().or_else(|| self.res.len())
+    }
+
+    fn demand_range(&self, range: Range<u64>) {
+        self.coord.request_range(range);
     }
 }
 
@@ -516,20 +496,31 @@ mod tests {
         assert_eq!(source.phase_at(100..110), kithara_stream::SourcePhase::Eof,);
     }
 
-    // Parameterless phase() tests — 32KB-window logic
+    // Parameterless phase() tests
 
     #[kithara::test]
-    fn file_source_phase_parameterless_ready_when_data_available() {
-        // 64 KB resource — enough for the 32 KB look-ahead window.
-        let data = vec![0xABu8; 64 * 1024];
-        let res = create_committed_resource(&data);
+    fn file_source_phase_parameterless_ready_when_current_byte_is_available() {
+        let data = vec![0xABu8; 64];
+        let res = create_committed_resource(&data[..16]);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
         coord.set_total_bytes(Some(data.len() as u64));
-        // Position stays at 0, so window is 0..32KB — all present.
         let source = make_source(res, coord, bus);
 
         assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn file_source_phase_parameterless_waiting_when_current_byte_is_missing() {
+        let data = vec![0xABu8; 64];
+        let res = create_committed_resource(&data[..16]);
+        let coord = make_coord(Timeline::new());
+        let bus = EventBus::new(16);
+        coord.set_total_bytes(Some(data.len() as u64));
+        coord.timeline().set_byte_position(32);
+        let source = make_source(res, coord, bus);
+
+        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Waiting);
     }
 
     #[kithara::test]
@@ -562,6 +553,24 @@ mod tests {
         // Range 50..60 is NOT present, so Seeking phase fires (not Ready).
         let result = Source::wait_range(&mut source, 50..60, Duration::from_secs(1));
         assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
+    }
+
+    #[kithara::test]
+    fn file_source_demand_range_requests_downloader() {
+        let res = create_committed_resource(b"abcdef");
+        let coord = make_coord(Timeline::new());
+        let bus = EventBus::new(16);
+        let source = make_source(res, Arc::clone(&coord), bus);
+
+        assert_eq!(coord.take_range_request(), None);
+
+        Source::demand_range(&source, 512..513);
+
+        assert_eq!(
+            coord.take_range_request(),
+            Some(512..513),
+            "post-seek WaitingForSource must wake the file downloader via demand_range"
+        );
     }
 
     #[kithara::test]
