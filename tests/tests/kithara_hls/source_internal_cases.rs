@@ -1298,6 +1298,85 @@ async fn test_wait_range_uses_variant_fence_when_abr_hint_changes() {
 }
 
 #[kithara::test(tokio, browser)]
+async fn test_wait_range_uses_abr_target_after_midstream_switch() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    // The read path is still fenced to variant 0, but downloader has already
+    // committed to a midstream switch and drained on-demand requests.
+    set_source_variant_fence(&mut source, Some(0));
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
+    assert_eq!(
+        request.variant, 1,
+        "after a midstream switch, on-demand re-push must follow the ABR target variant rather than the stale read fence"
+    );
+    assert_eq!(request.segment_index, 1);
+}
+
+#[kithara::test(tokio, browser)]
+async fn test_wait_range_clamps_to_target_floor_after_midstream_switch() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    set_source_variant_fence(&mut source, Some(0));
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.commit_segment(1, 6, make_segment_data(100));
+    }
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
+    assert_eq!(request.variant, 1);
+    assert_eq!(
+        request.segment_index, 6,
+        "after a midstream switch, on-demand re-push must not fall back below the first materialized segment of the target variant"
+    );
+}
+
+#[kithara::test(tokio, browser)]
+async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
+    let cancel = CancellationToken::new();
+    let ps = Arc::new(PlaylistState::new(vec![
+        make_variant_state(0, 24),
+        make_variant_state(1, 24),
+    ]));
+    ps.set_size_map(0, uniform_size_map(24, 50));
+    ps.set_size_map(1, uniform_size_map(24, 700));
+
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    set_source_variant_fence(&mut source, Some(0));
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+
+    {
+        let mut segments = shared.segments.lock_sync();
+        for segment_index in 0..4 {
+            segments.commit_segment(0, segment_index, make_segment_data(50));
+        }
+        segments.switch_variant(4, 1);
+        segments.commit_segment(1, 4, make_segment_data(700));
+    }
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 910..930).await;
+    assert_eq!(request.variant, 1);
+    assert_eq!(
+        request.segment_index, 5,
+        "after the switch floor, on-demand routing must follow the mixed layout owner for this offset rather than reusing the target floor segment"
+    );
+}
+
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1683,6 +1762,107 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
         .expect("wait_range should exit after cancellation")
         .expect("wait_range task should not panic");
     assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
+}
+
+#[kithara::test(tokio, browser, env(KITHARA_HANG_TIMEOUT_SECS = "3"))]
+async fn test_wait_range_midstream_switch_target_request_stays_stable_until_ready() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    set_source_variant_fence(&mut source, Some(0));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let first_request = loop {
+        if let Some(request) = shared.segment_requests.peek() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected an on-demand request before timeout"
+        );
+    };
+    assert_eq!(first_request.variant, 1);
+    assert_eq!(first_request.segment_index, 1);
+
+    let dedupe_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() <= dedupe_deadline {
+        assert_eq!(
+            shared.segment_requests.peek(),
+            Some(first_request),
+            "post-switch repush must keep the target-variant demand stable until the range becomes ready"
+        );
+        shared.condvar.notify_all();
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    cancel.cancel();
+    shared.condvar.notify_all();
+    let result = timeout(Duration::from_millis(500), handle)
+        .await
+        .expect("wait_range should exit after cancellation")
+        .expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
+}
+
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_ready() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(1, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+    let fetch = test_fetch_manager(cancel.clone());
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    set_source_variant_fence(&mut source, Some(0));
+
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected on-demand request before timeout"
+        );
+    };
+    assert_eq!(request.variant, 1);
+    assert_eq!(request.segment_index, 1);
+
+    {
+        let seg0_data = make_segment_data(100);
+        let seg1_data = make_segment_data(100);
+        commit_dummy_resource_from_data(&commit_source, &seg1_data);
+        let mut segments = shared.segments.lock_sync();
+        segments.switch_variant(0, 1);
+        segments.commit_segment(1, 0, seg0_data);
+        segments.commit_segment(1, 1, seg1_data);
+    }
+    shared.condvar.notify_all();
+
+    let result = timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("wait_range should not hang while target data is pushed")
+        .expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Ready)));
+    assert!(
+        !shared.had_midstream_switch.load(Ordering::Acquire),
+        "midstream-switch reroute must be one-shot and clear once the target range becomes ready"
+    );
 }
 
 /// Budget check must return `Err(Timeout)` when waited range has no loaded

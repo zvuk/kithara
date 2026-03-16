@@ -650,16 +650,74 @@ impl HlsSource {
         })
     }
 
+    fn resolve_demand_variant(&self) -> VariantIndex {
+        if self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return self.coord.abr_variant_index.load(Ordering::Acquire);
+        }
+        self.resolve_current_variant()
+    }
+
+    fn demand_floor_for_variant(&self, variant: VariantIndex) -> Option<SegmentIndex> {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return None;
+        }
+        let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+        if variant != current_variant {
+            return None;
+        }
+        self.segments
+            .lock_sync()
+            .variant_segments(variant)
+            .and_then(|vs| vs.first().map(|(segment_index, _)| segment_index))
+    }
+
+    fn resolve_demand_segment_for_offset(
+        &self,
+        range_start: u64,
+        variant: VariantIndex,
+    ) -> Option<SegmentIndex> {
+        let resolved = self.resolve_segment_for_offset(range_start, variant)?;
+        let segment_index = Self::segment_index(resolved);
+        Some(
+            self.demand_floor_for_variant(variant)
+                .map_or(segment_index, |floor| segment_index.max(floor)),
+        )
+    }
+
+    fn switched_layout_segment_for_offset(
+        &self,
+        range_start: u64,
+    ) -> Option<(VariantIndex, SegmentIndex)> {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let floor = self.demand_floor_for_variant(current_variant);
+        let (variant, segment_index) = self.layout_segment_for_offset(range_start)?;
+
+        if floor.is_none() {
+            return (variant == current_variant).then_some((variant, segment_index));
+        }
+
+        (segment_index >= floor.unwrap_or(0)).then_some((variant, segment_index))
+    }
+
     fn queue_segment_request_for_offset(&self, range_start: u64, seek_epoch: u64) -> bool {
-        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire)
+            && let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start)
+        {
             return self.push_segment_request(variant, segment_index, seek_epoch);
         }
 
-        let current_variant = self.resolve_current_variant();
+        if let Some((variant, segment_index)) = self.switched_layout_segment_for_offset(range_start)
+        {
+            return self.push_segment_request(variant, segment_index, seek_epoch);
+        }
 
-        if let Some(segment_index) = self
-            .resolve_segment_for_offset(range_start, current_variant)
-            .map(Self::segment_index)
+        let current_variant = self.resolve_demand_variant();
+        if let Some(segment_index) =
+            self.resolve_demand_segment_for_offset(range_start, current_variant)
         {
             return self.push_segment_request(current_variant, segment_index, seek_epoch);
         }
@@ -721,7 +779,9 @@ impl HlsSource {
         metadata_miss_count: &mut usize,
         max_metadata_miss_spins: usize,
     ) -> StreamResult<bool, HlsError> {
-        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire)
+            && let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start)
+        {
             *metadata_miss_count = 0;
             trace!(
                 variant,
@@ -732,7 +792,19 @@ impl HlsSource {
             return Ok(self.push_segment_request(variant, segment_index, seek_epoch));
         }
 
-        let current_variant = self.resolve_current_variant();
+        if let Some((variant, segment_index)) = self.switched_layout_segment_for_offset(range_start)
+        {
+            *metadata_miss_count = 0;
+            trace!(
+                variant,
+                segment_index,
+                offset = range_start,
+                "wait_range: switched-layout on-demand segment load"
+            );
+            return Ok(self.push_segment_request(variant, segment_index, seek_epoch));
+        }
+
+        let current_variant = self.resolve_demand_variant();
         if current_variant >= self.playlist_state.num_variants() {
             return self
                 .metadata_miss(
@@ -748,12 +820,10 @@ impl HlsSource {
 
         if let Some(resolved) = self.resolve_segment_for_offset(range_start, current_variant) {
             *metadata_miss_count = 0;
-            let segment_index = self.log_resolved_demand_segment(
-                range_start,
-                seek_epoch,
-                current_variant,
-                resolved,
-            );
+            let segment_index = self
+                .resolve_demand_segment_for_offset(range_start, current_variant)
+                .expect("resolved demand segment must stay available during logging");
+            self.log_resolved_demand_segment(range_start, seek_epoch, current_variant, resolved);
             return Ok(self.push_segment_request(current_variant, segment_index, seek_epoch));
         }
 
@@ -846,6 +916,9 @@ impl Source for HlsSource {
                 };
             }
             if range_ready {
+                self.coord
+                    .had_midstream_switch
+                    .store(false, Ordering::Release);
                 return Ok(WaitOutcome::Ready);
             }
             if seeking {
@@ -876,12 +949,6 @@ impl Source for HlsSource {
                 ?phase,
                 "wait_range: spinning"
             );
-
-            // A midstream variant switch drains all segment_requests.
-            // Clear on-demand tracking so we can re-push for the new variant.
-            self.coord
-                .had_midstream_switch
-                .swap(false, Ordering::AcqRel);
 
             drop(segments);
 
