@@ -962,6 +962,23 @@ impl<T: StreamType> StreamAudioSource<T> {
 // ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
+    fn boundary_end(&self, start: u64) -> u64 {
+        self.shared_stream.len().map_or_else(
+            || start.saturating_add(32 * 1024),
+            |len| start.saturating_add(32 * 1024).min(len),
+        )
+    }
+
+    fn source_is_ready_for_boundary(&self, start: u64) -> bool {
+        let end = self.boundary_end(start);
+        self.source_ready_for_range(start..end)
+    }
+
+    fn source_phase_for_boundary(&self, start: u64) -> kithara_stream::SourcePhase {
+        let end = self.boundary_end(start);
+        self.shared_stream.phase_at(start..end)
+    }
+
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
         matches!(
             self.shared_stream.phase_at(range),
@@ -989,14 +1006,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
         match applying.mode {
-            SeekMode::Anchor(anchor) => {
-                let start = anchor.byte_offset;
-                let end = self.shared_stream.len().map_or_else(
-                    || start.saturating_add(32 * 1024),
-                    |len| start.saturating_add(32 * 1024).min(len),
-                );
-                self.source_ready_for_range(start..end)
-            }
+            SeekMode::Anchor(anchor) => self.source_is_ready_for_boundary(anchor.byte_offset),
             SeekMode::Direct => self.source_is_ready(),
         }
     }
@@ -1004,16 +1014,10 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_phase_for_wait_context(&self, context: &WaitContext) -> kithara_stream::SourcePhase {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
-                SeekMode::Anchor(anchor) => {
-                    let start = anchor.byte_offset;
-                    let end = self.shared_stream.len().map_or_else(
-                        || start.saturating_add(32 * 1024),
-                        |len| start.saturating_add(32 * 1024).min(len),
-                    );
-                    self.shared_stream.phase_at(start..end)
-                }
+                SeekMode::Anchor(anchor) => self.source_phase_for_boundary(anchor.byte_offset),
                 SeekMode::Direct => self.shared_stream.phase(),
             },
+            WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
             _ => self.shared_stream.phase(),
         }
     }
@@ -1026,12 +1030,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         let TrackState::WaitingForSource { context, .. } = &self.state else {
             return;
         };
-        let start = if let WaitContext::ApplySeek(applying) = context
-            && let SeekMode::Anchor(anchor) = applying.mode
-        {
-            anchor.byte_offset
-        } else {
-            self.shared_stream.position()
+        let start = match context {
+            WaitContext::ApplySeek(applying) => {
+                if let SeekMode::Anchor(anchor) = applying.mode {
+                    anchor.byte_offset
+                } else {
+                    self.shared_stream.position()
+                }
+            }
+            WaitContext::Recreation(recreate) => recreate.offset,
+            _ => self.shared_stream.position(),
         };
         self.shared_stream
             .demand_range(start..start.saturating_add(1));
@@ -1338,8 +1346,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn step_recreating_decoder(&mut self) -> TrackStep<PcmChunk> {
         use kithara_stream::SourcePhase;
 
-        if !self.source_is_ready() {
-            let phase = self.shared_stream.phase();
+        let recreate = match &self.state {
+            TrackState::RecreatingDecoder(recreate) => recreate.clone(),
+            _ => return TrackStep::StateChanged,
+        };
+        if !self.source_is_ready_for_boundary(recreate.offset) {
+            let phase = self.source_phase_for_boundary(recreate.offset);
             if let Some(reason) = map_source_phase(phase) {
                 let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
                     TrackState::RecreatingDecoder(recreate) => recreate,
@@ -1352,6 +1364,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     context: WaitContext::Recreation(recreate),
                     reason,
                 };
+                self.submit_demand_for_current_state();
                 return TrackStep::Blocked(reason);
             }
             match phase {

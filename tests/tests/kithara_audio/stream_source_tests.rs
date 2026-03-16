@@ -30,6 +30,7 @@ use kithara_test_utils::kithara;
 
 struct TestSourceState {
     data: Vec<u8>,
+    last_demand_range: Option<Range<u64>>,
     len: Option<u64>,
     media_info: Option<MediaInfo>,
     ready_until: Option<u64>,
@@ -83,6 +84,7 @@ impl TestSource {
         Self {
             state: Arc::new(Mutex::new(TestSourceState {
                 data,
+                last_demand_range: None,
                 len,
                 media_info: None,
                 ready_until: None,
@@ -252,6 +254,10 @@ impl Source for TestSource {
             return kithara_stream::SourcePhase::Eof;
         }
         kithara_stream::SourcePhase::Ready
+    }
+
+    fn demand_range(&self, range: Range<u64>) {
+        self.state.lock_sync().last_demand_range = Some(range);
     }
 }
 
@@ -1207,6 +1213,74 @@ fn same_codec_seek_with_stale_base_offset_does_not_recreate_decoder() {
         &[Duration::from_millis(250)],
         "same-codec seek must run on the existing decoder"
     );
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn waiting_recreation_uses_recreate_offset_for_readiness() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2_000], Some(2_000));
+    let seek_spec = v0_spec();
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    state.lock_sync().ready_until = Some(128);
+    set_waiting_recreation(
+        &mut source,
+        1,
+        Duration::from_secs(12),
+        v3_info(),
+        500,
+        WaitingReason::Waiting,
+    );
+
+    assert!(matches!(
+        step_track(&mut source),
+        TrackStep::Blocked(WaitingReason::Waiting)
+    ));
+    assert_eq!(track_state(&source), TrackPhaseTag::WaitingForSource);
+    assert!(offsets.lock_sync().is_empty());
+    assert_eq!(state.lock_sync().last_demand_range, Some(500..501));
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn recreating_decoder_waits_for_recreate_offset_before_factory() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2_000], Some(2_000));
+    let seek_spec = v0_spec();
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
+    let (recreated_decoder, _) =
+        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 64); 2], vec![], None);
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    state.lock_sync().ready_until = Some(128);
+    set_recreating_decoder(&mut source, 1, Duration::from_secs(12), v3_info(), 500);
+
+    assert!(matches!(
+        step_track(&mut source),
+        TrackStep::Blocked(WaitingReason::Waiting)
+    ));
+    assert_eq!(track_state(&source), TrackPhaseTag::WaitingForSource);
+    assert!(offsets.lock_sync().is_empty());
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]

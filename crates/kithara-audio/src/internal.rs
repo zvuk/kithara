@@ -242,6 +242,48 @@ pub mod source {
             skip,
         });
     }
+
+    pub fn set_recreating_decoder<T: StreamType>(
+        source: &mut StreamAudioSource<T>,
+        epoch: u64,
+        target: Duration,
+        media_info: MediaInfo,
+        offset: u64,
+    ) {
+        source.0.state = track_fsm::TrackState::RecreatingDecoder(track_fsm::RecreateState {
+            attempt: 0,
+            cause: track_fsm::RecreateCause::CodecChange,
+            media_info,
+            next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+                attempt: 0,
+                seek: track_fsm::SeekContext { epoch, target },
+            }),
+            offset,
+        });
+    }
+
+    pub fn set_waiting_recreation<T: StreamType>(
+        source: &mut StreamAudioSource<T>,
+        epoch: u64,
+        target: Duration,
+        media_info: MediaInfo,
+        offset: u64,
+        reason: WaitingReason,
+    ) {
+        source.0.state = track_fsm::TrackState::WaitingForSource {
+            context: track_fsm::WaitContext::Recreation(track_fsm::RecreateState {
+                attempt: 0,
+                cause: track_fsm::RecreateCause::CodecChange,
+                media_info,
+                next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+                    attempt: 0,
+                    seek: track_fsm::SeekContext { epoch, target },
+                }),
+                offset,
+            }),
+            reason,
+        };
+    }
 }
 
 pub use crate::resampler::{ResamplerParams, ResamplerProcessor};
