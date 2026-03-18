@@ -73,6 +73,9 @@ pub(crate) struct ResumeState {
     pub recover_attempts: u8,
     pub seek: SeekContext,
     pub skip: Option<Duration>,
+    /// Anchor byte offset from the seek — used for readiness checks and demand
+    /// when the decoder's stream position differs from the `StreamIndex` layout.
+    pub anchor_offset: Option<u64>,
 }
 
 /// What to do once decoder recreation succeeds.
@@ -311,6 +314,7 @@ mod tests {
                     epoch: 1,
                     target: Duration::from_secs(5),
                 },
+                anchor_offset: None,
                 skip: None,
             }),
             // AtEof is NOT terminal — seek-after-EOF is valid
@@ -386,8 +390,9 @@ mod tests {
                 recover_attempts: 0,
                 seek: SeekContext {
                     epoch: 1,
-                    target: Duration::from_secs(10)
+                    target: Duration::from_secs(10),
                 },
+                anchor_offset: None,
                 skip: None,
             })
             .phase_tag(),

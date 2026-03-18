@@ -240,6 +240,7 @@ pub mod source {
             recover_attempts,
             seek: track_fsm::SeekContext { epoch, target },
             skip,
+            anchor_offset: None,
         });
     }
 

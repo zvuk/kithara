@@ -499,6 +499,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "seek lifecycle context")]
     fn apply_seek_applied(
         &mut self,
         epoch: u64,
@@ -507,6 +508,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         segment_index: Option<u32>,
         byte_range_start: Option<u64>,
         byte_range_end: Option<u64>,
+        anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
         self.emit_seek_lifecycle(
@@ -525,6 +527,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 target: position,
             },
             skip: None,
+            anchor_offset,
         });
     }
 
@@ -590,6 +593,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             segment_index,
             byte_range_start,
             byte_range_end,
+            None, // Direct seek — no anchor offset
         );
         true
     }
@@ -625,6 +629,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             segment_index,
             byte_range_start,
             byte_range_end,
+            Some(anchor.byte_offset),
         );
         true
     }
@@ -1443,6 +1448,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         segment_index,
                         byte_range_start,
                         byte_range_end,
+                        None, // Recreate path — no anchor offset available
                     );
                     self.epoch.store(request.seek.epoch, Ordering::Release);
                     self.timeline.clear_seek_pending(request.seek.epoch);
@@ -1461,6 +1467,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn step_awaiting_resume(&mut self) -> TrackStep<PcmChunk> {
+        // Use anchor offset for readiness check when available. The decoder
+        // may have landed at a different byte position than the anchor, but
+        // StreamIndex layout is built around the anchor offset (from reset_to).
+        let anchor_offset = match &self.state {
+            TrackState::AwaitingResume(resume) => resume.anchor_offset,
+            _ => None,
+        };
         if !self.source_is_ready() {
             let phase = self.shared_stream.phase();
             if let Some(reason) = map_source_phase(phase) {
@@ -1468,7 +1481,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     ?phase,
                     ?reason,
                     stream_pos = self.shared_stream.position(),
-                    segment_range = ?self.shared_stream.current_segment_range(),
+                    ?anchor_offset,
                     epoch = self.epoch.load(Ordering::Acquire),
                     "step_awaiting_resume: source not ready"
                 );
