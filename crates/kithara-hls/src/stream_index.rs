@@ -190,9 +190,9 @@ pub struct StreamIndex {
     /// Byte-offset ranges → (variant, `segment_index`). Only committed segments.
     /// Updated on every commit/reconcile. Provides O(log n) `find_at_offset`.
     byte_map: RangeMap<u64, (VariantIndex, SegmentIndex)>,
-    /// Expected total size per segment (from `size_map` HEAD estimates).
+    /// Expected total size per segment per variant (from `size_map` HEAD estimates).
     /// Used by `rebuild_byte_map_from` to reserve space for uncommitted segments.
-    expected_sizes: Vec<u64>,
+    expected_sizes: Vec<Vec<u64>>,
     /// Total number of segments in the playlist.
     num_segments: usize,
 }
@@ -214,7 +214,7 @@ impl StreamIndex {
             variants: (0..num_variants).map(|_| VariantSegments::new()).collect(),
             variant_map,
             byte_map: RangeMap::new(),
-            expected_sizes: Vec::new(),
+            expected_sizes: vec![Vec::new(); num_variants],
             num_segments,
         }
     }
@@ -279,8 +279,11 @@ impl StreamIndex {
     ///
     /// Called once after `calculate_size_map`. Enables `rebuild_byte_map_from`
     /// to reserve correct offsets for not-yet-committed segments.
-    pub fn set_expected_sizes(&mut self, sizes: Vec<u64>) {
-        self.expected_sizes = sizes;
+    pub fn set_expected_sizes(&mut self, variant: VariantIndex, sizes: Vec<u64>) {
+        trace!(variant, count = sizes.len(), "set_expected_sizes");
+        if variant < self.expected_sizes.len() {
+            self.expected_sizes[variant] = sizes;
+        }
         self.rebuild_byte_map_from(0);
     }
 
@@ -496,6 +499,12 @@ impl StreamIndex {
         None
     }
 
+    /// Number of expected sizes stored (across all variants).
+    #[must_use]
+    pub fn expected_sizes_len(&self) -> usize {
+        self.expected_sizes.iter().map(Vec::len).sum()
+    }
+
     /// Number of committed segments across all variants.
     #[must_use]
     pub fn num_committed(&self) -> usize {
@@ -574,7 +583,11 @@ impl StreamIndex {
                 let seg_len = self
                     .stored_segment(variant, seg_idx)
                     .map(SegmentData::total_len)
-                    .or_else(|| self.expected_sizes.get(seg_idx).copied())
+                    .or_else(|| {
+                        self.expected_sizes
+                            .get(variant)
+                            .and_then(|v| v.get(seg_idx).copied())
+                    })
                     .unwrap_or(0);
                 offset += seg_len;
             }
@@ -612,7 +625,11 @@ impl StreamIndex {
                     .stored_segment(variant, seg_idx)
                     .map(SegmentData::total_len);
                 let total_len = stored_len
-                    .or_else(|| self.expected_sizes.get(seg_idx).copied())
+                    .or_else(|| {
+                        self.expected_sizes
+                            .get(variant)
+                            .and_then(|v| v.get(seg_idx).copied())
+                    })
                     .unwrap_or(0);
                 if total_len == 0 {
                     continue;
@@ -1051,7 +1068,7 @@ mod tests {
     fn find_at_offset_with_gap_preserves_layout_offsets() {
         // 20 segments, each 200 bytes. Commit 0-3 then skip to 16.
         let mut idx = StreamIndex::new(1, 20);
-        idx.set_expected_sizes(vec![200; 20]);
+        idx.set_expected_sizes(0, vec![200; 20]);
         for i in 0..4 {
             idx.commit_segment(0, i, make_segment_data(0, 200));
         }

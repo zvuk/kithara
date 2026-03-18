@@ -715,7 +715,7 @@ impl HlsDownloader {
         // Sync expected segment sizes into StreamIndex so that
         // rebuild_byte_map_from reserves correct offsets for gaps.
         if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
-            self.segments.lock_sync().set_expected_sizes(sizes);
+            self.segments.lock_sync().set_expected_sizes(variant, sizes);
         }
 
         let (cached_count, cached_end_offset) =

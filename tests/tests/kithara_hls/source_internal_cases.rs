@@ -874,7 +874,8 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
     commit_segment_bytes(write_fetch.as_ref(), &segment_data, &[], &expected);
     {
         let mut segments = shared.segments.lock_sync();
-        segments.set_expected_sizes(vec![100; 24]);
+        segments.set_expected_sizes(0, vec![100; 24]);
+        segments.set_expected_sizes(1, vec![100; 24]);
         segments.reset_to(2, 1, 200);
         segments.commit_segment(1, 7, segment_data);
     }
