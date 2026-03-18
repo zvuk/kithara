@@ -150,6 +150,14 @@ impl PlaylistState {
         }
     }
 
+    /// Clone of `segment_sizes` from the `size_map` (for `StreamIndex` sync).
+    #[must_use]
+    pub fn segment_sizes(&self, variant: VariantIndex) -> Option<Vec<u64>> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        state.size_map.as_ref().map(|sm| sm.segment_sizes.clone())
+    }
+
     /// Reconcile a segment's actual size after DRM decryption.
     ///
     /// Updates the segment's size and recalculates all subsequent offsets.

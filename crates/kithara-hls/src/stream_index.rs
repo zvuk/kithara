@@ -190,6 +190,9 @@ pub struct StreamIndex {
     /// Byte-offset ranges → (variant, `segment_index`). Only committed segments.
     /// Updated on every commit/reconcile. Provides O(log n) `find_at_offset`.
     byte_map: RangeMap<u64, (VariantIndex, SegmentIndex)>,
+    /// Expected total size per segment (from `size_map` HEAD estimates).
+    /// Used by `rebuild_byte_map_from` to reserve space for uncommitted segments.
+    expected_sizes: Vec<u64>,
     /// Total number of segments in the playlist.
     num_segments: usize,
 }
@@ -211,6 +214,7 @@ impl StreamIndex {
             variants: (0..num_variants).map(|_| VariantSegments::new()).collect(),
             variant_map,
             byte_map: RangeMap::new(),
+            expected_sizes: Vec::new(),
             num_segments,
         }
     }
@@ -268,6 +272,15 @@ impl StreamIndex {
         // byte_map is NOT cleared — committed segments from preserved
         // variants may still be valid. rebuild_byte_map_from(0) will
         // recompute which entries are visible under the new layout.
+        self.rebuild_byte_map_from(0);
+    }
+
+    /// Set expected total sizes per segment (from `size_map` HEAD estimates).
+    ///
+    /// Called once after `calculate_size_map`. Enables `rebuild_byte_map_from`
+    /// to reserve correct offsets for not-yet-committed segments.
+    pub fn set_expected_sizes(&mut self, sizes: Vec<u64>) {
+        self.expected_sizes = sizes;
         self.rebuild_byte_map_from(0);
     }
 
@@ -549,8 +562,8 @@ impl StreamIndex {
 
     /// Compute the byte offset where `target_segment` starts in the virtual stream.
     ///
-    /// Walks committed segments in layout order, summing their sizes.
-    /// Uncommitted segments contribute 0 (they have no committed data).
+    /// Walks segments in layout order, summing their sizes.
+    /// Uses committed size when available, falling back to expected size.
     fn byte_offset_at(&self, target_segment: SegmentIndex) -> u64 {
         let mut offset = self.layout_base_offset;
         for (seg_range, &variant) in self.variant_map.iter() {
@@ -558,9 +571,12 @@ impl StreamIndex {
                 if seg_idx >= target_segment {
                     return offset;
                 }
-                if let Some(data) = self.stored_segment(variant, seg_idx) {
-                    offset += data.total_len();
-                }
+                let seg_len = self
+                    .stored_segment(variant, seg_idx)
+                    .map(SegmentData::total_len)
+                    .or_else(|| self.expected_sizes.get(seg_idx).copied())
+                    .unwrap_or(0);
+                offset += seg_len;
             }
         }
         offset
@@ -583,20 +599,25 @@ impl StreamIndex {
             self.byte_map.remove(range);
         }
 
-        // Reinsert with correct offsets
+        // Reinsert with correct offsets.
+        // For uncommitted segments, advance offset by expected size so that
+        // subsequent committed segments appear at their canonical byte offset.
         let mut offset = self.byte_offset_at(from_segment);
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {
                 if seg_idx < from_segment {
                     continue;
                 }
-                let Some(total_len) = self
+                let stored_len = self
                     .stored_segment(variant, seg_idx)
-                    .map(SegmentData::total_len)
-                else {
+                    .map(SegmentData::total_len);
+                let total_len = stored_len
+                    .or_else(|| self.expected_sizes.get(seg_idx).copied())
+                    .unwrap_or(0);
+                if total_len == 0 {
                     continue;
-                };
-                if self.is_segment_loaded(variant, seg_idx) {
+                }
+                if stored_len.is_some() && self.is_segment_loaded(variant, seg_idx) {
                     let end = offset + total_len;
                     self.byte_map.insert(offset..end, (variant, seg_idx));
                 }
@@ -1022,5 +1043,26 @@ mod tests {
         assert_eq!(idx.item_range((0, 0)), Some(0..100));
         assert_eq!(idx.item_range((0, 1)), Some(100..300));
         assert_eq!(idx.item_range((0, 5)), None);
+    }
+
+    // === StreamIndex: sparse commit (gap between committed segments) ===
+
+    #[kithara::test]
+    fn find_at_offset_with_gap_preserves_layout_offsets() {
+        // 20 segments, each 200 bytes. Commit 0-3 then skip to 16.
+        let mut idx = StreamIndex::new(1, 20);
+        idx.set_expected_sizes(vec![200; 20]);
+        for i in 0..4 {
+            idx.commit_segment(0, i, make_segment_data(0, 200));
+        }
+        // Skip segments 4-15 (not downloaded yet).
+        idx.commit_segment(0, 16, make_segment_data(0, 200));
+
+        // Segment 16 should be at offset 16*200 = 3200, not 4*200 = 800.
+        let seg = idx
+            .find_at_offset(3200)
+            .expect("segment 16 must be findable at its layout offset 3200");
+        assert_eq!(seg.segment_index, 16);
+        assert_eq!(seg.byte_offset, 3200);
     }
 }

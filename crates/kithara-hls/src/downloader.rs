@@ -712,6 +712,12 @@ impl HlsDownloader {
             debug!(?e, variant, "failed to calculate variant size map");
         }
 
+        // Sync expected segment sizes into StreamIndex so that
+        // rebuild_byte_map_from reserves correct offsets for gaps.
+        if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+            self.segments.lock_sync().set_expected_sizes(sizes);
+        }
+
         let (cached_count, cached_end_offset) =
             self.populate_cached_segments_if_needed(variant, is_variant_switch);
         self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
@@ -1003,7 +1009,7 @@ impl HlsDownloader {
     }
 
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
-        if self.coord.timeline().is_flushing() || self.coord.timeline().is_seek_pending() {
+        if self.coord.timeline().is_flushing() {
             tokio::task::yield_now().await;
             return PlanOutcome::Idle;
         }
