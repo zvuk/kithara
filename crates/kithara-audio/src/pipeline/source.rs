@@ -1485,6 +1485,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                     epoch = self.epoch.load(Ordering::Acquire),
                     "step_awaiting_resume: source not ready"
                 );
+                // NOTE: anchor-based demand intentionally NOT sent here.
+                // It causes DRM regression where encrypted/decrypted sizes
+                // differ. Standard demand via submit_demand_for_current_state
+                // (in step_waiting_for_source) uses byte_position.
                 self.state = TrackState::WaitingForSource {
                     context: WaitContext::Playback,
                     reason,

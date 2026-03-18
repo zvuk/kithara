@@ -499,6 +499,12 @@ impl StreamIndex {
         None
     }
 
+    /// Base byte offset of the current layout (set by `reset_to`).
+    #[must_use]
+    pub fn layout_base_offset(&self) -> u64 {
+        self.layout_base_offset
+    }
+
     /// Number of expected sizes stored (across all variants).
     #[must_use]
     pub fn expected_sizes_len(&self) -> usize {

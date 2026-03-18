@@ -96,9 +96,10 @@ where
 
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
         let (committed, has_active) = {
-            let cache = self.cache.lock_sync();
+            let mut cache = self.cache.lock_sync();
             let mut committed = None;
             let mut has_active = false;
+            let mut promote_key = None;
 
             for (cache_key, entry) in cache.iter() {
                 let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res)) =
@@ -119,11 +120,16 @@ where
                     ResourceStatus::Committed { final_len } => {
                         if committed.is_none() {
                             committed = Some(AssetResourceState::Committed { final_len });
+                            promote_key = Some(cache_key.clone());
                         }
                     }
                 }
             }
 
+            // Promote committed entry so it survives until read_from_entry.
+            if let Some(pk) = promote_key {
+                cache.promote(&pk);
+            }
             drop(cache);
             (committed, has_active)
         };

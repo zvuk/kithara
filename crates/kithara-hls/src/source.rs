@@ -992,6 +992,10 @@ impl Source for HlsSource {
         }
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "segments guard used across multiple checks"
+    )]
     fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
         use kithara_stream::SourcePhase;
         let segments = self.segments.lock_sync();
@@ -1000,6 +1004,19 @@ impl Source for HlsSource {
         }
         if self.range_ready_from_segments(&segments, &range) {
             return SourcePhase::Ready;
+        }
+        // After reset_to, the decoder may land at a byte position slightly
+        // before the layout base offset (Symphonia seeks by sample, not by
+        // segment). If the first segment of the current layout covers the
+        // requested range, treat it as ready.
+        if range.start < segments.layout_base_offset() {
+            let adjusted = segments.layout_base_offset()
+                ..range
+                    .end
+                    .max(segments.layout_base_offset().saturating_add(1));
+            if self.range_ready_from_segments(&segments, &adjusted) {
+                return SourcePhase::Ready;
+            }
         }
         if self.coord.timeline().is_flushing() {
             return SourcePhase::Seeking;
