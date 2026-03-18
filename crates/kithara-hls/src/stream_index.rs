@@ -480,6 +480,15 @@ impl StreamIndex {
             return Some((seg_ref.variant, seg_ref.segment_index));
         }
 
+        // After reset_to, the decoder may land before layout_base_offset.
+        // Map to the first segment of the current layout.
+        if offset < self.layout_base_offset
+            && let Some((seg_range, &variant)) = self.variant_map.iter().next()
+            && let Some(first) = seg_range.clone().next()
+        {
+            return Some((variant, first));
+        }
+
         let mut cursor = self.layout_base_offset;
         for (seg_range, &variant) in self.variant_map.iter() {
             for seg_idx in seg_range.clone() {

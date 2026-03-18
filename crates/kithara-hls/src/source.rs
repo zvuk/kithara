@@ -902,7 +902,13 @@ impl Source for HlsSource {
             // Compute phase inline — priority order matches SourcePhase::classify.
             let cancelled = self.coord.cancel.is_cancelled();
             let stopped = self.coord.stopped.load(Ordering::Acquire);
-            let range_ready = self.range_ready_from_segments(&segments, &range);
+            let mut range_ready = self.range_ready_from_segments(&segments, &range);
+            // After reset_to, decoder may land before layout_base_offset.
+            if !range_ready && range.start < segments.layout_base_offset() {
+                let base = segments.layout_base_offset();
+                let adjusted = base..range.end.max(base.saturating_add(1));
+                range_ready = self.range_ready_from_segments(&segments, &adjusted);
+            }
             let seeking = self.coord.timeline().is_flushing();
             let past_eof = self.is_past_eof(&segments, &range);
             let waiting_demand = self.coord.has_pending_segment_request(seek_epoch);
@@ -1064,10 +1070,17 @@ impl Source for HlsSource {
         let read_epoch = self.coord.timeline().seek_epoch();
         let (seg, effective_total) = {
             let segments = self.segments.lock_sync();
+            let mut found = segments
+                .visible_segment_at(offset)
+                .map(|r| ReadSegment::from_ref(&r));
+            // After reset_to, decoder may read from before layout_base_offset.
+            if found.is_none() && offset < segments.layout_base_offset() {
+                found = segments
+                    .visible_segment_at(segments.layout_base_offset())
+                    .map(|r| ReadSegment::from_ref(&r));
+            }
             (
-                segments
-                    .visible_segment_at(offset)
-                    .map(|r| ReadSegment::from_ref(&r)),
+                found,
                 segments.effective_total(self.playlist_state.as_ref()),
             )
         };
