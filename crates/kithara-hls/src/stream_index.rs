@@ -1082,4 +1082,42 @@ mod tests {
         assert_eq!(seg.segment_index, 16);
         assert_eq!(seg.byte_offset, 3200);
     }
+
+    #[kithara::test]
+    fn reset_to_variant_without_expected_sizes_collapses_gaps() {
+        // Proves the bug: reset_to variant 1 without expected_sizes[1]
+        // causes segment 8 to collapse to base offset 500.
+        let mut idx = StreamIndex::new(2, 10);
+        idx.set_expected_sizes(0, vec![100; 10]);
+        // variant 1 has NO expected_sizes (ensure_variant_ready not called)
+
+        idx.commit_segment(0, 0, make_segment_data(0, 100));
+        idx.reset_to(5, 1, 500);
+        idx.commit_segment(1, 8, make_segment_data(0, 120));
+
+        // BUG: segment 8 at 500 (collapsed) instead of 500 + 3*? = ???
+        assert!(
+            idx.find_at_offset(500).is_some(),
+            "without expected_sizes[1], segment 8 collapses to base"
+        );
+    }
+
+    #[kithara::test]
+    fn reset_to_variant_with_expected_sizes_preserves_offsets() {
+        // After setting expected_sizes for variant 1, gaps are preserved.
+        let mut idx = StreamIndex::new(2, 10);
+        idx.set_expected_sizes(0, vec![100; 10]);
+        idx.set_expected_sizes(1, vec![120; 10]);
+
+        idx.commit_segment(0, 0, make_segment_data(0, 100));
+        idx.reset_to(5, 1, 500);
+        idx.commit_segment(1, 8, make_segment_data(0, 120));
+
+        // segment 8 = base(500) + 3 gaps * 120 = 500 + 360 = 860
+        let seg = idx
+            .find_at_offset(860)
+            .expect("segment 8 with expected_sizes must be at 860");
+        assert_eq!(seg.segment_index, 8);
+        assert_eq!(seg.byte_offset, 860);
+    }
 }

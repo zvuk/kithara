@@ -1472,6 +1472,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                     epoch = self.epoch.load(Ordering::Acquire),
                     "step_awaiting_resume: source not ready"
                 );
+                self.state = TrackState::WaitingForSource {
+                    context: WaitContext::Playback,
+                    reason,
+                };
                 return TrackStep::Blocked(reason);
             }
         }

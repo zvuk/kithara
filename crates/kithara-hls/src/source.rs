@@ -596,6 +596,11 @@ impl HlsSource {
                 // Reset layout — decoder will be recreated.
                 let mut segments = self.segments.lock_sync();
                 segments.reset_to(segment_index, variant, anchor.byte_offset);
+                // Sync expected sizes for the target variant so
+                // rebuild_byte_map_from can reserve correct gap offsets.
+                if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+                    segments.set_expected_sizes(variant, sizes);
+                }
                 drop(segments);
                 self.coord.timeline().set_download_position(0);
                 debug!(
