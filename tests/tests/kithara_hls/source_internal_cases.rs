@@ -869,11 +869,12 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
     let write_fetch = Arc::clone(&fetch);
     let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
     let segment_data = make_segment_data(100);
-    let expected = b"late-segment";
+    let expected: Vec<u8> = (0u8..100).collect();
 
-    commit_segment_bytes(write_fetch.as_ref(), &segment_data, &[], expected);
+    commit_segment_bytes(write_fetch.as_ref(), &segment_data, &[], &expected);
     {
         let mut segments = shared.segments.lock_sync();
+        segments.set_expected_sizes(vec![100; 24]);
         segments.reset_to(2, 1, 200);
         segments.commit_segment(1, 7, segment_data);
     }
@@ -891,18 +892,21 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
         "source readiness at the landed byte position must use the absolute layout offset of the loaded segment"
     );
 
-    let mut buf = vec![0u8; expected.len()];
+    // Read from offset 750 (50 bytes into the segment starting at 700).
+    let read_len = 50;
+    let mut buf = vec![0u8; read_len];
     let read = source
         .read_at(750, &mut buf)
         .expect("read_at from absolute late-segment offset");
 
     assert_eq!(
         read,
-        ReadOutcome::Data(expected.len()),
+        ReadOutcome::Data(read_len),
         "read_at must return committed bytes for a late loaded segment at its absolute layout offset"
     );
     assert_eq!(
-        buf, expected,
+        buf,
+        &expected[50..],
         "read_at must resolve the committed late segment using absolute layout coordinates"
     );
 }
