@@ -3,6 +3,20 @@ package com.kithara
 import android.content.Context
 
 /**
+ * Minimum log level forwarded from the Rust layer to logcat.
+ *
+ * Maps to `tracing` levels: [Trace] is the most verbose, [Off] disables all logging.
+ */
+enum class LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Off,
+}
+
+/**
  * Entry point for the Kithara audio engine.
  *
  * Call [initialize] once before using any Kithara API — typically in
@@ -10,7 +24,7 @@ import android.content.Context
  *
  * ```kotlin
  * // In Application.onCreate:
- * Kithara.initialize(applicationContext)
+ * Kithara.initialize(applicationContext, logLevel = LogLevel.Debug)
  *
  * // Anywhere in the app:
  * val player = KitharaPlayer()
@@ -41,13 +55,14 @@ object Kithara {
      * Safe to call multiple times — subsequent calls are no-ops.
      *
      * @param context Any [Context]; the application context is used internally.
+     * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
      */
-    fun initialize(context: Context) {
+    fun initialize(context: Context, logLevel: LogLevel = LogLevel.Warn) {
         if (ready) return
         synchronized(this) {
             if (ready) return
             System.loadLibrary("kithara_ffi")
-            nativeInitRustlsPlatformVerifier(context.applicationContext)
+            nativeInit(context.applicationContext, logLevel.ordinal)
             cacheDir = context.applicationContext.cacheDir
                 .resolve("kithara")
                 .absolutePath
@@ -56,5 +71,5 @@ object Kithara {
     }
 
     @JvmStatic
-    private external fun nativeInitRustlsPlatformVerifier(context: Context)
+    private external fun nativeInit(context: Context, logLevel: Int)
 }

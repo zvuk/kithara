@@ -971,9 +971,9 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
             .read_at(offset, &mut buf)
             .expect("read_at over mixed layout");
         match read {
-            ReadOutcome::Data(0) => panic!(
-                "unexpected EOF while reading mixed-layout byte stream at offset {offset}"
-            ),
+            ReadOutcome::Data(0) => {
+                panic!("unexpected EOF while reading mixed-layout byte stream at offset {offset}")
+            }
             ReadOutcome::Data(n) => {
                 actual.extend_from_slice(&buf[..n]);
                 offset += n as u64;

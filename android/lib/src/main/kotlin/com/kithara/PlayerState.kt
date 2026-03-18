@@ -63,3 +63,16 @@ data class ItemState(
     val error: KitharaError? = null,
     val status: ItemStatus = ItemStatus.Unknown,
 )
+
+/**
+ * One-shot player events delivered via [KitharaPlayer.events].
+ *
+ * Distinct from [PlayerState], which carries continuously-updated snapshot data.
+ */
+sealed interface KitharaPlayerEvent {
+    /** The current item changed; [itemId] is null when the queue becomes empty. */
+    data class CurrentItemChanged(val itemId: String?) : KitharaPlayerEvent
+
+    /** The current item played to its end successfully. */
+    data object PlayedToEnd : KitharaPlayerEvent
+}

@@ -27,19 +27,21 @@ struct PlayerView: View {
     var body: some View {
         VStack(spacing: 0) {
             headerSection
-            Spacer().frame(height: 24)
+            Spacer().frame(height: 20)
             urlSection
-            Spacer().frame(height: 20)
+            Spacer().frame(height: 16)
             nowPlayingSection
-            Spacer().frame(height: 16)
+            Spacer().frame(height: 12)
             seekSection
-            Spacer().frame(height: 20)
-            transportSection
             Spacer().frame(height: 16)
+            transportSection
+            Spacer().frame(height: 12)
             rateSection
-            Spacer().frame(height: 20)
+            Spacer().frame(height: 16)
             volumeSection
-            Spacer()
+            Spacer().frame(height: 16)
+            playlistSection
+            Spacer().frame(height: 16)
             errorSection
         }
         .padding(18)
@@ -96,9 +98,9 @@ struct PlayerView: View {
                 #endif
 
             Button {
-                viewModel.loadAndPlay()
+                viewModel.addTrack()
             } label: {
-                Text("Load")
+                Text("Add")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.kitharaBg)
                     .padding(.horizontal, 16)
@@ -114,26 +116,15 @@ struct PlayerView: View {
     // MARK: - Now Playing
 
     private var nowPlayingSection: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "music.note")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Color.kitharaGold)
-                Text(viewModel.trackName)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.kitharaLight)
-                    .lineLimit(1)
-                Spacer()
-            }
-
-            if let itemId = viewModel.currentItemId {
-                HStack {
-                    Text("ID: \(itemId.prefix(8))…")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color.kitharaMuted)
-                    Spacer()
-                }
-            }
+        HStack(spacing: 8) {
+            Image(systemName: "music.note")
+                .font(.system(size: 16))
+                .foregroundStyle(Color.kitharaGold)
+            Text(viewModel.trackName)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.kitharaLight)
+                .lineLimit(1)
+            Spacer()
         }
         .padding(12)
         .background(Color.kitharaPanel)
@@ -178,7 +169,15 @@ struct PlayerView: View {
 
     private var transportSection: some View {
         HStack(spacing: 32) {
-            Spacer()
+            Button {
+                viewModel.playPrev()
+            } label: {
+                Image(systemName: "backward.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.kitharaLight)
+            }
+            .buttonStyle(.plain)
+
             Button {
                 viewModel.togglePlayPause()
             } label: {
@@ -190,8 +189,17 @@ struct PlayerView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
-            Spacer()
+
+            Button {
+                viewModel.playNext()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.kitharaLight)
+            }
+            .buttonStyle(.plain)
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Rate
@@ -246,6 +254,32 @@ struct PlayerView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    // MARK: - Playlist
+
+    @ViewBuilder
+    private var playlistSection: some View {
+        if viewModel.playlist.isEmpty {
+            Text("No tracks in playlist")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.kitharaMuted)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.kitharaPanel)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(Array(viewModel.playlist.enumerated()), id: \.element.id) { index, entry in
+                        playlistRow(entry: entry, index: index)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(10)
+            .background(Color.kitharaPanel)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
     // MARK: - Error
 
     @ViewBuilder
@@ -274,6 +308,33 @@ struct PlayerView: View {
 
     private func rateLabel(_ rate: Float) -> String {
         rate == Float(Int(rate)) ? "\(Int(rate))x" : String(format: "%.2gx", rate)
+    }
+
+    private func playlistRow(entry: PlaylistEntry, index: Int) -> some View {
+        let isCurrent = entry.id == viewModel.currentTrackId
+
+        return Button {
+            viewModel.selectTrack(entry.id)
+        } label: {
+            HStack(spacing: 10) {
+                Text(String(format: "%02d", index + 1))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isCurrent ? Color.kitharaGold : .kitharaMuted)
+
+                Text(entry.name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isCurrent ? Color.kitharaLight : .kitharaMuted)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(isCurrent ? Color.kitharaGold.opacity(0.16) : Color.kitharaBg)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 
     private var statusText: String {

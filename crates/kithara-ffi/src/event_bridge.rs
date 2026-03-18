@@ -88,6 +88,7 @@ impl EventBridge {
                 let inner = player.lock_sync();
                 // Pump Firewheel graph updates (volume, etc.) on native.
                 let _ = inner.tick();
+                inner.process_notifications();
                 let time = inner.position_seconds();
                 let duration = inner.duration_seconds();
                 drop(inner);
@@ -147,6 +148,7 @@ impl EventBridge {
                 FfiPlayerEvent::VolumeChanged { volume: *volume }
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
+            PlayerEvent::ItemDidPlayToEnd => FfiPlayerEvent::ItemDidPlayToEnd,
             _ => return,
         };
         observer.on_event(ffi_event);

@@ -438,6 +438,30 @@ impl PlayerImpl {
         out
     }
 
+    /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
+    /// when a track finishes via EOF.
+    pub fn process_notifications(&self) {
+        use crate::impls::player_notification::PlayerNotification;
+
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return;
+        };
+
+        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+            match notification {
+                PlayerNotification::TrackPlaybackStopped(_) => {
+                    let _ = self.events_tx.send(PlayerEvent::ItemDidPlayToEnd);
+                }
+                other => {
+                    tracing::trace!(?other, "unhandled player notification");
+                }
+            }
+        }
+    }
+
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
         self.config.eq_layout.len()
