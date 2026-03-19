@@ -1123,8 +1123,10 @@ impl Source for HlsSource {
 
         // ABR variant switch: update layout_variant so the recreated decoder
         // reads from the new variant's byte map. This is the point where
-        // ABR actually takes effect — not during seek.
-        {
+        // ABR takes effect here — but NOT during an active seek.
+        // If a seek is in-flight, layout_variant must stay on the variant
+        // the seek anchor was resolved in, otherwise read positions desync.
+        if !self.coord.timeline().is_flushing() && !self.coord.timeline().is_seek_pending() {
             let mut segments = self.segments.lock_sync();
             if segments.layout_variant() != current_variant {
                 segments.set_layout_variant(current_variant);

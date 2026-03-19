@@ -19,7 +19,7 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
+use kithara_test_utils::{TestTempDir, serve_assets, temp_dir, tracing_setup};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -182,6 +182,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
 async fn seek_sequence_from_log_real_stream(
+    _tracing_setup: (),
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,

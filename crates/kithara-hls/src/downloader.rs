@@ -688,6 +688,14 @@ impl HlsDownloader {
         self.playlist_state
             .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
 
+        // Sync reconciled sizes back to StreamIndex expected_sizes so that
+        // byte offsets for uncommitted segments stay accurate after DRM decrypt.
+        if let Some(sizes) = self.playlist_state.segment_sizes(dl.variant) {
+            self.segments
+                .lock_sync()
+                .set_expected_sizes(dl.variant, sizes);
+        }
+
         self.bus.publish(HlsEvent::DownloadProgress {
             offset: next_download,
             total: None,
