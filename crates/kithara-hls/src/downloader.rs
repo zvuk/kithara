@@ -220,6 +220,14 @@ impl HlsDownloader {
         if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
             return false;
         }
+        // With per-variant byte maps, demand from the layout_variant must
+        // always be honored (e.g. seek-to-zero after ABR switch).
+        // Only filter segments for the ABR variant that are below the
+        // switch point in the sequential download cursor.
+        let layout = self.segments.lock_sync().layout_variant();
+        if variant == layout {
+            return false;
+        }
         let current_variant = self.abr.get_current_variant_index();
         variant == current_variant && segment_index < self.gap_scan_start_segment()
     }
@@ -965,17 +973,29 @@ impl HlsDownloader {
         }
     }
 
-    #[expect(clippy::unused_self, reason = "signature preserved for call sites")]
     fn should_skip_pre_switch_variant(
         &self,
-        _variant: usize,
+        variant: usize,
         _segment_index: usize,
-        _is_midstream_switch: bool,
+        is_midstream_switch: bool,
     ) -> bool {
-        // With per-variant byte maps, demand always comes from layout_variant.
-        // The downloader must honor it — filtering by ABR variant causes
-        // infinite retry loops (source demands V0, downloader skips because ABR=V1).
-        false
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
+            return false;
+        }
+        // With per-variant byte maps, demand from layout_variant must be honored.
+        let layout = self.segments.lock_sync().layout_variant();
+        if variant == layout {
+            return false;
+        }
+        let current_variant = self.abr.get_current_variant_index();
+        if variant == current_variant {
+            return false;
+        }
+        debug!(
+            variant,
+            current_variant, "skipping stale segment from pre-switch variant"
+        );
+        true
     }
 
     fn build_demand_plan(&mut self, req: &SegmentRequest, is_variant_switch: bool) -> HlsPlan {
