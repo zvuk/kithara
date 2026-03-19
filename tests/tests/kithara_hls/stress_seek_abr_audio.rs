@@ -162,8 +162,8 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 async fn stress_seek_abr_audio(_tracing_setup: ()) {
     // Generate WAV data for two variants

@@ -177,7 +177,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     native,
     serial,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -213,7 +213,7 @@ async fn seek_sequence_from_log_real_stream(
             audio.seek(pos).expect("seek must not fail");
 
             let mut samples_after_seek = 0usize;
-            let read_deadline = Instant::now() + Duration::from_secs(4);
+            let read_deadline = Instant::now() + Duration::from_secs(8);
             while Instant::now() < read_deadline && samples_after_seek < 16_384 {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;

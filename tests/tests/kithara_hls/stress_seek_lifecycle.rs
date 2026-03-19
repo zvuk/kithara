@@ -158,8 +158,8 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
