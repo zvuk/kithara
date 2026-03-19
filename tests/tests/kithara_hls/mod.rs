@@ -2,6 +2,7 @@
 
 pub(crate) mod fixture;
 
+mod abr_switch_playback;
 mod abr_integration;
 mod basic_playback;
 mod deferred_abr;
