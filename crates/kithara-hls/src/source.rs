@@ -1602,7 +1602,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_resolves_in_layout_variant_not_abr_target() {
-        let mut source = build_test_source_with_segments(2, 4);
+        let source = build_test_source_with_segments(2, 4);
         set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
         set_variant_size_map(source.playlist_state.as_ref(), 1, &[500, 500, 500, 500]);
         push_segment(&source.segments, 0, 0, 0, 100);
