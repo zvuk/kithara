@@ -216,7 +216,7 @@ impl TrackSlot {
                 }
                 Err(rejected) => {
                     self.pending_fetch = Some(rejected);
-                    return StepResult::NoProgress;
+                    return StepResult::Waiting;
                 }
             }
         }
@@ -242,7 +242,7 @@ impl TrackSlot {
             }
             TrackStep::Blocked(reason) => {
                 trace!(?reason, "track blocked");
-                StepResult::NoProgress
+                StepResult::Waiting
             }
             TrackStep::Eof => {
                 if !self.eof_sent {
@@ -311,6 +311,22 @@ impl TrackSlot {
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Best result from a single round-robin pass over all tracks.
+///
+/// Ordered by priority: `Produced > Waiting > Idle > Stuck`.
+/// A single track returning `Produced` overrides everything else.
+enum PassOutcome {
+    /// At least one track decoded a chunk or changed state.
+    Produced,
+    /// No chunks produced, but at least one track is alive and waiting
+    /// (backpressure or source loading). Not a hang.
+    Waiting,
+    /// All tracks are terminal (EOF / Failed) — legitimately idle.
+    Idle,
+    /// Non-terminal tracks reported no progress — potential hang.
+    Stuck,
+}
+
 /// Cooperative multi-track worker loop.
 ///
 /// Runs on a dedicated OS thread. Drains commands, steps each track
@@ -334,77 +350,87 @@ fn run_shared_worker_loop(
             return;
         }
 
-        // Phase 1: Drain global commands.
-        let should_stop = drain_worker_commands(cmd_rx, &mut tracks, &mut cursor);
-        if should_stop {
+        if drain_worker_commands(cmd_rx, &mut tracks, &mut cursor) {
             return;
         }
 
-        // Phase 2: Round-robin — one step per track.
-        let mut progress = false;
-        let track_count = tracks.len();
+        // Round-robin: step each track once, collect best outcome.
+        let outcome = step_all_tracks(&mut tracks, &mut cursor);
 
-        for _ in 0..track_count {
-            if cursor >= track_count {
-                cursor = 0;
-            }
-            let slot = &mut tracks[cursor];
-            cursor += 1;
-
-            match catch_unwind(AssertUnwindSafe(|| slot.step())) {
-                Ok(StepResult::Progress) => progress = true,
-                Ok(StepResult::NoProgress) => {}
-                Err(_) => {
-                    warn!(track_id = slot.track_id, "shared worker: track panicked");
-                    slot.terminal = true;
-                    slot.complete_preload();
-                    // Push EOF so the consumer stops waiting for chunks.
-                    let epoch = slot.source.timeline().seek_epoch();
-                    let _ = slot
-                        .data_tx
-                        .try_push(Fetch::new(PcmChunk::default(), true, epoch));
-                    slot.consumer_wake.wake();
-                }
-            }
-        }
-
-        // Phase 3: Cleanup failed/cancelled tracks.
+        // Remove finished tracks.
         let before = tracks.len();
         tracks.retain(|slot| !slot.is_removable());
         if tracks.len() < before && cursor > tracks.len() {
             cursor = 0;
         }
 
-        // Phase 4: Idle.
-        if progress {
-            hang_reset!();
-            kithara_platform::thread::yield_now();
-        } else if tracks.is_empty() {
-            // No tracks registered — the worker is legitimately idle,
-            // not hung. Reset the watchdog to avoid false positives.
-            hang_reset!();
-            wake.wait_timeout(EMPTY_TIMEOUT);
-        } else {
-            // Terminal phases (AtEof/Failed) are legitimately idle:
-            // they wait for an external event (seek command). Reset the
-            // watchdog so it doesn't fire during normal inter-seek gaps.
-            //
-            // Non-terminal phases (Decoding/PendingReset) that report
-            // no progress should tick the watchdog: if the source stays
-            // "not ready" because the downloader is also stalled, the
-            // watchdog will fire after the configured timeout.
-            let all_terminal = tracks.iter().all(|s| s.terminal || s.eof_sent);
-            if all_terminal {
+        // Watchdog + sleep based on outcome.
+        match outcome {
+            PassOutcome::Produced => {
                 hang_reset!();
-            } else {
-                trace!(
-                    track_count = tracks.len(),
-                    terminal_count = tracks.iter().filter(|s| s.terminal || s.eof_sent).count(),
-                    "worker no-progress tick (non-terminal tracks stalled)"
-                );
-                hang_tick!();
+                kithara_platform::thread::yield_now();
             }
-            wake.wait_timeout(IDLE_TIMEOUT);
+            PassOutcome::Waiting => {
+                wake.wait_timeout(IDLE_TIMEOUT);
+            }
+            PassOutcome::Idle => {
+                hang_reset!();
+                wake.wait_timeout(EMPTY_TIMEOUT);
+            }
+            PassOutcome::Stuck => {
+                hang_tick!();
+                wake.wait_timeout(IDLE_TIMEOUT);
+            }
+        }
+    }
+}
+
+fn step_all_tracks(tracks: &mut [TrackSlot], cursor: &mut usize) -> PassOutcome {
+    if tracks.is_empty() {
+        return PassOutcome::Idle;
+    }
+
+    let mut best = StepResult::NoProgress;
+    let count = tracks.len();
+
+    for _ in 0..count {
+        if *cursor >= count {
+            *cursor = 0;
+        }
+        let slot = &mut tracks[*cursor];
+        *cursor += 1;
+
+        let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| slot.step())) {
+            r
+        } else {
+            warn!(track_id = slot.track_id, "shared worker: track panicked");
+            slot.terminal = true;
+            slot.complete_preload();
+            let epoch = slot.source.timeline().seek_epoch();
+            let _ = slot
+                .data_tx
+                .try_push(Fetch::new(PcmChunk::default(), true, epoch));
+            slot.consumer_wake.wake();
+            StepResult::NoProgress
+        };
+
+        // Keep the "best" result: Progress > Waiting > NoProgress.
+        best = match (best, result) {
+            (StepResult::Progress, _) | (_, StepResult::Progress) => StepResult::Progress,
+            (StepResult::Waiting, _) | (_, StepResult::Waiting) => StepResult::Waiting,
+            _ => StepResult::NoProgress,
+        };
+    }
+
+    match best {
+        StepResult::Progress => PassOutcome::Produced,
+        StepResult::Waiting => PassOutcome::Waiting,
+        StepResult::NoProgress => {
+            if tracks.iter().all(|s| s.terminal || s.eof_sent) {
+                PassOutcome::Idle
+            } else {
+                PassOutcome::Stuck
+            }
         }
     }
 }

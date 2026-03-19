@@ -38,7 +38,10 @@ pub enum ServiceClass {
 pub(crate) enum StepResult {
     /// Track made progress (decoded chunk, applied seek, pushed pending).
     Progress,
-    /// Track could not progress (no data, ringbuf full, EOF, failed).
+    /// Track is alive but waiting (backpressure, source not ready yet).
+    /// Not a hang — should reset the watchdog.
+    Waiting,
+    /// Track could not progress (EOF, failed, terminal).
     NoProgress,
 }
 
