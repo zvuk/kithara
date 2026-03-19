@@ -1,0 +1,18 @@
+Baseline test results — 2026-03-10 before offset architecture refactoring
+
+cargo test --workspace --exclude kithara-integration-tests
+Result: ALL PASSED (0 failed)
+
+Key crate results:
+- kithara-audio: 126 passed
+- kithara-hls: 55 passed
+- kithara-stream: 48 passed
+- kithara-decode: 112 passed
+- kithara-storage: 104 passed
+- kithara-abr: 91 passed
+- kithara-assets: 64 passed
+
+Total: ~715 unit tests, 0 failures.
+
+Integration tests (kithara-integration-tests) excluded from baseline — they require
+real HLS data and are run separately.

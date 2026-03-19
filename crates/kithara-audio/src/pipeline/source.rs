@@ -1568,6 +1568,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
 
         // 2. State dispatch — one transition per call
+        // 2. State dispatch — one transition per call
         match self.state.phase_tag() {
             TrackPhaseTag::Decoding => self.step_decoding(),
             TrackPhaseTag::SeekRequested => self.step_seek_requested(),

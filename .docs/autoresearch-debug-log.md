@@ -1,0 +1,1 @@
+- 2026-03-14T00:00: Session start. Parsed test.log after ANSI stripping. Initial failing set from log: 5 DRM-only tests. Common symptom in 4 tests: seek anchor exact decoder seek failed with unexpected end of file around 205.81s, followed by early EOF/timeout. Separate symptom in 1 test: hang detector fired in recv_outcome_blocking during DRM ABR seek stress.
