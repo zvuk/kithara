@@ -45,6 +45,7 @@ async fn abr_switch_real_assets_does_not_hang(_tracing_setup: (), temp_dir: Test
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
+    audio.preload();
 
     // Read for 15 seconds. If ABR switch hangs the worker,
     // HangDetector (3s) will panic before the 30s test timeout.
@@ -95,6 +96,7 @@ async fn fixed_variant_real_assets_plays_without_hang(_tracing_setup: (), temp_d
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
+    audio.preload();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut buf = vec![0f32; 4096];
