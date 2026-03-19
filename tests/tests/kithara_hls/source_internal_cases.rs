@@ -540,7 +540,7 @@ fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
         .segment_requests
         .pop()
         .expect("seek landing must enqueue request for the landed segment");
-    assert_eq!(req.variant, 1);
+    assert_eq!(req.variant, 0, "demand uses layout_variant, not ABR target");
     assert_eq!(
         req.segment_index, 1,
         "seek landing must resolve demand from the decoder-landed byte offset"
@@ -1549,7 +1549,7 @@ async fn test_wait_range_uses_variant_fence_when_abr_hint_changes() {
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_wait_range_uses_abr_target_after_midstream_switch() {
+async fn test_wait_range_uses_layout_variant_after_midstream_switch() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
@@ -1563,8 +1563,8 @@ async fn test_wait_range_uses_abr_target_after_midstream_switch() {
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
     assert_eq!(
-        request.variant, 1,
-        "after a midstream switch, on-demand re-push must follow the ABR target variant rather than the stale read fence"
+        request.variant, 0,
+        "demand uses layout_variant, not ABR target"
     );
     assert_eq!(request.segment_index, 1);
 }
@@ -1586,10 +1586,13 @@ async fn test_wait_range_clamps_to_target_floor_after_midstream_switch() {
     }
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
-    assert_eq!(request.variant, 1);
     assert_eq!(
-        request.segment_index, 6,
-        "after a midstream switch, on-demand re-push must not fall back below the first materialized segment of the target variant"
+        request.variant, 0,
+        "demand uses layout_variant, not ABR target"
+    );
+    assert_eq!(
+        request.segment_index, 1,
+        "with layout_variant=0 and 100-byte segments, offset 150 maps to segment 1"
     );
 }
 
@@ -1628,13 +1631,15 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
     }
 
     // With per-variant byte maps and layout_variant=1, v1 expected sizes = 700 bytes/seg.
-    // Offset 910 maps to seg 1, but demand_floor clamps to seg 4
-    // (first committed segment in v1 = download window floor).
+    // Offset 910 maps to seg 1 (910 / 700 = 1). Demand uses layout_variant directly.
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 910..930).await;
-    assert_eq!(request.variant, 1);
     assert_eq!(
-        request.segment_index, 4,
-        "demand floor must clamp to the first committed segment of the switched variant"
+        request.variant, 1,
+        "demand uses layout_variant (which is 1 after set_layout_variant)"
+    );
+    assert_eq!(
+        request.segment_index, 1,
+        "with layout_variant=1 and 700-byte segments, offset 910 maps to segment 1"
     );
 }
 
@@ -2049,7 +2054,10 @@ async fn test_wait_range_midstream_switch_target_request_stays_stable_until_read
             "expected an on-demand request before timeout"
         );
     };
-    assert_eq!(first_request.variant, 1);
+    assert_eq!(
+        first_request.variant, 0,
+        "demand uses layout_variant, not ABR target"
+    );
     assert_eq!(first_request.segment_index, 1);
 
     let dedupe_deadline = Instant::now() + Duration::from_secs(2);
@@ -2102,7 +2110,10 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
             "expected on-demand request before timeout"
         );
     };
-    assert_eq!(request.variant, 1);
+    assert_eq!(
+        request.variant, 0,
+        "demand uses layout_variant, not ABR target"
+    );
     assert_eq!(request.segment_index, 1);
 
     {

@@ -242,7 +242,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             .media_info
             .as_ref()
             .is_some_and(|cached| cached.codec != current_info.codec);
-        if !codec_changed {
+        let variant_changed = self
+            .session
+            .media_info
+            .as_ref()
+            .is_some_and(|cached| cached.variant_index != current_info.variant_index);
+        if !codec_changed && !variant_changed {
             return None;
         }
 

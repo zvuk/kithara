@@ -965,24 +965,17 @@ impl HlsDownloader {
         }
     }
 
+    #[expect(clippy::unused_self, reason = "signature preserved for call sites")]
     fn should_skip_pre_switch_variant(
         &self,
-        variant: usize,
-        segment_index: usize,
-        is_midstream_switch: bool,
+        _variant: usize,
+        _segment_index: usize,
+        _is_midstream_switch: bool,
     ) -> bool {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
-            return false;
-        }
-        let current_variant = self.abr.get_current_variant_index();
-        if variant == current_variant {
-            return false;
-        }
-        debug!(
-            variant,
-            segment_index, current_variant, "skipping stale segment from pre-switch variant"
-        );
-        true
+        // With per-variant byte maps, demand always comes from layout_variant.
+        // The downloader must honor it — filtering by ABR variant causes
+        // infinite retry loops (source demands V0, downloader skips because ABR=V1).
+        false
     }
 
     fn build_demand_plan(&mut self, req: &SegmentRequest, is_variant_switch: bool) -> HlsPlan {
@@ -1662,7 +1655,7 @@ mod tests {
         let segment_index = 37;
 
         let (is_variant_switch, is_midstream_switch) =
-            classify_layout_transition(Some(variant), variant, segment_index);
+            classify_layout_transition(variant, variant, segment_index);
 
         assert!(
             !is_variant_switch,
@@ -1672,16 +1665,11 @@ mod tests {
             !is_midstream_switch,
             "seek within same variant must not trigger midstream switch path"
         );
-
-        let (is_variant_switch, is_midstream_switch) =
-            classify_layout_transition(Some(variant), variant, segment_index);
-        assert!(!is_variant_switch);
-        assert!(!is_midstream_switch);
     }
 
     #[kithara::test]
     fn classify_real_variant_change_marks_midstream_switch_only_after_segment_zero() {
-        let from_variant = Some(0);
+        let from_variant = 0;
         let to_variant = 1;
 
         let (is_variant_switch, is_midstream_switch) =
