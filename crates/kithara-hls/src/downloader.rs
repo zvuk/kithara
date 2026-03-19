@@ -57,11 +57,11 @@ fn first_missing_segment(
 }
 
 fn classify_layout_transition(
-    layout_variant: Option<VariantIndex>,
+    layout_variant: VariantIndex,
     variant: VariantIndex,
     segment_index: SegmentIndex,
 ) -> (bool, bool) {
-    let is_variant_switch = layout_variant.is_some_and(|previous| previous != variant);
+    let is_variant_switch = layout_variant != variant;
     let is_midstream_switch = is_variant_switch && segment_index > 0;
     (is_variant_switch, is_midstream_switch)
 }
@@ -180,8 +180,8 @@ pub(crate) struct HlsDownloader {
 }
 
 impl HlsDownloader {
-    fn layout_variant(&self, segment_index: SegmentIndex) -> Option<VariantIndex> {
-        self.segments.lock_sync().variant_at(segment_index)
+    fn layout_variant(&self) -> VariantIndex {
+        self.segments.lock_sync().layout_variant()
     }
 
     fn current_segment_index(&self) -> SegmentIndex {
@@ -264,7 +264,7 @@ impl HlsDownloader {
     }
 
     fn classify_variant_transition(&self, variant: usize, segment_index: usize) -> (bool, bool) {
-        classify_layout_transition(self.layout_variant(segment_index), variant, segment_index)
+        classify_layout_transition(self.layout_variant(), variant, segment_index)
     }
 
     fn reset_for_seek_epoch(
@@ -327,16 +327,15 @@ impl HlsDownloader {
     fn switch_needs_init(
         &self,
         variant: usize,
-        segment_index: usize,
+        _segment_index: usize,
         is_variant_switch: bool,
     ) -> bool {
         if !is_variant_switch {
             return false;
         }
 
-        self.layout_variant(segment_index)
-            .filter(|previous| *previous != variant)
-            .is_some_and(|previous| is_cross_codec_switch(&self.playlist_state, previous, variant))
+        let previous = self.layout_variant();
+        previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
     }
 
     fn variant_has_init(&self, variant: usize) -> bool {
@@ -621,7 +620,7 @@ impl HlsDownloader {
     fn commit_segment(
         &mut self,
         dl: HlsFetch,
-        is_variant_switch: bool,
+        _is_variant_switch: bool,
         _is_midstream_switch: bool,
     ) {
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
@@ -669,13 +668,9 @@ impl HlsDownloader {
             media_url: dl.media.url.clone(),
         };
 
-        {
-            let mut segments = self.segments.lock_sync();
-            if is_variant_switch {
-                segments.switch_variant(dl.segment_index, dl.variant);
-            }
-            segments.commit_segment(dl.variant, dl.segment_index, data);
-        }
+        self.segments
+            .lock_sync()
+            .commit_segment(dl.variant, dl.segment_index, data);
 
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
@@ -713,9 +708,17 @@ impl HlsDownloader {
         }
 
         // Sync expected segment sizes into StreamIndex so that
-        // rebuild_byte_map_from reserves correct offsets for gaps.
-        if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
-            self.segments.lock_sync().set_expected_sizes(variant, sizes);
+        // rebuild_variant_byte_map reserves correct offsets for gaps.
+        {
+            let mut segments = self.segments.lock_sync();
+            if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+                segments.set_expected_sizes(variant, sizes);
+            }
+            // For initial download (not midstream), align layout_variant with
+            // the download variant so the source reads from the correct byte map.
+            if is_variant_switch && !is_midstream_switch {
+                segments.set_layout_variant(variant);
+            }
         }
 
         let (cached_count, cached_end_offset) =
@@ -917,7 +920,8 @@ impl HlsDownloader {
     ) -> bool {
         let seg_data = {
             let segments = self.segments.lock_sync();
-            if !segments.is_visible(variant, segment_index) {
+            if variant != segments.layout_variant() || !segments.is_visible(variant, segment_index)
+            {
                 return false;
             }
             segments
@@ -2176,7 +2180,7 @@ mod tests {
         {
             let mut segments = downloader.segments.lock_sync();
             // Assign all segments to variant 1 so commit_segment places them in byte_map
-            segments.switch_variant(0, 1);
+            segments.set_layout_variant(1);
             let media_url = Url::parse("https://example.com/seg-1-0").expect("valid segment URL");
             segments.commit_segment(
                 1,
@@ -2991,7 +2995,7 @@ mod tests {
             .timeline()
             .initiate_seek(Duration::from_secs(12));
         downloader.reset_for_seek_epoch(seek_epoch, 1, 3);
-        downloader.segments.lock_sync().reset_to(3, 1, 300);
+        downloader.segments.lock_sync().set_layout_variant(1);
 
         let (is_variant_switch, _is_midstream_switch) =
             downloader.classify_variant_transition(1, 3);
@@ -3176,7 +3180,7 @@ mod tests {
         );
 
         // Set up variant_map: variant 1 owns all segments
-        downloader.segments.lock_sync().switch_variant(0, 1);
+        downloader.segments.lock_sync().set_layout_variant(1);
 
         assert_eq!(
             downloader.effective_total_bytes(),
@@ -3392,7 +3396,7 @@ mod tests {
         downloader.coord.timeline().set_download_position(220);
         {
             let mut segments = downloader.segments.lock_sync();
-            segments.switch_variant(1, 1);
+            segments.set_layout_variant(1);
             segments.commit_segment(
                 0,
                 0,
@@ -3500,6 +3504,10 @@ mod tests {
         downloader.coord.timeline().set_download_position(300);
         {
             let mut segments = downloader.segments.lock_sync();
+            // Set expected sizes for variant 1 so byte offsets are correct.
+            if let Some(sizes) = playlist_state.segment_sizes(1) {
+                segments.set_expected_sizes(1, sizes);
+            }
             for segment_index in 0..3 {
                 segments.commit_segment(
                     0,
@@ -3544,9 +3552,12 @@ mod tests {
         );
         let range = <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (1, 3))
             .expect("committed segment must have byte range");
+        // Variant 1 expected sizes: [120, 100, 100, ...].
+        // Segments 0-2 not committed for variant 1 → use expected sizes.
+        // Offset = 120 + 100 + 100 = 320.
         assert_eq!(
-            range.start, 300,
-            "first switched segment must establish the new layout anchor instead of being dropped"
+            range.start, 320,
+            "first switched segment must appear at the correct offset in variant 1's byte space"
         );
         drop(segments);
         assert_eq!(downloader.current_segment_index(), 4);
@@ -3974,7 +3985,7 @@ mod tests {
 
         {
             let mut segments = downloader.segments.lock_sync();
-            segments.switch_variant(1, 1);
+            segments.set_layout_variant(1);
             segments.commit_segment(
                 0,
                 1,

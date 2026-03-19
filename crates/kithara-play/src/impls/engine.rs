@@ -409,12 +409,15 @@ impl EngineImpl {
         use ringbuf::{HeapRb, traits::Split};
 
         let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
-        self.slot_handles.lock_sync().push(SlotHandle {
+        self.active_slots.lock_sync().push(slot_id);
+        self.slot_registry.lock_sync().insert(
             slot_id,
-            cmd_tx,
-            eq: SharedEq::new(0),
-            shared_state,
-        });
+            SlotHandle {
+                cmd_tx,
+                eq: SharedEq::new(0),
+                shared_state,
+            },
+        );
     }
 }
 

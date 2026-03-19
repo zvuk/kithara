@@ -87,7 +87,7 @@ mod tests {
         // Create StreamIndex with 4 variants and 20 segments
         let segments = Arc::new(Mutex::new(StreamIndex::new(4, 20)));
         // Set variant_map so segment 5 belongs to variant 2
-        segments.lock_sync().switch_variant(5, 2);
+        segments.lock_sync().set_layout_variant(2);
         segments.lock_sync().commit_segment(
             2,
             5,
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(ctx.variant_index(), Some(2));
 
         // Atomics update: add another segment at variant 3
-        segments.lock_sync().switch_variant(10, 3);
+        segments.lock_sync().set_layout_variant(3);
         segments.lock_sync().commit_segment(
             3,
             10,

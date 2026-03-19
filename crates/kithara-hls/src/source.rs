@@ -115,12 +115,12 @@ impl HlsSource {
 
     // --- variant resolution ---
 
-    /// Single source of truth for current target variant resolution.
+    /// Current variant for source operations (read, seek, demand).
     ///
-    /// `variant_fence` is only a read/seek fence. It must never override the
-    /// ABR atomic when source logic needs the current target variant.
+    /// Always uses `layout_variant` — ABR only affects playback via
+    /// `media_info()` → `format_change` detection → layout switch.
     fn resolve_current_variant(&self) -> VariantIndex {
-        self.coord.abr_variant_index.load(Ordering::Acquire)
+        self.segments.lock_sync().layout_variant()
     }
 
     pub(crate) fn can_cross_variant_without_reset(
@@ -519,7 +519,10 @@ impl HlsSource {
             return Err(HlsError::SegmentNotFound("empty playlist".to_string()));
         }
 
-        let mut variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+        // Use current layout variant, NOT ABR target.
+        // ABR must not affect seek resolution — variant switch happens
+        // after seek completes, via format_change detection.
+        let mut variant = self.segments.lock_sync().layout_variant();
         if variant >= variants {
             variant = 0;
         }
@@ -554,17 +557,18 @@ impl HlsSource {
         })
     }
 
-    /// Classify a seek as Preserve (keep segments) or Reset (clear segments).
+    /// Classify a seek as Preserve or Reset.
+    ///
+    /// Since `resolve_seek_anchor` always uses `layout_variant` (not ABR target),
+    /// seeks are always within the current layout → always Preserve.
+    /// Variant switches happen via `format_change` detection, not during seek.
     fn classify_seek(&self, anchor: &SourceSeekAnchor) -> SeekLayout {
         let target_variant = anchor.variant_index.unwrap_or(0);
-        if self
-            .layout_segment_for_offset(anchor.byte_offset)
-            .is_some_and(|(variant, _)| variant == target_variant)
-        {
-            return SeekLayout::Preserve;
-        }
         match self.current_layout_variant() {
             Some(current) if current == target_variant => SeekLayout::Preserve,
+            Some(current) if self.can_cross_variant_without_reset(current, target_variant) => {
+                SeekLayout::Preserve
+            }
             _ => SeekLayout::Reset,
         }
     }
@@ -583,7 +587,9 @@ impl HlsSource {
 
         match *layout {
             SeekLayout::Preserve => {
-                // Keep segments — byte layout valid, Symphonia tables remain correct.
+                // Keep segments — byte layout valid, decoder seeks in place.
+                // layout_variant stays unchanged. ABR switch (if pending) is
+                // handled after seek via format_change detection.
                 trace!(
                     seek_epoch,
                     variant,
@@ -593,11 +599,11 @@ impl HlsSource {
                 );
             }
             SeekLayout::Reset => {
-                // Reset layout — decoder will be recreated.
+                // Switch layout variant — decoder will be recreated.
                 let mut segments = self.segments.lock_sync();
-                segments.reset_to(segment_index, variant, anchor.byte_offset);
+                segments.set_layout_variant(variant);
                 // Sync expected sizes for the target variant so
-                // rebuild_byte_map_from can reserve correct gap offsets.
+                // rebuild_variant_byte_map can reserve correct gap offsets.
                 if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
                     segments.set_expected_sizes(variant, sizes);
                 }
@@ -608,7 +614,7 @@ impl HlsSource {
                     variant,
                     segment_index,
                     byte_offset = anchor.byte_offset,
-                    "seek plan: Reset — reset StreamIndex"
+                    "seek plan: Reset — switched layout variant"
                 );
             }
         }
@@ -656,75 +662,19 @@ impl HlsSource {
     }
 
     fn resolve_demand_variant(&self) -> VariantIndex {
-        if self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            return self.coord.abr_variant_index.load(Ordering::Acquire);
-        }
         self.resolve_current_variant()
     }
 
-    fn demand_floor_for_variant(&self, variant: VariantIndex) -> Option<SegmentIndex> {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            return None;
-        }
-        let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
-        if variant != current_variant {
-            return None;
-        }
-        self.segments
-            .lock_sync()
-            .variant_segments(variant)
-            .and_then(|vs| vs.first().map(|(segment_index, _)| segment_index))
-    }
-
-    fn resolve_demand_segment_for_offset(
-        &self,
-        range_start: u64,
-        variant: VariantIndex,
-    ) -> Option<SegmentIndex> {
-        let resolved = self.resolve_segment_for_offset(range_start, variant)?;
-        let segment_index = Self::segment_index(resolved);
-        Some(
-            self.demand_floor_for_variant(variant)
-                .map_or(segment_index, |floor| segment_index.max(floor)),
-        )
-    }
-
-    fn switched_layout_segment_for_offset(
-        &self,
-        range_start: u64,
-    ) -> Option<(VariantIndex, SegmentIndex)> {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            return None;
-        }
-
-        let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
-        let floor = self.demand_floor_for_variant(current_variant);
-        let (variant, segment_index) = self.layout_segment_for_offset(range_start)?;
-
-        if floor.is_none() {
-            return (variant == current_variant).then_some((variant, segment_index));
-        }
-
-        (segment_index >= floor.unwrap_or(0)).then_some((variant, segment_index))
-    }
-
     fn queue_segment_request_for_offset(&self, range_start: u64, seek_epoch: u64) -> bool {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire)
-            && let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start)
-        {
+        // Always use layout_variant for demand — ABR is invisible here.
+        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
             return self.push_segment_request(variant, segment_index, seek_epoch);
         }
 
-        if let Some((variant, segment_index)) = self.switched_layout_segment_for_offset(range_start)
-        {
+        let variant = self.resolve_demand_variant();
+        if let Some(resolved) = self.resolve_segment_for_offset(range_start, variant) {
+            let segment_index = Self::segment_index(resolved);
             return self.push_segment_request(variant, segment_index, seek_epoch);
-        }
-
-        let current_variant = self.resolve_demand_variant();
-        if let Some(segment_index) =
-            self.resolve_demand_segment_for_offset(range_start, current_variant)
-        {
-            return self.push_segment_request(current_variant, segment_index, seek_epoch);
         }
 
         false
@@ -784,27 +734,14 @@ impl HlsSource {
         metadata_miss_count: &mut usize,
         max_metadata_miss_spins: usize,
     ) -> StreamResult<bool, HlsError> {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire)
-            && let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start)
-        {
+        // Always use layout_variant for demand — ABR is invisible to source.
+        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
             *metadata_miss_count = 0;
             trace!(
                 variant,
                 segment_index,
                 offset = range_start,
                 "wait_range: layout on-demand segment load"
-            );
-            return Ok(self.push_segment_request(variant, segment_index, seek_epoch));
-        }
-
-        if let Some((variant, segment_index)) = self.switched_layout_segment_for_offset(range_start)
-        {
-            *metadata_miss_count = 0;
-            trace!(
-                variant,
-                segment_index,
-                offset = range_start,
-                "wait_range: switched-layout on-demand segment load"
             );
             return Ok(self.push_segment_request(variant, segment_index, seek_epoch));
         }
@@ -825,9 +762,7 @@ impl HlsSource {
 
         if let Some(resolved) = self.resolve_segment_for_offset(range_start, current_variant) {
             *metadata_miss_count = 0;
-            let segment_index = self
-                .resolve_demand_segment_for_offset(range_start, current_variant)
-                .expect("resolved demand segment must stay available during logging");
+            let segment_index = Self::segment_index(resolved);
             self.log_resolved_demand_segment(range_start, seek_epoch, current_variant, resolved);
             return Ok(self.push_segment_request(current_variant, segment_index, seek_epoch));
         }
@@ -902,13 +837,7 @@ impl Source for HlsSource {
             // Compute phase inline — priority order matches SourcePhase::classify.
             let cancelled = self.coord.cancel.is_cancelled();
             let stopped = self.coord.stopped.load(Ordering::Acquire);
-            let mut range_ready = self.range_ready_from_segments(&segments, &range);
-            // After reset_to, decoder may land before layout_base_offset.
-            if !range_ready && range.start < segments.layout_base_offset() {
-                let base = segments.layout_base_offset();
-                let adjusted = base..range.end.max(base.saturating_add(1));
-                range_ready = self.range_ready_from_segments(&segments, &adjusted);
-            }
+            let range_ready = self.range_ready_from_segments(&segments, &range);
             let seeking = self.coord.timeline().is_flushing();
             let past_eof = self.is_past_eof(&segments, &range);
             let waiting_demand = self.coord.has_pending_segment_request(seek_epoch);
@@ -1011,16 +940,16 @@ impl Source for HlsSource {
         if self.range_ready_from_segments(&segments, &range) {
             return SourcePhase::Ready;
         }
-        // After reset_to, the decoder may land at a byte position slightly
-        // before the layout base offset (Symphonia seeks by sample, not by
-        // segment). If the first segment of the current layout covers the
-        // requested range, treat it as ready.
-        if range.start < segments.layout_base_offset() {
-            let adjusted = segments.layout_base_offset()
-                ..range
-                    .end
-                    .max(segments.layout_base_offset().saturating_add(1));
-            if self.range_ready_from_segments(&segments, &adjusted) {
+        // ABR variant transition stall: decoder reads from layout_variant, but
+        // the downloader switched to a different variant. If range_start is past
+        // all committed data for layout_variant, data will never arrive.
+        // Report Ready so read_at can detect VariantChange.
+        if self.coord.had_midstream_switch.load(Ordering::Acquire)
+            && range.start >= segments.max_end_offset()
+            && segments.max_end_offset() > 0
+        {
+            let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+            if abr_variant != segments.layout_variant() {
                 return SourcePhase::Ready;
             }
         }
@@ -1070,15 +999,9 @@ impl Source for HlsSource {
         let read_epoch = self.coord.timeline().seek_epoch();
         let (seg, effective_total) = {
             let segments = self.segments.lock_sync();
-            let mut found = segments
+            let found = segments
                 .visible_segment_at(offset)
                 .map(|r| ReadSegment::from_ref(&r));
-            // After reset_to, decoder may read from before layout_base_offset.
-            if found.is_none() && offset < segments.layout_base_offset() {
-                found = segments
-                    .visible_segment_at(segments.layout_base_offset())
-                    .map(|r| ReadSegment::from_ref(&r));
-            }
             (
                 found,
                 segments.effective_total(self.playlist_state.as_ref()),
@@ -1088,6 +1011,24 @@ impl Source for HlsSource {
         let Some(seg) = seg else {
             if effective_total > 0 && offset >= effective_total {
                 return Ok(ReadOutcome::Data(0));
+            }
+
+            // ABR variant transition stall detection:
+            // Decoder reads from layout_variant's byte map, but data will never
+            // arrive if the downloader switched to a different variant.
+            // Signal VariantChange so the FSM recreates the decoder.
+            let layout_variant = self.segments.lock_sync().layout_variant();
+            let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+            if abr_variant != layout_variant
+                && self.coord.had_midstream_switch.load(Ordering::Acquire)
+            {
+                trace!(
+                    offset,
+                    layout_variant,
+                    abr_variant,
+                    "read_at: ABR variant stall — signaling VariantChange"
+                );
+                return Ok(ReadOutcome::VariantChange);
             }
 
             self.queue_segment_request_for_offset(offset, read_epoch);
@@ -1184,6 +1125,20 @@ impl Source for HlsSource {
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+
+        // ABR variant switch: update layout_variant so the recreated decoder
+        // reads from the new variant's byte map. This is the point where
+        // ABR actually takes effect — not during seek.
+        {
+            let mut segments = self.segments.lock_sync();
+            if segments.layout_variant() != current_variant {
+                segments.set_layout_variant(current_variant);
+                if let Some(sizes) = self.playlist_state.segment_sizes(current_variant) {
+                    segments.set_expected_sizes(current_variant, sizes);
+                }
+            }
+        }
+
         if let Some(range) = self.init_segment_range_for_variant(current_variant) {
             return Some(range);
         }
@@ -1644,45 +1599,62 @@ mod tests {
     }
 
     #[kithara::test]
-    fn cross_variant_seek_clears_segments() {
-        let source = build_test_source(2);
+    fn seek_resolves_in_layout_variant_not_abr_target() {
+        let mut source = build_test_source_with_segments(2, 4);
+        set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
+        set_variant_size_map(source.playlist_state.as_ref(), 1, &[500, 500, 500, 500]);
         push_segment(&source.segments, 0, 0, 0, 100);
 
-        let anchor = make_anchor(1, 0, 0);
-        let layout = source.classify_seek(&anchor);
-        assert!(matches!(layout, SeekLayout::Reset));
+        // ABR wants variant 1, but layout is variant 0
+        source.coord.abr_variant_index.store(1, Ordering::Release);
+
+        let anchor = source
+            .resolve_seek_anchor(Duration::from_millis(500))
+            .expect("anchor resolution");
+
+        // Anchor must use layout variant (0), NOT ABR target (1)
+        assert_eq!(
+            anchor.variant_index,
+            Some(0),
+            "seek must resolve in layout_variant, ignoring ABR target"
+        );
     }
 
     #[kithara::test]
-    fn same_codec_different_variant_seek_clears_segments() {
-        let source = build_test_source(2);
+    fn seek_does_not_switch_layout_variant() {
+        let mut source = build_test_source_with_segments(2, 4);
+        set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
         push_segment(&source.segments, 0, 0, 0, 100);
 
-        // Different variant index even with same codec → Reset
-        let anchor = make_anchor(1, 0, 0);
+        source.coord.abr_variant_index.store(1, Ordering::Release);
+
+        let anchor = make_anchor(0, 0, 0);
         let layout = source.classify_seek(&anchor);
-        assert!(matches!(layout, SeekLayout::Reset));
+        source.apply_seek_plan(&anchor, &layout);
+
+        assert_eq!(
+            source.segments.lock_sync().layout_variant(),
+            0,
+            "seek must not switch layout_variant — ABR switch happens via format_change"
+        );
     }
 
     #[kithara::test]
-    fn mixed_layout_seek_to_prefix_preserves_segments() {
+    fn seek_within_layout_variant_preserves_segments() {
         let source = build_test_source_with_segments(2, 3);
+        // Commit segments to layout variant (0)
         push_segment(&source.segments, 0, 0, 0, 100);
         push_segment(&source.segments, 0, 1, 100, 100);
-        {
-            let mut segments = source.segments.lock_sync();
-            segments.switch_variant(1, 1);
-        }
-        push_segment(&source.segments, 1, 1, 100, 100);
-        push_segment(&source.segments, 1, 2, 200, 100);
+        push_segment(&source.segments, 0, 2, 200, 100);
 
         source.coord.timeline().set_byte_position(250);
 
+        // Seek to variant 0 (same as layout_variant) → Preserve
         let anchor = make_anchor(0, 0, 0);
         let layout = source.classify_seek(&anchor);
         assert!(
             matches!(layout, SeekLayout::Preserve),
-            "seek to an offset already owned by the mixed layout must preserve StreamIndex"
+            "seek within the layout variant must preserve StreamIndex"
         );
     }
 
@@ -1692,7 +1664,7 @@ mod tests {
         push_segment(&source.segments, 0, 0, 0, 100);
         {
             let mut segments = source.segments.lock_sync();
-            segments.switch_variant(1, 1);
+            segments.set_layout_variant(1);
         }
         push_segment(&source.segments, 1, 1, 100, 100);
         source.coord.timeline().set_byte_position(0);
@@ -1700,31 +1672,31 @@ mod tests {
         source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
 
         let segments = source.segments.lock_sync();
-        assert_eq!(segments.variant_at(0), Some(0));
         assert_eq!(
-            segments.variant_at(1),
-            Some(1),
+            segments.layout_variant(),
+            1,
             "landing on the prefix must not rewrite the switched tail back to variant 0"
         );
     }
 
     #[kithara::test]
-    fn resolve_current_variant_uses_abr_atomic_not_variant_fence() {
-        let mut source = build_test_source(2);
-        source.variant_fence = Some(0);
+    fn resolve_current_variant_uses_layout_variant() {
+        let source = build_test_source(2);
         source.coord.abr_variant_index.store(1, Ordering::Release);
 
+        // resolve_current_variant uses layout_variant, not ABR
         assert_eq!(
             source.resolve_current_variant(),
-            1,
-            "current target variant must come from the ABR atomic, not variant_fence"
+            0,
+            "current variant must come from layout_variant, not ABR atomic"
         );
     }
 
     #[kithara::test]
-    fn seek_time_anchor_uses_applied_layout_offset_when_abr_target_outpaces_layout() {
+    fn seek_anchor_uses_layout_variant_not_abr_target() {
         let mut source = build_test_source_with_segments(2, 4);
         set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
+        // ABR wants variant 1, but seek must use layout_variant (0)
         source.coord.abr_variant_index.store(1, Ordering::Release);
 
         let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -1733,28 +1705,69 @@ mod tests {
 
         assert_eq!(
             anchor.variant_index,
-            Some(1),
-            "anchor still targets the ABR-selected variant"
+            Some(0),
+            "seek must resolve in layout_variant (0), not ABR target (1)"
         );
         assert_eq!(anchor.segment_index, Some(2));
         assert_eq!(
             anchor.byte_offset, 200,
-            "when target-variant metadata is not ready yet, seek_time_anchor must use the applied layout offset instead of failing"
+            "seek offset must be in layout variant's byte space"
         );
     }
 
     #[kithara::test]
-    fn commit_seek_landing_uses_layout_variant_for_invalidated_prefix() {
+    fn abr_does_not_affect_any_seek_state() {
+        let mut source = build_test_source_with_segments(2, 4);
+        set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 100, 100]);
+        set_variant_size_map(source.playlist_state.as_ref(), 1, &[500, 500, 500, 500]);
+        push_segment(&source.segments, 0, 0, 0, 100);
+        push_segment(&source.segments, 0, 1, 100, 100);
+
+        // ABR switches to variant 1 mid-stream
+        source.coord.abr_variant_index.store(1, Ordering::Release);
+        source
+            .coord
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+
+        // Seek resolves in layout_variant (0), ignoring ABR
+        let anchor = source
+            .resolve_seek_anchor(Duration::from_millis(4_000))
+            .expect("anchor");
+        assert_eq!(anchor.variant_index, Some(0), "anchor ignores ABR");
+
+        // classify_seek returns Preserve (same layout variant)
+        let layout = source.classify_seek(&anchor);
+        assert!(
+            matches!(layout, SeekLayout::Preserve),
+            "seek within layout_variant is always Preserve"
+        );
+
+        // apply_seek_plan does not change layout_variant
+        source.apply_seek_plan(&anchor, &layout);
+        assert_eq!(
+            source.segments.lock_sync().layout_variant(),
+            0,
+            "layout_variant unchanged after seek"
+        );
+
+        // demand routing uses layout_variant (0), not ABR (1)
+        assert_eq!(
+            source.resolve_current_variant(),
+            0,
+            "demand variant is layout_variant during seek"
+        );
+    }
+
+    #[kithara::test]
+    fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
         let mut source = build_test_source(2);
         set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
         set_variant_size_map(source.playlist_state.as_ref(), 1, &[100, 100]);
 
+        // Layout variant = 0, commit and evict segment 0
         push_segment(&source.segments, 0, 0, 0, 100);
-        {
-            let mut segments = source.segments.lock_sync();
-            segments.switch_variant(1, 1);
-        }
-        push_segment(&source.segments, 1, 1, 100, 100);
+        push_segment(&source.segments, 0, 1, 100, 100);
 
         let evicted = ResourceKey::from_url(
             &Url::parse("https://example.com/seg-0-0.m4s").expect("valid segment URL"),
@@ -1764,15 +1777,17 @@ mod tests {
             assert!(segments.remove_resource(&evicted));
         }
 
+        // ABR wants variant 1, but layout is still variant 0
         source.coord.abr_variant_index.store(1, Ordering::Release);
         source.coord.timeline().set_byte_position(0);
 
-        source.commit_seek_landing(Some(make_anchor(1, 0, 0)));
+        source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
 
+        // Recovery must target layout variant (0), not ABR target (1)
         assert_eq!(
             source.variant_fence,
             Some(0),
-            "seek landing must fence reads to the landed layout variant, not the ABR target"
+            "seek landing must fence reads to the layout variant, not the ABR target"
         );
         assert_eq!(
             source.coord.take_segment_request(),
@@ -1781,7 +1796,7 @@ mod tests {
                 segment_index: 0,
                 seek_epoch: 0,
             }),
-            "seek landing recovery must target the layout variant that owns the missing prefix"
+            "seek landing recovery must target the layout variant that owns the missing segment"
         );
     }
 
@@ -1859,17 +1874,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn queue_segment_request_uses_layout_variant_for_invalidated_prefix() {
+    fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
         let source = build_test_source(2);
         set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
         set_variant_size_map(source.playlist_state.as_ref(), 1, &[100, 100]);
 
+        // Layout variant = 0, commit and evict segment 0
         push_segment(&source.segments, 0, 0, 0, 100);
-        {
-            let mut segments = source.segments.lock_sync();
-            segments.switch_variant(1, 1);
-        }
-        push_segment(&source.segments, 1, 1, 100, 100);
+        push_segment(&source.segments, 0, 1, 100, 100);
 
         let evicted = ResourceKey::from_url(
             &Url::parse("https://example.com/seg-0-0.m4s").expect("valid segment URL"),
@@ -1879,6 +1891,7 @@ mod tests {
             assert!(segments.remove_resource(&evicted));
         }
 
+        // ABR wants variant 1, but layout is still variant 0
         source.coord.abr_variant_index.store(1, Ordering::Release);
 
         assert!(
@@ -1892,7 +1905,7 @@ mod tests {
                 segment_index: 0,
                 seek_epoch: 7,
             }),
-            "recovery must target the layout variant that owns the missing prefix"
+            "recovery must target the layout variant that owns the missing segment"
         );
     }
 
@@ -2050,28 +2063,26 @@ mod tests {
     }
 
     #[kithara::test]
-    fn format_change_segment_range_uses_reset_layout_floor_when_no_segments_are_loaded() {
+    fn format_change_segment_range_uses_layout_floor_when_no_segments_are_loaded() {
         let source = build_source_with_size_map(&[100, 100, 100, 100]);
 
-        source.segments.lock_sync().reset_to(2, 0, 200);
-
+        // With per-variant byte maps, layout_floor is always segment 0.
+        // No segments committed → fallback to metadata for segment 0.
         assert_eq!(
             source.format_change_segment_range(),
-            Some(200..300),
-            "after SeekLayout::Reset, decoder-start fallback must use the reset layout floor, not variant segment 0"
+            Some(0..100),
+            "without committed segments, decoder-start fallback uses metadata for layout variant segment 0"
         );
     }
 
     #[kithara::test]
-    fn reset_layout_keeps_absolute_total_length_for_seek_recreate() {
+    fn layout_variant_preserves_total_length() {
         let source = build_source_with_size_map(&[100, 100, 100, 100]);
-
-        source.segments.lock_sync().reset_to(2, 0, 200);
 
         assert_eq!(
             source.len(),
             Some(400),
-            "SeekLayout::Reset must preserve absolute stream coordinates; shrinking len() to the tail makes absolute recreate offsets look past-EOF"
+            "total length must reflect all segments in the layout variant"
         );
     }
 

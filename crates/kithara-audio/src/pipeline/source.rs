@@ -660,15 +660,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             .and_then(|info| info.variant_index);
         let target_variant = target_info.as_ref().and_then(|info| info.variant_index);
 
-        // Decoder must be recreated when codec or variant changed.
-        // Variant-only switch (same codec): decoder's internal seek tables
-        // reference the old variant's byte layout. After reset_to, these
-        // tables produce positions outside the new StreamIndex layout.
+        // Decoder must be recreated only when codec changed.
+        // With per-variant byte maps, same-codec variant changes don't need
+        // recreation — each variant has its own independent byte space, so
+        // decoder seek tables remain valid within the current layout.
         let codec_changed =
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
-        let needs_recreation = codec_changed || variant_changed;
+        let needs_recreation = codec_changed;
         let recreate_offset = if variant_changed && !codec_changed {
             anchor.byte_offset
         } else {
