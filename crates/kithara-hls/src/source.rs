@@ -944,10 +944,7 @@ impl Source for HlsSource {
         // the downloader switched to a different variant. If range_start is past
         // all committed data for layout_variant, data will never arrive.
         // Report Ready so read_at can detect VariantChange.
-        if self.coord.had_midstream_switch.load(Ordering::Acquire)
-            && range.start >= segments.max_end_offset()
-            && segments.max_end_offset() > 0
-        {
+        if range.start >= segments.max_end_offset() && segments.max_end_offset() > 0 {
             let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
             if abr_variant != segments.layout_variant() {
                 return SourcePhase::Ready;
@@ -1019,9 +1016,7 @@ impl Source for HlsSource {
             // Signal VariantChange so the FSM recreates the decoder.
             let layout_variant = self.segments.lock_sync().layout_variant();
             let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
-            if abr_variant != layout_variant
-                && self.coord.had_midstream_switch.load(Ordering::Acquire)
-            {
+            if abr_variant != layout_variant {
                 trace!(
                     offset,
                     layout_variant,
@@ -1336,7 +1331,12 @@ pub(crate) fn build_pair(
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
     let num_variants = playlist_state.num_variants();
     let num_segments = playlist_state.num_segments(0).unwrap_or(0);
-    let segments = Arc::new(Mutex::new(StreamIndex::new(num_variants, num_segments)));
+    let initial_variant = coord.abr_variant_index.load(Ordering::Acquire);
+    let mut stream_index = StreamIndex::new(num_variants, num_segments);
+    if initial_variant < num_variants {
+        stream_index.set_layout_variant(initial_variant);
+    }
+    let segments = Arc::new(Mutex::new(stream_index));
     // Segment-based throttle: only for ephemeral backends where LRU eviction
     // destroys data. Disk backends don't need this — files survive eviction.
     // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
