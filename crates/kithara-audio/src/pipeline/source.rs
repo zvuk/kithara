@@ -916,11 +916,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             hang_tick!();
             kithara_platform::thread::yield_now();
 
-            // Exit immediately when an UNPROCESSED seek is pending so the
-            // worker loop can call apply_pending_seek(). Check epoch
-            // instead of is_flushing()/is_seek_pending() to avoid
-            // infinite loops when flags linger after seek completion.
-            if self.timeline.seek_epoch() > self.epoch.load(Ordering::Acquire) {
+            // Exit immediately when a seek is pending so the worker
+            // loop can call apply_pending_seek().  This guard is
+            // necessary because Symphonia silently retries
+            // io::ErrorKind::Interrupted (standard Rust convention),
+            // so a flushing signal sent from wait_range may never
+            // escape the decoder's internal read loop.
+            if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
                 trace!(
                     flushing = self.timeline.is_flushing(),
                     seek_pending = self.timeline.is_seek_pending(),
@@ -1565,7 +1567,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             return TrackStep::StateChanged;
         }
 
-        // 2. State dispatch — one transition per call
         // 2. State dispatch — one transition per call
         match self.state.phase_tag() {
             TrackPhaseTag::Decoding => self.step_decoding(),

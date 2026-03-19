@@ -216,12 +216,12 @@ impl HlsDownloader {
         self.cursor.rewind_fill_to(segment_index);
     }
 
-    #[expect(clippy::unused_self, reason = "signature preserved for call sites")]
-    fn is_below_switch_floor(&self, _variant: VariantIndex, _segment_index: SegmentIndex) -> bool {
-        // With per-variant byte maps, demand comes from layout_variant and
-        // must always be honored. The old switch-floor filtering caused hangs
-        // when the source demanded segments below the ABR switch point.
-        false
+    fn is_below_switch_floor(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return false;
+        }
+        let current_variant = self.abr.get_current_variant_index();
+        variant == current_variant && segment_index < self.gap_scan_start_segment()
     }
 
     #[expect(
