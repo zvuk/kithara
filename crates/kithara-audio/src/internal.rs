@@ -253,7 +253,7 @@ pub mod source {
     ) {
         source.0.state = track_fsm::TrackState::RecreatingDecoder(track_fsm::RecreateState {
             attempt: 0,
-            cause: track_fsm::RecreateCause::CodecChange,
+            cause: track_fsm::RecreateCause::VariantSwitch,
             media_info,
             next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
                 attempt: 0,
@@ -274,7 +274,7 @@ pub mod source {
         source.0.state = track_fsm::TrackState::WaitingForSource {
             context: track_fsm::WaitContext::Recreation(track_fsm::RecreateState {
                 attempt: 0,
-                cause: track_fsm::RecreateCause::CodecChange,
+                cause: track_fsm::RecreateCause::VariantSwitch,
                 media_info,
                 next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
                     attempt: 0,

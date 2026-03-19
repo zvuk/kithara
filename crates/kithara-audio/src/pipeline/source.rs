@@ -558,7 +558,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 "seek: codec-changing format boundary pending, recreating decoder before seek"
             );
             self.start_recreating_decoder(
-                RecreateCause::CodecChange,
+                RecreateCause::VariantSwitch,
                 new_info,
                 RecreateNext::ApplySeek(request),
                 target_offset,
@@ -660,16 +660,22 @@ impl<T: StreamType> StreamAudioSource<T> {
             .and_then(|info| info.variant_index);
         let target_variant = target_info.as_ref().and_then(|info| info.variant_index);
 
-        // Same-codec seeks must continue on the current decoder session.
-        // Recreating on base-offset drift reintroduces the old ABR regression.
+        // Decoder must be recreated when codec or variant changed.
+        // Variant-only switch (same codec): decoder's internal seek tables
+        // reference the old variant's byte layout. After reset_to, these
+        // tables produce positions outside the new StreamIndex layout.
         let codec_changed =
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
-        let recreate_offset = self
-            .shared_stream
-            .format_change_segment_range()
-            .map_or(anchor.byte_offset, |range| range.start);
+        let needs_recreation = codec_changed || variant_changed;
+        let recreate_offset = if variant_changed && !codec_changed {
+            anchor.byte_offset
+        } else {
+            self.shared_stream
+                .format_change_segment_range()
+                .map_or(anchor.byte_offset, |range| range.start)
+        };
         trace!(
             ?current_codec,
             ?target_codec,
@@ -677,18 +683,27 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?target_variant,
             codec_changed,
             variant_changed,
+            needs_recreation,
+            recreate_offset,
             base_offset = self.session.base_offset,
             "seek anchor alignment: compare format"
         );
-        if !codec_changed {
+        if !needs_recreation {
             return true;
         }
 
+        let target_info = target_info.or_else(|| {
+            self.session.media_info.clone().map(|mut info| {
+                info.variant_index = target_variant;
+                info
+            })
+        });
         let Some(target_info) = target_info else {
             self.fail_seek(
                 request,
                 DecodeError::InvalidData(
-                    "seek anchor alignment: codec changed but media info unavailable".into(),
+                    "seek anchor alignment: variant/codec changed but media info unavailable"
+                        .into(),
                 ),
                 "seek anchor alignment failed",
             );
@@ -696,7 +711,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
 
         self.start_recreating_decoder(
-            RecreateCause::CodecChange,
+            RecreateCause::VariantSwitch,
             target_info,
             RecreateNext::Seek(request),
             recreate_offset,
@@ -1417,6 +1432,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 });
                 return TrackStep::Failed;
             }
+            // Clear variant fence before recreation — the new decoder reads
+            // from a different variant's segment. Without this, read_at
+            // returns VariantChange (fence mismatch) and Symphonia probe fails.
+            self.shared_stream.clear_variant_fence();
             self.recreate_decoder(&recreate.media_info, recreate.offset)
         };
         if !recreated {

@@ -138,8 +138,8 @@ pub(crate) enum SeekMode {
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
-    /// ABR switch changed the codec.
-    CodecChange,
+    /// ABR switch changed the codec or variant.
+    VariantSwitch,
 }
 
 /// Terminal failure reasons.
@@ -371,7 +371,7 @@ mod tests {
         assert_eq!(
             TrackState::RecreatingDecoder(RecreateState {
                 attempt: 1,
-                cause: RecreateCause::CodecChange,
+                cause: RecreateCause::VariantSwitch,
                 media_info: MediaInfo::default(),
                 next: RecreateNext::ApplySeek(SeekRequest {
                     attempt: 1,
