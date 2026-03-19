@@ -826,9 +826,11 @@ impl Source for HlsSource {
                 Some(epoch) if epoch != seek_epoch => {
                     metadata_miss_count = 0;
                     wait_seek_epoch = Some(seek_epoch);
-                    if !self.coord.timeline().is_seek_pending() {
-                        return Ok(WaitOutcome::Interrupted);
-                    }
+                    // If a seek is still pending (not yet applied), interrupt
+                    // wait_range so the FSM can process it. If already applied
+                    // (!is_seek_pending), just continue waiting — returning
+                    // Interrupted here causes an infinite retry loop in
+                    // Stream::read when is_flushing() is also false.
                 }
                 None => wait_seek_epoch = Some(seek_epoch),
                 _ => {}
