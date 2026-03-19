@@ -8,6 +8,7 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
+    file::{File, FileConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
@@ -71,10 +72,12 @@ async fn abr_switch_real_assets_does_not_hang(_tracing_setup: (), temp_dir: Test
     );
 }
 
-/// DRM stream must continue producing chunks after seek.
+/// Stream must continue producing chunks after seek sequence.
 ///
 /// Regression for app3.log: DRM track plays to 23.97s with seeks,
 /// then stops producing chunks → recv_outcome_blocking hang.
+///
+/// Parameterized: path × ABR mode to isolate DRM vs HLS vs no-ABR.
 #[kithara::test(
     tokio,
     native,
@@ -82,16 +85,30 @@ async fn abr_switch_real_assets_does_not_hang(_tracing_setup: (), temp_dir: Test
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn drm_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempDir) {
+#[case::drm_abr_auto("/drm/master.m3u8", true)]
+#[case::hls_abr_auto("/hls/master.m3u8", true)]
+#[case::drm_manual_v0("/drm/master.m3u8", false)]
+#[case::hls_manual_v0("/hls/master.m3u8", false)]
+async fn stream_continues_after_seek(
+    _tracing_setup: (),
+    temp_dir: TestTempDir,
+    #[case] path: &str,
+    #[case] abr_auto: bool,
+) {
     let server = serve_assets().await;
-    let url = server.url("/drm/master.m3u8");
+    let url = server.url(path);
 
     let cancel = CancellationToken::new();
+    let abr_mode = if abr_auto {
+        AbrMode::Auto(Some(0))
+    } else {
+        AbrMode::Manual(0)
+    };
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
+            mode: abr_mode,
             ..Default::default()
         });
 
@@ -124,9 +141,13 @@ async fn drm_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempD
                 sleep(Duration::from_millis(10)).await;
             }
         }
+        info!(
+            path,
+            target_secs, samples, "[{path}] seek to {target_secs}s → {samples} samples"
+        );
         assert!(
             samples > 0,
-            "seek to {target_secs}s must produce samples, got 0"
+            "[{path}] seek to {target_secs}s must produce samples, got 0"
         );
     }
 
@@ -143,9 +164,13 @@ async fn drm_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempD
             sleep(Duration::from_millis(10)).await;
         }
     }
+    info!(
+        path,
+        post_seek_samples, "[{path}] post-seek → {post_seek_samples} samples"
+    );
     assert!(
         post_seek_samples > 0,
-        "playback after seeks must continue, got 0 samples"
+        "[{path}] playback after seeks must continue, got 0 samples"
     );
 }
 
@@ -194,5 +219,83 @@ async fn fixed_variant_real_assets_plays_without_hang(_tracing_setup: (), temp_d
     assert!(
         total_samples > 1000,
         "baseline: expected sustained playback, got only {total_samples} samples"
+    );
+}
+
+/// MP3 progressive file must continue producing chunks after seek sequence.
+///
+/// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
+/// Baseline: no ABR, no segments, no variant switching.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn mp3_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempDir) {
+    let server = serve_assets().await;
+    let url = server.url("/track.mp3");
+
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut audio = Audio::<Stream<File>>::new(config)
+        .await
+        .expect("create audio");
+    audio.preload();
+
+    let mut buf = vec![0f32; 4096];
+
+    // Phase 1: Read for 3s (warmup)
+    let warmup = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < warmup {
+        let _ = audio.read(&mut buf);
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (same as HLS/DRM tests)
+    for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
+        audio
+            .seek(Duration::from_secs_f64(target_secs))
+            .expect("seek");
+        let read_deadline = Instant::now() + Duration::from_secs(3);
+        let mut samples = 0u64;
+        while Instant::now() < read_deadline {
+            let n = audio.read(&mut buf);
+            samples += n as u64;
+            if n == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        }
+        info!(
+            target_secs,
+            samples, "[mp3] seek to {target_secs}s → {samples} samples"
+        );
+        assert!(
+            samples > 0,
+            "[mp3] seek to {target_secs}s must produce samples, got 0"
+        );
+    }
+
+    // Phase 3: Continue reading after last seek — must not hang
+    let continue_deadline = Instant::now() + Duration::from_secs(5);
+    let mut post_seek_samples = 0u64;
+    while Instant::now() < continue_deadline {
+        let n = audio.read(&mut buf);
+        post_seek_samples += n as u64;
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+    info!(
+        post_seek_samples,
+        "[mp3] post-seek → {post_seek_samples} samples"
+    );
+    assert!(
+        post_seek_samples > 0,
+        "[mp3] playback after seeks must continue, got 0 samples"
     );
 }
