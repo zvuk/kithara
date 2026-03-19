@@ -128,33 +128,36 @@ async fn stream_continues_after_seek(
     }
 
     // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (like app3.log)
+    //
+    // Read a limited number of samples after each seek — NOT a wall-time
+    // deadline — because the decoder decodes faster than real-time and
+    // would otherwise reach EOF within each 3-second window.
+    let samples_per_seek: u64 = 48000 * 2; // ~1 second of stereo 48 kHz
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
             .seek(Duration::from_secs_f64(target_secs))
             .expect("seek");
-        let read_deadline = Instant::now() + Duration::from_secs(3);
+
         let mut samples = 0u64;
-        while Instant::now() < read_deadline {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while samples < samples_per_seek && Instant::now() < deadline {
             let n = audio.read(&mut buf);
             samples += n as u64;
             if n == 0 {
                 sleep(Duration::from_millis(10)).await;
             }
         }
-        info!(
-            path,
-            target_secs, samples, "[{path}] seek to {target_secs}s → {samples} samples"
-        );
         assert!(
             samples > 0,
             "[{path}] seek to {target_secs}s must produce samples, got 0"
         );
     }
 
-    // Phase 3: Continue reading after last seek — must not hang
-    let continue_deadline = Instant::now() + Duration::from_secs(5);
+    // Phase 3: Continue reading after last seek — must not hang.
+    // Read another ~1s of audio to confirm playback continues.
     let mut post_seek_samples = 0u64;
-    while Instant::now() < continue_deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
         let n = audio.read(&mut buf);
         post_seek_samples += n as u64;
         if n == 0 {
@@ -164,10 +167,6 @@ async fn stream_continues_after_seek(
             sleep(Duration::from_millis(10)).await;
         }
     }
-    info!(
-        path,
-        post_seek_samples, "[{path}] post-seek → {post_seek_samples} samples"
-    );
     assert!(
         post_seek_samples > 0,
         "[{path}] playback after seeks must continue, got 0 samples"
@@ -254,23 +253,21 @@ async fn mp3_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempD
     }
 
     // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (same as HLS/DRM tests)
+    let samples_per_seek: u64 = 48000 * 2;
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
             .seek(Duration::from_secs_f64(target_secs))
             .expect("seek");
-        let read_deadline = Instant::now() + Duration::from_secs(3);
+
         let mut samples = 0u64;
-        while Instant::now() < read_deadline {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while samples < samples_per_seek && Instant::now() < deadline {
             let n = audio.read(&mut buf);
             samples += n as u64;
             if n == 0 {
                 sleep(Duration::from_millis(10)).await;
             }
         }
-        info!(
-            target_secs,
-            samples, "[mp3] seek to {target_secs}s → {samples} samples"
-        );
         assert!(
             samples > 0,
             "[mp3] seek to {target_secs}s must produce samples, got 0"
@@ -278,9 +275,9 @@ async fn mp3_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempD
     }
 
     // Phase 3: Continue reading after last seek — must not hang
-    let continue_deadline = Instant::now() + Duration::from_secs(5);
     let mut post_seek_samples = 0u64;
-    while Instant::now() < continue_deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
         let n = audio.read(&mut buf);
         post_seek_samples += n as u64;
         if n == 0 {
@@ -290,10 +287,6 @@ async fn mp3_stream_continues_after_seek(_tracing_setup: (), temp_dir: TestTempD
             sleep(Duration::from_millis(10)).await;
         }
     }
-    info!(
-        post_seek_samples,
-        "[mp3] post-seek → {post_seek_samples} samples"
-    );
     assert!(
         post_seek_samples > 0,
         "[mp3] playback after seeks must continue, got 0 samples"
