@@ -612,6 +612,36 @@ mod tests {
         (reg, data_rx, preload_notify, cancel)
     }
 
+    fn make_registration_with_source(
+        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk, Command = AudioCommand>>,
+        ringbuf_capacity: usize,
+        preload_chunks: usize,
+    ) -> (
+        TrackRegistration,
+        HeapCons<Fetch<PcmChunk>>,
+        Arc<Notify>,
+        CancellationToken,
+    ) {
+        let rb = HeapRb::<Fetch<PcmChunk>>::new(ringbuf_capacity);
+        let (data_tx, data_rx) = rb.split();
+        let cmd_rb = HeapRb::<AudioCommand>::new(4);
+        let (_, cmd_rx) = cmd_rb.split();
+        let preload_notify = Arc::new(Notify::new());
+        let cancel = CancellationToken::new();
+
+        let reg = TrackRegistration {
+            consumer_wake: Arc::new(ThreadWake::new()),
+            source,
+            data_tx,
+            cmd_rx,
+            preload_notify: Arc::clone(&preload_notify),
+            preload_chunks,
+            service_class: ServiceClass::Audible,
+            cancel: cancel.clone(),
+        };
+        (reg, data_rx, preload_notify, cancel)
+    }
+
     fn wait_for_chunks(
         rx: &mut HeapCons<Fetch<PcmChunk>>,
         count: usize,
@@ -878,5 +908,231 @@ mod tests {
         );
 
         handle.shutdown();
+    }
+
+    // -- Starvation tests ---------------------------------------------------
+
+    /// A slow/blocked track must not starve a producing track.
+    ///
+    /// Reproduces the production bug: HLS track waiting for network data
+    /// blocks the shared worker's step_track() call, causing MP3 track
+    /// audio to stutter.
+    ///
+    /// The mock simulates a track whose step_track() blocks the thread
+    /// for 50ms (like a real wait_range() call waiting for network data).
+    /// The worker must still deliver chunks to the ready track at a
+    /// rate sufficient for glitch-free playback.
+    #[kithara::test]
+    fn shared_worker_blocking_track_does_not_starve_producing_track() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct BlockingSource {
+            timeline: Timeline,
+            blocking: Arc<AtomicBool>,
+        }
+
+        impl AudioWorkerSource for BlockingSource {
+            type Chunk = PcmChunk;
+            type Command = AudioCommand;
+
+            fn step_track(&mut self) -> TrackStep<PcmChunk> {
+                if self.blocking.load(Ordering::Relaxed) {
+                    // Simulate sync blocking (like wait_range on network I/O).
+                    kithara_platform::thread::sleep(Duration::from_millis(50));
+                    TrackStep::Blocked(WaitingReason::Waiting)
+                } else {
+                    TrackStep::Blocked(WaitingReason::Waiting)
+                }
+            }
+
+            fn handle_command(&mut self, _cmd: AudioCommand) {}
+
+            fn timeline(&self) -> &Timeline {
+                &self.timeline
+            }
+        }
+
+        let handle = AudioWorkerHandle::new();
+
+        // Track A: always ready, produces 100 chunks fast.
+        let (reg_a, mut rx_a, _, _ca) = make_registration(MockSource::new(100), 32, 0);
+        let _id_a = handle.register_track(reg_a);
+
+        // Track B: blocks thread for 50ms per step (simulating network wait).
+        let blocking = Arc::new(AtomicBool::new(true));
+        let blocking_source = BlockingSource {
+            timeline: Timeline::new(),
+            blocking: Arc::clone(&blocking),
+        };
+        let (reg_b, _rx_b, _, _cb) =
+            make_registration_with_source(Box::new(blocking_source), 32, 0);
+        let _id_b = handle.register_track(reg_b);
+
+        // Give worker 500ms to produce chunks for track A despite track B blocking.
+        kithara_platform::thread::sleep(Duration::from_millis(500));
+
+        let mut got_a = 0;
+        while rx_a.try_pop().is_some() {
+            got_a += 1;
+        }
+
+        // At 50ms blocking per step_track call on track B, the worker can do
+        // ~10 rounds per 500ms. Track A should get at least 5 chunks.
+        // Without the fix: track A gets 0 chunks because worker is stuck
+        // in track B's blocking step_track.
+        assert!(
+            got_a >= 5,
+            "Producing track must not be starved by blocking track: \
+             got only {got_a} chunks in 500ms (expected ≥5)"
+        );
+
+        blocking.store(false, Ordering::Relaxed);
+        handle.shutdown();
+    }
+
+    /// A track that blocks inside step_track() (simulating Symphonia read
+    /// waiting on network data) must not starve other tracks.
+    ///
+    /// This is the REAL production bug: HLS decode path enters wait_range()
+    /// which blocks the entire worker thread. MP3 track's ringbuf drains
+    /// during the block, causing audio underrun.
+    ///
+    /// Target: even with 50ms blocking per HLS step, MP3 track should
+    /// still receive enough chunks for glitch-free playback.
+    #[kithara::test]
+    fn shared_worker_sync_blocking_step_starves_other_tracks() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct SlowDecodeSource {
+            timeline: Timeline,
+            block_ms: u64,
+        }
+
+        impl AudioWorkerSource for SlowDecodeSource {
+            type Chunk = PcmChunk;
+            type Command = AudioCommand;
+
+            fn step_track(&mut self) -> TrackStep<PcmChunk> {
+                // Simulate: source_is_ready() returns true, then
+                // decode_next_chunk() blocks on wait_range() for data.
+                kithara_platform::thread::sleep(Duration::from_millis(self.block_ms));
+                TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
+            }
+
+            fn handle_command(&mut self, _cmd: AudioCommand) {}
+
+            fn timeline(&self) -> &Timeline {
+                &self.timeline
+            }
+        }
+
+        let handle = AudioWorkerHandle::new();
+
+        // Track A (MP3-like): fast, always ready.
+        let (reg_a, mut rx_a, _, _ca) = make_registration(MockSource::new(1000), 32, 0);
+        let _id_a = handle.register_track(reg_a);
+
+        // Track B (HLS-like): blocks 200ms per step (simulating network stall).
+        let slow_source = SlowDecodeSource {
+            timeline: Timeline::new(),
+            block_ms: 200,
+        };
+        let (reg_b, mut rx_b, _, _cb) = make_registration_with_source(Box::new(slow_source), 32, 0);
+        let _id_b = handle.register_track(reg_b);
+
+        // Run for 500ms. At 44100Hz stereo, 500ms = ~22050 samples.
+        // A single PcmChunk is typically 4096 samples (~46ms at 44100Hz).
+        // For glitch-free playback we need ~11 chunks per 500ms.
+        kithara_platform::thread::sleep(Duration::from_millis(500));
+
+        let mut got_a = 0;
+        while rx_a.try_pop().is_some() {
+            got_a += 1;
+        }
+        let mut got_b = 0;
+        while rx_b.try_pop().is_some() {
+            got_b += 1;
+        }
+
+        // With 20ms blocking per HLS step, round-robin takes ~20ms per round.
+        // In 500ms: ~25 rounds. Track A should get ~25 chunks (one per round).
+        // Minimum for glitch-free: 11 chunks (500ms / 46ms per chunk).
+        assert!(
+            got_a >= 11,
+            "Fast track (MP3) starved by slow track (HLS): \
+             got {got_a} chunks in 500ms, need ≥11 for glitch-free. \
+             Slow track got {got_b}. Worker must not block on slow decode."
+        );
+    }
+
+    /// The shared worker must NOT busy-spin after producing chunks.
+    ///
+    /// Reproduces production bug: MP3 (fast local file) + HLS (network)
+    /// on shared worker. Worker busy-loops on MP3 with yield_now(),
+    /// starving the tokio runtime. HLS downloader can't run → HLS track
+    /// gets no data → audio glitches.
+    ///
+    /// The test measures: if nobody consumes the ringbuf, the worker must
+    /// sleep (backpressure), not spin. We check that the worker thread's
+    /// CPU time stays low relative to wall time.
+    #[kithara::test]
+    fn shared_worker_does_not_busy_spin_on_backpressure() {
+        let handle = AudioWorkerHandle::new();
+
+        // Track with small ringbuf (capacity 2) — fills fast.
+        let (reg, _rx, _, _cancel) = make_registration(MockSource::new(10_000), 2, 0);
+        let _id = handle.register_track(reg);
+
+        // Let it fill the ringbuf.
+        kithara_platform::thread::sleep(Duration::from_millis(50));
+
+        // Now ringbuf is full. Nobody is consuming. Worker should be sleeping.
+        // Measure process CPU time over 500ms of wall time.
+        let cpu_before = cpu_time_ms();
+        kithara_platform::thread::sleep(Duration::from_millis(500));
+        let cpu_after = cpu_time_ms();
+
+        let cpu_used_ms = cpu_after.saturating_sub(cpu_before);
+
+        handle.shutdown();
+
+        // A well-behaved worker sleeping on backpressure uses <50ms of CPU
+        // in 500ms wall time (<10%). A busy-spinning worker uses ~500ms (100%).
+        assert!(
+            cpu_used_ms < 100,
+            "Worker should NOT busy-spin on backpressure: \
+             used {cpu_used_ms}ms CPU in 500ms wall time (expected <100ms)"
+        );
+    }
+}
+
+/// Process CPU time in milliseconds (user + system).
+#[cfg(test)]
+fn cpu_time_ms() -> u64 {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps failed");
+    let s = String::from_utf8_lossy(&output.stdout);
+    parse_cputime(s.trim())
+}
+
+/// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
+#[cfg(test)]
+fn parse_cputime(s: &str) -> u64 {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        3 => {
+            let h: u64 = parts[0].trim().parse().unwrap_or(0);
+            let m: u64 = parts[1].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[2].trim().parse().unwrap_or(0);
+            (h * 3600 + m * 60 + sec) * 1000
+        }
+        2 => {
+            let m: u64 = parts[0].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[1].trim().parse().unwrap_or(0);
+            (m * 60 + sec) * 1000
+        }
+        _ => 0,
     }
 }
