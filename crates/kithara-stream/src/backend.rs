@@ -29,6 +29,10 @@ enum LoopControl {
     Restart,
 }
 
+/// Handle to the downloader worker (OS thread with optional shared runtime).
+#[cfg(not(target_arch = "wasm32"))]
+struct WorkerHandle(JoinHandle<()>);
+
 /// Spawns and owns a Downloader task.
 ///
 /// The downloader runs independently (async, writing data to storage).
@@ -45,66 +49,99 @@ pub struct Backend {
     /// Cancelled on drop to stop the downloader.
     cancel: CancellationToken,
 
-    /// Worker thread handle (joined on drop after cancellation).
-    worker: Option<JoinHandle<()>>,
+    /// Worker handle (joined/aborted on drop after cancellation).
+    #[cfg(not(target_arch = "wasm32"))]
+    worker: Option<WorkerHandle>,
+
+    #[cfg(target_arch = "wasm32")]
+    worker: Option<()>,
 }
 
 impl Backend {
-    /// Spawn a downloader task on a dedicated thread.
+    /// Spawn a downloader task.
     ///
     /// The downloader runs in the background writing data to storage.
     /// A child cancellation token is created: dropping this Backend
     /// cancels the child (and thus the downloader) without affecting
     /// the parent token.
     ///
+    /// # Runtime resolution
+    ///
+    /// 1. `runtime` is `Some(handle)` → async task on that handle (0 OS threads)
+    /// 2. `runtime` is `None` + current runtime is multi-thread → async task (0 OS threads)
+    /// 3. Otherwise → dedicated OS thread with its own current-thread runtime
+    ///
     /// # Panics
     ///
-    /// Panics if creating the dedicated current-thread Tokio runtime fails.
-    pub fn new<D: Downloader + Send>(downloader: D, cancel: &CancellationToken) -> Self {
+    /// Panics if creating the dedicated current-thread Tokio runtime fails
+    /// (only in fallback path 3).
+    pub fn new<D: Downloader + Send>(
+        downloader: D,
+        cancel: &CancellationToken,
+        runtime: Option<tokio::runtime::Handle>,
+    ) -> Self {
         let child_cancel = cancel.child_token();
         let task_cancel = child_cancel.clone();
 
         #[cfg(not(target_arch = "wasm32"))]
-        let worker = {
-            let handle = tokio::runtime::Handle::current();
-            if matches!(
-                handle.runtime_flavor(),
-                tokio::runtime::RuntimeFlavor::CurrentThread
-            ) {
-                // `Handle::block_on` from a foreign thread can starve current-thread
-                // runtimes. Run downloader on a dedicated single-thread runtime
-                // inside the worker thread.
-                kithara_platform::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("failed to build downloader runtime");
-                    rt.block_on(Self::run_downloader(downloader, task_cancel));
-                })
-            } else {
-                kithara_platform::spawn(move || {
-                    handle.block_on(Self::run_downloader(downloader, task_cancel));
-                })
-            }
-        };
+        let worker = Some(Self::spawn_downloader(downloader, task_cancel, runtime));
 
         #[cfg(target_arch = "wasm32")]
         let worker = {
+            let _ = runtime;
             // On WASM, spawn the downloader as an async task on the current
             // Worker's tokio runtime instead of creating a dedicated Web Worker.
-            // The engine command worker already has a tokio runtime; downloads
-            // (fetch API) are fully async and non-blocking.
             tokio::task::spawn(Self::run_downloader(downloader, task_cancel));
             None
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let worker = Some(worker);
 
         Self {
             cancel: child_cancel,
             worker,
         }
+    }
+
+    /// Resolve the best spawn strategy and start the downloader.
+    ///
+    /// Resolution order:
+    /// 1. Explicit handle → reuse via `block_on` on a helper thread (no extra runtime)
+    /// 2. Current multi-thread runtime → reuse its handle (no extra runtime)
+    /// 3. Current-thread runtime or none → dedicated thread + own runtime (fallback)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_downloader<D: Downloader + Send>(
+        downloader: D,
+        cancel: CancellationToken,
+        runtime: Option<tokio::runtime::Handle>,
+    ) -> WorkerHandle {
+        // Try to find a usable multi-thread handle: explicit > current > none.
+        let shared_handle = runtime.or_else(|| {
+            tokio::runtime::Handle::try_current().ok().filter(|h| {
+                !matches!(
+                    h.runtime_flavor(),
+                    tokio::runtime::RuntimeFlavor::CurrentThread
+                )
+            })
+        });
+
+        if let Some(handle) = shared_handle {
+            // Reuse shared runtime — downloader runs on a helper thread that
+            // calls `handle.block_on()`. This avoids creating a new tokio
+            // runtime (no timer/io threads) while keeping the downloader's
+            // non-Send futures off the multi-thread pool.
+            return WorkerHandle(kithara_platform::spawn(move || {
+                handle.block_on(Self::run_downloader(downloader, cancel));
+            }));
+        }
+
+        // Fallback: no multi-thread runtime available — dedicated thread
+        // with its own current-thread runtime.
+        WorkerHandle(kithara_platform::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build downloader runtime");
+            rt.block_on(Self::run_downloader(downloader, cancel));
+        }))
     }
 
     #[kithara_hang_detector::hang_watchdog]
@@ -430,8 +467,8 @@ impl Drop for Backend {
         self.cancel.cancel();
 
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
+        if let Some(WorkerHandle(join)) = self.worker.take()
+            && join.join().is_err()
         {
             debug!("Downloader worker panicked during shutdown");
         }
@@ -560,7 +597,7 @@ mod tests {
         };
 
         let cancel = CancellationToken::new();
-        let _backend = Backend::new(downloader, &cancel);
+        let _backend = Backend::new(downloader, &cancel, None);
 
         // Wait for the downloader to enter step() (blocked on slow stream).
         step_entered.notified().await;

@@ -194,7 +194,7 @@ impl File {
 
             // Spawn downloader on a dedicated thread.
             // Backend is stored in FileSource — dropping the source cancels the downloader.
-            let backend = Backend::new(downloader, &cancel);
+            let backend = Backend::new(downloader, &cancel, config.runtime.clone());
 
             // Create source with shared state and backend for on-demand loading.
             let source =
