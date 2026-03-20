@@ -947,8 +947,8 @@ mod tests {
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 if self.blocking.load(Ordering::Relaxed) {
-                    // Simulate sync blocking (like wait_range on network I/O).
-                    kithara_platform::thread::sleep(Duration::from_millis(50));
+                    // Simulate sync blocking (like wait_range timeout at 10ms).
+                    kithara_platform::thread::sleep(Duration::from_millis(10));
                     TrackStep::Blocked(WaitingReason::Waiting)
                 } else {
                     TrackStep::Blocked(WaitingReason::Waiting)
@@ -1044,12 +1044,13 @@ mod tests {
         let (reg_a, mut rx_a, _, _ca) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
-        // Track B (HLS-like): blocks 50ms per step (one condvar wait spin
-        // in wait_range, WAIT_RANGE_SLEEP_MS = 50ms). During mixing, this
-        // blocks the worker thread and starves track A for 50ms per round.
+        // Track B (HLS-like): blocks 10ms per step. This simulates the
+        // reduced WAIT_RANGE_TIMEOUT (10ms) + WAIT_RANGE_SLEEP_MS (2ms)
+        // where wait_range does a few condvar spins before timing out.
+        // With the fix, step_track returns within ~10ms instead of 50ms+.
         let slow_source = SlowDecodeSource {
             timeline: Timeline::new(),
-            block_ms: 50,
+            block_ms: 10,
         };
         let (reg_b, mut rx_b, _, _cb) = make_registration_with_source(Box::new(slow_source), 32, 0);
         let _id_b = handle.register_track(reg_b);

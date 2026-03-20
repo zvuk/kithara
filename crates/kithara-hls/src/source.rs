@@ -58,7 +58,10 @@ pub struct HlsSource {
 }
 
 const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 10;
-const WAIT_RANGE_SLEEP_MS: u64 = 50;
+/// Condvar sleep per spin in `wait_range`. Kept short so the audio worker
+/// can round-robin between tracks without one slow source starving others.
+/// Previous value 50ms caused audible glitches during multi-track mixing.
+const WAIT_RANGE_SLEEP_MS: u64 = 2;
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
 enum SeekLayout {
