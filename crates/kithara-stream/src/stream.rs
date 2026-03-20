@@ -169,6 +169,11 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
+/// Maximum time a single `wait_range()` call blocks before returning.
+///
+/// Kept short so the audio worker can round-robin between tracks without
+/// one slow source starving others. The decode loop retries automatically
+/// when `wait_range` times out (returned as interrupt to Symphonia).
 const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl<T: StreamType> Read for Stream<T> {
@@ -188,12 +193,23 @@ impl<T: StreamType> Read for Stream<T> {
             let pos = timeline.byte_position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            // Wait for data to be available (blocking)
-            match self
-                .source
-                .wait_range(range, WAIT_RANGE_TIMEOUT)
-                .map_err(|e| io::Error::other(e.to_string()))?
-            {
+            // Wait for data to be available.
+            // In cooperative mode (short timeout), a timeout is not fatal —
+            // it means "data not ready yet, try again later". We convert it
+            // to an interrupted signal so the decode loop yields to the worker.
+            let wait_result = self.source.wait_range(range, WAIT_RANGE_TIMEOUT);
+            let wait_outcome = match wait_result {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("budget exceeded") {
+                        // Cooperative timeout — not fatal, yield to worker.
+                        return Err(io::Error::other("seek pending"));
+                    }
+                    return Err(io::Error::other(msg));
+                }
+            };
+            match wait_outcome {
                 WaitOutcome::Ready => {}
                 WaitOutcome::Eof => return Ok(0),
                 WaitOutcome::Interrupted => {

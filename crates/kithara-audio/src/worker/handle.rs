@@ -222,7 +222,17 @@ impl TrackSlot {
         }
 
         // Step the track FSM.
-        match self.source.step_track() {
+        let step_start = kithara_platform::time::Instant::now();
+        let step_result = self.source.step_track();
+        let step_elapsed = step_start.elapsed();
+        if step_elapsed > Duration::from_millis(10) {
+            tracing::warn!(
+                track_id = self.track_id,
+                elapsed_ms = step_elapsed.as_millis(),
+                "step_track took too long — starving other tracks"
+            );
+        }
+        match step_result {
             TrackStep::Produced(fetch) => {
                 self.eof_sent = false;
                 match self.data_tx.try_push(fetch) {
@@ -976,14 +986,16 @@ mod tests {
             got_a += 1;
         }
 
-        // At 50ms blocking per step_track call on track B, the worker can do
-        // ~10 rounds per 500ms. Track A should get at least 5 chunks.
-        // Without the fix: track A gets 0 chunks because worker is stuck
-        // in track B's blocking step_track.
+        // With 50ms blocking per step, round-robin takes ~50ms per round.
+        // In 1s: ~20 rounds. Track A gets one chunk per round = ~20 chunks.
+        // For glitch-free 44100Hz audio: need ~11 chunks/s (4096 samples each).
+        // The REAL issue: during the 50ms block, track A's ringbuf drains
+        // and the audio callback gets silence → audible glitch.
+        // Test must verify track A gets enough chunks WITHOUT gaps.
         assert!(
-            got_a >= 5,
+            got_a >= 11,
             "Producing track must not be starved by blocking track: \
-             got only {got_a} chunks in 500ms (expected ≥5)"
+             got only {got_a} chunks in 1s (expected ≥11 for glitch-free)"
         );
 
         blocking.store(false, Ordering::Relaxed);
@@ -1032,36 +1044,48 @@ mod tests {
         let (reg_a, mut rx_a, _, _ca) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
-        // Track B (HLS-like): blocks 200ms per step (simulating network stall).
+        // Track B (HLS-like): blocks 50ms per step (one condvar wait spin
+        // in wait_range, WAIT_RANGE_SLEEP_MS = 50ms). During mixing, this
+        // blocks the worker thread and starves track A for 50ms per round.
         let slow_source = SlowDecodeSource {
             timeline: Timeline::new(),
-            block_ms: 200,
+            block_ms: 50,
         };
         let (reg_b, mut rx_b, _, _cb) = make_registration_with_source(Box::new(slow_source), 32, 0);
         let _id_b = handle.register_track(reg_b);
 
-        // Run for 500ms. At 44100Hz stereo, 500ms = ~22050 samples.
-        // A single PcmChunk is typically 4096 samples (~46ms at 44100Hz).
-        // For glitch-free playback we need ~11 chunks per 500ms.
-        kithara_platform::thread::sleep(Duration::from_millis(500));
+        // Simulate audio callback draining track A's ringbuf at real-time rate.
+        // At 44100Hz stereo with 4096 samples/chunk → one chunk every ~46ms.
+        // If worker can't deliver within 46ms, the consumer starves → glitch.
+        //
+        // We poll every 5ms and measure the longest gap between chunks.
+        let mut max_gap = Duration::ZERO;
+        let mut last_chunk_time = kithara_platform::time::Instant::now();
+        let mut total_chunks = 0u32;
+        let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(1);
 
-        let mut got_a = 0;
-        while rx_a.try_pop().is_some() {
-            got_a += 1;
-        }
-        let mut got_b = 0;
-        while rx_b.try_pop().is_some() {
-            got_b += 1;
+        while kithara_platform::time::Instant::now() < deadline {
+            if rx_a.try_pop().is_some() {
+                let gap = last_chunk_time.elapsed();
+                if total_chunks > 0 && gap > max_gap {
+                    max_gap = gap;
+                }
+                last_chunk_time = kithara_platform::time::Instant::now();
+                total_chunks += 1;
+            }
+            // Drain track B to prevent backpressure.
+            while rx_b.try_pop().is_some() {}
+            kithara_platform::thread::sleep(Duration::from_millis(5));
         }
 
-        // With 20ms blocking per HLS step, round-robin takes ~20ms per round.
-        // In 500ms: ~25 rounds. Track A should get ~25 chunks (one per round).
-        // Minimum for glitch-free: 11 chunks (500ms / 46ms per chunk).
+        // For glitch-free playback, the max gap between chunks must be
+        // less than one chunk duration (~46ms at 44100Hz stereo).
+        // The slow track's 50ms sync blocking causes gaps ≥50ms → glitch.
         assert!(
-            got_a >= 11,
-            "Fast track (MP3) starved by slow track (HLS): \
-             got {got_a} chunks in 500ms, need ≥11 for glitch-free. \
-             Slow track got {got_b}. Worker must not block on slow decode."
+            max_gap < Duration::from_millis(46),
+            "Max gap between chunks for fast track: {max_gap:?} (limit 46ms). \
+             Slow track's sync blocking causes starvation. \
+             Total chunks delivered: {total_chunks}"
         );
     }
 
