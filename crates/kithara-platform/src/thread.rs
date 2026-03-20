@@ -123,6 +123,64 @@ where
     std::thread::spawn(f)
 }
 
+/// Number of active threads spawned via [`spawn_named`].
+///
+/// Incremented on spawn, decremented when the thread function returns.
+/// Used by thread-budget tests to count only kithara-owned threads.
+static ACTIVE_NAMED_THREADS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Returns the number of currently active threads spawned via [`spawn_named`].
+#[must_use]
+pub fn active_named_thread_count() -> usize {
+    ACTIVE_NAMED_THREADS.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Spawn a new named thread.
+///
+/// Sets the OS thread name and tracks the thread in [`active_named_thread_count`].
+/// The counter is decremented automatically when `f` returns.
+///
+/// # Panics
+///
+/// Panics if the OS refuses to create the thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_named<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    ACTIVE_NAMED_THREADS.fetch_add(1, std::sync::atomic::Ordering::Release);
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let result = f();
+            ACTIVE_NAMED_THREADS.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            result
+        })
+        .expect("failed to spawn named thread")
+}
+
+/// Spawn a new named thread (WASM variant).
+///
+/// # Panics
+///
+/// Panics if the OS refuses to create the thread.
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_named<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let _name = name.into();
+    ACTIVE_NAMED_THREADS.fetch_add(1, std::sync::atomic::Ordering::Release);
+    spawn(move || {
+        let result = f();
+        ACTIVE_NAMED_THREADS.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        result
+    })
+}
+
 /// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
 /// Workers use this to locate the JS module for `initSync`.
 #[cfg(target_arch = "wasm32")]

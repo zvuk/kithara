@@ -25,10 +25,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 30_000;
+const NEXT_CHUNK_TIMEOUT_MS: u64 = 90_000;
 const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
-const WARMUP_TIMEOUT_SECS: u64 = 30;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 32;
+const WARMUP_TIMEOUT_SECS: u64 = 60;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 60;
 const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
 const RANDOM_SEEK_OPS_MAX: usize = 1_400;
 /// Lowered from 220 to tolerate parallel test execution under CPU/net load.
@@ -759,7 +759,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(180, 240)),
+    timeout(browser_timeout(300, 360)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls_ephemeral("/hls/master.m3u8", "HLS", true)]

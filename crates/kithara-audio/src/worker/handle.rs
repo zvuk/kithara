@@ -6,7 +6,10 @@
 
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -70,6 +73,9 @@ pub struct AudioWorkerHandle {
     cancel: CancellationToken,
 }
 
+/// Monotonic counter for unique audio-worker thread names.
+static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
+
 impl AudioWorkerHandle {
     /// Spawn a new shared worker thread and return a handle.
     #[must_use]
@@ -81,7 +87,8 @@ impl AudioWorkerHandle {
         let wake_clone = Arc::clone(&wake);
         let cancel_clone = cancel.clone();
 
-        kithara_platform::thread::spawn(move || {
+        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        kithara_platform::thread::spawn_named(format!("kithara-audio-worker-{id}"), move || {
             run_shared_worker_loop(&cmd_rx, &wake_clone, &cancel_clone);
         });
 

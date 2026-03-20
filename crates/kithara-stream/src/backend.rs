@@ -10,6 +10,8 @@
 //! - Periodic yield to async runtime
 //! - Cancellation via `CancellationToken`
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use futures::{StreamExt, stream::FuturesUnordered};
 use kithara_platform::{JoinHandle, MaybeSend, tokio};
 use tokio_util::sync::CancellationToken;
@@ -19,6 +21,9 @@ use crate::downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 
 /// Default yield interval (iterations between `yield_now` calls).
 const DEFAULT_YIELD_INTERVAL: usize = 8;
+
+/// Monotonic counter for unique download-worker thread names.
+static DOWNLOAD_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 
 enum LoopControl {
     Continue { made_progress: bool },
@@ -134,13 +139,17 @@ impl Backend {
         // Fallback: no multi-thread runtime available — dedicated thread
         // with its own current-thread runtime.
         debug!("Backend: fallback — creating dedicated current-thread runtime");
-        WorkerHandle::Thread(kithara_platform::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build downloader runtime");
-            rt.block_on(Self::run_downloader(downloader, cancel));
-        }))
+        let id = DOWNLOAD_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        WorkerHandle::Thread(kithara_platform::thread::spawn_named(
+            format!("kithara-download-worker-{id}"),
+            move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build downloader runtime");
+                rt.block_on(Self::run_downloader(downloader, cancel));
+            },
+        ))
     }
 
     #[kithara_hang_detector::hang_watchdog]

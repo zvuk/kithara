@@ -13,6 +13,13 @@
 //!
 //! Total own threads: **1** (the shared worker), regardless of track count.
 //! Any threads beyond this are waste.
+//!
+//! ## Counting strategy
+//!
+//! All kithara-owned threads are spawned via [`kithara_platform::thread::spawn_named`],
+//! which maintains an atomic counter. Tests read this counter instead of
+//! parsing `ps -M`, making assertions immune to tokio pool noise and
+//! parallel test execution.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -21,20 +28,11 @@ use std::time::Duration;
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_platform::thread::active_named_thread_count;
 use kithara_stream::Stream;
 use kithara_test_utils::{TestTempDir, kithara, serve_assets, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-/// Count OS threads for the current process via `ps -M`.
-fn thread_count() -> usize {
-    let output = std::process::Command::new("ps")
-        .args(["-M", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps -M failed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().count().saturating_sub(1)
-}
 
 /// Wait for spawned threads to register with the OS.
 fn settle() {
@@ -47,14 +45,18 @@ fn settle() {
 
 #[kithara::test]
 fn thread_budget_audio_worker_is_one_thread() {
-    let before = thread_count();
+    let before = active_named_thread_count();
     let worker = AudioWorkerHandle::new();
     settle();
-    let after = thread_count();
-    worker.shutdown();
+    let after = active_named_thread_count();
 
     let delta = after.saturating_sub(before);
-    assert_eq!(delta, 1, "AudioWorkerHandle must spawn exactly 1 thread");
+    assert_eq!(
+        delta, 1,
+        "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
+    );
+
+    worker.shutdown();
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +77,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let server = serve_assets().await;
     let cancel = CancellationToken::new();
 
-    let before = thread_count();
+    let before = active_named_thread_count();
 
     let hls_config = HlsConfig::new(server.url("/hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
@@ -91,18 +93,14 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     audio.preload();
     settle();
 
-    let after = thread_count();
+    let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(before, after, delta, "single HLS pipeline");
 
-    // Budget breakdown:
-    //   1 audio worker (standalone, no shared worker in this test)
-    //   1 downloader helper thread (block_on shared runtime, no extra runtime)
-    //   2-4 transient spawn_blocking threads (probe + decoder, tokio pool)
-    // Total: ≤7. Previous baseline was ~14 (with per-stream runtimes).
+    // Budget: 1 audio worker. Downloader runs as async task (0 threads).
     assert!(
-        delta <= 12,
-        "Single pipeline budget: ≤12 threads, got delta={delta} \
+        delta <= 2,
+        "Single pipeline budget: ≤2 kithara threads, got delta={delta} \
          (before={before}, after={after})"
     );
 
@@ -110,7 +108,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 }
 
 // ---------------------------------------------------------------------------
-// 3 tracks with shared worker: target = 1 thread total
+// 3 tracks with shared worker: target = 0 extra threads
 //
 // 1 shared worker serves all tracks. Downloaders are async tasks.
 // ---------------------------------------------------------------------------
@@ -127,7 +125,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let cancel = CancellationToken::new();
     let shared_worker = AudioWorkerHandle::new();
 
-    let before = thread_count();
+    // Snapshot taken AFTER worker creation — worker thread is already counted.
+    settle();
+    let before = active_named_thread_count();
 
     // Track 1: HLS
     let hls_config = HlsConfig::new(server.url("/hls/master.m3u8"))
@@ -177,7 +177,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     }
     settle();
 
-    let after = thread_count();
+    let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(
         before,
@@ -187,14 +187,11 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         "3 tracks shared worker"
     );
 
-    // Budget breakdown:
-    //   1 shared audio worker
-    //   3 downloader helper threads (block_on shared runtime, no extra runtimes)
-    //   2-6 transient spawn_blocking threads (probe + decoder per track)
-    // Total: ≤16. Previous baseline was ~33 (with per-stream runtimes + per-track workers).
+    // Budget: 0 extra kithara threads. Worker already counted in `before`.
+    // Downloaders run as async tasks on the caller's runtime.
     assert!(
-        delta <= 16,
-        "3 tracks with shared worker budget: ≤16 threads, got delta={delta} \
+        delta == 0,
+        "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
          (before={before}, after={after})"
     );
 
@@ -204,15 +201,15 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 }
 
 // ---------------------------------------------------------------------------
-// Process ceiling
+// Process ceiling — no leaked kithara threads when idle
 // ---------------------------------------------------------------------------
 
 #[kithara::test]
 fn thread_budget_process_ceiling() {
-    let count = thread_count();
+    let count = active_named_thread_count();
     assert!(
-        count <= 15,
-        "Process has {count} threads with no active pipelines — \
-         investigate leaked runtimes or eager thread creation."
+        count == 0,
+        "Process has {count} active kithara threads with no active pipelines — \
+         investigate leaked threads."
     );
 }

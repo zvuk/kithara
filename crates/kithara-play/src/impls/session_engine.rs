@@ -388,7 +388,9 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
         SESSION_CLIENT
             .get_or_init(|| {
                 let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(64).split();
-                let _ = kithara_platform::spawn(move || engine_thread(cmd_rx));
+                let _ = kithara_platform::thread::spawn_named("kithara-engine", move || {
+                    engine_thread(cmd_rx);
+                });
                 Arc::new(SessionClient {
                     cmd_tx: Mutex::new(cmd_tx),
                 })

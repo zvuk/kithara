@@ -202,8 +202,14 @@ impl<T: StreamType> Read for Stream<T> {
                 Err(e) => {
                     let msg = e.to_string();
                     if msg.contains("budget exceeded") {
-                        // Cooperative timeout — not fatal, yield to worker.
-                        return Err(io::Error::other("seek pending"));
+                        // Seek in progress — surface to the audio worker.
+                        if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                            return Err(io::Error::other("seek pending"));
+                        }
+                        // No seek — data simply isn't ready yet, spin.
+                        hang_tick!();
+                        kithara_platform::thread::yield_now();
+                        continue;
                     }
                     return Err(io::Error::other(msg));
                 }
