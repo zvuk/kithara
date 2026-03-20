@@ -108,6 +108,13 @@ impl AudioPlayer {
 
         let ffi_pos = after_ffi_index.map_or(queue.len(), |i| i + 1);
 
+        // Inject shared worker + runtime so item's downloader reuses them.
+        {
+            let player = self.inner.lock_sync();
+            *item.worker.lock_sync() = Some(player.worker().clone());
+            *item.runtime.lock_sync() = player.runtime().cloned();
+        }
+
         let entry = Arc::new(QueueEntry {
             item: Arc::clone(&item),
             inserted_into_engine: AtomicBool::new(false),

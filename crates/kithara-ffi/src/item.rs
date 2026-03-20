@@ -35,6 +35,10 @@ pub struct AudioPlayerItem {
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     loading: AtomicBool,
     load_notify: Notify,
+    /// Shared audio worker — set by `AudioPlayer` when item is inserted.
+    pub(crate) worker: Mutex<Option<kithara::audio::AudioWorkerHandle>>,
+    /// Shared runtime — set by `AudioPlayer` when item is inserted.
+    pub(crate) runtime: Mutex<Option<kithara_platform::tokio::runtime::Handle>>,
 }
 
 /// Internal configuration built from item properties before loading.
@@ -61,6 +65,8 @@ impl AudioPlayerItem {
             observer: Mutex::new(None),
             loading: AtomicBool::new(false),
             load_notify: Notify::new(),
+            worker: Mutex::new(None),
+            runtime: Mutex::new(None),
         })
     }
 
@@ -210,6 +216,13 @@ impl AudioPlayerItem {
 
         if let Some(headers) = &self.headers {
             config = config.with_headers(headers.clone().into());
+        }
+
+        if let Some(ref w) = *self.worker.lock_sync() {
+            config.worker = Some(w.clone());
+        }
+        if let Some(ref rt) = *self.runtime.lock_sync() {
+            config.runtime = Some(rt.clone());
         }
 
         Ok(ResourceLoadConfig { config })
