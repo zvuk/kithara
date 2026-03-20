@@ -98,6 +98,7 @@ pub struct EngineImpl {
     ///
     /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
+    runtime: Option<kithara_platform::tokio::runtime::Handle>,
 }
 
 impl EngineImpl {
@@ -126,6 +127,7 @@ impl EngineImpl {
             session,
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::new(),
+            runtime: kithara_platform::tokio::runtime::Handle::try_current().ok(),
         }
     }
 
@@ -200,6 +202,15 @@ impl EngineImpl {
     #[must_use]
     pub fn worker(&self) -> &AudioWorkerHandle {
         &self.worker
+    }
+
+    /// Runtime handle captured at engine creation.
+    ///
+    /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
+    /// the app's runtime instead of spawning per-stream runtimes.
+    #[must_use]
+    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+        self.runtime.as_ref()
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {

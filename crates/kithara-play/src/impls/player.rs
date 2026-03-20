@@ -132,6 +132,15 @@ impl PlayerImpl {
         self.engine.worker()
     }
 
+    /// Runtime handle captured by this player's engine.
+    ///
+    /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
+    /// the app's runtime instead of creating per-stream runtimes.
+    #[must_use]
+    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+        self.engine.runtime()
+    }
+
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.items.lock_sync().len()
