@@ -306,6 +306,15 @@ regex = "1"
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
 
+# Optimised test profile — keeps debug assertions but compiles with
+# opt-level 2 so integration tests run at near-release speed.
+# Usage: cargo test --profile test-release
+[profile.test-release]
+inherits = "release"
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"

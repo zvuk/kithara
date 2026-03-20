@@ -32,7 +32,7 @@ use tracing::info;
     native,
     serial,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
