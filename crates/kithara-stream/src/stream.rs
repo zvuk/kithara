@@ -91,9 +91,6 @@ pub trait StreamType: MaybeSend + 'static {
 /// `Source::wait_range()` and `Source::read_at()`.
 pub struct Stream<T: StreamType> {
     source: T::Source,
-    /// After the first successful read, switch to short `wait_range` timeout
-    /// for responsive multi-track scheduling.
-    playback_mode: bool,
 }
 
 impl<T: StreamType> Stream<T> {
@@ -104,10 +101,7 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
-        Ok(Self {
-            source,
-            playback_mode: false,
-        })
+        Ok(Self { source })
     }
 
     /// Get current read position.
@@ -175,16 +169,11 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-/// Generous timeout for initial buffering (probe, first segment).
-const INITIAL_WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Short timeout for steady-state playback. Keeps the audio worker
-/// responsive for round-robin between tracks.
-///
-/// At 44100Hz stereo with 4096-sample chunks, one chunk lasts ~46ms.
-/// A 10ms budget gives the worker time to serve other tracks and still
-/// refill the ringbuf before the audio callback drains it.
-const PLAYBACK_WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
+/// Short timeout keeps the audio worker responsive for round-robin
+/// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+/// lasts ~46ms. A 10ms budget gives the worker time to serve other
+/// tracks and still refill the ringbuf before the audio callback drains it.
+const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -207,12 +196,7 @@ impl<T: StreamType> Read for Stream<T> {
             // In cooperative mode (short timeout), a timeout is not fatal —
             // it means "data not ready yet, try again later". We convert it
             // to an interrupted signal so the decode loop yields to the worker.
-            let timeout = if self.playback_mode {
-                PLAYBACK_WAIT_RANGE_TIMEOUT
-            } else {
-                INITIAL_WAIT_RANGE_TIMEOUT
-            };
-            let wait_result = self.source.wait_range(range, timeout);
+            let wait_result = self.source.wait_range(range, WAIT_RANGE_TIMEOUT);
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(e) => {
@@ -261,7 +245,6 @@ impl<T: StreamType> Read for Stream<T> {
                         return Err(io::Error::other("seek pending"));
                     }
                     hang_reset!();
-                    self.playback_mode = true;
                     timeline.set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
