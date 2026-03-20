@@ -10,7 +10,7 @@ use std::{
 use derive_setters::Setters;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
-use kithara_audio::{AudioConfig, ResamplerQuality};
+use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
@@ -151,6 +151,13 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
+    /// Shared audio worker handle for cooperative multi-track decoding.
+    ///
+    /// When set, all resources sharing the same worker decode on a single
+    /// OS thread. When `None`, each `Audio` pipeline creates its own
+    /// standalone worker thread (backward-compatible default).
+    #[setters(skip)]
+    pub worker: Option<AudioWorkerHandle>,
 }
 
 impl ResourceConfig {
@@ -219,6 +226,7 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
+            worker: None,
         })
     }
 
@@ -233,6 +241,13 @@ impl ResourceConfig {
     #[must_use]
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    /// Set shared audio worker for cooperative multi-track decoding.
+    #[must_use]
+    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
+        self.worker = Some(worker);
         self
     }
 
@@ -297,6 +312,9 @@ impl ResourceConfig {
         config = config.with_preload_chunks(self.preload_chunks);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
+        }
+        if let Some(worker) = self.worker {
+            config = config.with_worker(worker);
         }
 
         config
@@ -373,6 +391,9 @@ impl ResourceConfig {
         config = config.with_preload_chunks(self.preload_chunks);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
+        }
+        if let Some(worker) = self.worker {
+            config = config.with_worker(worker);
         }
 
         Ok(config)
@@ -489,5 +510,45 @@ mod tests {
             .with_preferred_peak_bitrate(512_000.0);
         let audio_config = config.into_hls_config().unwrap();
         assert_eq!(audio_config.stream.abr.max_bandwidth_bps, Some(512_000));
+    }
+
+    #[kithara::test]
+    fn config_worker_default_none() {
+        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        assert!(config.worker.is_none());
+    }
+
+    #[kithara::test]
+    fn config_with_worker_sets_field() {
+        let worker = AudioWorkerHandle::new();
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_worker(worker.clone());
+        assert!(config.worker.is_some());
+        worker.shutdown();
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn config_worker_propagates_to_file_config() {
+        let worker = AudioWorkerHandle::new();
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_worker(worker.clone());
+        let audio_config = config.into_file_config();
+        assert!(audio_config.worker.is_some());
+        worker.shutdown();
+    }
+
+    #[cfg(feature = "hls")]
+    #[kithara::test]
+    fn config_worker_propagates_to_hls_config() {
+        let worker = AudioWorkerHandle::new();
+        let config = ResourceConfig::new("https://example.com/live.m3u8")
+            .unwrap()
+            .with_worker(worker.clone());
+        let audio_config = config.into_hls_config().unwrap();
+        assert!(audio_config.worker.is_some());
+        worker.shutdown();
     }
 }

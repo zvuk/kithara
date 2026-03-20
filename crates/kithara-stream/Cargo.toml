@@ -13,9 +13,11 @@ workspace = true
 [dependencies]
 async-stream = { workspace = true }
 bytes = { workspace = true }
+delegate = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
 kithara-net = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 thiserror = { workspace = true }
@@ -23,12 +25,14 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
 internal = []
 disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
     "kithara-storage/disable-hang-detector",
 ]

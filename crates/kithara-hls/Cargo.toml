@@ -28,21 +28,28 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 rangemap = { workspace = true }
 hotpath = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 internal = []
-disable-hang-detector = ["kithara-platform/disable-hang-detector"]
+disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
+    "kithara-platform/disable-hang-detector",
+]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+aes = { workspace = true }
+cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["internal"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }

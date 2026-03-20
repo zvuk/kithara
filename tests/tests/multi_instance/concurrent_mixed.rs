@@ -163,7 +163,13 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 }
 
 /// 2 File + 2 HLS instances running concurrently.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn mixed_two_file_two_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
@@ -260,7 +266,13 @@ async fn mixed_two_file_two_hls(_tracing_setup: ()) {
 }
 
 /// 4 File + 4 HLS instances (8 total) running concurrently.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(180)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn mixed_four_file_four_hls(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;

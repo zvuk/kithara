@@ -1,7 +1,11 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, JsValue};
 
-#[kithara::test(browser, timeout(std::time::Duration::from_secs(5)))]
+#[kithara::test(
+    browser,
+    timeout(std::time::Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn executes_inside_browser_runner() {
     #[cfg(target_arch = "wasm32")]
     {

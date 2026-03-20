@@ -16,6 +16,7 @@ use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
 use crate::{
+    pipeline::audio_worker::AudioWorkerHandle,
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
 };
@@ -73,6 +74,13 @@ pub struct AudioConfig<T: StreamType> {
     /// Additional effects to append after resampler in the processing chain.
     #[setters(skip)]
     pub effects: Vec<Box<dyn AudioEffect>>,
+    /// Optional shared audio worker handle.
+    ///
+    /// When provided, the track registers with this shared worker instead of
+    /// spawning a dedicated OS thread. When `None` (default), a standalone
+    /// worker is created automatically for backward compatibility.
+    #[setters(skip)]
+    pub worker: Option<AudioWorkerHandle>,
 }
 
 impl<T: StreamType> AudioConfig<T> {
@@ -93,6 +101,7 @@ impl<T: StreamType> AudioConfig<T> {
             stream,
             bus: None,
             effects: Vec::new(),
+            worker: None,
         }
     }
 
@@ -105,6 +114,15 @@ impl<T: StreamType> AudioConfig<T> {
     /// Add an audio effect to the processing chain (runs after resampler).
     pub fn with_effect(mut self, effect: Box<dyn AudioEffect>) -> Self {
         self.effects.push(effect);
+        self
+    }
+
+    /// Use a shared audio worker instead of spawning a dedicated thread.
+    ///
+    /// Multiple tracks sharing one worker run on a single OS thread via
+    /// cooperative round-robin scheduling.
+    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
+        self.worker = Some(worker);
         self
     }
 }

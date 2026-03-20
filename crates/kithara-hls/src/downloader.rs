@@ -11,20 +11,21 @@ use kithara_abr::{
     AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource,
 };
-use kithara_assets::ResourceKey;
+use kithara_assets::{AssetResourceState, ResourceKey};
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::{time::Instant, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
-use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
-use tracing::debug;
+use kithara_stream::{DownloadCursor, Downloader, DownloaderIo, PlanOutcome};
+use tracing::{debug, trace};
 use url::Url;
 
 use crate::{
     HlsError,
-    download_state::{DownloadProgress, DownloadState, LoadedSegment},
+    coord::{HlsCoord, SegmentRequest},
     fetch::{DefaultFetchManager, Loader, SegmentMeta},
+    ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
-    source::{SegmentRequest, SharedSegments},
+    stream_index::{SegmentData, StreamIndex},
 };
 
 fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
@@ -33,8 +34,8 @@ fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
 
 fn is_cross_codec_switch(
     playlist_state: &PlaylistState,
-    from_variant: usize,
-    to_variant: usize,
+    from_variant: VariantIndex,
+    to_variant: VariantIndex,
 ) -> bool {
     matches!(
         (
@@ -46,30 +47,26 @@ fn is_cross_codec_switch(
 }
 
 fn first_missing_segment(
-    state: &DownloadState,
-    variant: usize,
-    start_segment: usize,
+    state: &StreamIndex,
+    variant: VariantIndex,
+    start_segment: SegmentIndex,
     num_segments: usize,
-) -> Option<usize> {
+) -> Option<SegmentIndex> {
     let start = start_segment.min(num_segments);
     (start..num_segments).find(|&segment_index| !state.is_segment_loaded(variant, segment_index))
 }
 
-fn classify_variant_transition(
-    last_committed_variant: Option<usize>,
-    sent_init_for_variant: &HashSet<usize>,
-    variant: usize,
-    segment_index: usize,
+fn classify_layout_transition(
+    layout_variant: VariantIndex,
+    variant: VariantIndex,
+    segment_index: SegmentIndex,
 ) -> (bool, bool) {
-    let variant_changed = last_committed_variant.is_some_and(|previous| previous != variant);
-    let is_initial_start =
-        last_committed_variant.is_none() && !sent_init_for_variant.contains(&variant);
-    let is_variant_switch = variant_changed || is_initial_start;
-    let is_midstream_switch = variant_changed && segment_index > 0;
+    let is_variant_switch = layout_variant != variant;
+    let is_midstream_switch = is_variant_switch && segment_index > 0;
     (is_variant_switch, is_midstream_switch)
 }
 
-fn should_request_init(is_variant_switch: bool, segment_index: usize) -> bool {
+fn should_request_init(is_variant_switch: bool, segment_index: SegmentIndex) -> bool {
     is_variant_switch || segment_index == 0
 }
 
@@ -87,8 +84,8 @@ impl HlsIo {
 
 /// Plan for downloading a single HLS segment.
 pub(crate) struct HlsPlan {
-    pub(crate) variant: usize,
-    pub(crate) segment_index: usize,
+    pub(crate) variant: VariantIndex,
+    pub(crate) segment_index: SegmentIndex,
     pub(crate) need_init: bool,
     pub(crate) seek_epoch: SeekEpoch,
 }
@@ -99,8 +96,8 @@ pub(crate) struct HlsFetch {
     pub(crate) init_url: Option<Url>,
     pub(crate) media: SegmentMeta,
     pub(crate) media_cached: bool,
-    pub(crate) segment_index: usize,
-    pub(crate) variant: usize,
+    pub(crate) segment_index: SegmentIndex,
+    pub(crate) variant: VariantIndex,
     pub(crate) duration: Duration,
     pub(crate) seek_epoch: SeekEpoch,
 }
@@ -135,8 +132,11 @@ impl DownloaderIo for HlsIo {
         };
 
         let (media_result, (init_url, init_len)) = tokio::join!(
-            self.fetch
-                .load_media_segment_with_source(plan.variant, plan.segment_index),
+            self.fetch.load_media_segment_with_source_for_epoch(
+                plan.variant,
+                plan.segment_index,
+                plan.seek_epoch,
+            ),
             init_fut,
         );
 
@@ -162,13 +162,12 @@ pub(crate) struct HlsDownloader {
     pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) current_segment_index: usize,
-    pub(crate) gap_scan_start_segment: usize,
-    pub(crate) last_committed_variant: Option<usize>,
+    pub(crate) cursor: DownloadCursor<SegmentIndex>,
     pub(crate) force_init_for_seek: bool,
-    pub(crate) sent_init_for_variant: HashSet<usize>,
+    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
     pub(crate) abr: AbrController<ThroughputEstimator>,
-    pub(crate) shared: Arc<SharedSegments>,
+    pub(crate) coord: Arc<HlsCoord>,
+    pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     pub(crate) bus: EventBus,
     /// Backpressure threshold (bytes). None = no byte-based backpressure.
     pub(crate) look_ahead_bytes: Option<u64>,
@@ -181,13 +180,99 @@ pub(crate) struct HlsDownloader {
 }
 
 impl HlsDownloader {
+    fn layout_variant(&self) -> VariantIndex {
+        self.segments.lock_sync().layout_variant()
+    }
+
+    fn current_segment_index(&self) -> SegmentIndex {
+        self.cursor.fill_next().unwrap_or(0)
+    }
+
+    fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
+        self.playlist_state.num_segments(variant)
+    }
+
+    fn effective_total_bytes(&self) -> Option<u64> {
+        let total = self
+            .segments
+            .lock_sync()
+            .effective_total(self.playlist_state.as_ref());
+        (total > 0).then_some(total)
+    }
+
+    fn gap_scan_start_segment(&self) -> SegmentIndex {
+        self.cursor.fill_floor().unwrap_or(0)
+    }
+
+    fn reset_cursor(&mut self, segment_index: SegmentIndex) {
+        self.cursor.reset_fill(segment_index);
+    }
+
+    fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.advance_fill_to(segment_index);
+    }
+
+    fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.rewind_fill_to(segment_index);
+    }
+
+    fn is_below_switch_floor(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return false;
+        }
+        // With per-variant byte maps, demand from the layout_variant must
+        // always be honored (e.g. seek-to-zero after ABR switch).
+        // Only filter segments for the ABR variant that are below the
+        // switch point in the sequential download cursor.
+        let layout = self.segments.lock_sync().layout_variant();
+        if variant == layout {
+            return false;
+        }
+        let current_variant = self.abr.get_current_variant_index();
+        variant == current_variant && segment_index < self.gap_scan_start_segment()
+    }
+
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
+    )]
+    fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
+        let variant = self.abr.get_current_variant_index();
+        let anchor = {
+            let segments = self.segments.lock_sync();
+            let vs = segments.variant_segments(variant)?;
+            vs.iter().find_map(|(segment_index, _data)| {
+                <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+                    &segments,
+                    (variant, segment_index),
+                )
+                .map(|range| (segment_index, range.start))
+            })
+        };
+        let (segment_index, byte_offset) = anchor?;
+        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
+    }
+
+    fn is_stale_cross_codec_fetch(&self, fetch: &HlsFetch) -> bool {
+        let Some((current_variant, anchor_offset)) = self.switched_layout_anchor() else {
+            return false;
+        };
+        if fetch.variant == current_variant
+            || !is_cross_codec_switch(&self.playlist_state, current_variant, fetch.variant)
+        {
+            return false;
+        }
+
+        let fetch_offset = self
+            .playlist_state
+            .segment_byte_offset(fetch.variant, fetch.segment_index)
+            .unwrap_or_else(|| self.coord.timeline().download_position());
+
+        fetch_offset >= anchor_offset
+    }
+
     fn classify_variant_transition(&self, variant: usize, segment_index: usize) -> (bool, bool) {
-        classify_variant_transition(
-            self.last_committed_variant,
-            &self.sent_init_for_variant,
-            variant,
-            segment_index,
-        )
+        classify_layout_transition(self.layout_variant(), variant, segment_index)
     }
 
     fn reset_for_seek_epoch(
@@ -196,35 +281,43 @@ impl HlsDownloader {
         variant: usize,
         segment_index: usize,
     ) {
-        let previous_variant = self.last_committed_variant;
-        let download_position = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .unwrap_or(0);
+        let previous_variant = self.abr.get_current_variant_index();
+
         self.active_seek_epoch = seek_epoch;
-        self.shared.timeline.set_eof(false);
-        self.shared
+        self.coord.timeline().set_eof(false);
+        self.coord
             .had_midstream_switch
             .store(false, Ordering::Release);
-        self.current_segment_index = segment_index;
-        self.gap_scan_start_segment = segment_index;
-        self.force_init_for_seek = previous_variant
-            .and_then(|index| self.playlist_state.variant_codec(index))
+        self.reset_cursor(segment_index);
+
+        self.force_init_for_seek = self
+            .playlist_state
+            .variant_codec(previous_variant)
             .zip(self.playlist_state.variant_codec(variant))
             .is_some_and(|(from, to)| from != to);
-        // Seek establishes a new baseline in the target variant timeline.
-        // Treat the target as committed so non-zero seek segments do not
-        // go through synthetic variant-switch init insertion.
-        self.last_committed_variant = Some(variant);
-        // Update total_bytes for the target variant. If metadata isn't available
-        // yet, preserve existing value to avoid transient None in wait_range.
-        let variant_total = self.playlist_state.total_variant_size(variant);
-        self.shared
-            .timeline
-            .set_total_bytes(variant_total.or_else(|| self.shared.timeline.total_bytes()));
-        self.shared
-            .timeline
-            .set_download_position(download_position);
+
+        if previous_variant == variant {
+            // Same variant: keep download_position at committed watermark.
+            // Segments are still in StreamIndex — downloader will check
+            // segment_loaded_for_demand() and skip already-loaded segments.
+            let watermark = self.coord.timeline().download_position();
+            let target_offset = self
+                .playlist_state
+                .segment_byte_offset(variant, segment_index)
+                .unwrap_or(0);
+            self.coord
+                .timeline()
+                .set_download_position(watermark.max(target_offset));
+        } else {
+            // Different variant: full reset from metadata offset.
+            let download_position = self
+                .playlist_state
+                .segment_byte_offset(variant, segment_index)
+                .unwrap_or(0);
+            self.coord
+                .timeline()
+                .set_download_position(download_position);
+        }
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -239,6 +332,24 @@ impl HlsDownloader {
         }
     }
 
+    fn switch_needs_init(
+        &self,
+        variant: usize,
+        _segment_index: usize,
+        is_variant_switch: bool,
+    ) -> bool {
+        if !is_variant_switch {
+            return false;
+        }
+
+        let previous = self.layout_variant();
+        previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
+    }
+
+    fn variant_has_init(&self, variant: usize) -> bool {
+        self.playlist_state.init_url(variant).is_some()
+    }
+
     fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
         self.bus.publish(HlsEvent::DownloadError {
@@ -246,39 +357,83 @@ impl HlsDownloader {
         });
     }
 
-    fn loaded_segment_offset_mismatch(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Option<(u64, u64)> {
-        let loaded_offset = {
-            let segments = self.shared.segments.lock_sync();
-            segments
-                .find_loaded_segment(variant, segment_index)
-                .map(|segment| segment.byte_offset)?
-        };
-        let expected_offset = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index)?;
-        (loaded_offset != expected_offset).then_some((loaded_offset, expected_offset))
+    fn loaded_segment_offset(&self, variant: usize, segment_index: usize) -> Option<u64> {
+        let segments = self.segments.lock_sync();
+        <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+            &segments,
+            (variant, segment_index),
+        )
+        .map(|r| r.start)
     }
 
-    /// Check whether a segment's init+media resources are still available.
-    ///
-    /// For disk backends this always returns `true` (files survive LRU eviction).
-    /// For ephemeral backends, verifies LRU presence via `has_resource` (peek).
-    fn segment_resources_available(&self, seg: &LoadedSegment) -> bool {
-        let backend = self.fetch.backend();
-        if !backend.is_ephemeral() {
+    fn expected_layout_offset(&self, variant: usize, segment_index: usize) -> Option<u64> {
+        // StreamIndex computes byte offsets internally for committed segments.
+        let segments = self.segments.lock_sync();
+        if let Some(range) = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
+            &segments,
+            (variant, segment_index),
+        ) {
+            return Some(range.start);
+        }
+        drop(segments);
+        // Fallback to playlist metadata
+        self.playlist_state
+            .segment_byte_offset(variant, segment_index)
+    }
+
+    fn reader_segment_hint(&self, variant: usize) -> usize {
+        let reader_offset = self.coord.timeline().byte_position();
+        self.playlist_state
+            .find_segment_at_offset(variant, reader_offset)
+            .unwrap_or_else(|| self.current_segment_index())
+    }
+
+    fn resource_covers_len(&self, key: &ResourceKey, len: u64) -> bool {
+        if len == 0 {
             return true;
         }
-        if seg.init_len > 0
-            && let Some(ref init_url) = seg.init_url
-            && !backend.has_resource(&ResourceKey::from_url(init_url))
+
+        match self.fetch.backend().resource_state(key) {
+            Ok(AssetResourceState::Committed {
+                final_len: Some(final_len),
+            }) => final_len >= len,
+            Ok(AssetResourceState::Committed { .. }) => self
+                .fetch
+                .backend()
+                .open_resource(key)
+                .is_ok_and(|resource| resource.contains_range(0..len)),
+            _ => false,
+        }
+    }
+
+    /// Check whether a segment's init+media resources are fully readable.
+    fn segment_resources_available(&self, data: &SegmentData) -> bool {
+        if data.init_len > 0
+            && let Some(ref init_url) = data.init_url
+            && !self.resource_covers_len(&ResourceKey::from_url(init_url), data.init_len)
         {
             return false;
         }
-        backend.has_resource(&ResourceKey::from_url(&seg.media_url))
+        self.resource_covers_len(&ResourceKey::from_url(&data.media_url), data.media_len)
+    }
+
+    /// Check whether a previously-committed segment's init resource has been
+    /// evicted from the ephemeral cache.  When true, the next demand download
+    /// must include `need_init = true` so the init resource is re-fetched.
+    fn demand_init_evicted(&self, variant: usize, segment_index: usize) -> bool {
+        let segments = self.segments.lock_sync();
+        let Some(data) = segments.stored_segment(variant, segment_index) else {
+            return false;
+        };
+        let init_len = data.init_len;
+        if init_len == 0 {
+            return false;
+        }
+        let Some(init_url) = data.init_url.clone() else {
+            return false;
+        };
+        drop(segments);
+        !self.resource_covers_len(&ResourceKey::from_url(&init_url), init_len)
     }
 
     /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
@@ -357,8 +512,10 @@ impl HlsDownloader {
     ///
     /// Returns `(count, cumulative_byte_offset)` for caller to update downloader state.
     fn populate_cached_segments(
-        shared: &SharedSegments,
+        segments: &kithara_platform::Mutex<StreamIndex>,
+        coord: &HlsCoord,
         fetch: &DefaultFetchManager,
+        playlist_state: &PlaylistState,
         variant: usize,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
@@ -367,17 +524,29 @@ impl HlsDownloader {
         }
 
         let backend = fetch.backend();
-        let playlist_state = &shared.playlist_state;
+        Self::populate_cached_segments_with_open(segments, coord, playlist_state, variant, |key| {
+            backend.resource_state(key).ok()
+        })
+    }
 
+    fn populate_cached_segments_with_open<F>(
+        segments: &kithara_platform::Mutex<StreamIndex>,
+        coord: &HlsCoord,
+        playlist_state: &PlaylistState,
+        variant: usize,
+        mut open_status: F,
+    ) -> (usize, u64)
+    where
+        F: FnMut(&ResourceKey) -> Option<AssetResourceState>,
+    {
         let init_url = playlist_state.init_url(variant);
         let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
 
         // If init is required, verify it's cached on disk
         if let Some(ref url) = init_url {
             let init_key = ResourceKey::from_url(url);
-            let init_cached = backend
-                .open_resource(&init_key)
-                .is_ok_and(|r| matches!(r.status(), ResourceStatus::Committed { .. }));
+            let init_cached = open_status(&init_key)
+                .is_some_and(|status| matches!(status, AssetResourceState::Committed { .. }));
             if !init_cached {
                 return (0, 0);
             }
@@ -391,11 +560,9 @@ impl HlsDownloader {
         let init_len = if playlist_state.total_variant_size(variant).is_some() {
             if let Some(ref url) = init_url {
                 let key = ResourceKey::from_url(url);
-                backend
-                    .open_resource(&key)
-                    .ok()
-                    .and_then(|r| match r.status() {
-                        ResourceStatus::Committed { final_len } => final_len,
+                open_status(&key)
+                    .and_then(|status| match status {
+                        AssetResourceState::Committed { final_len } => final_len,
                         _ => None,
                     })
                     .unwrap_or(0)
@@ -406,9 +573,7 @@ impl HlsDownloader {
             0
         };
 
-        let mut segments = shared.segments.lock_sync();
         let mut count = 0usize;
-        let mut cumulative_offset = 0u64;
 
         for index in 0..num_segments {
             let Some(segment_url) = playlist_state.segment_url(variant, index) else {
@@ -416,11 +581,11 @@ impl HlsDownloader {
             };
 
             let key = ResourceKey::from_url(&segment_url);
-            let Ok(resource) = backend.open_resource(&key) else {
+            let Some(status) = open_status(&key) else {
                 break; // Stop on first uncached segment
             };
 
-            if let ResourceStatus::Committed { final_len } = resource.status() {
+            if let AssetResourceState::Committed { final_len } = status {
                 let media_len = final_len.unwrap_or(0);
                 if media_len == 0 {
                     break;
@@ -429,117 +594,43 @@ impl HlsDownloader {
                 // Init only for the first segment (init-once layout matches metadata)
                 let actual_init_len = if count == 0 { init_len } else { 0 };
 
-                let segment = LoadedSegment {
-                    variant,
-                    segment_index: index,
-                    byte_offset: cumulative_offset,
+                let data = SegmentData {
                     init_len: actual_init_len,
                     media_len,
                     init_url: init_url.clone(),
                     media_url: segment_url,
                 };
 
-                cumulative_offset = segment.end_offset();
-                segments.push(segment);
+                segments.lock_sync().commit_segment(variant, index, data);
                 count += 1;
             } else {
                 break; // Not committed, stop
             }
         }
 
-        drop(segments);
+        let cumulative_offset = segments.lock_sync().max_end_offset();
         if count > 0 {
             debug!(
                 variant,
                 count, cumulative_offset, "pre-populated cached segments from disk"
             );
-            shared.condvar.notify_all();
+            coord.condvar.notify_all();
         }
 
         (count, cumulative_offset)
     }
 
-    /// Check if this (variant, `segment_index`) is already committed at the correct offset.
-    ///
-    /// We check `byte_offset` because after a seek + variant switch, the same
-    /// (variant, `segment_index`) may be loaded at a different cumulative offset —
-    /// skipping that commit would create a hole visible to the reader.
-    fn is_duplicate_commit(&self, dl: &HlsFetch) -> bool {
-        let existing_offset = self
-            .shared
-            .segments
-            .lock_sync()
-            .find_loaded_segment(dl.variant, dl.segment_index)
-            .map(|s| s.byte_offset);
-
-        if let Some(byte_offset) = existing_offset {
-            let expected_offset = self
-                .playlist_state
-                .segment_byte_offset(dl.variant, dl.segment_index)
-                .unwrap_or(byte_offset);
-            if byte_offset == expected_offset {
-                debug!(
-                    variant = dl.variant,
-                    segment_index = dl.segment_index,
-                    byte_offset,
-                    "commit_segment: skipping duplicate at correct offset"
-                );
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Choose `byte_offset` for segment placement.
-    ///
-    /// After a midstream switch (or if one occurred earlier), use the cumulative
-    /// download position. Otherwise use metadata offset for correct positioning
-    /// of both sequential and on-demand (seek) loads.
-    fn resolve_byte_offset(&self, dl: &HlsFetch, is_midstream_switch: bool) -> u64 {
-        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-        let current_download = self.shared.timeline.download_position();
-        if is_midstream_switch || had_midstream_switch {
-            current_download
-        } else {
-            self.playlist_state
-                .segment_byte_offset(dl.variant, dl.segment_index)
-                .unwrap_or(current_download)
-        }
-    }
-
-    /// Reconcile metadata sizes and adjust timeline `total_bytes` if needed.
-    ///
-    /// Updates this segment's size in playlist metadata and recalculates
-    /// subsequent `byte_offsets` using the actual (possibly decrypted) size.
-    /// For non-DRM streams this is a no-op (actual == predicted). For DRM
-    /// streams, it corrects the drift from PKCS7 padding removal.
-    fn reconcile_total_bytes(&self, variant: usize, segment_index: usize, actual_size: u64) {
-        let pre_total = self.playlist_state.total_variant_size(variant);
-        self.playlist_state
-            .reconcile_segment_size(variant, segment_index, actual_size);
-        let post_total = self.playlist_state.total_variant_size(variant);
-
-        if let (Some(pre), Some(post)) = (pre_total, post_total)
-            && pre != post
-        {
-            let current = self.shared.timeline.total_bytes().unwrap_or(0);
-            let new_expected = if post > pre {
-                current.saturating_add(post - pre)
-            } else {
-                current.saturating_sub(pre - post)
-            };
-            self.shared.timeline.set_total_bytes(Some(new_expected));
-        }
-    }
-
+    // NOTE: resolve_byte_offset is no longer needed — StreamIndex computes byte
+    // offsets internally via commit_segment → rebuild_byte_map_from.
     /// Commit a downloaded segment to the segment index.
     ///
-    /// `is_variant_switch` / `is_midstream_switch` control init segment inclusion.
-    fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
-        if self.is_duplicate_commit(&dl) {
-            return;
-        }
-
+    /// `HlsFetch` already encodes whether this decoder-visible segment fetched init.
+    fn commit_segment(
+        &mut self,
+        dl: HlsFetch,
+        _is_variant_switch: bool,
+        _is_midstream_switch: bool,
+    ) {
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
         self.bus.publish(HlsEvent::SegmentComplete {
@@ -550,52 +641,67 @@ impl HlsDownloader {
             duration: dl.duration,
         });
 
-        if is_variant_switch {
-            self.sent_init_for_variant.insert(dl.variant);
-        }
-        self.last_committed_variant = Some(dl.variant);
+        let fresh_init_len = dl.init_len;
 
-        let actual_init_len = if is_midstream_switch || is_variant_switch || dl.segment_index == 0 {
-            dl.init_len
+        // Preserve init_len from an existing entry when re-downloading after
+        // eviction.  The init resource may still be available even though it
+        // was not re-fetched with this media segment.
+        let actual_init_len = if fresh_init_len == 0 {
+            let segments = self.segments.lock_sync();
+            segments
+                .stored_segment(dl.variant, dl.segment_index)
+                .map_or(0, |existing| existing.init_len)
         } else {
-            0
+            fresh_init_len
         };
 
-        let byte_offset = self.resolve_byte_offset(&dl, is_midstream_switch);
         let media_len = dl.media.len;
         let actual_size = actual_init_len + media_len;
 
-        let media_url = dl.media.url.clone();
-        let segment = LoadedSegment {
-            variant: dl.variant,
-            segment_index: dl.segment_index,
-            byte_offset,
-            init_len: actual_init_len,
-            media_len,
-            init_url: dl.init_url,
-            media_url: media_url.clone(),
+        let init_url = if actual_init_len > 0 {
+            dl.init_url.or_else(|| {
+                let segments = self.segments.lock_sync();
+                segments
+                    .stored_segment(dl.variant, dl.segment_index)
+                    .and_then(|existing| existing.init_url.clone())
+            })
+        } else {
+            dl.init_url
         };
 
-        let end = byte_offset + actual_size;
-        let current_download = self.shared.timeline.download_position();
-        let next_download = current_download.max(end);
-        self.shared.timeline.set_download_position(next_download);
+        let data = SegmentData {
+            init_len: actual_init_len,
+            media_len,
+            init_url,
+            media_url: dl.media.url.clone(),
+        };
 
-        self.reconcile_total_bytes(dl.variant, dl.segment_index, actual_size);
+        self.segments
+            .lock_sync()
+            .commit_segment(dl.variant, dl.segment_index, data);
+
+        let end_offset = self.segments.lock_sync().max_end_offset();
+        let current_download = self.coord.timeline().download_position();
+        let next_download = current_download.max(end_offset);
+        self.coord.timeline().set_download_position(next_download);
+
+        self.playlist_state
+            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
+
+        // Sync reconciled sizes back to StreamIndex expected_sizes so that
+        // byte offsets for uncommitted segments stay accurate after DRM decrypt.
+        if let Some(sizes) = self.playlist_state.segment_sizes(dl.variant) {
+            self.segments
+                .lock_sync()
+                .set_expected_sizes(dl.variant, sizes);
+        }
 
         self.bus.publish(HlsEvent::DownloadProgress {
             offset: next_download,
             total: None,
         });
 
-        {
-            let mut segments = self.shared.segments.lock_sync();
-            if is_variant_switch {
-                segments.fence_at(byte_offset, dl.variant);
-            }
-            segments.push(segment);
-        }
-        self.shared.condvar.notify_all();
+        self.coord.condvar.notify_all();
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
@@ -610,15 +716,30 @@ impl HlsDownloader {
             self.classify_variant_transition(variant, segment_index);
         self.handle_midstream_switch(is_midstream_switch);
 
-        if self.should_prepare_variant_totals(is_variant_switch) {
-            self.refresh_variant_total_bytes(
-                variant,
-                segment_index,
-                is_variant_switch,
-                is_midstream_switch,
-            )
-            .await;
+        if !self.playlist_state.has_size_map(variant)
+            && let Err(e) =
+                Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await
+        {
+            debug!(?e, variant, "failed to calculate variant size map");
         }
+
+        // Sync expected segment sizes into StreamIndex so that
+        // rebuild_variant_byte_map reserves correct offsets for gaps.
+        {
+            let mut segments = self.segments.lock_sync();
+            if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+                segments.set_expected_sizes(variant, sizes);
+            }
+            // For initial download (not midstream), align layout_variant with
+            // the download variant so the source reads from the correct byte map.
+            if is_variant_switch && !is_midstream_switch {
+                segments.set_layout_variant(variant);
+            }
+        }
+
+        let (cached_count, cached_end_offset) =
+            self.populate_cached_segments_if_needed(variant, is_variant_switch);
+        self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
 
         Ok((is_variant_switch, is_midstream_switch))
     }
@@ -627,64 +748,16 @@ impl HlsDownloader {
         if !is_midstream_switch {
             return;
         }
-        self.shared
+        self.cursor
+            .reopen_fill(self.current_segment_index(), self.current_segment_index());
+        self.coord
             .had_midstream_switch
             .store(true, Ordering::Release);
-        while self.shared.segment_requests.pop().is_some() {}
+        self.coord.clear_segment_requests();
         // Wake blocked wait_range so it can re-push its on-demand request.
         // The `had_midstream_switch` flag tells wait_range to clear
         // `on_demand_pending`, allowing the re-push for the new variant.
-        self.shared.condvar.notify_all();
-    }
-
-    fn should_prepare_variant_totals(&self, is_variant_switch: bool) -> bool {
-        is_variant_switch || self.shared.timeline.total_bytes().unwrap_or(0) == 0
-    }
-
-    async fn refresh_variant_total_bytes(
-        &mut self,
-        variant: usize,
-        segment_index: usize,
-        is_variant_switch: bool,
-        is_midstream_switch: bool,
-    ) {
-        if self.playlist_state.has_size_map(variant) {
-            self.apply_cached_variant_total(variant);
-            return;
-        }
-
-        if let Err(e) = Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await {
-            debug!(?e, variant, "failed to calculate variant size map");
-            return;
-        }
-
-        let total = self.playlist_state.total_variant_size(variant).unwrap_or(0);
-        debug!(variant, total, "calculated and cached variant size map");
-
-        let (cached_count, cached_end_offset) =
-            self.populate_cached_segments_if_needed(variant, is_variant_switch);
-        self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
-
-        let effective_total = self.calculate_effective_total(
-            variant,
-            segment_index,
-            total,
-            cached_end_offset,
-            is_midstream_switch,
-        );
-        if effective_total > 0 {
-            self.shared.timeline.set_total_bytes(Some(effective_total));
-        }
-    }
-
-    fn apply_cached_variant_total(&self, variant: usize) {
-        let Some(cached_total) = self.playlist_state.total_variant_size(variant) else {
-            return;
-        };
-        debug!(variant, total = cached_total, "using cached variant length");
-        if cached_total > 0 {
-            self.shared.timeline.set_total_bytes(Some(cached_total));
-        }
+        self.coord.condvar.notify_all();
     }
 
     fn populate_cached_segments_if_needed(
@@ -695,7 +768,13 @@ impl HlsDownloader {
         if is_variant_switch {
             return (0, 0);
         }
-        Self::populate_cached_segments(&self.shared, &self.fetch, variant)
+        Self::populate_cached_segments(
+            &self.segments,
+            &self.coord,
+            &self.fetch,
+            &self.playlist_state,
+            variant,
+        )
     }
 
     fn apply_cached_segment_progress(
@@ -708,74 +787,47 @@ impl HlsDownloader {
             return;
         }
 
-        let current_download = self.shared.timeline.download_position();
+        let current_download = self.coord.timeline().download_position();
         if cached_end_offset > current_download {
-            self.shared
-                .timeline
+            self.coord
+                .timeline()
                 .set_download_position(cached_end_offset);
         }
-        if cached_count > self.current_segment_index {
-            self.current_segment_index = cached_count;
+        if cached_count > self.current_segment_index() {
+            self.advance_current_segment_index(cached_count);
         }
         self.sent_init_for_variant.insert(variant);
     }
 
-    fn calculate_effective_total(
-        &self,
-        variant: usize,
-        segment_index: usize,
-        total: u64,
-        cached_end_offset: u64,
-        is_midstream_switch: bool,
-    ) -> u64 {
-        if !is_midstream_switch {
-            let result = total.max(cached_end_offset);
-            debug!(
-                variant,
-                metadata_total = total,
-                cached_end_offset,
-                effective_total = result,
-                "effective_total: normal (no switch)"
-            );
-            return result;
-        }
-
-        let switch_byte = self.shared.timeline.download_position();
-        let switch_meta = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .unwrap_or(0);
-        let result = total
-            .saturating_sub(switch_meta)
-            .saturating_add(switch_byte);
-        debug!(
-            variant,
-            segment_index,
-            metadata_total = total,
-            switch_byte,
-            switch_meta,
-            effective_total = result,
-            "effective_total: midstream switch adjustment"
-        );
-        result
-    }
-
     async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
-        if self.shared.timeline.is_flushing() {
+        if self.coord.timeline().is_flushing() {
             tokio::task::yield_now().await;
             return None;
         }
 
         let req = self.next_valid_demand_request()?;
-        debug!(
+        trace!(
             variant = req.variant,
             segment_index = req.segment_index,
             "processing on-demand segment request"
         );
 
-        let (req, num_segments) = self.num_segments_for_demand(req).await?;
+        let (req, num_segments) = self.num_segments_for_demand(req)?;
         if Self::demand_request_out_of_range(&req, num_segments) {
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
+            return None;
+        }
+
+        if self.is_below_switch_floor(req.variant, req.segment_index) {
+            debug!(
+                variant = req.variant,
+                segment_index = req.segment_index,
+                floor = self.gap_scan_start_segment(),
+                "dropping demand below switched-layout floor"
+            );
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
             return None;
         }
 
@@ -785,17 +837,23 @@ impl HlsDownloader {
             "segment loaded at stale offset, refreshing demand request",
             "segment already loaded, skipping",
         ) {
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
             return None;
         }
 
-        let (is_variant_switch, is_midstream_switch) = self
+        let Some((is_variant_switch, is_midstream_switch)) = self
             .prepare_variant_for_demand(req.variant, req.segment_index)
-            .await?;
+            .await
+        else {
+            self.coord.clear_pending_segment_request(req);
+            return None;
+        };
 
         if self.should_skip_pre_switch_variant(req.variant, req.segment_index, is_midstream_switch)
         {
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
             return None;
         }
 
@@ -805,7 +863,8 @@ impl HlsDownloader {
             "segment loaded with stale offset after metadata calc, refreshing",
             "segment loaded from cache after metadata calc",
         ) {
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
             return None;
         }
 
@@ -814,8 +873,8 @@ impl HlsDownloader {
 
     fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
         loop {
-            let req = self.shared.segment_requests.pop()?;
-            let current_epoch = self.shared.timeline.seek_epoch();
+            let req = self.coord.take_segment_request()?;
+            let current_epoch = self.coord.timeline().seek_epoch();
             if req.seek_epoch == current_epoch {
                 if req.seek_epoch != self.active_seek_epoch {
                     self.reset_for_seek_epoch(req.seek_epoch, req.variant, req.segment_index);
@@ -836,23 +895,23 @@ impl HlsDownloader {
                 variant: req.variant,
                 segment_index: req.segment_index,
             });
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
         }
     }
 
-    async fn num_segments_for_demand(
-        &mut self,
-        req: SegmentRequest,
-    ) -> Option<(SegmentRequest, usize)> {
-        match self.fetch.num_segments(req.variant).await {
-            Ok(value) => Some((req, value)),
-            Err(e) => {
-                self.publish_download_error("failed to query segment count for demand", &e);
-                self.shared.segment_requests.push(req);
-                self.shared.condvar.notify_all();
-                None
-            }
+    fn num_segments_for_demand(&mut self, req: SegmentRequest) -> Option<(SegmentRequest, usize)> {
+        if let Some(value) = self.num_segments(req.variant) {
+            return Some((req, value));
         }
+
+        self.publish_download_error(
+            "missing variant in playlist state for demand",
+            &HlsError::VariantNotFound(format!("variant {}", req.variant)),
+        );
+        self.coord.requeue_segment_request(req);
+        self.coord.condvar.notify_all();
+        None
     }
 
     fn demand_request_out_of_range(req: &SegmentRequest, num_segments: usize) -> bool {
@@ -872,34 +931,25 @@ impl HlsDownloader {
         &self,
         variant: usize,
         segment_index: usize,
-        stale_reason: &str,
+        _stale_reason: &str,
         loaded_reason: &str,
     ) -> bool {
-        if let Some((loaded_offset, expected_offset)) =
-            self.loaded_segment_offset_mismatch(variant, segment_index)
-        {
-            debug!(
-                variant,
-                segment_index,
-                loaded_offset,
-                expected_offset,
-                reason = stale_reason,
-                "demand segment has stale offset"
-            );
-            return false;
-        }
-
-        let loaded_segment = {
-            let segments = self.shared.segments.lock_sync();
+        let seg_data = {
+            let segments = self.segments.lock_sync();
+            if variant != segments.layout_variant() || !segments.is_visible(variant, segment_index)
+            {
+                return false;
+            }
             segments
-                .find_loaded_segment(variant, segment_index)
+                .variant_segments(variant)
+                .and_then(|vs| vs.get(segment_index))
                 .cloned()
         };
-        let Some(seg) = loaded_segment else {
+        let Some(data) = seg_data else {
             return false;
         };
 
-        if !self.segment_resources_available(&seg) {
+        if !self.segment_resources_available(&data) {
             debug!(
                 variant,
                 segment_index, "segment metadata present but resources evicted, need re-download"
@@ -907,7 +957,7 @@ impl HlsDownloader {
             return false;
         }
 
-        debug!(
+        trace!(
             variant,
             segment_index,
             reason = loaded_reason,
@@ -925,7 +975,7 @@ impl HlsDownloader {
             Ok(flags) => Some(flags),
             Err(e) => {
                 self.publish_download_error("variant preparation error in poll_demand", &e);
-                self.shared.condvar.notify_all();
+                self.coord.condvar.notify_all();
                 None
             }
         }
@@ -934,10 +984,15 @@ impl HlsDownloader {
     fn should_skip_pre_switch_variant(
         &self,
         variant: usize,
-        segment_index: usize,
+        _segment_index: usize,
         is_midstream_switch: bool,
     ) -> bool {
-        if !self.shared.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
+            return false;
+        }
+        // With per-variant byte maps, demand from layout_variant must be honored.
+        let layout = self.segments.lock_sync().layout_variant();
+        if variant == layout {
             return false;
         }
         let current_variant = self.abr.get_current_variant_index();
@@ -946,7 +1001,7 @@ impl HlsDownloader {
         }
         debug!(
             variant,
-            segment_index, current_variant, "skipping stale segment from pre-switch variant"
+            current_variant, "skipping stale segment from pre-switch variant"
         );
         true
     }
@@ -955,11 +1010,17 @@ impl HlsDownloader {
         self.bus.publish(HlsEvent::SegmentStart {
             variant: req.variant,
             segment_index: req.segment_index,
-            byte_offset: self.shared.timeline.download_position(),
+            byte_offset: self.coord.timeline().download_position(),
         });
 
-        let need_init =
-            self.force_init_for_seek || should_request_init(is_variant_switch, req.segment_index);
+        let has_init = self.variant_has_init(req.variant);
+        let need_init = has_init
+            && (self.force_init_for_seek
+                || should_request_init(
+                    self.switch_needs_init(req.variant, req.segment_index, is_variant_switch),
+                    req.segment_index,
+                )
+                || self.demand_init_evicted(req.variant, req.segment_index));
         if need_init {
             self.force_init_for_seek = false;
         }
@@ -973,7 +1034,7 @@ impl HlsDownloader {
     }
 
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
-        if self.shared.timeline.is_flushing() {
+        if self.coord.timeline().is_flushing() {
             tokio::task::yield_now().await;
             return PlanOutcome::Idle;
         }
@@ -982,7 +1043,7 @@ impl HlsDownloader {
         let decision = self.make_abr_decision();
         let variant = self.abr.get_current_variant_index();
 
-        let Some(num_segments) = self.num_segments_for_plan(variant).await else {
+        let Some(num_segments) = self.num_segments_for_plan(variant) else {
             return PlanOutcome::Idle;
         };
 
@@ -993,12 +1054,12 @@ impl HlsDownloader {
         self.publish_variant_applied(old_variant, variant, &decision);
 
         let (is_variant_switch, is_midstream_switch) = match self
-            .ensure_variant_ready(variant, self.current_segment_index)
+            .ensure_variant_ready(variant, self.current_segment_index())
             .await
         {
             Ok(flags) => flags,
             Err(e) => {
-                self.shared.condvar.notify_all();
+                self.coord.condvar.notify_all();
                 self.publish_download_error("variant preparation error", &e);
                 return PlanOutcome::Complete;
             }
@@ -1012,72 +1073,65 @@ impl HlsDownloader {
         );
 
         if plans.is_empty() {
-            self.current_segment_index = batch_end;
-            self.shared.condvar.notify_all();
+            let advanced = batch_end > self.current_segment_index();
+            self.advance_current_segment_index(batch_end);
+            self.coord.condvar.notify_all();
+            if advanced {
+                self.coord.reader_advanced.notify_one();
+            }
+            return PlanOutcome::Idle;
         }
 
         PlanOutcome::Batch(plans)
     }
 
-    async fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
-        match self.fetch.num_segments(variant).await {
-            Ok(value) => Some(value),
-            Err(e) => {
-                self.publish_download_error("failed to query segment count", &e);
-                self.shared.condvar.notify_all();
-                tokio::task::yield_now().await;
-                None
-            }
+    fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
+        if let Some(value) = self.num_segments(variant) {
+            return Some(value);
         }
+
+        self.publish_download_error(
+            "missing variant in playlist state",
+            &HlsError::VariantNotFound(format!("variant {variant}")),
+        );
+        self.coord.condvar.notify_all();
+        None
     }
 
     fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
-        if self.current_segment_index < num_segments {
+        if self.current_segment_index() < num_segments {
             return false;
         }
 
-        let timeline_seek_epoch = self.shared.timeline.seek_epoch();
+        let timeline_seek_epoch = self.coord.timeline().seek_epoch();
         if timeline_seek_epoch != self.active_seek_epoch {
-            self.shared.timeline.set_eof(false);
-            self.shared.condvar.notify_all();
+            self.coord.timeline().set_eof(false);
+            self.coord.condvar.notify_all();
             return true;
         }
 
-        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-        let rewind_variant = self.rewind_reference_variant(variant);
-        let can_rewind_from_tail =
-            !had_midstream_switch && self.last_committed_variant == Some(rewind_variant);
-        if can_rewind_from_tail {
+        if self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            let rewind_variant = self.rewind_reference_variant(variant);
             if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
                 return true;
             }
-        } else {
-            debug!(
-                rewind_variant,
-                num_segments,
-                "playlist tail reached without committed variant match; skip automatic backfill"
-            );
         }
 
-        let stream_end = self
-            .shared
-            .timeline
-            .total_bytes()
-            .or_else(|| self.playlist_state.total_variant_size(variant))
-            .unwrap_or_else(|| self.shared.segments.lock_sync().max_end_offset());
-        let playback_at_end = stream_end == 0 || self.shared.timeline.byte_position() >= stream_end;
+        let stream_end = self.effective_total_bytes().unwrap_or(0);
+        let playback_at_end =
+            stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;
         if !playback_at_end {
-            self.shared.timeline.set_eof(false);
-            self.shared.condvar.notify_all();
+            self.coord.timeline().set_eof(false);
+            self.coord.condvar.notify_all();
             return true;
         }
 
-        if !self.shared.timeline.eof() {
+        if !self.coord.timeline().eof() {
             debug!("reached end of playlist");
-            self.shared.timeline.set_eof(true);
+            self.coord.timeline().set_eof(true);
             self.bus.publish(HlsEvent::EndOfStream);
         }
-        self.shared.condvar.notify_all();
+        self.coord.condvar.notify_all();
         true
     }
 
@@ -1092,11 +1146,11 @@ impl HlsDownloader {
 
     fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
         let missing_segment = {
-            let segments = self.shared.segments.lock_sync();
+            let segments = self.segments.lock_sync();
             first_missing_segment(
                 &segments,
                 variant,
-                self.gap_scan_start_segment,
+                self.gap_scan_start_segment(),
                 num_segments,
             )
         };
@@ -1110,8 +1164,8 @@ impl HlsDownloader {
             num_segments,
             "playlist tail reached with gaps; rewinding to first missing segment"
         );
-        self.current_segment_index = segment_index;
-        self.shared.condvar.notify_all();
+        self.rewind_current_segment_index(segment_index);
+        self.coord.condvar.notify_all();
         true
     }
 
@@ -1133,16 +1187,34 @@ impl HlsDownloader {
         is_variant_switch: bool,
         is_midstream_switch: bool,
     ) -> (Vec<HlsPlan>, usize) {
-        let mut batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        let reader_seg = self.reader_segment_hint(variant);
+        let post_seek_probe_only = self.active_seek_epoch > 0
+            && self.coord.timeline().seek_epoch() == self.active_seek_epoch
+            && reader_seg == self.gap_scan_start_segment()
+            && self.current_segment_index() > reader_seg;
+        if post_seek_probe_only {
+            return (Vec::new(), self.current_segment_index());
+        }
+
+        let mut batch_end = (self.current_segment_index() + self.prefetch_count).min(num_segments);
         if let Some(limit) = self.look_ahead_segments {
-            let reader_seg = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
             batch_end = batch_end.min(reader_seg.saturating_add(limit).saturating_add(1));
         }
-        let seek_epoch = self.shared.timeline.seek_epoch();
+        let seek_epoch = self.coord.timeline().seek_epoch();
+        if self.active_seek_epoch > 0 && seek_epoch == self.active_seek_epoch {
+            batch_end = batch_end.min(self.current_segment_index().saturating_add(1));
+        }
         let mut plans = Vec::new();
-        let mut need_init = self.force_init_for_seek || is_variant_switch;
+        let has_init = self.variant_has_init(variant);
+        let mut need_init = has_init
+            && (self.force_init_for_seek
+                || self.switch_needs_init(
+                    variant,
+                    self.current_segment_index(),
+                    is_variant_switch,
+                ));
 
-        for seg_idx in self.current_segment_index..batch_end {
+        for seg_idx in self.current_segment_index()..batch_end {
             if self.should_skip_planned_segment(variant, seg_idx, is_midstream_switch) {
                 continue;
             }
@@ -1150,10 +1222,10 @@ impl HlsDownloader {
             self.bus.publish(HlsEvent::SegmentStart {
                 variant,
                 segment_index: seg_idx,
-                byte_offset: self.shared.timeline.download_position(),
+                byte_offset: self.coord.timeline().download_position(),
             });
 
-            let plan_need_init = should_request_init(need_init, seg_idx);
+            let plan_need_init = has_init && should_request_init(need_init, seg_idx);
             plans.push(HlsPlan {
                 variant,
                 segment_index: seg_idx,
@@ -1166,6 +1238,20 @@ impl HlsDownloader {
             need_init = false;
         }
 
+        if !plans.is_empty() && plans.len() <= 4 {
+            let first = plans.first().map_or(0, |plan| plan.segment_index);
+            let last = plans.last().map_or(0, |plan| plan.segment_index);
+            debug!(
+                variant,
+                current_segment_index = self.current_segment_index(),
+                batch_end,
+                first_segment = first,
+                last_segment = last,
+                count = plans.len(),
+                "built batch plans"
+            );
+        }
+
         (plans, batch_end)
     }
 
@@ -1175,26 +1261,16 @@ impl HlsDownloader {
         seg_idx: usize,
         is_midstream_switch: bool,
     ) -> bool {
-        if let Some((loaded_offset, expected_offset)) =
-            self.loaded_segment_offset_mismatch(variant, seg_idx)
-        {
-            debug!(
-                variant,
-                segment_index = seg_idx,
-                loaded_offset,
-                expected_offset,
-                "segment in plan window has stale offset, forcing refresh"
-            );
-            return false;
-        }
-
-        let loaded_segment = {
-            let segments = self.shared.segments.lock_sync();
-            segments.find_loaded_segment(variant, seg_idx).cloned()
+        let seg_data = {
+            let segments = self.segments.lock_sync();
+            segments
+                .variant_segments(variant)
+                .and_then(|vs| vs.get(seg_idx))
+                .cloned()
         };
-        if let Some(seg) = loaded_segment {
-            if self.segment_resources_available(&seg) {
-                self.current_segment_index = seg_idx + 1;
+        if let Some(data) = seg_data {
+            if self.segment_resources_available(&data) {
+                self.advance_current_segment_index(seg_idx + 1);
                 return true;
             }
             debug!(
@@ -1205,7 +1281,7 @@ impl HlsDownloader {
             return false;
         }
 
-        let had_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        let had_switch = self.coord.had_midstream_switch.load(Ordering::Acquire);
         if !had_switch || is_midstream_switch {
             return false;
         }
@@ -1274,8 +1350,8 @@ impl HlsDownloader {
 
 impl Drop for HlsDownloader {
     fn drop(&mut self) {
-        self.shared.stopped.store(true, Ordering::Release);
-        self.shared.condvar.notify_all();
+        self.coord.stopped.store(true, Ordering::Release);
+        self.coord.condvar.notify_all();
     }
 }
 
@@ -1298,9 +1374,9 @@ impl Downloader for HlsDownloader {
     }
 
     fn commit(&mut self, fetch: HlsFetch) {
-        let current_epoch = self.shared.timeline.seek_epoch();
+        let current_epoch = self.coord.timeline().seek_epoch();
         if is_stale_epoch(fetch.seek_epoch, current_epoch) {
-            debug!(
+            trace!(
                 fetch_epoch = fetch.seek_epoch,
                 current_epoch,
                 variant = fetch.variant,
@@ -1313,7 +1389,44 @@ impl Downloader for HlsDownloader {
                 variant: fetch.variant,
                 segment_index: fetch.segment_index,
             });
-            self.shared.condvar.notify_all();
+            self.coord.clear_pending_segment_request(SegmentRequest {
+                segment_index: fetch.segment_index,
+                variant: fetch.variant,
+                seek_epoch: fetch.seek_epoch,
+            });
+            self.coord.condvar.notify_all();
+            return;
+        }
+
+        if self.is_stale_cross_codec_fetch(&fetch) {
+            debug!(
+                variant = fetch.variant,
+                segment_index = fetch.segment_index,
+                current_variant = self.abr.get_current_variant_index(),
+                "dropping stale cross-codec fetch after switched anchor"
+            );
+            self.coord.clear_pending_segment_request(SegmentRequest {
+                segment_index: fetch.segment_index,
+                variant: fetch.variant,
+                seek_epoch: fetch.seek_epoch,
+            });
+            self.coord.condvar.notify_all();
+            return;
+        }
+
+        if self.is_below_switch_floor(fetch.variant, fetch.segment_index) {
+            debug!(
+                variant = fetch.variant,
+                segment_index = fetch.segment_index,
+                floor = self.gap_scan_start_segment(),
+                "dropping fetch below switched-layout floor"
+            );
+            self.coord.clear_pending_segment_request(SegmentRequest {
+                segment_index: fetch.segment_index,
+                variant: fetch.variant,
+                seek_epoch: fetch.seek_epoch,
+            });
+            self.coord.condvar.notify_all();
             return;
         }
 
@@ -1327,23 +1440,46 @@ impl Downloader for HlsDownloader {
         // Only advance sequential position for the next expected segment.
         // On-demand loads and out-of-order batch results must not jump past gaps --
         // plan() handles skipping loaded segments when building the next batch.
-        if fetch.segment_index == self.current_segment_index {
-            self.current_segment_index = fetch.segment_index + 1;
+        if fetch.segment_index == self.current_segment_index() {
+            self.advance_current_segment_index(fetch.segment_index + 1);
         }
 
+        if fetch.segment_index <= 8 {
+            debug!(
+                variant = fetch.variant,
+                segment_index = fetch.segment_index,
+                current_segment_index = self.current_segment_index(),
+                "committing fetch"
+            );
+        }
+
+        self.coord.clear_pending_segment_request(SegmentRequest {
+            segment_index: fetch.segment_index,
+            variant: fetch.variant,
+            seek_epoch: fetch.seek_epoch,
+        });
         self.commit_segment(fetch, is_variant_switch, is_midstream_switch);
     }
 
     fn should_throttle(&self) -> bool {
         // Never throttle during seek — downloader must be free to respond.
-        if self.shared.timeline.is_flushing() {
+        if self.coord.timeline().is_flushing() {
+            return false;
+        }
+
+        let current_variant = self.abr.get_current_variant_index();
+        if !self
+            .segments
+            .lock_sync()
+            .is_segment_loaded(current_variant, self.current_segment_index())
+        {
             return false;
         }
 
         // Byte-based throttle
         if let Some(limit) = self.look_ahead_bytes {
-            let reader_pos = self.shared.timeline.byte_position();
-            let downloaded = self.shared.segments.lock_sync().max_end_offset();
+            let reader_pos = self.coord.timeline().byte_position();
+            let downloaded = self.segments.lock_sync().max_end_offset();
             if downloaded.saturating_sub(reader_pos) > limit {
                 return true;
             }
@@ -1351,8 +1487,8 @@ impl Downloader for HlsDownloader {
 
         // Segment-based throttle (critical for ephemeral with small LRU cache)
         if let Some(limit) = self.look_ahead_segments {
-            let reader_seg = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
-            if self.current_segment_index > reader_seg + limit {
+            let reader_seg = self.reader_segment_hint(current_variant);
+            if self.current_segment_index() > reader_seg + limit {
                 return true;
             }
         }
@@ -1361,14 +1497,14 @@ impl Downloader for HlsDownloader {
     }
 
     async fn wait_ready(&self) {
-        if self.shared.timeline.is_flushing() || !self.should_throttle() {
+        if self.coord.timeline().is_flushing() || !self.should_throttle() {
             return;
         }
-        self.shared.reader_advanced.notified().await;
+        self.coord.notified_reader_advanced().await;
     }
 
     fn wait_for_work(&self) -> impl Future<Output = ()> {
-        self.shared.reader_advanced.notified()
+        self.coord.notified_reader_advanced()
     }
 }
 
@@ -1376,14 +1512,18 @@ impl Downloader for HlsDownloader {
 mod tests {
     use std::{
         collections::HashSet,
-        sync::{Arc, atomic::Ordering},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
-    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+    use kithara_assets::{AssetResourceState, AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
+    use kithara_platform::time::Instant;
     use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
     use kithara_stream::{AudioCodec, Downloader, PlanOutcome, Timeline};
     use kithara_test_utils::kithara;
@@ -1392,16 +1532,17 @@ mod tests {
     use url::Url;
 
     use super::{
-        AbrDecision, AbrReason, DownloadState, HlsDownloader, LoadedSegment,
-        classify_variant_transition, first_missing_segment, is_cross_codec_switch, is_stale_epoch,
-        should_request_init,
+        AbrDecision, AbrReason, HlsDownloader, HlsFetch, StreamIndex, classify_layout_transition,
+        first_missing_segment, is_cross_codec_switch, is_stale_epoch, should_request_init,
     };
     use crate::{
         config::HlsConfig,
-        fetch::{DefaultFetchManager, FetchManager},
+        coord::SegmentRequest,
+        fetch::{DefaultFetchManager, FetchManager, SegmentMeta},
         parsing::{VariantId, VariantStream},
         playlist::{PlaylistAccess, PlaylistState, SegmentState, VariantSizeMap, VariantState},
-        source::{SharedSegments, build_pair},
+        source::build_pair,
+        stream_index::SegmentData,
     };
 
     #[kithara::test]
@@ -1412,26 +1553,28 @@ mod tests {
 
     #[kithara::test]
     fn first_missing_segment_detects_gap() {
-        let mut state = DownloadState::new();
         let media_url = Url::parse("https://example.com/seg.m4s").expect("valid URL");
-        state.push(LoadedSegment {
-            variant: 0,
-            segment_index: 0,
-            byte_offset: 0,
-            init_len: 0,
-            media_len: 100,
-            init_url: None,
-            media_url: media_url.clone(),
-        });
-        state.push(LoadedSegment {
-            variant: 0,
-            segment_index: 2,
-            byte_offset: 200,
-            init_len: 0,
-            media_len: 100,
-            init_url: None,
-            media_url,
-        });
+        let mut state = StreamIndex::new(1, 3);
+        state.commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            },
+        );
+        state.commit_segment(
+            0,
+            2,
+            SegmentData {
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            },
+        );
 
         assert_eq!(first_missing_segment(&state, 0, 0, 3), Some(1));
         assert_eq!(first_missing_segment(&state, 0, 2, 3), None);
@@ -1498,6 +1641,24 @@ mod tests {
         Arc::new(FetchManager::new(backend, net, cancel))
     }
 
+    fn test_fetch_manager_disk(cancel: CancellationToken) -> (TempDir, Arc<DefaultFetchManager>) {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let noop_drm: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = AssetStoreBuilder::new()
+            .root_dir(temp_dir.path())
+            .asset_root(Some("test"))
+            .cache_capacity(std::num::NonZeroUsize::new(1).expect("non-zero"))
+            .cancel(cancel.clone())
+            .process_fn(noop_drm)
+            .build();
+        let net = HttpClient::new(NetOptions::default());
+        (temp_dir, Arc::new(FetchManager::new(backend, net, cancel)))
+    }
+
     #[kithara::test]
     fn cross_codec_switch_detects_incompatible_variants() {
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -1518,17 +1679,11 @@ mod tests {
 
     #[kithara::test]
     fn classify_same_variant_seek_is_not_midstream_switch() {
-        let mut sent_init_for_variant = HashSet::new();
         let variant = 1;
         let segment_index = 37;
-        let last_committed_variant = Some(variant);
 
-        let (is_variant_switch, is_midstream_switch) = classify_variant_transition(
-            last_committed_variant,
-            &sent_init_for_variant,
-            variant,
-            segment_index,
-        );
+        let (is_variant_switch, is_midstream_switch) =
+            classify_layout_transition(variant, variant, segment_index);
 
         assert!(
             !is_variant_switch,
@@ -1538,31 +1693,20 @@ mod tests {
             !is_midstream_switch,
             "seek within same variant must not trigger midstream switch path"
         );
-
-        sent_init_for_variant.insert(variant);
-        let (is_variant_switch, is_midstream_switch) = classify_variant_transition(
-            last_committed_variant,
-            &sent_init_for_variant,
-            variant,
-            segment_index,
-        );
-        assert!(!is_variant_switch);
-        assert!(!is_midstream_switch);
     }
 
     #[kithara::test]
     fn classify_real_variant_change_marks_midstream_switch_only_after_segment_zero() {
-        let sent_init_for_variant = HashSet::new();
-        let from_variant = Some(0);
+        let from_variant = 0;
         let to_variant = 1;
 
         let (is_variant_switch, is_midstream_switch) =
-            classify_variant_transition(from_variant, &sent_init_for_variant, to_variant, 0);
+            classify_layout_transition(from_variant, to_variant, 0);
         assert!(is_variant_switch);
         assert!(!is_midstream_switch);
 
         let (is_variant_switch, is_midstream_switch) =
-            classify_variant_transition(from_variant, &sent_init_for_variant, to_variant, 5);
+            classify_layout_transition(from_variant, to_variant, 5);
         assert!(is_variant_switch);
         assert!(is_midstream_switch);
     }
@@ -1589,44 +1733,163 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
-        downloader.current_segment_index = 2;
+        downloader.cursor.reset_fill(2);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
+            let mut segments = downloader.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-1").expect("valid segment URL");
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 1,
-                byte_offset: 100,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url,
-            });
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
         }
 
         downloader
-            .shared
+            .coord
             .abr_variant_index
             .store(0, Ordering::Release);
-        downloader.shared.timeline.set_eof(false);
-        downloader.shared.timeline.set_byte_position(200);
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(200);
         assert!(downloader.handle_tail_state(1, 2));
         assert!(
-            downloader.shared.timeline.eof(),
+            downloader.coord.timeline().eof(),
             "playlist should reach EOF when committed variant has no missing tail gaps"
         );
-        assert_eq!(downloader.current_segment_index, 2);
-        assert_eq!(downloader.last_committed_variant, Some(0));
+        assert_eq!(downloader.current_segment_index(), 2);
+    }
+
+    #[kithara::test(tokio)]
+    async fn populate_cached_segments_does_not_hold_stream_index_lock_during_invalidation() {
+        let cancel = CancellationToken::new();
+        let callback_invocations = Arc::new(AtomicUsize::new(0));
+        let callback_lock_free = Arc::new(AtomicBool::new(true));
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            2,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            Arc::clone(&fetch),
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let callback_invocations_clone = Arc::clone(&callback_invocations);
+        let callback_lock_free_clone = Arc::clone(&callback_lock_free);
+        let segments = Arc::clone(&downloader.segments);
+        let (count, cumulative_offset) = HlsDownloader::populate_cached_segments_with_open(
+            &downloader.segments,
+            &downloader.coord,
+            playlist_state.as_ref(),
+            0,
+            move |_key| {
+                callback_invocations_clone.fetch_add(1, Ordering::AcqRel);
+                if segments.try_lock().is_err() {
+                    callback_lock_free_clone.store(false, Ordering::Release);
+                }
+                Some(AssetResourceState::Committed {
+                    final_len: Some(16),
+                })
+            },
+        );
+
+        assert_eq!(count, 2);
+        assert_eq!(cumulative_offset, 32);
+        assert!(
+            callback_invocations.load(Ordering::Acquire) >= 2,
+            "cache scan must cross the open boundary for each cached segment"
+        );
+        assert!(
+            callback_lock_free.load(Ordering::Acquire),
+            "populate_cached_segments must not hold StreamIndex lock across reentrant open callbacks"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn populate_cached_segments_ignores_active_disk_resource() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            1,
+        )]));
+        let (_temp_dir, fetch) = test_fetch_manager_disk(cancel);
+
+        let media_url = playlist_state
+            .segment_url(0, 0)
+            .expect("segment URL present");
+        let key = ResourceKey::from_url(&media_url);
+        let active = fetch
+            .backend()
+            .acquire_resource_with_ctx(&key, None)
+            .expect("acquire active resource");
+        active.write_at(0, &[1; 16]).expect("write active bytes");
+
+        let evict_key = ResourceKey::from_url(
+            &Url::parse("https://example.com/seg-evict-0.m4s").expect("valid evict URL"),
+        );
+        let evict = fetch
+            .backend()
+            .acquire_resource_with_ctx(&evict_key, None)
+            .expect("acquire evicting resource");
+        evict.write_at(0, &[2; 16]).expect("write evicting bytes");
+
+        assert_eq!(
+            fetch
+                .backend()
+                .resource_state(&key)
+                .expect("resource state"),
+            AssetResourceState::Active
+        );
+
+        let segments = kithara_platform::Mutex::new(StreamIndex::new(1, 1));
+        let coord = crate::coord::HlsCoord::new(
+            CancellationToken::new(),
+            Timeline::new(),
+            Arc::new(AtomicUsize::new(0)),
+        );
+
+        let (count, cumulative_offset) = HlsDownloader::populate_cached_segments(
+            &segments,
+            &coord,
+            fetch.as_ref(),
+            playlist_state.as_ref(),
+            0,
+        );
+
+        assert_eq!(
+            count, 0,
+            "active disk resource must not be treated as a cached committed segment"
+        );
+        assert_eq!(cumulative_offset, 0);
+        assert!(
+            segments.lock_sync().find_at_offset(0).is_none(),
+            "active disk resource must not be materialized into StreamIndex"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1652,41 +1915,112 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
-        downloader.current_segment_index = 2;
+        downloader.cursor.reset_fill(2);
         downloader
-            .shared
+            .coord
             .abr_variant_index
             .store(0, Ordering::Release);
-        downloader.shared.timeline.set_byte_position(0);
-        downloader.shared.timeline.set_eof(false);
+        downloader.coord.timeline().set_byte_position(0);
+        downloader.coord.timeline().set_eof(false);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
+            let mut segments = downloader.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 1,
-                byte_offset: 100,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url,
-            });
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
         }
 
         assert!(downloader.handle_tail_state(0, 2));
         assert!(
-            !downloader.shared.timeline.eof(),
+            !downloader.coord.timeline().eof(),
             "downloader must not set eof while playback position is not at stream end"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn should_not_throttle_when_current_variant_has_gap_to_fill() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.look_ahead_bytes = Some(100);
+        downloader.look_ahead_segments = Some(1);
+        downloader.cursor.reset_fill(0);
+        downloader
+            .coord
+            .abr_variant_index
+            .store(1, Ordering::Release);
+        downloader.coord.timeline().set_byte_position(0);
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: Url::parse("https://example.com/seg-0-0").expect("valid URL"),
+                },
+            );
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: Url::parse("https://example.com/seg-0-1").expect("valid URL"),
+                },
+            );
+            segments.commit_segment(
+                0,
+                2,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: Url::parse("https://example.com/seg-0-2").expect("valid URL"),
+                },
+            );
+        }
+
+        assert!(
+            !downloader.should_throttle(),
+            "downloader must not throttle while the current variant still has a missing gap"
         );
     }
 
@@ -1712,54 +2046,56 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(1);
-        downloader.current_segment_index = 3;
+        downloader.cursor.reset_fill(3);
         downloader
-            .shared
+            .coord
             .abr_variant_index
             .store(0, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
+            let mut segments = downloader.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 1,
-                byte_offset: 100,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 2,
-                byte_offset: 200,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url,
-            });
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                0,
+                2,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
         }
 
-        downloader.shared.timeline.set_eof(false);
-        downloader.shared.timeline.set_byte_position(300);
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(300);
         assert!(downloader.handle_tail_state(1, 3));
         assert!(
-            downloader.shared.timeline.eof(),
+            downloader.coord.timeline().eof(),
             "playlist should emit EOF when stale committed variant is unrelated to tail gaps"
         );
-        assert_eq!(downloader.current_segment_index, 3);
+        assert_eq!(downloader.current_segment_index(), 3);
         assert_eq!(
-            downloader.shared.abr_variant_index.load(Ordering::Acquire),
+            downloader.coord.abr_variant_index.load(Ordering::Acquire),
             0
         );
     }
@@ -1786,43 +2122,44 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
-        downloader.current_segment_index = 2;
+        downloader.cursor.reset_fill(2);
         downloader
-            .shared
+            .coord
             .abr_variant_index
             .store(1, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
+            let mut segments = downloader.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 1,
-                byte_offset: 100,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url,
-            });
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
         }
 
-        downloader.shared.timeline.set_eof(false);
-        downloader.shared.timeline.set_byte_position(200);
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(200);
         assert!(downloader.handle_tail_state(1, 2));
         assert!(
-            downloader.shared.timeline.eof(),
+            downloader.coord.timeline().eof(),
             "playlist should reach EOF when tail is committed on different variant"
         );
-        assert_eq!(downloader.current_segment_index, 2);
+        assert_eq!(downloader.current_segment_index(), 2);
     }
 
     #[kithara::test(tokio)]
@@ -1847,56 +2184,121 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
-        downloader.current_segment_index = 3;
+        downloader.cursor.reset_fill(3);
         downloader
-            .shared
+            .coord
             .abr_variant_index
             .store(1, Ordering::Release);
         downloader
-            .shared
+            .coord
             .had_midstream_switch
             .store(true, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
+            let mut segments = downloader.segments.lock_sync();
+            // Assign all segments to variant 1 so commit_segment places them in byte_map
+            segments.set_layout_variant(1);
             let media_url = Url::parse("https://example.com/seg-1-0").expect("valid segment URL");
-            segments.push(LoadedSegment {
-                variant: 1,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 1,
-                segment_index: 1,
-                byte_offset: 100,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: media_url.clone(),
-            });
-            segments.push(LoadedSegment {
-                variant: 1,
-                segment_index: 2,
-                byte_offset: 200,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url,
-            });
+            segments.commit_segment(
+                1,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                1,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: media_url.clone(),
+                },
+            );
+            segments.commit_segment(
+                1,
+                2,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
         }
-        downloader.shared.timeline.set_eof(false);
-        downloader.shared.timeline.set_byte_position(150);
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(150);
 
         assert!(downloader.handle_tail_state(1, 3));
         assert!(
-            !downloader.shared.timeline.eof(),
+            !downloader.coord.timeline().eof(),
             "tail handler must not force EOF while playback is not at stream end"
         );
-        assert_eq!(downloader.current_segment_index, 3);
+        assert_eq!(downloader.current_segment_index(), 3);
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_does_not_rewind_unseen_variant_without_midstream_switch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.cursor.reopen_fill(0, 3);
+        downloader
+            .coord
+            .abr_variant_index
+            .store(1, Ordering::Release);
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(0);
+
+        {
+            let mut segments = downloader.segments.lock_sync();
+            for segment_index in 0..3 {
+                segments.commit_segment(
+                    0,
+                    segment_index,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(&format!(
+                            "https://example.com/seg-0-{segment_index}"
+                        ))
+                        .expect("valid segment URL"),
+                    },
+                );
+            }
+        }
+
+        assert!(downloader.handle_tail_state(1, 3));
+        assert_eq!(
+            downloader.current_segment_index(),
+            3,
+            "tail handler must not rewind into an unseen variant before a real midstream switch"
+        );
+        assert!(
+            !downloader.coord.timeline().eof(),
+            "tail handler must keep playback alive while buffered data is still readable"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1921,19 +2323,111 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.current_segment_index = 1; // tail
-        downloader.shared.timeline.set_eof(false);
+        downloader.cursor.reset_fill(1); // tail
+        downloader.coord.timeline().set_eof(false);
         let _ = downloader
-            .shared
-            .timeline
+            .coord
+            .timeline()
             .initiate_seek(Duration::from_secs(1));
-        assert!(downloader.shared.timeline.is_flushing());
+        assert!(downloader.coord.timeline().is_flushing());
 
         let outcome = Downloader::plan(&mut downloader).await;
         assert!(matches!(outcome, PlanOutcome::Idle));
         assert!(
-            !downloader.shared.timeline.eof(),
+            !downloader.coord.timeline().eof(),
             "plan must not set EOF while seek flushing is active"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn single_segment_playlist_plans_only_segment_zero() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            1,
+            100,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let outcome = Downloader::plan(&mut downloader).await;
+        let PlanOutcome::Batch(plans) = outcome else {
+            panic!("single-segment playlist must plan exactly one batch item");
+        };
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].variant, 0);
+        assert_eq!(plans[0].segment_index, 0);
+        assert!(
+            !plans[0].need_init,
+            "single-segment init-less playlist must not request synthetic init"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn single_segment_playlist_reaches_tail_after_commit() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            1,
+            100,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.commit(HlsFetch {
+            init_len: 0,
+            init_url: None,
+            media: SegmentMeta {
+                variant: 0,
+                segment_type: crate::fetch::SegmentType::Media(0),
+                sequence: 0,
+                url: Url::parse("https://example.com/seg-0-0.m4s").expect("valid URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 0,
+            variant: 0,
+            duration: Duration::from_millis(10),
+            seek_epoch: 0,
+        });
+
+        assert_eq!(downloader.current_segment_index(), 1);
+        downloader.coord.timeline().set_byte_position(100);
+
+        let outcome = Downloader::plan(&mut downloader).await;
+        assert!(matches!(outcome, PlanOutcome::Idle));
+        assert!(
+            downloader.coord.timeline().eof(),
+            "single-segment playlist must reach EOF without any rewind or special-case path"
         );
     }
 
@@ -1959,26 +2453,68 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.current_segment_index = 1; // tail
-        downloader.shared.timeline.set_eof(false);
+        downloader.cursor.reset_fill(1); // tail
+        downloader.coord.timeline().set_eof(false);
 
         let epoch = downloader
-            .shared
-            .timeline
+            .coord
+            .timeline()
             .initiate_seek(Duration::from_secs(1));
-        downloader.shared.timeline.complete_seek(epoch);
-        assert!(!downloader.shared.timeline.is_flushing());
+        downloader.coord.timeline().complete_seek(epoch);
+        assert!(!downloader.coord.timeline().is_flushing());
         assert_ne!(
-            downloader.shared.timeline.seek_epoch(),
+            downloader.coord.timeline().seek_epoch(),
             downloader.active_seek_epoch
         );
 
         let outcome = Downloader::plan(&mut downloader).await;
         assert!(matches!(outcome, PlanOutcome::Idle));
         assert!(
-            !downloader.shared.timeline.eof(),
+            !downloader.coord.timeline().eof(),
             "plan must not emit EOF while seek epoch is newer than downloader state"
         );
+    }
+
+    #[kithara::test(tokio)]
+    async fn plan_while_seek_pending_is_idle() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
+            0,
+            Some(AudioCodec::AacLc),
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.cursor.reset_fill(1);
+        let epoch = downloader
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(1));
+        downloader.coord.timeline().complete_seek(epoch);
+
+        assert!(
+            downloader.coord.timeline().is_seek_pending(),
+            "seek_pending must stay set until decoder applies the seek"
+        );
+        assert!(
+            !downloader.coord.timeline().is_flushing(),
+            "complete_seek clears flushing before decoder applies seek"
+        );
+
+        let outcome = Downloader::plan(&mut downloader).await;
+        assert!(matches!(outcome, PlanOutcome::Idle));
     }
 
     #[kithara::test(tokio)]
@@ -2003,7 +2539,6 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
         downloader.sent_init_for_variant.insert(0);
 
         downloader.reset_for_seek_epoch(1, 0, 0);
@@ -2016,8 +2551,8 @@ mod tests {
             !downloader.force_init_for_seek,
             "same-codec seek reset should not force init"
         );
-        assert_eq!(downloader.last_committed_variant, Some(0));
-        assert_eq!(downloader.gap_scan_start_segment, 0);
+        assert_eq!(downloader.abr.get_current_variant_index(), 0);
+        assert_eq!(downloader.gap_scan_start_segment(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -2042,7 +2577,6 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
         downloader.sent_init_for_variant.insert(0);
 
         downloader.reset_for_seek_epoch(2, 1, 0);
@@ -2059,8 +2593,338 @@ mod tests {
             !downloader.force_init_for_seek,
             "same-codec seek to unseen variant should not force init"
         );
-        assert_eq!(downloader.last_committed_variant, Some(1));
-        assert_eq!(downloader.gap_scan_start_segment, 0);
+        assert_eq!(downloader.abr.get_current_variant_index(), 1);
+        assert_eq!(downloader.gap_scan_start_segment(), 0);
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_demand_plan_same_codec_variant_change_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state(0, Some(AudioCodec::AacLc)),
+            make_variant_state(1, Some(AudioCodec::AacLc)),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.sent_init_for_variant.insert(0);
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(1, 5);
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 5,
+                variant: 1,
+                seek_epoch: 0,
+            },
+            is_variant_switch,
+        );
+
+        assert!(
+            !plan.need_init,
+            "same-codec variant change must not inject init into demand plan"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_demand_plan_initial_nonzero_segment_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            4,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(0, 2);
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 2,
+                variant: 0,
+                seek_epoch: 0,
+            },
+            is_variant_switch,
+        );
+
+        assert!(
+            !plan.need_init,
+            "fresh direct demand on init-less playlist must not inject init"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_demand_plan_initial_segment_zero_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            4,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(0, 0);
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 0,
+                variant: 0,
+                seek_epoch: 0,
+            },
+            is_variant_switch,
+        );
+
+        assert!(
+            !plan.need_init,
+            "init-less playlist must not request init on initial segment zero"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_same_codec_variant_change_keeps_metadata_layout() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.sent_init_for_variant.insert(0);
+        downloader.cursor.reset_fill(5);
+        downloader.prefetch_count = 2;
+        let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(1, 5);
+        let (plans, _batch_end) =
+            downloader.build_batch_plans(1, 10, is_variant_switch, is_midstream_switch);
+
+        assert!(
+            !plans.is_empty(),
+            "same-codec variant change should still build sequential plans"
+        );
+        assert!(
+            !plans[0].need_init,
+            "same-codec variant change must not inject init into batch plan"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_seek_into_init_less_playlist_starts_at_target_segment() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            6,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.prefetch_count = 2;
+        downloader.reset_for_seek_epoch(1, 0, 2);
+        let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 2);
+        let (plans, _batch_end) =
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+
+        assert_eq!(
+            plans.first().map(|plan| plan.segment_index),
+            Some(2),
+            "seek batch must start from the requested segment"
+        );
+        assert!(
+            plans.iter().all(|plan| !plan.need_init),
+            "seek batch on init-less playlist must not inject init"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_initial_segment_zero_without_init_does_not_request_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            6,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.prefetch_count = 2;
+        let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 0);
+        let (plans, _batch_end) =
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+
+        assert_eq!(
+            plans.first().map(|plan| plan.segment_index),
+            Some(0),
+            "initial batch must start from segment zero"
+        );
+        assert!(
+            plans.iter().all(|plan| !plan.need_init),
+            "init-less playlist must not inject init into initial batch"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_suppresses_prefetch_immediately_after_seek() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+        )]));
+        playlist_state.set_size_map(
+            0,
+            VariantSizeMap {
+                init_size: 0,
+                segment_sizes: vec![100; 10],
+                offsets: (0..10).map(|index| index as u64 * 100).collect(),
+                total: 1_000,
+            },
+        );
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let epoch = downloader
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(1));
+        downloader.coord.timeline().complete_seek(epoch);
+        downloader.reset_for_seek_epoch(epoch, 0, 5);
+        downloader.cursor.reopen_fill(5, 6);
+        downloader.prefetch_count = 3;
+        downloader.coord.timeline().set_byte_position(500);
+        let (plans, batch_end) = downloader.build_batch_plans(0, 10, false, false);
+        assert!(
+            plans.is_empty(),
+            "post-seek planner must wait for demand-driven resume"
+        );
+        assert_eq!(batch_end, 6);
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_batch_plans_limits_parallel_prefetch_during_active_seek_epoch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::Flac),
+            20,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let epoch = downloader
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(67));
+        downloader.coord.timeline().complete_seek(epoch);
+        downloader.reset_for_seek_epoch(epoch, 0, 11);
+        downloader.cursor.reset_fill(12);
+        downloader.prefetch_count = 3;
+        downloader.coord.timeline().set_byte_position(8_451_629);
+        let (plans, batch_end) = downloader.build_batch_plans(0, 20, false, false);
+        assert_eq!(
+            plans.len(),
+            1,
+            "active seek epoch must not launch multiple parallel prefetches"
+        );
+        assert_eq!(plans[0].segment_index, 12);
+        assert_eq!(batch_end, 13);
     }
 
     #[kithara::test(tokio)]
@@ -2085,27 +2949,308 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
         downloader.reset_for_seek_epoch(3, 1, 2);
 
         assert!(
             downloader.force_init_for_seek,
             "cross-codec seek reset must force init for the first segment"
         );
-        assert_eq!(downloader.last_committed_variant, Some(1));
-        assert_eq!(downloader.gap_scan_start_segment, 2);
+        assert_eq!(downloader.abr.get_current_variant_index(), 1);
+        assert_eq!(downloader.gap_scan_start_segment(), 2);
     }
 
-    /// Regression: `reset_for_seek_epoch` must not leave `total_bytes` as `None`.
-    /// Source's `wait_range` uses `total_bytes` for EOF detection. A transient
-    /// `None` between reset and variant total refresh causes premature EOF or
-    /// missed EOF detection.
     #[kithara::test(tokio)]
-    async fn reset_for_seek_epoch_preserves_total_bytes() {
+    async fn commit_preserves_init_for_first_cross_codec_seek_target_segment() {
         let cancel = CancellationToken::new();
-        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        let init_url = base.join("init-1.mp4").expect("valid init URL");
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_size_map(0, Some(AudioCodec::AacLc), 6, 100),
+            VariantState {
+                id: 1,
+                uri: base.join("v1.m3u8").expect("valid playlist URL"),
+                bandwidth: Some(128_000),
+                codec: Some(AudioCodec::Flac),
+                container: None,
+                init_url: Some(init_url.clone()),
+                segments: (0..6)
+                    .map(|index| SegmentState {
+                        index,
+                        url: base
+                            .join(&format!("seg-1-{index}.m4s"))
+                            .expect("valid segment URL"),
+                        duration: Duration::from_secs(4),
+                        key: None,
+                    })
+                    .collect(),
+                size_map: Some(VariantSizeMap {
+                    init_size: 20,
+                    offsets: vec![0, 120, 220, 320, 420, 520],
+                    segment_sizes: vec![120, 100, 100, 100, 100, 100],
+                    total: 620,
+                }),
+            },
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let seek_epoch = downloader
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(12));
+        downloader.reset_for_seek_epoch(seek_epoch, 1, 3);
+        downloader.segments.lock_sync().set_layout_variant(1);
+
+        let (is_variant_switch, _is_midstream_switch) =
+            downloader.classify_variant_transition(1, 3);
+        assert!(
+            !is_variant_switch,
+            "after seek reset the layout already points at the target variant, so this path must not depend on switch detection"
+        );
+
+        let plan = downloader.build_demand_plan(
+            &SegmentRequest {
+                segment_index: 3,
+                variant: 1,
+                seek_epoch,
+            },
+            is_variant_switch,
+        );
+        assert!(
+            plan.need_init,
+            "cross-codec seek reset must still request init for the first decoder-visible segment"
+        );
+
+        downloader.commit(HlsFetch {
+            init_len: 20,
+            init_url: Some(init_url),
+            media: SegmentMeta {
+                variant: 1,
+                segment_type: crate::fetch::SegmentType::Media(3),
+                sequence: 3,
+                url: base.join("seg-1-3.m4s").expect("valid segment URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 3,
+            variant: 1,
+            duration: Duration::from_millis(1),
+            seek_epoch,
+        });
+
+        let segments = downloader.segments.lock_sync();
+        let segment = segments
+            .stored_segment(1, 3)
+            .expect("target segment must be committed");
+        assert_eq!(
+            segment.init_len, 20,
+            "the first decoder-visible segment after a cross-codec seek reset must retain init bytes even when the layout already points at the target variant"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_preserves_effective_total_without_timeline_cache() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
             0,
             Some(AudioCodec::AacLc),
+            3,
+        )]));
+        playlist_state.set_size_map(
+            0,
+            VariantSizeMap {
+                init_size: 0,
+                offsets: vec![0, 800, 1_600],
+                segment_sizes: vec![800, 800, 800],
+                total: 2_400,
+            },
+        );
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        assert_eq!(downloader.effective_total_bytes(), Some(2_400));
+
+        downloader.reset_for_seek_epoch(1, 0, 0);
+
+        assert_eq!(
+            downloader.effective_total_bytes(),
+            Some(2_400),
+            "seek reset must preserve HLS byte length through StreamIndex metadata"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_same_variant_preserves_effective_total() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::Flac),
+            3,
+        )]));
+        playlist_state.set_size_map(
+            0,
+            VariantSizeMap {
+                init_size: 20,
+                offsets: vec![0, 120, 220],
+                segment_sizes: vec![120, 100, 100],
+                total: 320,
+            },
+        );
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        {
+            let mut segments = downloader.segments.lock_sync();
+            let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 20,
+                    media_len: 220,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        assert_eq!(downloader.effective_total_bytes(), Some(440));
+
+        downloader.reset_for_seek_epoch(1, 0, 1);
+
+        assert_eq!(
+            downloader.effective_total_bytes(),
+            Some(440),
+            "same-variant seek reset must preserve the existing effective total"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn effective_total_bytes_derives_total_from_stream_index() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::Flac), 3),
+        ]));
+        playlist_state.set_size_map(
+            1,
+            VariantSizeMap {
+                init_size: 20,
+                offsets: vec![0, 120, 220],
+                segment_sizes: vec![120, 100, 100],
+                total: 320,
+            },
+        );
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Set up variant_map: variant 1 owns all segments
+        downloader.segments.lock_sync().set_layout_variant(1);
+
+        assert_eq!(
+            downloader.effective_total_bytes(),
+            Some(320),
+            "effective total must be derived from StreamIndex (estimated variant 1 sizes)"
+        );
+    }
+
+    fn make_variant_state_with_size_map(
+        id: usize,
+        codec: Option<AudioCodec>,
+        segment_count: usize,
+        seg_size: u64,
+    ) -> VariantState {
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        let offsets: Vec<u64> = (0..segment_count).map(|i| i as u64 * seg_size).collect();
+        let total = segment_count as u64 * seg_size;
+        VariantState {
+            id,
+            uri: base
+                .join(&format!("v{id}.m3u8"))
+                .expect("valid playlist URL"),
+            bandwidth: Some(128_000),
+            codec,
+            container: None,
+            init_url: None,
+            segments: (0..segment_count)
+                .map(|index| SegmentState {
+                    index,
+                    url: base
+                        .join(&format!("seg-{id}-{index}.m4s"))
+                        .expect("valid segment URL"),
+                    duration: Duration::from_secs(4),
+                    key: None,
+                })
+                .collect(),
+            size_map: Some(VariantSizeMap {
+                init_size: 0,
+                segment_sizes: vec![seg_size; segment_count],
+                offsets,
+                total,
+            }),
+        }
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_same_variant_keeps_watermark() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+            seg_size,
         )]));
         let variants = parsed_variants(1);
         let fetch = test_fetch_manager(cancel.clone());
@@ -2122,16 +3267,84 @@ mod tests {
             EventBus::new(16),
         );
 
-        // Establish total_bytes before seek.
-        downloader.shared.timeline.set_total_bytes(Some(2400));
+        downloader.coord.timeline().set_download_position(5000);
 
-        // Seek reset must not clear total_bytes.
-        downloader.reset_for_seek_epoch(1, 0, 0);
+        downloader.reset_for_seek_epoch(1, 0, 2);
 
-        assert!(
-            downloader.shared.timeline.total_bytes().is_some(),
-            "total_bytes must not be None after seek reset — \
-             source relies on it for EOF detection in wait_range"
+        assert_eq!(
+            downloader.coord.timeline().download_position(),
+            5000,
+            "same-variant seek must keep download_position at committed watermark"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_same_variant_forward_raises_watermark() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_size_map(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+            seg_size,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.coord.timeline().set_download_position(5000);
+
+        downloader.reset_for_seek_epoch(1, 0, 7);
+
+        assert_eq!(
+            downloader.coord.timeline().download_position(),
+            7000,
+            "forward same-variant seek must raise download_position to target"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_cross_variant_resets_position() {
+        let cancel = CancellationToken::new();
+        let seg_size = 1000;
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_size_map(0, Some(AudioCodec::AacLc), 10, seg_size),
+            make_variant_state_with_size_map(1, Some(AudioCodec::Flac), 10, seg_size),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.coord.timeline().set_download_position(5000);
+
+        downloader.reset_for_seek_epoch(2, 1, 3);
+
+        assert_eq!(
+            downloader.coord.timeline().download_position(),
+            3000,
+            "cross-variant seek must reset download_position to target metadata offset"
         );
     }
 
@@ -2148,31 +3361,39 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn loaded_segment_offset_mismatch_detects_shifted_loaded_segment() {
+    async fn commit_drops_old_cross_codec_fetch_after_switched_anchor_is_committed() {
         let cancel = CancellationToken::new();
-        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
-            0,
-            Some(AudioCodec::AacLc),
-            2,
-        )]));
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::Flac), 3),
+        ]));
         playlist_state.set_size_map(
             0,
             VariantSizeMap {
                 init_size: 0,
-                offsets: vec![0, 100],
-                segment_sizes: vec![100, 100],
-                total: 200,
+                offsets: vec![0, 100, 200],
+                segment_sizes: vec![100, 100, 100],
+                total: 300,
+            },
+        );
+        playlist_state.set_size_map(
+            1,
+            VariantSizeMap {
+                init_size: 20,
+                offsets: vec![0, 120, 220],
+                segment_sizes: vec![120, 100, 100],
+                total: 320,
             },
         );
 
-        let variants = parsed_variants(1);
+        let variants = parsed_variants(2);
         let fetch = test_fetch_manager(cancel.clone());
         let config = HlsConfig {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
 
-        let (downloader, _source) = build_pair(
+        let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
@@ -2180,32 +3401,300 @@ mod tests {
             EventBus::new(16),
         );
 
+        downloader.abr.apply(
+            &AbrDecision {
+                target_variant_index: 1,
+                reason: AbrReason::DownSwitch,
+                changed: true,
+            },
+            Instant::now(),
+        );
+        downloader.coord.timeline().set_download_position(220);
         {
-            let mut segments = downloader.shared.segments.lock_sync();
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 1,
-                byte_offset: 120,
-                init_len: 0,
-                media_len: 100,
-                init_url: None,
-                media_url: Url::parse("https://example.com/seg-0-1.m4s").expect("valid URL"),
-            });
+            let mut segments = downloader.segments.lock_sync();
+            segments.set_layout_variant(1);
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: Url::parse("https://example.com/seg-0-0.m4s").expect("valid URL"),
+                },
+            );
+            segments.commit_segment(
+                1,
+                1,
+                SegmentData {
+                    init_len: 20,
+                    media_len: 100,
+                    init_url: None,
+                    media_url: Url::parse("https://example.com/seg-1-1.m4s").expect("valid URL"),
+                },
+            );
         }
 
-        assert_eq!(
-            downloader.loaded_segment_offset_mismatch(0, 1),
-            Some((120, 100))
+        downloader.commit(HlsFetch {
+            init_len: 0,
+            init_url: None,
+            media: SegmentMeta {
+                variant: 0,
+                segment_type: crate::fetch::SegmentType::Media(2),
+                sequence: 2,
+                url: Url::parse("https://example.com/seg-0-2.m4s").expect("valid URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 2,
+            variant: 0,
+            duration: Duration::from_millis(1),
+            seek_epoch: 0,
+        });
+
+        let segments = downloader.segments.lock_sync();
+        assert!(
+            !segments.is_segment_loaded(0, 2),
+            "old cross-codec fetch must not re-enter the switched layout after a new anchor is committed"
         );
+        assert_eq!(downloader.abr.get_current_variant_index(), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn commit_keeps_first_target_cross_codec_fetch_before_new_anchor_commits() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 6),
+            make_variant_state_with_segments(1, Some(AudioCodec::Flac), 6),
+        ]));
+        playlist_state.set_size_map(
+            0,
+            VariantSizeMap {
+                init_size: 0,
+                offsets: vec![0, 100, 200, 300, 400, 500],
+                segment_sizes: vec![100, 100, 100, 100, 100, 100],
+                total: 600,
+            },
+        );
+        playlist_state.set_size_map(
+            1,
+            VariantSizeMap {
+                init_size: 20,
+                offsets: vec![0, 120, 220, 320, 420, 520],
+                segment_sizes: vec![120, 100, 100, 100, 100, 100],
+                total: 620,
+            },
+        );
+
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.abr.apply(
+            &AbrDecision {
+                target_variant_index: 1,
+                reason: AbrReason::DownSwitch,
+                changed: true,
+            },
+            Instant::now(),
+        );
+        downloader.cursor.reset_fill(3);
+        downloader
+            .coord
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+        downloader.coord.timeline().set_download_position(300);
+        {
+            let mut segments = downloader.segments.lock_sync();
+            // Set expected sizes for variant 1 so byte offsets are correct.
+            if let Some(sizes) = playlist_state.segment_sizes(1) {
+                segments.set_expected_sizes(1, sizes);
+            }
+            for segment_index in 0..3 {
+                segments.commit_segment(
+                    0,
+                    segment_index,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(&format!(
+                            "https://example.com/seg-0-{segment_index}.m4s",
+                        ))
+                        .expect("valid URL"),
+                    },
+                );
+            }
+        }
+
+        downloader.commit(HlsFetch {
+            init_len: 20,
+            init_url: Some(Url::parse("https://example.com/init-1.mp4").expect("valid URL")),
+            media: SegmentMeta {
+                variant: 1,
+                segment_type: crate::fetch::SegmentType::Media(3),
+                sequence: 3,
+                url: Url::parse("https://example.com/seg-1-3.m4s").expect("valid URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 3,
+            variant: 1,
+            duration: Duration::from_millis(1),
+            seek_epoch: 0,
+        });
+
+        let segments = downloader.segments.lock_sync();
+        assert!(
+            segments.is_segment_loaded(1, 3),
+            "first target cross-codec fetch must commit"
+        );
+        let range = <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (1, 3))
+            .expect("committed segment must have byte range");
+        // Variant 1 expected sizes: [120, 100, 100, ...].
+        // Segments 0-2 not committed for variant 1 → use expected sizes.
+        // Offset = 120 + 100 + 100 = 320.
+        assert_eq!(
+            range.start, 320,
+            "first switched segment must appear at the correct offset in variant 1's byte space"
+        );
+        drop(segments);
+        assert_eq!(downloader.current_segment_index(), 4);
+        assert_eq!(downloader.abr.get_current_variant_index(), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn poll_demand_drops_same_variant_request_below_switch_floor() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.abr.apply(
+            &AbrDecision {
+                target_variant_index: 1,
+                reason: AbrReason::DownSwitch,
+                changed: true,
+            },
+            Instant::now(),
+        );
+        downloader.cursor.reopen_fill(4, 4);
+        downloader
+            .coord
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+        downloader.coord.requeue_segment_request(SegmentRequest {
+            segment_index: 2,
+            variant: 1,
+            seek_epoch: downloader.coord.timeline().seek_epoch(),
+        });
+
+        let plan = downloader.poll_demand().await;
+        assert!(plan.is_none(), "demand below switch floor must be dropped");
+    }
+
+    #[kithara::test(tokio)]
+    async fn commit_drops_same_variant_fetch_below_switch_floor() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.abr.apply(
+            &AbrDecision {
+                target_variant_index: 1,
+                reason: AbrReason::DownSwitch,
+                changed: true,
+            },
+            Instant::now(),
+        );
+        downloader.cursor.reopen_fill(4, 4);
+        downloader
+            .coord
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+
+        downloader.commit(HlsFetch {
+            init_len: 44,
+            init_url: Some(Url::parse("https://example.com/init-1.mp4").expect("valid URL")),
+            media: SegmentMeta {
+                variant: 1,
+                segment_type: crate::fetch::SegmentType::Media(0),
+                sequence: 0,
+                url: Url::parse("https://example.com/seg-1-0.m4s").expect("valid URL"),
+                duration: None,
+                key: None,
+                len: 100,
+                container: None,
+            },
+            media_cached: false,
+            segment_index: 0,
+            variant: 1,
+            duration: Duration::from_millis(1),
+            seek_epoch: 0,
+        });
+
+        let segments = downloader.segments.lock_sync();
+        assert!(
+            !segments.is_segment_loaded(1, 0),
+            "fetch below switch floor must not enter switched layout"
+        );
+        drop(segments);
+        assert_eq!(downloader.current_segment_index(), 4);
     }
 
     /// Regression test: `handle_midstream_switch` sets `had_midstream_switch`
     /// flag and notifies condvar so the reader can re-push drained requests.
     ///
     /// Before the fix, `handle_midstream_switch` drained all segment requests
-    /// without waking the reader. The reader's `WaitRangeState` still believed
-    /// its request was pending (`on_demand_pending = true`) and would never
-    /// re-push, causing a deadlock.
+    /// without waking the reader. The reader's on-demand epoch tracking still
+    /// believed its request was pending and would never re-push, causing a
+    /// deadlock.
     ///
     /// The fix adds `condvar.notify_all()` after draining and checks
     /// `had_midstream_switch` in `wait_range` to clear the pending flag,
@@ -2232,11 +3721,10 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.last_committed_variant = Some(0);
-        downloader.current_segment_index = 2;
+        downloader.cursor.reset_fill(2);
 
-        use crate::source::SegmentRequest;
-        downloader.shared.segment_requests.push(SegmentRequest {
+        use crate::coord::SegmentRequest;
+        downloader.coord.requeue_segment_request(SegmentRequest {
             segment_index: 1,
             variant: 1,
             seek_epoch: 0,
@@ -2245,7 +3733,7 @@ mod tests {
         // Before: had_midstream_switch is false.
         assert!(
             !downloader
-                .shared
+                .coord
                 .had_midstream_switch
                 .load(Ordering::Acquire)
         );
@@ -2254,28 +3742,94 @@ mod tests {
 
         // After: all requests drained.
         assert!(
-            downloader.shared.segment_requests.pop().is_none(),
+            downloader.coord.take_segment_request().is_none(),
             "handle_midstream_switch must drain all requests"
         );
 
         // After: had_midstream_switch flag is set.
         assert!(
             downloader
-                .shared
+                .coord
                 .had_midstream_switch
                 .load(Ordering::Acquire),
             "handle_midstream_switch must set had_midstream_switch flag"
         );
+        assert_eq!(
+            downloader.gap_scan_start_segment(),
+            2,
+            "midstream switch must remember the switch point for later gap rewind"
+        );
     }
 
-    /// `segment_loaded_for_demand` must detect evicted init resources in ephemeral mode.
+    #[kithara::test(tokio)]
+    async fn tail_state_rewinds_missing_segments_after_midstream_switch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.cursor.reopen_fill(1, 3);
+        downloader
+            .coord
+            .abr_variant_index
+            .store(1, Ordering::Release);
+        downloader
+            .coord
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+
+        {
+            let mut segments = downloader.segments.lock_sync();
+            let media_url = Url::parse("https://example.com/seg-1-1").expect("valid segment URL");
+            segments.commit_segment(
+                1,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 100,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        downloader.coord.timeline().set_eof(false);
+        downloader.coord.timeline().set_byte_position(150);
+
+        assert!(downloader.handle_tail_state(1, 3));
+        assert_eq!(
+            downloader.current_segment_index(),
+            2,
+            "tail handler must rewind to the first missing segment after the switch point"
+        );
+        assert!(
+            !downloader.coord.timeline().eof(),
+            "gap rewind after midstream switch must not force EOF"
+        );
+    }
+
+    /// `segment_loaded_for_demand` must trust resource presence in ephemeral mode.
     ///
-    /// Without the fix, `segment_loaded_for_demand` only checks DownloadState metadata
-    /// (HashSet). When the init resource is evicted from LRU cache, it still returns
-    /// `true`, causing the downloader to skip re-download. Reader then blocks on
-    /// an empty MemResource forever.
+    /// When bytes are still present in the cache, demand should reuse them.
+    /// When init is evicted from the LRU cache, metadata alone must not suppress
+    /// a re-download.
     #[kithara::test]
-    fn segment_loaded_for_demand_detects_evicted_init() {
+    fn segment_loaded_for_demand_tracks_resource_presence_in_ephemeral_mode() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
             0,
@@ -2307,7 +3861,7 @@ mod tests {
             let init_res = downloader
                 .fetch
                 .backend()
-                .open_resource(&init_key)
+                .acquire_resource(&init_key)
                 .expect("open init resource");
             init_res.write_at(0, b"init_data").expect("write init");
             init_res.commit(None).expect("commit init");
@@ -2316,30 +3870,30 @@ mod tests {
             let media_res = downloader
                 .fetch
                 .backend()
-                .open_resource(&media_key)
+                .acquire_resource(&media_key)
                 .expect("open media resource");
             media_res.write_at(0, b"media_data").expect("write media");
             media_res.commit(None).expect("commit media");
         }
 
-        // Register the segment in DownloadState
+        // Register the segment in StreamIndex
         {
-            let mut segments = downloader.shared.segments.lock_sync();
-            segments.push(LoadedSegment {
-                variant: 0,
-                segment_index: 0,
-                byte_offset: 0,
-                init_len: 9,
-                media_len: 10,
-                init_url: Some(init_url),
-                media_url,
-            });
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 9,
+                    media_len: 10,
+                    init_url: Some(init_url),
+                    media_url,
+                },
+            );
         }
 
-        // Segment is loaded (metadata present)
         assert!(
             downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
-            "segment must be loaded before eviction"
+            "segment_loaded_for_demand must return true when segment resources are present"
         );
 
         // Open enough other resources to evict init from LRU cache
@@ -2348,18 +3902,121 @@ mod tests {
             let res = downloader
                 .fetch
                 .backend()
-                .open_resource(&key)
+                .acquire_resource(&key)
                 .expect("open evict resource");
             res.write_at(0, b"x").expect("write");
             res.commit(None).expect("commit");
         }
 
-        // After eviction: segment metadata is still present,
-        // but init resource is gone from cache.
-        // segment_loaded_for_demand SHOULD return false (init evicted).
         assert!(
             !downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
             "segment_loaded_for_demand must return false when init resource is evicted"
+        );
+    }
+
+    #[kithara::test]
+    fn segment_loaded_for_demand_requires_committed_resource_in_ephemeral_mode() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
+        let media_key = ResourceKey::from_url(&media_url);
+        let media_res = downloader
+            .fetch
+            .backend()
+            .acquire_resource(&media_key)
+            .expect("open media resource");
+        media_res.write_at(0, b"media_data").expect("write media");
+
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                0,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 10,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        assert!(
+            !downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
+            "segment_loaded_for_demand must not treat active resources as already loaded"
+        );
+    }
+
+    #[kithara::test]
+    fn segment_loaded_for_demand_requires_visible_layout_entry() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let media_url =
+            Url::parse("https://example.com/hidden-seg-0-1.m4s").expect("valid media URL");
+        let media_key = ResourceKey::from_url(&media_url);
+        let media_res = downloader
+            .fetch
+            .backend()
+            .acquire_resource(&media_key)
+            .expect("open media resource");
+        media_res.write_at(0, b"hidden_media").expect("write media");
+        media_res.commit(Some(12)).expect("commit media");
+
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.set_layout_variant(1);
+            segments.commit_segment(
+                0,
+                1,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 12,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        assert!(
+            !downloader.segment_loaded_for_demand(0, 1, "test_stale", "test_loaded"),
+            "per-variant storage alone must not suppress demand when the segment is not visible in the current layout"
         );
     }
 }

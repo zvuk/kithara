@@ -7,6 +7,7 @@ use kithara_storage::{ResourceExt, ResourceStatus};
 use lru::LruCache;
 
 use crate::{
+    AssetResourceState,
     base::{Assets, Capabilities},
     error::AssetsResult,
     key::ResourceKey,
@@ -26,6 +27,14 @@ enum CacheEntry<R, I> {
 }
 
 type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
+type CacheMap<A> = LruCache<
+    CacheKey<<A as Assets>::Context>,
+    CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
+>;
+type CacheItem<A> = (
+    CacheKey<<A as Assets>::Context>,
+    CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
+);
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
@@ -43,6 +52,8 @@ where
 {
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
+    capacity: NonZeroUsize,
+    on_invalidated: Option<crate::store::OnInvalidatedFn>,
 }
 
 impl<A> fmt::Debug for CachedAssets<A>
@@ -61,10 +72,16 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
-    pub fn new(inner: Arc<A>, capacity: NonZeroUsize) -> Self {
+    pub fn new(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+    ) -> Self {
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            capacity,
+            on_invalidated,
         }
     }
 
@@ -77,24 +94,122 @@ where
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
-    /// Check whether a committed resource is currently in the LRU cache.
-    ///
-    /// Uses `peek` (no LRU promotion) to avoid side effects.
-    /// Returns `false` for `Active` (empty) placeholders created after eviction.
-    /// Returns `true` for non-cached backends (disk always has resources).
+    fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
+        let (committed, has_active) = {
+            let mut cache = self.cache.lock_sync();
+            let mut committed = None;
+            let mut has_active = false;
+            let mut promote_key = None;
+
+            for (cache_key, entry) in cache.iter() {
+                let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res)) =
+                    (cache_key, entry)
+                else {
+                    continue;
+                };
+
+                if resource_key != key {
+                    continue;
+                }
+
+                match res.status() {
+                    ResourceStatus::Failed(reason) => {
+                        return Some(AssetResourceState::Failed(reason));
+                    }
+                    ResourceStatus::Active => has_active = true,
+                    ResourceStatus::Committed { final_len } => {
+                        if committed.is_none() {
+                            committed = Some(AssetResourceState::Committed { final_len });
+                            promote_key = Some(cache_key.clone());
+                        }
+                    }
+                }
+            }
+
+            // Promote committed entry so it survives until read_from_entry.
+            if let Some(pk) = promote_key {
+                cache.promote(&pk);
+            }
+            drop(cache);
+            (committed, has_active)
+        };
+
+        if has_active {
+            return Some(AssetResourceState::Active);
+        }
+
+        committed
+    }
+
+    fn is_protected_resource(entry: &CacheEntry<A::Res, A::IndexRes>) -> bool {
+        matches!(
+            entry,
+            CacheEntry::Resource(res) if matches!(res.status(), ResourceStatus::Active)
+        )
+    }
+
+    fn pop_evictable(cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
+        let key = cache
+            .iter()
+            .filter_map(|(key, entry)| (!Self::is_protected_resource(entry)).then_some(key.clone()))
+            .last()?;
+        cache.pop(&key).map(|entry| (key, entry))
+    }
+
+    fn cache_entry(
+        &self,
+        cache: &mut CacheMap<A>,
+        key: CacheKey<A::Context>,
+        entry: CacheEntry<A::Res, A::IndexRes>,
+    ) -> Vec<ResourceKey> {
+        let mut invalidated = Vec::new();
+
+        while cache.len() >= self.capacity.get() {
+            let Some((displaced_key, displaced_entry)) = Self::pop_evictable(cache) else {
+                break;
+            };
+            if let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
+                (displaced_key, displaced_entry)
+            {
+                invalidated.push(resource_key);
+            }
+        }
+
+        let must_cache = Self::is_protected_resource(&entry);
+
+        if cache.len() >= self.capacity.get() && !must_cache {
+            return invalidated;
+        }
+
+        if must_cache && cache.len() >= self.capacity.get() {
+            let overflow_capacity = NonZeroUsize::new(cache.len() + 1)
+                .expect("cache overflow capacity must stay non-zero");
+            if overflow_capacity > cache.cap() {
+                cache.resize(overflow_capacity);
+            }
+        }
+
+        if let Some((displaced_key, displaced_entry)) = cache.push(key, entry)
+            && let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
+                (displaced_key, displaced_entry)
+        {
+            invalidated.push(resource_key);
+        }
+
+        if cache.len() <= self.capacity.get() && cache.cap() != self.capacity {
+            cache.resize(self.capacity);
+        }
+
+        invalidated
+    }
+
+    /// Compatibility helper for callers that only care about committed resources.
     #[must_use]
     pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        if !self.is_active() {
-            return true;
-        }
-        self.cache.lock_sync().iter().any(|(cache_key, entry)| {
-            matches!(
-                (cache_key, entry),
-                (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
-                    if resource_key == key
-                        && matches!(res.status(), ResourceStatus::Committed { .. })
-            )
-        })
+        matches!(
+            self.resource_state(key),
+            Ok(AssetResourceState::Committed { .. })
+        )
     }
 }
 
@@ -112,6 +227,18 @@ where
             fn root_dir(&self) -> &Path;
             fn asset_root(&self) -> &str;
         }
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if !self.is_active() {
+            return self.inner.resource_state(key);
+        }
+
+        if let Some(state) = self.cached_state(key) {
+            return Ok(state);
+        }
+
+        self.inner.resource_state(key)
     }
 
     fn open_resource_with_ctx(
@@ -174,8 +301,46 @@ where
         }
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
-        cache.push(cache_key, CacheEntry::Resource(res.clone()));
+        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
+        let on_invalidated = self.on_invalidated.clone();
         drop(cache);
+
+        if let Some(cb) = on_invalidated {
+            for displaced_key in displaced {
+                cb(&displaced_key);
+            }
+        }
+
+        Ok(res)
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        if !self.is_active() {
+            return self.inner.acquire_resource_with_ctx(key, ctx);
+        }
+
+        let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
+        let mut cache = self.cache.lock_sync();
+
+        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
+            res.reactivate()?;
+            return Ok(res.clone());
+        }
+
+        let res = self.inner.acquire_resource_with_ctx(key, ctx)?;
+        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
+        let on_invalidated = self.on_invalidated.clone();
+        drop(cache);
+
+        if let Some(cb) = on_invalidated {
+            for displaced_key in displaced {
+                cb(&displaced_key);
+            }
+        }
 
         Ok(res)
     }
@@ -192,7 +357,11 @@ where
         }
 
         let res = self.inner.open_pins_index_resource()?;
-        cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
+        let _ = self.cache_entry(
+            &mut cache,
+            CacheKey::PinsIndex,
+            CacheEntry::Index(res.clone()),
+        );
         drop(cache);
 
         Ok(res)
@@ -210,7 +379,11 @@ where
         }
 
         let res = self.inner.open_lru_index_resource()?;
-        cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
+        let _ = self.cache_entry(
+            &mut cache,
+            CacheKey::LruIndex,
+            CacheEntry::Index(res.clone()),
+        );
         drop(cache);
 
         Ok(res)
@@ -317,12 +490,24 @@ mod tests {
             self.inner.open_resource(key)
         }
 
+        fn acquire_resource_with_ctx(
+            &self,
+            key: &ResourceKey,
+            _ctx: Option<Self::Context>,
+        ) -> AssetsResult<Self::Res> {
+            self.inner.acquire_resource(key)
+        }
+
         fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
             self.inner.open_pins_index_resource()
         }
 
         fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
             self.inner.open_lru_index_resource()
+        }
+
+        fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+            self.inner.resource_state(key)
         }
 
         fn delete_asset(&self) -> AssetsResult<()> {
@@ -336,13 +521,13 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        CachedAssets::new(disk, capacity)
+        CachedAssets::new(disk, capacity, None)
     }
 
     /// Bypass test: empty asset_root → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
-        CachedAssets::new(disk, NonZeroUsize::new(5).unwrap())
+        CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -351,13 +536,15 @@ mod tests {
         let cap = NonZeroUsize::new(3).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        // Open 4 resources — first should be evicted from LRU (capacity 3)
+        // Open 4 committed resources — first should be evicted from LRU (capacity 3)
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
-            cached.open_resource(key).unwrap();
+            let res = cached.acquire_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
         }
 
         // Cache should have exactly 3 entries (capacity)
@@ -371,8 +558,8 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::new("audio.mp3");
 
-        let res1 = cached.open_resource(&key).unwrap();
-        let res2 = cached.open_resource(&key).unwrap();
+        let res1 = cached.acquire_resource(&key).unwrap();
+        let res2 = cached.acquire_resource(&key).unwrap();
 
         // Same resource path — cache hit
         assert_eq!(res1.path(), res2.path());
@@ -389,7 +576,7 @@ mod tests {
                 let c = cached.clone();
                 thread::spawn(move || {
                     let key = ResourceKey::new(format!("seg_{i}.m4s"));
-                    c.open_resource(&key).unwrap();
+                    c.acquire_resource(&key).unwrap();
                 })
             })
             .collect();
@@ -441,10 +628,10 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn has_resource_matches_contextful_entries() {
         let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
         let key = ResourceKey::new("segment-0.m4s");
 
-        let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
+        let res = cached.acquire_resource_with_ctx(&key, Some(7)).unwrap();
         res.write_at(0, b"segment data").unwrap();
         res.commit(Some(12)).unwrap();
 
@@ -457,10 +644,10 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_without_context_reuses_committed_contextful_resource() {
         let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap());
+        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
         let key = ResourceKey::new("segment-0.m4s");
 
-        let res = cached.open_resource_with_ctx(&key, Some(7)).unwrap();
+        let res = cached.acquire_resource_with_ctx(&key, Some(7)).unwrap();
         res.write_at(0, b"segment data").unwrap();
         res.commit(Some(12)).unwrap();
 
@@ -474,5 +661,25 @@ mod tests {
         let n = reopened.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
         assert_eq!(&buf, b"segment data");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn active_resource_survives_lru_eviction_pressure() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = make_cached(dir.path(), NonZeroUsize::new(1).unwrap());
+        let key_active = ResourceKey::new("active.m4s");
+        let key_other = ResourceKey::new("other.m4s");
+
+        let active = cached.acquire_resource(&key_active).unwrap();
+        active.write_at(0, b"abcd").unwrap();
+
+        let other = cached.acquire_resource(&key_other).unwrap();
+        other.write_at(0, b"wxyz").unwrap();
+
+        let reopened = cached.open_resource(&key_active).unwrap();
+        assert!(
+            matches!(reopened.status(), ResourceStatus::Active),
+            "active resource must stay discoverable after LRU pressure"
+        );
     }
 }

@@ -1,45 +1,25 @@
-use derivative::Derivative;
 use kithara_platform::{MaybeSend, MaybeSync};
 
-use crate::{
-    error::PlayError,
-    types::{EqBand, SlotId},
-};
+use crate::error::PlayError;
 
-#[derive(Clone, Copy, Debug, Derivative, PartialEq)]
-#[derivative(Default)]
-#[non_exhaustive]
-pub struct EqConfig {
-    #[derivative(Default(value = "200.0"))]
-    pub low_freq: f32,
-    #[derivative(Default(value = "1000.0"))]
-    pub mid_freq: f32,
-    #[derivative(Default(value = "5000.0"))]
-    pub high_freq: f32,
-    #[derivative(Default(value = "0.707"))]
-    pub low_q: f32,
-    #[derivative(Default(value = "0.707"))]
-    pub mid_q: f32,
-    #[derivative(Default(value = "0.707"))]
-    pub high_q: f32,
-}
-
+/// Master N-band equalizer.
+///
+/// Provides read/write access to per-band gains by index. The number of bands
+/// is fixed at player construction time via [`PlayerConfig::eq_layout`].
 #[cfg_attr(
     any(test, feature = "test-utils"),
     unimock::unimock(api = EqualizerMock)
 )]
 pub trait Equalizer: MaybeSend + MaybeSync + 'static {
-    fn gain(&self, slot: SlotId, band: EqBand) -> Option<f32>;
+    /// Number of EQ bands.
+    fn band_count(&self) -> usize;
 
-    fn set_gain(&self, slot: SlotId, band: EqBand, db: f32) -> Result<(), PlayError>;
+    /// Get the current gain in dB for the given band index.
+    fn gain(&self, band: usize) -> Option<f32>;
 
-    fn is_kill(&self, slot: SlotId, band: EqBand) -> Option<bool>;
+    /// Set the gain in dB for the given band index (clamped to -24..+6 dB).
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
 
-    fn set_kill(&self, slot: SlotId, band: EqBand, kill: bool) -> Result<(), PlayError>;
-
-    fn reset(&self, slot: SlotId) -> Result<(), PlayError>;
-
-    fn config(&self) -> EqConfig;
-
-    fn set_config(&self, config: EqConfig) -> Result<(), PlayError>;
+    /// Reset all bands to 0 dB.
+    fn reset(&self) -> Result<(), PlayError>;
 }

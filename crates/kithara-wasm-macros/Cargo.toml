@@ -13,3 +13,7 @@ proc-macro = true
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+
+[lints]
+workspace = true

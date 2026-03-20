@@ -2,10 +2,7 @@
 
 use std::{
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize},
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 pub use kithara_abr::{AbrMode, AbrOptions};
@@ -19,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::source::build_pair;
 pub use crate::{
     config::HlsConfig,
-    download_state::{DownloadState, LoadedSegment},
+    coord::{HlsCoord, SegmentRequest},
     error::HlsError,
     fetch::{DefaultFetchManager, FetchManager},
     keys::KeyManager,
@@ -28,7 +25,8 @@ pub use crate::{
         parse_media_playlist, variant_info_from_master,
     },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
-    source::{HlsSource, SegmentRequest, SharedSegments},
+    source::HlsSource,
+    stream_index::{SegmentData, StreamIndex},
 };
 
 fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
@@ -46,21 +44,26 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
     Arc::new(FetchManager::new(backend, net, cancel))
 }
 
-/// Build a test-friendly `HlsSource` with an in-memory backend.
-pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
+pub fn make_test_source(
+    playlist_state: Arc<PlaylistState>,
+    segments: Arc<kithara_platform::Mutex<StreamIndex>>,
+    coord: Arc<HlsCoord>,
+    cancel: CancellationToken,
+) -> HlsSource {
     let fetch = make_test_fetch(cancel);
-    make_test_source_with_fetch(shared, fetch)
+    make_test_source_with_fetch(playlist_state, segments, coord, fetch)
 }
 
-/// Build a test-friendly `HlsSource` with a given fetch manager.
 pub fn make_test_source_with_fetch(
-    shared: Arc<SharedSegments>,
+    playlist_state: Arc<PlaylistState>,
+    segments: Arc<kithara_platform::Mutex<StreamIndex>>,
+    coord: Arc<HlsCoord>,
     fetch: Arc<DefaultFetchManager>,
 ) -> HlsSource {
-    let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
+        coord,
         fetch,
-        shared,
+        segments,
         playlist_state,
         bus: EventBus::new(16),
         variant_fence: None,
@@ -74,36 +77,32 @@ pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchMan
     make_test_fetch(cancel)
 }
 
-/// Write a dummy committed resource so `has_resource` returns true for
-/// the media URL of a `LoadedSegment`.
-///
-/// Ephemeral `range_ready_from_segments` verifies LRU presence — tests
-/// that push metadata must also populate the resource.
+/// Commit dummy resource from a `SegmentData` reference.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "test helper — segment lengths fit in usize"
 )]
 #[expect(clippy::missing_panics_doc, reason = "test-only helper")]
-pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
+pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
     use kithara_assets::ResourceKey;
     use kithara_storage::ResourceExt;
 
     let backend = source.fetch.backend();
-    let media_key = ResourceKey::from_url(&seg.media_url);
+    let media_key = ResourceKey::from_url(&data.media_url);
     let res = backend
-        .open_resource(&media_key)
+        .acquire_resource(&media_key)
         .expect("open media resource");
-    res.write_at(0, &vec![0u8; seg.media_len as usize])
+    res.write_at(0, &vec![0u8; data.media_len as usize])
         .expect("write media");
     res.commit(None).expect("commit media");
 
-    if let Some(ref init_url) = seg.init_url {
+    if let Some(ref init_url) = data.init_url {
         let init_key = ResourceKey::from_url(init_url);
         let init_res = backend
-            .open_resource(&init_key)
+            .acquire_resource(&init_key)
             .expect("open init resource");
         init_res
-            .write_at(0, &vec![0u8; seg.init_len as usize])
+            .write_at(0, &vec![0u8; data.init_len as usize])
             .expect("write init");
         init_res.commit(None).expect("commit init");
     }
@@ -142,18 +141,13 @@ pub fn source_can_cross_variant(
 #[must_use]
 pub fn source_range_ready_from_segments(
     source: &HlsSource,
-    segments: &DownloadState,
+    segments: &StreamIndex,
     range: &Range<u64>,
 ) -> bool {
     source.range_ready_from_segments(segments, range)
 }
 
 #[must_use]
-pub fn source_segment_index_handle(source: &HlsSource) -> Arc<AtomicU32> {
-    source.segment_index_handle()
-}
-
-#[must_use]
 pub fn source_variant_index_handle(source: &HlsSource) -> Arc<AtomicUsize> {
-    source.variant_index_handle()
+    Arc::clone(&source.coord.abr_variant_index)
 }

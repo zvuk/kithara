@@ -10,6 +10,7 @@ use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageReso
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
@@ -70,16 +71,7 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
-    fn open_storage_resource(
-        &self,
-        key: &ResourceKey,
-        path: PathBuf,
-    ) -> AssetsResult<MmapResource> {
-        let mode = if key.is_absolute() {
-            OpenMode::ReadOnly
-        } else {
-            OpenMode::Auto
-        };
+    fn open_storage_resource(&self, path: PathBuf, mode: OpenMode) -> AssetsResult<MmapResource> {
         Ok(Resource::open(
             self.cancel.clone(),
             MmapOptions {
@@ -131,7 +123,25 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        let mmap = self.open_storage_resource(key, path)?;
+        if !path.exists() {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "resource missing").into());
+        }
+        let mmap = self.open_storage_resource(path, OpenMode::ReadOnly)?;
+        Ok(StorageResource::Mmap(mmap))
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        let path = self.resource_path(key)?;
+        let mode = if key.is_absolute() {
+            OpenMode::ReadOnly
+        } else {
+            OpenMode::Auto
+        };
+        let mmap = self.open_storage_resource(path, mode)?;
         Ok(StorageResource::Mmap(mmap))
     }
 
@@ -145,11 +155,33 @@ impl Assets for DiskAssetStore {
         self.open_index_resource(path)
     }
 
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        let path = self.resource_path(key)?;
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(AssetResourceState::Committed {
+                final_len: Some(metadata.len()),
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(AssetResourceState::Missing)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     fn delete_asset(&self) -> AssetsResult<()> {
         if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
         delete_asset_dir(&self.root_dir, &self.asset_root).map_err(Into::into)
+    }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        let path = self.resource_path(key)?;
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

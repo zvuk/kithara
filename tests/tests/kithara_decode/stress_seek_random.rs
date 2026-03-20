@@ -50,7 +50,12 @@ fn tracing_setup(debug_filter: EnvFilter) {
 /// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
 /// 6. For each: seek → read → verify data (valid range, L==R channels)
 /// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
-#[kithara::test(native, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    native,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_random_seek_read_synthetic_wav(tracing_setup: ()) {
     let _ = tracing_setup;
 

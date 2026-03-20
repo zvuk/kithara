@@ -18,17 +18,24 @@ use crate::{
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
+    key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
     unified::AssetStore,
 };
 
+/// Callback invoked when a cached resource is invalidated (displaced from LRU cache).
+///
+/// In ephemeral mode this means data loss (no disk backing).
+/// In disk mode the data may still be on disk but the handle is gone.
+pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
+
 /// Simplified storage options for creating an asset store.
 ///
 /// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
 /// This provides a user-friendly API that hides internal details like `asset_root`.
-#[derive(Clone, Debug, Setters)]
+#[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
@@ -45,6 +52,25 @@ pub struct StoreOptions {
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
     pub max_bytes: Option<u64>,
+    /// Called when a cached resource is invalidated (displaced from LRU cache).
+    #[setters(skip)]
+    pub on_invalidated: Option<OnInvalidatedFn>,
+}
+
+impl fmt::Debug for StoreOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreOptions")
+            .field("cache_dir", &self.cache_dir)
+            .field("cache_capacity", &self.cache_capacity)
+            .field("ephemeral", &self.ephemeral)
+            .field("max_assets", &self.max_assets)
+            .field("max_bytes", &self.max_bytes)
+            .field(
+                "on_invalidated",
+                &self.on_invalidated.as_ref().map(|_| "..."),
+            )
+            .finish()
+    }
 }
 
 impl Default for StoreOptions {
@@ -58,6 +84,7 @@ impl Default for StoreOptions {
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
+            on_invalidated: None,
         }
     }
 }
@@ -71,6 +98,7 @@ impl StoreOptions {
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
+            on_invalidated: None,
         }
     }
 
@@ -96,14 +124,14 @@ impl StoreOptions {
 /// - `DiskAssetStore` (base disk I/O)
 /// - `EvictAssets` (LRU eviction)
 /// - `ProcessingAssets` (transformation with context, uses Default if no context)
-/// - `LeaseAssets` (RAII pinning)
-/// - `CachedAssets` (caches `LeaseResource` with guards, outermost)
+/// - `CachedAssets` (reuses opened resources)
+/// - `LeaseAssets` (RAII pinning, outermost)
 ///
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type DiskStore<Ctx = ()> =
-    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Resource handle returned by [`AssetStore::open_resource`].
 ///
@@ -117,7 +145,7 @@ pub type AssetResource<Ctx = ()> =
 ///
 /// Internal chain used for `AssetStore::Mem`.
 pub(crate) type MemStore<Ctx = ()> =
-    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -154,6 +182,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
     mem_resource_capacity: Option<usize>,
+    on_invalidated: Option<OnInvalidatedFn>,
     pool: Option<BytePool>,
     process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
@@ -183,6 +212,7 @@ impl AssetStoreBuilder<()> {
             ephemeral: false,
             evict_config: None,
             mem_resource_capacity: None,
+            on_invalidated: None,
             pool: None,
             process_fn: Some(dummy_process),
             root_dir: None,
@@ -267,6 +297,13 @@ where
         self
     }
 
+    /// Set callback invoked when a cached resource is invalidated.
+    #[must_use]
+    pub fn on_invalidated(mut self, callback: OnInvalidatedFn) -> Self {
+        self.on_invalidated = Some(callback);
+        self
+    }
+
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
@@ -301,7 +338,7 @@ where
         // Use provided pool or global pool
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
+        // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
         // Each decorator checks `capabilities()` to decide whether to activate.
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(
@@ -315,11 +352,11 @@ where
             process_fn,
             pool.clone(),
         ));
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        let lease = LeaseAssets::with_byte_recorder(processing, cancel, byte_recorder, pool);
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::new(Arc::new(lease), capacity)
+        LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool)
     }
 
     /// Build ephemeral (in-memory) asset store.
@@ -347,14 +384,14 @@ where
             cancel.clone(),
             pool.clone(),
         ));
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
         let processing = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
             process_fn,
             pool.clone(),
         ));
-        let lease = LeaseAssets::new(processing, cancel, pool);
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::new(Arc::new(lease), capacity)
+        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
+        LeaseAssets::new(cached, cancel, pool)
     }
 }
 
@@ -372,6 +409,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
             mem_resource_capacity: self.mem_resource_capacity,
+            on_invalidated: self.on_invalidated,
             pool: self.pool,
             process_fn: Some(f),
             root_dir: self.root_dir,
@@ -382,7 +420,10 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
 
     use kithara_platform::time::Duration;
     use kithara_storage::ResourceExt;
@@ -391,6 +432,16 @@ mod tests {
 
     use super::*;
     use crate::{base::Assets, key::ResourceKey};
+
+    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(msg) = err.downcast_ref::<String>() {
+            return msg.clone();
+        }
+        if let Some(msg) = err.downcast_ref::<&str>() {
+            return (*msg).to_string();
+        }
+        "<non-string panic>".to_string()
+    }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
@@ -422,13 +473,81 @@ mod tests {
             .build();
 
         let key = ResourceKey::new("test.bin");
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"hello").unwrap();
 
         let mut buf = [0u8; 5];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"hello");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_resource_write_ops_panic() {
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .ephemeral(true)
+            .build();
+        let key = ResourceKey::new("test.bin");
+
+        let write_handle = store.acquire_resource(&key).unwrap();
+        write_handle.write_at(0, b"x").unwrap();
+        write_handle.commit(Some(1)).unwrap();
+        drop(write_handle);
+
+        let read_handle = store.open_resource(&key).unwrap();
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.write_at(0, b"x");
+        }))
+        .expect_err("write_at via open_resource must panic");
+        assert!(
+            panic_message(err).contains("write_at requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            read_handle.fail("boom".to_string());
+        }))
+        .expect_err("fail via open_resource must panic");
+        assert!(
+            panic_message(err).contains("fail requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_resource_commit_and_reactivate_panic() {
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .ephemeral(true)
+            .build();
+        let key = ResourceKey::new("test.bin");
+
+        let write_handle = store.acquire_resource(&key).unwrap();
+        write_handle.write_at(0, b"abcd").unwrap();
+        write_handle.commit(Some(4)).unwrap();
+        drop(write_handle);
+
+        let read_handle = store.open_resource(&key).unwrap();
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.commit(Some(4));
+        }))
+        .expect_err("commit via open_resource must panic");
+        assert!(
+            panic_message(err).contains("commit requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
+
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = read_handle.reactivate();
+        }))
+        .expect_err("reactivate via open_resource must panic");
+        assert!(
+            panic_message(err).contains("reactivate requires acquire_resource*"),
+            "panic must point to acquire_resource"
+        );
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -535,7 +654,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.open_resource(key).unwrap();
+            let res = backend.acquire_resource(key).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }
@@ -564,16 +683,14 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.open_resource(key).unwrap();
+            let res = backend.acquire_resource(key).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource was evicted from LRU — re-opening creates a fresh empty one.
-        let reopened = backend.open_resource(&keys[0]).unwrap();
-        assert_eq!(
-            reopened.len(),
-            None,
+        // First resource was evicted from LRU — re-opening now reports Missing.
+        assert!(
+            backend.open_resource(&keys[0]).is_err(),
             "evicted resource should be gone in ephemeral mode"
         );
     }

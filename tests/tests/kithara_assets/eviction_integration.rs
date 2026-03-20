@@ -43,7 +43,11 @@ fn asset_store_with_root(
         .build()
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(2, 3)]
 #[case(3, 4)]
 #[case(5, 6)]
@@ -60,7 +64,7 @@ fn eviction_max_assets_skips_pinned_assets(
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
 
         // Keep handle for the last asset to pin it
@@ -68,10 +72,7 @@ fn eviction_max_assets_skips_pinned_assets(
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
-                && let Ok((pins_file, _)) = bincode::serde::decode_from_slice::<PinsIndexFile, _>(
-                    &pins_bytes,
-                    bincode::config::legacy(),
-                )
+                && let Ok(pins_file) = postcard::from_bytes::<PinsIndexFile>(&pins_bytes)
             {
                 assert!(
                     pins_file
@@ -87,7 +88,7 @@ fn eviction_max_assets_skips_pinned_assets(
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_store = asset_store_with_root(&temp_dir, &trigger_root, Some(max_assets));
             let key_trigger = ResourceKey::new("media/trigger.bin");
-            let res_trigger = trigger_store.open_resource(&key_trigger).unwrap();
+            let res_trigger = trigger_store.acquire_resource(&key_trigger).unwrap();
             res_trigger.write_all(b"trigger").unwrap();
 
             assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
@@ -116,7 +117,11 @@ fn eviction_max_assets_skips_pinned_assets(
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1)]
 #[case(2)]
 #[case(3)]
@@ -132,7 +137,7 @@ fn eviction_ignores_missing_index(
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new(format!("data/{}.bin", i));
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
     }
 
@@ -146,12 +151,16 @@ fn eviction_ignores_missing_index(
     let trigger_store = asset_store_with_root(&temp_dir, "trigger-asset", Some(2));
     let trigger_key = ResourceKey::new("data/trigger.bin");
 
-    let res = trigger_store.open_resource(&trigger_key);
+    let res = trigger_store.acquire_resource(&trigger_key);
 
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -161,7 +170,7 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new("empty.bin");
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"").unwrap();
     }
 
@@ -180,7 +189,11 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1, 3, 1)] // max_assets=1, create 3 assets, keep 1 newest pinned
 #[case(2, 4, 1)] // max_assets=2, create 4 assets, keep 1 newest pinned
 #[case(3, 6, 2)] // max_assets=3, create 6 assets, keep 2 newest pinned
@@ -198,7 +211,7 @@ fn eviction_respects_max_assets_limit(
         let asset_root = format!("asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"DATA").unwrap();
 
         // Keep handle for the newest `pinned_count` assets to pin them

@@ -43,14 +43,16 @@ pub mod error;
 pub mod internal;
 
 mod context;
-pub(crate) mod download_state;
+mod coord;
 mod downloader;
 mod fetch;
+mod ids;
 mod inner;
 mod keys;
 mod parsing;
 pub(crate) mod playlist;
 mod source;
+pub(crate) mod stream_index;
 
 // Public API re-exports
 

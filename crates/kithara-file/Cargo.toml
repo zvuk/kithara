@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 bytes = { workspace = true }
+delegate = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-assets = { workspace = true }
@@ -27,6 +28,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 crossbeam-queue = { workspace = true }
 hotpath = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = []

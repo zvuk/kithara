@@ -20,6 +20,7 @@ futures = { workspace = true }
 web-time = { workspace = true }
 kithara-hang-detector = { workspace = true }
 tokio_with_wasm = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parking_lot = { workspace = true }

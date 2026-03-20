@@ -30,14 +30,13 @@ loop {
 }
 ```
 
-Macro form:
+Attribute macro form:
 
 ```rust
 use kithara_hang_detector::hang_watchdog;
 
-hang_watchdog! {
-    timeout: std::time::Duration::from_secs(5);
-    thread: "decoder.worker";
+#[hang_watchdog(timeout = Duration::from_secs(5))]
+fn worker_loop() {
     loop {
         // ... unit of work
         hang_tick!();
@@ -62,7 +61,7 @@ Default timeout is 10s. On native, it can be overridden via `KITHARA_HANG_TIMEOU
 - `HangDetector::tick()`
 - `HangDetector::reset()`
 - `default_timeout()`
-- `hang_watchdog!` macro (`thread:` and `timeout:` options)
+- `#[hang_watchdog]` attribute macro (`thread` and `timeout` options)
 
 ## Feature Flags
 

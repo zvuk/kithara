@@ -14,11 +14,8 @@ pub enum AssetsError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("bincode error: {0}")]
-    Bincode(#[from] bincode::error::EncodeError),
-
-    #[error("bincode decode error: {0}")]
-    BincodeDecode(#[from] bincode::error::DecodeError),
+    #[error("serialization error: {0}")]
+    Serialization(#[from] postcard::Error),
 
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
@@ -51,32 +48,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_bincode_error_display() {
-        let err = AssetsError::Bincode(bincode::error::EncodeError::UnexpectedEnd);
-        assert!(err.to_string().starts_with("bincode error:"));
+    fn test_serialization_error_display() {
+        let err = AssetsError::Serialization(postcard::Error::DeserializeUnexpectedEnd);
+        assert!(err.to_string().starts_with("serialization error:"));
     }
 
     #[kithara::test]
-    fn test_bincode_encode_error_from() {
-        let encode_err = bincode::error::EncodeError::UnexpectedEnd;
-        let err: AssetsError = encode_err.into();
-        assert!(matches!(err, AssetsError::Bincode(_)));
-    }
-
-    #[kithara::test]
-    fn test_bincode_decode_error_display() {
-        let err = AssetsError::BincodeDecode(bincode::error::DecodeError::UnexpectedEnd {
-            additional: 4,
-        });
-        let msg = err.to_string();
-        assert!(msg.starts_with("bincode decode error:"));
-    }
-
-    #[kithara::test]
-    fn test_bincode_decode_error_from() {
-        let decode_err = bincode::error::DecodeError::UnexpectedEnd { additional: 8 };
-        let err: AssetsError = decode_err.into();
-        assert!(matches!(err, AssetsError::BincodeDecode(_)));
+    fn test_serialization_error_from() {
+        let postcard_err = postcard::Error::DeserializeUnexpectedEnd;
+        let err: AssetsError = postcard_err.into();
+        assert!(matches!(err, AssetsError::Serialization(_)));
     }
 
     #[kithara::test]

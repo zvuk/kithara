@@ -33,7 +33,7 @@ pub struct EvictConfig {
 /// - We track per-asset metadata:
 ///   - `last_touch`: monotonically increasing counter (logical clock)
 ///   - `bytes`: best-effort size accounting provided by higher layers (or left as `None`)
-/// - The on-disk representation is internal to this module (binary format via bincode).
+/// - The on-disk representation is internal to this module (binary format via postcard).
 ///
 /// ## What this is NOT
 /// - It is not a filesystem walker.
@@ -64,11 +64,10 @@ impl<R: ResourceExt> LruIndex<R> {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile =
-            match bincode::serde::decode_from_slice(&buf, bincode::config::legacy()) {
-                Ok((file, _)) => file,
-                Err(_) => return Ok(LruState::default()),
-            };
+        let file: LruIndexFile = match postcard::from_bytes(&buf[..n]) {
+            Ok(file) => file,
+            Err(_) => return Ok(LruState::default()),
+        };
 
         Ok(LruState::from_file(file))
     }
@@ -76,7 +75,7 @@ impl<R: ResourceExt> LruIndex<R> {
     /// Persist the provided state to storage atomically.
     pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = bincode::serde::encode_to_vec(&file, bincode::config::legacy())?;
+        let bytes = postcard::to_allocvec(&file)?;
         self.res.write_all(&bytes)?;
         Ok(())
     }

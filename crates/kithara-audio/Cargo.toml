@@ -11,6 +11,7 @@ description = "Audio pipeline with OS thread worker, effects chain, and resampli
 workspace = true
 
 [dependencies]
+delegate = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-decode = { workspace = true }
@@ -22,16 +23,17 @@ biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
-fallible-iterator = { workspace = true }
 tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = []
@@ -47,6 +49,7 @@ memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 apple = ["kithara-decode/apple"]
 # Disable hang-loop detection in wait loops (fallback to no-op detector)
 disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
     "kithara-stream/disable-hang-detector",
 ]

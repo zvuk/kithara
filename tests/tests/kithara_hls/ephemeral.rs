@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn ephemeral_backend_creates_mem_resource() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -43,7 +43,7 @@ fn ephemeral_backend_creates_mem_resource() {
 
     let key = kithara::assets::ResourceKey::new("seg_0.m4s");
     let res = backend
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("open ephemeral resource");
     assert!(
         res.path().is_none(),
@@ -51,7 +51,11 @@ fn ephemeral_backend_creates_mem_resource() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn disk_backend_creates_mmap_resource() {
     let temp = TestTempDir::new();
     let backend = AssetStoreBuilder::new()
@@ -61,7 +65,7 @@ fn disk_backend_creates_mmap_resource() {
         .build();
 
     let key = kithara::assets::ResourceKey::new("seg_0.m4s");
-    let res = backend.open_resource(&key).expect("open disk resource");
+    let res = backend.acquire_resource(&key).expect("open disk resource");
     assert!(
         res.path().is_some(),
         "disk resource must have file path (MmapResource)"
@@ -99,7 +103,13 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
-#[kithara::test(native, tokio, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

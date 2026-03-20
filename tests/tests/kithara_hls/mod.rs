@@ -2,10 +2,12 @@
 
 pub(crate) mod fixture;
 
+mod abr_switch_playback;
 mod abr_integration;
 mod basic_playback;
 mod deferred_abr;
 mod deferred_abr_debug;
+mod drm_stream_integrity;
 mod driver_test;
 mod ephemeral;
 mod keys_integration;

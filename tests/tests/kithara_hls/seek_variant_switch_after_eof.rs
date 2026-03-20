@@ -35,7 +35,12 @@ use tracing::info;
 ///
 /// Reproduces the production bug where `handle_midstream_switch()` unconditionally
 /// drains all segment requests, discarding the on-demand request from the new seek epoch.
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     _debug_tracing_setup: (),
     temp_dir: TestTempDir,

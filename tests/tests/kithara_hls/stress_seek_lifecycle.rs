@@ -154,7 +154,13 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]

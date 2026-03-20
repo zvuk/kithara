@@ -12,6 +12,8 @@ use kithara_platform::tokio::sync::Notify;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
+use crate::ServiceClass;
+
 /// Audio processing effect in the chain (transforms PCM chunks).
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = AudioEffectMock))]
 pub trait AudioEffect: Send + 'static {
@@ -95,6 +97,11 @@ pub trait PcmReader: Send {
     /// The actual pitch-shifting is done by the resampler.
     fn set_playback_rate(&self, _rate: f32) {}
 
+    /// Update the scheduling priority hint for the shared worker.
+    ///
+    /// Maps track playback state to worker priority: `Audible` tracks
+    /// are decoded first, then `Warm`, then `Idle`.
+    fn set_service_class(&self, _class: ServiceClass) {}
     /// Get notify for async preload (first chunk available).
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         None

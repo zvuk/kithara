@@ -148,7 +148,7 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     assert_eq!(variants[2].variant_index, 2);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn test_abr_controller_async_usage() {
     // Test that ABR controller can be used in async context
     let config = AbrOptions {

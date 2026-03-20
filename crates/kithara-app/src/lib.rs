@@ -1,7 +1,17 @@
-mod app;
-pub mod controller;
+// Require at least one frontend feature.
+#[cfg(not(any(feature = "tui", feature = "gui")))]
+compile_error!("Enable at least one frontend feature: `tui` or `gui`");
+
+pub mod config;
+pub mod controls;
 pub mod crossfade;
 pub mod events;
-pub mod tui_runner;
+pub mod frontend;
+pub mod playlist;
+pub mod theme;
 
-pub use app::{AppError, AppResult, Mode, resolve_mode, run, run_gui_sync, track_name};
+#[cfg(feature = "tui")]
+pub mod tui;
+
+#[cfg(feature = "gui")]
+pub mod gui;

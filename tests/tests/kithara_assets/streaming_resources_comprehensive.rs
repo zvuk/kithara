@@ -42,7 +42,7 @@ fn asset_store_with_root(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(1024, 512, 0)] // Small write
 #[case(4096, 2048, 8192)] // Medium write with offset
 #[case(16384, 8192, 32768)] // Large write with offset
@@ -57,7 +57,7 @@ fn streaming_resource_complex_write_patterns(
 
     let key = ResourceKey::new("data.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write data in chunks at different positions
     let total_chunks = total_size / chunk_size;
@@ -77,7 +77,11 @@ fn streaming_resource_complex_write_patterns(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(1, 100)] // Single concurrent write
 #[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
 fn streaming_resource_concurrent_writes(
@@ -89,7 +93,7 @@ fn streaming_resource_concurrent_writes(
 
     let key = ResourceKey::new("concurrent.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Spawn concurrent writes
     let mut handles = Vec::new();
@@ -118,7 +122,7 @@ fn streaming_resource_concurrent_writes(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(0, 1024)] // Read from start
 #[case(2048, 1024)] // Read from middle
 #[case(4096, 512)] // Read from end
@@ -132,7 +136,7 @@ fn streaming_resource_edge_case_reads(
 
     let key = ResourceKey::new("edge.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write initial data
     let data_size = 6144; // Total data size
@@ -156,7 +160,7 @@ fn streaming_resource_edge_case_reads(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(vec![(0, 1024), (2048, 1024)])] // Non-overlapping
 #[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
 fn streaming_resource_multiple_range_operations(
@@ -167,7 +171,7 @@ fn streaming_resource_multiple_range_operations(
 
     let key = ResourceKey::new("multi.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write multiple ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
@@ -193,7 +197,7 @@ fn streaming_resource_multiple_range_operations(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(false)] // Without explicit commit
 #[case(true)] // With explicit commit
 fn streaming_resource_commit_behavior(
@@ -204,7 +208,7 @@ fn streaming_resource_commit_behavior(
 
     let key = ResourceKey::new("commit.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write some data
     let data = vec![0xAB; 4096];
@@ -223,18 +227,27 @@ fn streaming_resource_commit_behavior(
     let read_back_again = read_bytes(&res, 0, data.len());
     assert_eq!(read_back_again, data);
 
-    // Drop resource and verify it's still accessible
+    // Drop resource and verify lifecycle contract after the handle is gone.
     drop(res);
 
-    // Reopen the resource
-    let res_reopened = store.open_resource(&key).unwrap();
-
-    // Should be able to read the data (assuming persistence works)
-    let final_read = read_bytes(&res_reopened, 0, data.len());
-    assert_eq!(final_read, data);
+    if explicit_commit {
+        let res_reopened = store.open_resource(&key).unwrap();
+        let final_read = read_bytes(&res_reopened, 0, data.len());
+        assert_eq!(final_read, data);
+    } else {
+        let err = store
+            .open_resource(&key)
+            .expect_err("drop without commit must not leave a ghost resource");
+        assert!(
+            err.to_string().contains("No such file")
+                || err.to_string().contains("not found")
+                || err.to_string().contains("missing"),
+            "uncommitted drop should report missing resource, got: {err}"
+        );
+    }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(1024)]
 #[case(4096)]
 #[case(16384)]
@@ -246,7 +259,7 @@ fn streaming_resource_zero_length_operations(
 
     let key = ResourceKey::new("zero.bin");
 
-    let res = store.open_resource(&key).unwrap();
+    let res = store.acquire_resource(&key).unwrap();
 
     // Write some data first
     let data = vec![0xCC; 2048];

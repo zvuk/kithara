@@ -7,23 +7,26 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["tui", "gui"]
+tui = ["dep:ratatui", "dep:crossterm"]
+gui = ["dep:iced"]
+
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
-kithara-tui = { workspace = true }
-kithara-ui = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 clap = { workspace = true }
-crossterm = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# TUI-only
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
+
+# GUI-only
+iced = { workspace = true, optional = true }
 
 [[bin]]
 name = "kithara"
 path = "src/main.rs"
-
-[[bin]]
-name = "kithara-tui"
-path = "src/main_tui.rs"
-
-[[bin]]
-name = "kithara-gui"
-path = "src/main_gui.rs"

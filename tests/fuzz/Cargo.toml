@@ -11,14 +11,78 @@ cargo-fuzz = true
 libfuzzer-sys = { workspace = true }
 arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
+kithara-assets = { workspace = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true, features = ["internal"] }
+kithara-platform = { workspace = true }
+kithara-play = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-stream = { workspace = true }
 hls_m3u8 = { workspace = true }
+tokio-util = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../../crates/kithara-workspace-hack" }
 
 [[bin]]
 name = "aes_decrypt"
 path = "fuzz_targets/aes_decrypt.rs"
 doc = false
+test = false
+bench = false
 
 [[bin]]
 name = "hls_parsing"
 path = "fuzz_targets/hls_parsing.rs"
 doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "hls_internal_parsing"
+path = "fuzz_targets/hls_internal_parsing.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "play_resource_config"
+path = "fuzz_targets/play_resource_config.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "storage_mem_resource"
+path = "fuzz_targets/storage_mem_resource.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "storage_mmap_resource"
+path = "fuzz_targets/storage_mmap_resource.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "stream_read_seek"
+path = "fuzz_targets/stream_read_seek.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "file_config"
+path = "fuzz_targets/file_config.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "assets_key"
+path = "fuzz_targets/assets_key.rs"
+doc = false
+test = false
+bench = false

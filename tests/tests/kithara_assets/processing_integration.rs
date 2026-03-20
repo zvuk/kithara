@@ -93,7 +93,7 @@ fn build_test_store_no_processing(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -110,7 +110,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
     let ctx = TestContext { xor_key: 0x42 };
     {
         let res = store
-            .open_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
 
@@ -133,7 +133,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
     assert_eq!(buf, expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -150,7 +150,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     let original_data = b"Data for caching test";
     {
         let res = store
-            .open_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
@@ -179,7 +179,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -196,7 +196,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     let original_data: Vec<u8> = (0..100).collect();
     {
         let res = store
-            .open_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, &original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
@@ -222,7 +222,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -239,7 +239,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     let original_data = b"short";
     {
         let res = store
-            .open_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
@@ -253,7 +253,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     assert_eq!(n, 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
     // Build store WITHOUT custom process_fn (uses default pass-through).
     let store = build_test_store_no_processing(&temp_dir, "no-processing");
@@ -262,7 +262,7 @@ fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTem
 
     // Write some data.
     {
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
     }

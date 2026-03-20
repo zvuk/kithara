@@ -264,7 +264,12 @@ fn phase_distance(a: usize, b: usize) -> usize {
 }
 
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_read_samples_integrity() {
     init().await;
     info!("Starting stress_read_samples_integrity");
@@ -388,7 +393,12 @@ async fn stress_read_samples_integrity() {
 }
 
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_and_read() {
     init().await;
     info!("Starting stress_seek_and_read");
@@ -524,7 +534,12 @@ async fn stress_seek_and_read() {
 /// - All samples must be finite and in [-1.0, 1.0]
 /// - Tolerate at most 1% dead seeks (pipeline restart race)
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_rapid_seeks_must_not_stall() {
     init().await;
     info!("Starting stress_rapid_seeks_must_not_stall");
@@ -686,7 +701,12 @@ async fn stress_rapid_seeks_must_not_stall() {
 /// - Verify: read at least 50 chunks from the beginning, all valid
 /// - Position must be near 0 after seeking, then advance monotonically
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_to_zero_after_pressure() {
     init().await;
     info!("Starting stress_seek_to_zero_after_pressure");
@@ -849,7 +869,12 @@ async fn stress_seek_to_zero_after_pressure() {
 /// Regression: after long playback from the middle, seek near start (but not 0)
 /// must land inside segment 0, not at segment 1 boundary.
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segment() {
     init().await;
     info!("Starting stress_seek_near_start_after_mid_playback_must_land_inside_first_segment");
@@ -960,7 +985,12 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
 /// one seek command should produce one seek-complete, and playback progress
 /// after that seek should advance without extra backward resets.
 #[ignore = "requires Audio event bootstrap path; browser coverage lives in selenium"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_events_single_reset_and_monotonic_progress() {
     init().await;
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
@@ -1115,7 +1145,12 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
 /// For the deterministic saw-tooth fixture, this early window must be strictly
 /// contiguous frame-by-frame (no tiny backward jumps / repeated fragments).
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment() {
     init().await;
     info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment");
@@ -1124,7 +1159,12 @@ async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment() {
 }
 
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(90)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter() {
     init().await;
     info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter");

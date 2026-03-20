@@ -17,14 +17,14 @@ members = [
     "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-hang-detector",
+    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-tui",
-    "crates/kithara-ui",
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
+    "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
     "examples",
@@ -47,10 +47,10 @@ default-members = [
     "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-hang-detector",
+    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-tui",
     "tests",
     "examples",
 ]
@@ -144,6 +144,7 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-hang-detector = { path = "crates/kithara-hang-detector", version = "0.1.0" }
+kithara-hang-detector-macros = { path = "crates/kithara-hang-detector-macros", version = "0.1.0" }
 kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
@@ -152,9 +153,8 @@ kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
-kithara-tui = { path = "crates/kithara-tui" }
-kithara-ui = { path = "crates/kithara-ui" }
 kithara-app = { path = "crates/kithara-app" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }
@@ -191,8 +191,8 @@ fallible-iterator = "0.3"
 # decoding
 symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-rodio = { version = "0.21.1", default-features = false }
-ratatui = "0.29.0"
+rodio = { version = "0.22.2", default-features = false }
+ratatui = "0.30.0"
 rubato = "1.0"
 audioadapter-buffers = "2.0"
 smallvec = "1"
@@ -226,7 +226,7 @@ web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = { version = "2.0", features = ["serde"] }
+postcard = { version = "1", features = ["alloc"] }
 
 # hex encoding
 hex = "0.4"
@@ -238,11 +238,11 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 
 # FFI
 uniffi = { version = "0.31.0" }
-jni = "0.21.1"
+jni = "0.22.3"
 ndk-context = "0.1.1"
 rustls-platform-verifier = "0.6.2"
 
@@ -278,8 +278,8 @@ stats_alloc = "0.1"
 assert_no_alloc = "1.1"
 
 # performance monitoring
-hotpath = "0.10.1"
-criterion = "0.5.1"
+hotpath = "0.14.0"
+criterion = "0.8.2"
 
 # fast interleave/deinterleave
 fast-interleave = "0.1"
@@ -296,10 +296,10 @@ iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "t
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
-crossterm = "0.28"
+crossterm = "0.29"
 
 # xtask tooling
-cargo_metadata = "0.19"
+cargo_metadata = "0.23"
 anyhow = "1"
 regex = "1"
 

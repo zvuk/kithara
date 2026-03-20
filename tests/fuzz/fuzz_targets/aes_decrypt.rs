@@ -18,11 +18,10 @@ fuzz_target!(|input: AesInput| {
     if block_len == 0 {
         return;
     }
-    let data = &input.data[..block_len];
 
+    let data = &input.data[..block_len];
     let mut ctx = kithara_drm::DecryptContext::new(input.key, input.iv);
     let mut output = vec![0u8; data.len()];
-
     // We only care that this doesn't panic/crash unexpectedly.
     let _ = kithara_drm::aes128_cbc_process_chunk(data, &mut output, &mut ctx, input.is_last);
 });

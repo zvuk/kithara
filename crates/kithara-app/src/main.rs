@@ -1,7 +1,10 @@
-use std::env;
+use std::{io, sync::Arc};
 
 use clap::Parser;
-use kithara_app::{AppResult, Mode, resolve_mode};
+use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig, prelude::PlayerImpl};
+use kithara_app::{
+    config::AppConfig, controls::AppController, frontend::Frontend, playlist::Playlist,
+};
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -15,30 +18,98 @@ struct Args {
     tracks: Vec<String>,
 }
 
+/// Application UI mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Mode {
+    /// Auto-detect: TUI if terminal attached, GUI otherwise.
+    Auto,
+    /// Terminal UI (ratatui).
+    Tui,
+    /// Graphical UI (iced).
+    Gui,
+}
+
+type AppError = Box<dyn std::error::Error + Send + Sync>;
+type AppResult<T = ()> = Result<T, AppError>;
+
+/// Resolve `Mode::Auto` into a concrete mode.
+fn resolve_mode(mode: Mode) -> Mode {
+    match mode {
+        Mode::Auto => {
+            if io::IsTerminal::is_terminal(&io::stdin()) {
+                Mode::Tui
+            } else {
+                Mode::Gui
+            }
+        }
+        concrete => concrete,
+    }
+}
+
 fn main() -> AppResult {
     // Suppress noisy macOS system logs (OpenGL dlsym, WindowTab, etc.)
     #[cfg(target_os = "macos")]
     // SAFETY: called at program start before any threads are spawned.
     unsafe {
-        env::set_var("OS_ACTIVITY_MODE", "disable");
+        std::env::set_var("OS_ACTIVITY_MODE", "disable");
     }
 
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
-    let log_directives: &[&str] = match mode {
-        Mode::Tui => &["off"],
-        _ => &["info"],
-    };
-    kithara_tui::init_tracing(log_directives, mode == Mode::Tui)?;
 
-    if mode == Mode::Gui {
-        // GUI: iced owns the tokio runtime, run synchronously.
-        kithara_app::run_gui_sync(args.tracks)
-    } else {
-        // TUI: we build our own tokio runtime.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(kithara_app::run(mode, args.tracks))
+    let config = AppConfig::with_defaults(args.tracks);
+
+    // Initialize tracing based on mode.
+    #[cfg(feature = "tui")]
+    {
+        let log_directives: &[&str] = match mode {
+            Mode::Tui => &["off"],
+            _ => &["info"],
+        };
+        kithara_app::tui::init_tracing(log_directives, mode == Mode::Tui)?;
     }
+    #[cfg(not(feature = "tui"))]
+    {
+        // GUI-only: simple tracing init without CRLF writer.
+        kithara_app::gui::init_tracing()?;
+    }
+
+    // Create player and controller.
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default()
+            .with_crossfade_duration(config.crossfade_seconds)
+            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count)),
+    ));
+    let playlist = Arc::new(Playlist::new(config.tracks.clone()));
+    let mut controller = AppController::new(Arc::clone(&player), playlist, config.eq_band_count);
+
+    match mode {
+        #[cfg(feature = "tui")]
+        Mode::Tui | Mode::Auto => {
+            let mut frontend = kithara_app::tui::TuiFrontend::new(&config)?;
+            frontend.start(&mut controller)?;
+            frontend.run_loop(&mut controller)?;
+            frontend.shutdown()?;
+        }
+        #[cfg(feature = "gui")]
+        Mode::Gui => {
+            let mut frontend = kithara_app::gui::GuiFrontend::new(&config)?;
+            frontend.start(&mut controller)?;
+            frontend.run_loop(&mut controller)?;
+            frontend.shutdown()?;
+        }
+        #[cfg(not(feature = "gui"))]
+        Mode::Gui => {
+            return Err("GUI mode not available: compile with --features gui".into());
+        }
+        #[cfg_attr(
+            feature = "tui",
+            expect(unreachable_patterns, reason = "depends on enabled features")
+        )]
+        _ => {
+            return Err("No frontend available for the selected mode".into());
+        }
+    }
+
+    Ok(())
 }

@@ -1,14 +1,9 @@
-use std::{
-    sync::{Arc, mpsc},
-    time::Duration,
-};
+use std::time::Duration;
 
 use kithara::{
-    play::{Engine, EngineEvent, PlayerEvent},
-    prelude::{AudioEvent, Event, FileEvent, HlsEvent, PlayerImpl},
+    play::{EngineEvent, PlayerEvent},
+    prelude::{AudioEvent, Event, FileEvent, HlsEvent},
 };
-use tokio::sync::{broadcast, broadcast::error::RecvError};
-use tracing::info;
 
 pub enum UiMsg {
     Engine(EngineEvent),
@@ -62,117 +57,4 @@ pub fn format_seconds(seconds: f64) -> String {
     let minutes = whole / 60;
     let secs = whole % 60;
     format!("{minutes:02}:{secs:02}")
-}
-
-#[must_use]
-pub fn forward_player_events(
-    mut rx: broadcast::Receiver<PlayerEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx.send(UiMsg::Player(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("player events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-}
-
-#[must_use]
-pub fn forward_engine_events(
-    mut rx: broadcast::Receiver<EngineEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx.send(UiMsg::Engine(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("engine events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-}
-
-#[must_use]
-pub fn forward_source_events(
-    mut rx: broadcast::Receiver<Event>,
-    source: String,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx
-                        .send(UiMsg::Source {
-                            event,
-                            source: source.clone(),
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("{source} events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-}
-
-/// Spawn a background task that logs all player and engine events via tracing.
-///
-/// Used in GUI mode where there is no TUI event loop to display events.
-pub fn start_event_logging(player: &Arc<PlayerImpl>) {
-    let mut player_rx = player.subscribe();
-    let mut engine_rx = player.engine().subscribe();
-
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                result = player_rx.recv() => match result {
-                    Ok(event) => info!("[player] {event:?}"),
-                    Err(RecvError::Lagged(n)) => info!("[player] events lagged: {n}"),
-                    Err(RecvError::Closed) => break,
-                },
-                result = engine_rx.recv() => match result {
-                    Ok(event) => info!("[engine] {event:?}"),
-                    Err(RecvError::Lagged(n)) => info!("[engine] events lagged: {n}"),
-                    Err(RecvError::Closed) => break,
-                },
-            }
-        }
-    });
 }

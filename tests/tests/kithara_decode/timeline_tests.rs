@@ -109,7 +109,11 @@ mod hls_timeline {
     const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size; // 2 MB
 
     /// Verify that HLS stream produces correct `PcmMeta` with segment tracking.
-    #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+    #[kithara::test(
+        tokio,
+        timeout(Duration::from_secs(10)),
+        env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    )]
     async fn test_hls_timeline_segment_tracking() {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()

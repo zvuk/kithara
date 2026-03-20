@@ -47,10 +47,15 @@ pub mod source {
         time::Duration,
     };
 
+    use delegate::delegate;
     use kithara_decode::{InnerDecoder, PcmChunk};
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
-    use crate::{pipeline::worker::AudioWorkerSource, traits::AudioEffect};
+    pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
+    use crate::{
+        pipeline::{track_fsm, worker::AudioWorkerSource},
+        traits::AudioEffect,
+    };
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
 
@@ -67,28 +72,36 @@ pub mod source {
     }
 
     impl<T: StreamType> Read for SharedStream<T> {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+        delegate! {
+            to self.0 {
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+            }
         }
     }
 
     impl<T: StreamType> Seek for SharedStream<T> {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.0.seek(pos)
+        delegate! {
+            to self.0 {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 
     pub struct OffsetReader<T: StreamType>(crate::pipeline::source::OffsetReader<T>);
 
     impl<T: StreamType> Read for OffsetReader<T> {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+        delegate! {
+            to self.0 {
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+            }
         }
     }
 
     impl<T: StreamType> Seek for OffsetReader<T> {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.0.seek(pos)
+        delegate! {
+            to self.0 {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 
@@ -134,8 +147,8 @@ pub mod source {
         ))
     }
 
-    pub fn apply_pending_seek<T: StreamType>(source: &mut StreamAudioSource<T>) {
-        AudioWorkerSource::apply_pending_seek(&mut source.0);
+    pub fn step_track<T: StreamType>(source: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+        AudioWorkerSource::step_track(&mut source.0)
     }
 
     pub fn clear_variant_fence<T: StreamType>(shared: &SharedStream<T>) {
@@ -144,49 +157,133 @@ pub mod source {
 
     #[must_use]
     pub fn current_base_offset<T: StreamType>(source: &StreamAudioSource<T>) -> u64 {
-        source.0.base_offset
-    }
-
-    pub fn fetch_next<T: StreamType>(source: &mut StreamAudioSource<T>) -> Fetch<PcmChunk> {
-        AudioWorkerSource::fetch_next(&mut source.0)
+        source.0.session.base_offset
     }
 
     #[must_use]
-    pub fn has_pending_format_change<T: StreamType>(source: &StreamAudioSource<T>) -> bool {
-        source.0.pending_format_change.is_some()
+    pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
+        &source.0.timeline
     }
 
-    pub fn retry_decode_error_after_seek<T: StreamType>(source: &mut StreamAudioSource<T>) -> bool {
-        source.0.retry_decode_error_after_seek()
+    #[must_use]
+    pub fn track_state<T: StreamType>(source: &StreamAudioSource<T>) -> TrackPhaseTag {
+        source.0.state.phase_tag()
     }
+
+    // ---- Test compatibility helpers ----
+    // These wrap step_track() to provide the old fetch_next/apply_pending_seek
+    // calling patterns used by integration tests.
+
+    /// Drive the FSM until it produces a fetch or reaches a terminal/blocked state.
+    ///
+    /// Replaces the old `fetch_next` — loops `step_track()` internally.
+    pub fn fetch_next<T: StreamType>(source: &mut StreamAudioSource<T>) -> Fetch<PcmChunk> {
+        loop {
+            match step_track(source) {
+                TrackStep::Produced(fetch) => return fetch,
+                TrackStep::StateChanged => continue,
+                TrackStep::Blocked(_) | TrackStep::Eof | TrackStep::Failed => {
+                    let epoch = timeline(source).seek_epoch();
+                    return Fetch::new(PcmChunk::default(), true, epoch);
+                }
+            }
+        }
+    }
+
+    /// Drive the FSM to process a pending seek.
+    ///
+    /// Replaces the old `apply_pending_seek` — loops `step_track()` until the
+    /// seek is fully applied. Stops once the FSM exits `SeekRequested` state,
+    /// meaning the seek was applied (or failed/blocked). Does NOT continue
+    /// decoding — callers use `fetch_next` separately for that.
+    pub fn apply_pending_seek<T: StreamType>(source: &mut StreamAudioSource<T>) {
+        loop {
+            let result = step_track(source);
+            match result {
+                TrackStep::StateChanged => {
+                    let phase = track_state(source);
+                    if !matches!(
+                        phase,
+                        TrackPhaseTag::SeekRequested
+                            | TrackPhaseTag::ApplyingSeek
+                            | TrackPhaseTag::RecreatingDecoder
+                    ) {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+
+    // ---- Test-only state accessors (overlay fields still present) ----
 
     pub fn set_base_offset<T: StreamType>(source: &mut StreamAudioSource<T>, base_offset: u64) {
-        source.0.base_offset = base_offset;
+        source.0.session.base_offset = base_offset;
     }
 
     pub fn set_cached_media_info<T: StreamType>(
         source: &mut StreamAudioSource<T>,
         media_info: Option<MediaInfo>,
     ) {
-        source.0.cached_media_info = media_info;
+        source.0.session.media_info = media_info;
     }
 
-    pub fn set_seek_recover_state<T: StreamType>(
+    pub fn set_awaiting_resume_state<T: StreamType>(
         source: &mut StreamAudioSource<T>,
-        base_offset: u64,
-        decode_started_epoch: Option<u64>,
-        target: Option<(u64, Duration)>,
-        attempts: u8,
+        epoch: u64,
+        target: Duration,
+        recover_attempts: u8,
+        skip: Option<Duration>,
     ) {
-        source.0.base_offset = base_offset;
-        source.0.pending_decode_started_epoch = decode_started_epoch;
-        source.0.pending_seek_recover_target = target;
-        source.0.pending_seek_recover_attempts = attempts;
+        source.0.state = track_fsm::TrackState::AwaitingResume(track_fsm::ResumeState {
+            recover_attempts,
+            seek: track_fsm::SeekContext { epoch, target },
+            skip,
+            anchor_offset: None,
+        });
     }
 
-    #[must_use]
-    pub fn timeline<T: StreamType>(source: &StreamAudioSource<T>) -> &Timeline {
-        &source.0.timeline
+    pub fn set_recreating_decoder<T: StreamType>(
+        source: &mut StreamAudioSource<T>,
+        epoch: u64,
+        target: Duration,
+        media_info: MediaInfo,
+        offset: u64,
+    ) {
+        source.0.state = track_fsm::TrackState::RecreatingDecoder(track_fsm::RecreateState {
+            attempt: 0,
+            cause: track_fsm::RecreateCause::VariantSwitch,
+            media_info,
+            next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+                attempt: 0,
+                seek: track_fsm::SeekContext { epoch, target },
+            }),
+            offset,
+        });
+    }
+
+    pub fn set_waiting_recreation<T: StreamType>(
+        source: &mut StreamAudioSource<T>,
+        epoch: u64,
+        target: Duration,
+        media_info: MediaInfo,
+        offset: u64,
+        reason: WaitingReason,
+    ) {
+        source.0.state = track_fsm::TrackState::WaitingForSource {
+            context: track_fsm::WaitContext::Recreation(track_fsm::RecreateState {
+                attempt: 0,
+                cause: track_fsm::RecreateCause::VariantSwitch,
+                media_info,
+                next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+                    attempt: 0,
+                    seek: track_fsm::SeekContext { epoch, target },
+                }),
+                offset,
+            }),
+            reason,
+        };
     }
 }
 

@@ -174,6 +174,19 @@ item.preferredPeakBitrateForExpensiveNetworks = 0  // unlimited on Wi-Fi
 | **KitharaFFI** | Auto-generated UniFFI bindings — not intended for direct use |
 | **KitharaFFIInternal** | Pre-built static library (XCFramework) from the Rust crate |
 
+## Interactive Playground
+
+There is also an interactive Swift playground at [`Examples/KitharaPlayground.playground`](Examples/KitharaPlayground.playground).
+It is useful for quickly trying core APIs (`load`, `insert`, `play`, `pause`, `seek`, `volume`, `mute`, and playback rate) without running the full demo app.
+
+Open `apple/Package.swift` in Xcode, then open the playground from the Project navigator and run it.
+For local Rust changes, build a local XCFramework first:
+
+```bash
+cargo xtask xcframework --profile debug
+cd apple
+KITHARA_LOCAL_DEV=1 open Package.swift
+```
 ## Demo App
 
 A minimal macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). Plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.

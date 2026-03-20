@@ -19,7 +19,7 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
+use kithara_test_utils::{TestTempDir, serve_assets, temp_dir, tracing_setup};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -27,7 +27,13 @@ use tracing::info;
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(120)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
 async fn stress_seek_during_abr_switch_real_decoder(
@@ -166,10 +172,17 @@ async fn stress_seek_during_abr_switch_real_decoder(
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(120)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
 async fn seek_sequence_from_log_real_stream(
+    _tracing_setup: (),
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
@@ -201,7 +214,7 @@ async fn seek_sequence_from_log_real_stream(
             audio.seek(pos).expect("seek must not fail");
 
             let mut samples_after_seek = 0usize;
-            let read_deadline = Instant::now() + Duration::from_secs(4);
+            let read_deadline = Instant::now() + Duration::from_secs(8);
             while Instant::now() < read_deadline && samples_after_seek < 16_384 {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;

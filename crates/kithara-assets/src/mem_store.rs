@@ -2,12 +2,13 @@
 
 //! In-memory asset store backend.
 
-use std::path::Path;
+use std::{io, path::Path};
 
 use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
@@ -73,6 +74,20 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
+        Err(io::Error::new(io::ErrorKind::NotFound, "resource missing").into())
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        if let ResourceKey::Relative(rel) = key
+            && rel.is_empty()
+        {
+            return Err(AssetsError::InvalidKey);
+        }
+
         let mut options = MemOptions::default();
         if let Some(capacity) = self.mem_resource_capacity
             && capacity > 0
@@ -89,6 +104,16 @@ impl Assets for MemAssetStore {
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(MemResource::new(self.cancel.clone()))
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if let ResourceKey::Relative(rel) = key
+            && rel.is_empty()
+        {
+            return Err(AssetsError::InvalidKey);
+        }
+
+        Ok(AssetResourceState::Missing)
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
@@ -109,11 +134,11 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_creates_mem_resource() {
+    fn acquire_creates_mem_resource() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         assert!(matches!(res, StorageResource::Mem(_)));
     }
 
@@ -122,7 +147,7 @@ mod tests {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"segment data").unwrap();
         res.commit(Some(12)).unwrap();
 
@@ -137,7 +162,7 @@ mod tests {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
 
-        let res = store.open_resource(&key).unwrap();
+        let res = store.acquire_resource(&key).unwrap();
         assert!(res.path().is_none());
     }
 

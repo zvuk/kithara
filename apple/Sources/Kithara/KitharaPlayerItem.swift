@@ -81,7 +81,7 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     }
 }
 
-// MARK: - ItemObserver bridge
+// MARK: - ItemObserver bridge (single on_event callback)
 
 private final class ItemObserverBridge: KitharaFFI.ItemObserver, @unchecked Sendable {
     private let subject: PassthroughSubject<ItemEvent, Never>

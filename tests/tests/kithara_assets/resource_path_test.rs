@@ -23,12 +23,16 @@ fn asset_store_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetStore
 
 // AssetResource Path Tests
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("metadata.json");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     // Write some data to ensure the resource is properly initialized
@@ -51,12 +55,16 @@ fn asset_resource_path_method(temp_dir: TestTempDir) {
     assert!(asset_path.file_name().unwrap() == "metadata.json");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("media.bin");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     // Write some data to ensure the resource is properly initialized
@@ -82,12 +90,16 @@ fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
     assert!(asset_path.file_name().unwrap() == "media.bin");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
     let key = ResourceKey::new("data.bin");
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     let asset_path = asset_resource.path().unwrap();
@@ -104,14 +116,18 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
     let asset_store = asset_store_with_root(&temp_dir, asset_root);
     let key = ResourceKey::new(resource_name);
     let asset_resource = asset_store
-        .open_resource(&key)
+        .acquire_resource(&key)
         .expect("Failed to open resource");
 
     let path = asset_resource.path().unwrap();
@@ -130,7 +146,11 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     assert!(relative_path.ends_with(resource_name));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    native,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
     let asset_store = asset_store_with_root(&temp_dir, asset_root);
@@ -138,12 +158,12 @@ fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir
     // Create two different resources in the same asset root
     let key1 = ResourceKey::new("resource1.bin");
     let resource1 = asset_store
-        .open_resource(&key1)
+        .acquire_resource(&key1)
         .expect("Failed to open resource1");
 
     let key2 = ResourceKey::new("resource2.bin");
     let resource2 = asset_store
-        .open_resource(&key2)
+        .acquire_resource(&key2)
         .expect("Failed to open resource2");
 
     // Paths should be different

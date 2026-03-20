@@ -8,7 +8,12 @@ use kithara_platform::time::Duration;
 
 // Test Cases
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -25,7 +30,12 @@ async fn fetch_and_cache_key(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -51,7 +61,12 @@ async fn key_processor_applied(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -75,7 +90,12 @@ async fn key_manager_with_different_processors(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn key_manager_error_handling(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
@@ -94,7 +114,12 @@ async fn key_manager_error_handling(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -117,7 +142,12 @@ async fn key_manager_caching_behavior(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -154,7 +184,12 @@ async fn key_manager_with_context(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,

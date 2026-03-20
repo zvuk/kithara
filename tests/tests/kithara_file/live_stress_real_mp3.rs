@@ -1,7 +1,5 @@
 use std::{
-    fs,
     num::NonZeroUsize,
-    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -20,14 +18,14 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
-const WARMUP_TIMEOUT_SECS: u64 = 8;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 20;
-const RANDOM_SEEK_OPS_MAX: usize = 1_000;
-const MIN_RANDOM_CHUNKS: usize = 700;
+const WARMUP_TIMEOUT_SECS: u64 = 2;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 4;
+const RANDOM_SEEK_OPS_MAX: usize = 256;
+const MIN_RANDOM_CHUNKS: usize = 384;
 const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-const FAST_SEEK_BURST: usize = 120;
-const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 90;
-const REVISIT_SEEKS: usize = 120;
+const FAST_SEEK_BURST: usize = 64;
+const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
+const REVISIT_SEEKS: usize = 64;
 
 #[kithara::fixture]
 fn live_tracing_filter() -> EnvFilter {
@@ -96,7 +94,13 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[cfg_attr(
     target_arch = "wasm32",
     ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"

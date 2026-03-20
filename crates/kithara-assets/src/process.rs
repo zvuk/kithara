@@ -11,7 +11,7 @@ use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use crate::{AssetsResult, ResourceKey, base::Assets};
+use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
 
 /// Chunk size for streaming processing (64KB, multiple of AES block size 16).
 const PROCESS_CHUNK_SIZE: usize = 64 * 1024;
@@ -86,16 +86,17 @@ where
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    R: Debug,
+    R: ResourceExt + Debug,
     Ctx: Clone + Debug,
 {
     pub fn new(inner: R, ctx: Option<Ctx>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
+        let processed = ctx.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
             inner,
             ctx,
             process,
             pool,
-            processed: Arc::new(Mutex::new(false)),
+            processed: Arc::new(Mutex::new(processed)),
         }
     }
 }
@@ -105,6 +106,10 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug,
 {
+    fn is_readable(&self) -> bool {
+        self.ctx.is_none() || *self.processed.lock_sync()
+    }
+
     /// Process content chunk-by-chunk and write back to disk.
     ///
     /// Returns the total number of bytes written after processing.
@@ -160,7 +165,6 @@ where
 {
     delegate::delegate! {
         to self.inner {
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
             fn fail(&self, reason: String);
@@ -168,9 +172,21 @@ where
             fn len(&self) -> Option<u64>;
             fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
-            fn contains_range(&self, range: Range<u64>) -> bool;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::Failed(
+                "processed resource is not readable before commit".to_string(),
+            ));
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.is_readable() && self.inner.contains_range(range)
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -252,6 +268,7 @@ where
             fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
@@ -263,6 +280,19 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let inner = self.inner.open_resource(key)?;
+
+        let processed =
+            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
+
+        Ok(processed)
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        let inner = self.inner.acquire_resource(key)?;
 
         let processed =
             ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
@@ -409,5 +439,49 @@ mod tests {
         let n = processed.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
         assert_eq!(&buf, b"test content");
+    }
+
+    #[kithara::test]
+    fn encrypted_resource_is_not_readable_before_commit() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+
+        let (resource, _dir) = mock_resource(b"test content");
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+
+        assert!(
+            !processed.contains_range(0..12),
+            "encrypted active resource must not advertise readable ranges before processing"
+        );
+
+        let mut buf = vec![0u8; 12];
+        let err = processed
+            .read_at(0, &mut buf)
+            .expect_err("encrypted active resource must reject reads before commit");
+        assert!(
+            err.to_string().contains("not readable before commit"),
+            "read guard must explain that commit is required before reads"
+        );
+    }
+
+    #[kithara::test]
+    fn reopened_committed_processed_resource_is_readable_immediately() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let already_processed: Vec<u8> = b"test content".iter().map(|b| b ^ 0x42).collect();
+
+        let (resource, _dir) = mock_resource(&already_processed);
+        resource
+            .commit(Some(already_processed.len() as u64))
+            .unwrap();
+
+        let reopened = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+
+        let mut buf = vec![0u8; already_processed.len()];
+        let n = reopened.read_at(0, &mut buf).unwrap();
+
+        assert_eq!(n, already_processed.len());
+        assert_eq!(buf, already_processed);
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
 }

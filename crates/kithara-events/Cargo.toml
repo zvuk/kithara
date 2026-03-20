@@ -15,6 +15,7 @@ kithara-platform = { workspace = true }
 
 kithara-abr = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = ["hls", "audio"]

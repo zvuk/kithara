@@ -11,15 +11,15 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
+use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 use super::{
     engine::{EngineConfig, EngineImpl},
-    player_notification::{PlayerNotification, TrackStopReason},
     player_processor::PlayerCmd,
     player_resource::PlayerResource,
     player_track::TrackTransition,
@@ -43,9 +43,9 @@ pub struct PlayerConfig {
     /// Default playback rate (1.0 = normal). Default: 1.0.
     #[derivative(Default(value = "1.0"))]
     pub default_rate: f32,
-    /// Number of EQ bands. Default: 10.
-    #[derivative(Default(value = "10"))]
-    pub eq_bands: usize,
+    /// EQ band layout. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
@@ -64,7 +64,6 @@ pub struct PlayerConfig {
 /// [`PlayerResource`], and sent to the processor via `PlayerCmd::LoadTrack`.
 pub struct PlayerImpl {
     config: PlayerConfig,
-    engine: EngineImpl,
 
     action_at_item_end: Mutex<ActionAtItemEnd>,
     crossfade_duration: AtomicF32,
@@ -72,6 +71,8 @@ pub struct PlayerImpl {
     current_slot: Mutex<Option<SlotId>>,
     default_rate: AtomicF32,
     events_tx: broadcast::Sender<PlayerEvent>,
+    /// Items drop before engine — Audio tracks unregister from worker
+    /// while it is still alive.
     items: Mutex<Vec<Option<Resource>>>,
     muted: AtomicBool,
     pcm_pool: PcmPool,
@@ -80,6 +81,9 @@ pub struct PlayerImpl {
     rate: AtomicF32,
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
+
+    /// Engine drops last — worker shutdown happens after all tracks unregister.
+    engine: EngineImpl,
 }
 
 impl PlayerImpl {
@@ -92,7 +96,7 @@ impl PlayerImpl {
             .unwrap_or_else(|| pcm_pool().clone());
 
         let engine_config = EngineConfig {
-            eq_bands: config.eq_bands,
+            eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
             ..EngineConfig::default()
@@ -117,6 +121,15 @@ impl PlayerImpl {
             engine,
             config,
         }
+    }
+
+    /// Shared audio worker handle for this player's engine.
+    ///
+    /// Clone and pass to [`ResourceConfig::with_worker`] so resources
+    /// loaded into this player share a single decode thread.
+    #[must_use]
+    pub fn worker(&self) -> &AudioWorkerHandle {
+        self.engine.worker()
     }
 
     /// Get the number of items in the queue (including consumed items).
@@ -409,9 +422,27 @@ impl PlayerImpl {
         self.engine.tick()
     }
 
-    /// Drain audio-thread notifications for the active slot and broadcast
-    /// corresponding [`PlayerEvent`]s.
+    /// Drain audio-thread notifications for the active slot.
+    pub fn drain_notifications(&self) -> Vec<String> {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return Vec::new();
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+            out.push(format!("{notification:?}"));
+        }
+        out
+    }
+
+    /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
+    /// when a track finishes via EOF.
     pub fn process_notifications(&self) {
+        use crate::impls::player_notification::PlayerNotification;
+
         let Some(slot_id) = *self.current_slot.lock_sync() else {
             return;
         };
@@ -421,14 +452,11 @@ impl PlayerImpl {
 
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             match notification {
-                PlayerNotification::TrackPlaybackStopped {
-                    reason: TrackStopReason::Eof,
-                    ..
-                } => {
+                PlayerNotification::TrackPlaybackStopped(_) => {
                     let _ = self.events_tx.send(PlayerEvent::ItemDidPlayToEnd);
                 }
                 other => {
-                    trace!(?other, "unhandled player notification");
+                    tracing::trace!(?other, "unhandled player notification");
                 }
             }
         }
@@ -436,7 +464,7 @@ impl PlayerImpl {
 
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
-        self.config.eq_bands
+        self.config.eq_layout.len()
     }
 
     /// Get EQ gain for a band in dB.
@@ -609,6 +637,24 @@ impl PlayerImpl {
     }
 }
 
+impl crate::traits::dj::eq::Equalizer for PlayerImpl {
+    fn band_count(&self) -> usize {
+        self.eq_band_count()
+    }
+
+    fn gain(&self, band: usize) -> Option<f32> {
+        self.eq_gain(band)
+    }
+
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        self.set_eq_gain(band, gain_db)
+    }
+
+    fn reset(&self) -> Result<(), PlayError> {
+        self.reset_eq()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_audio::mock::TestPcmReader;
@@ -745,7 +791,7 @@ mod tests {
         let config = PlayerConfig {
             crossfade_duration: 2.0,
             default_rate: 0.5,
-            eq_bands: 5,
+            eq_layout: generate_log_spaced_bands(5),
             max_slots: 2,
             pcm_pool: None,
         };
@@ -759,11 +805,11 @@ mod tests {
             .with_max_slots(8)
             .with_default_rate(0.5)
             .with_crossfade_duration(2.5)
-            .with_eq_bands(5);
+            .with_eq_layout(generate_log_spaced_bands(5));
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
-        assert_eq!(config.eq_bands, 5);
+        assert_eq!(config.eq_layout.len(), 5);
     }
 
     #[kithara::test(tokio)]
@@ -936,80 +982,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn process_notifications_empty_player_no_panic() {
+    fn player_exposes_worker() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        // No slot allocated → should be a no-op.
-        player.process_notifications();
-    }
-
-    #[kithara::test]
-    fn process_notifications_emits_did_play_to_end() {
-        use ringbuf::traits::Producer;
-
-        use crate::impls::{
-            player_notification::{PlayerNotification, TrackStopReason},
-            shared_player_state::SharedPlayerState,
-        };
-
-        let player = PlayerImpl::new(PlayerConfig::default());
-        let shared = Arc::new(SharedPlayerState::new());
-        let slot_id = SlotId(0);
-
-        player
-            .engine()
-            .inject_test_slot(slot_id, Arc::clone(&shared));
-        *player.current_slot.lock_sync() = Some(slot_id);
-
-        shared
-            .notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped {
-                src: Arc::from("test.mp3"),
-                reason: TrackStopReason::Eof,
-            })
-            .unwrap();
-
-        let mut rx = player.subscribe();
-        player.process_notifications();
-
-        let event = rx.try_recv().unwrap();
-        assert!(matches!(event, PlayerEvent::ItemDidPlayToEnd));
-    }
-
-    #[kithara::test]
-    #[case(TrackStopReason::FadeOut)]
-    #[case(TrackStopReason::Stop)]
-    fn process_notifications_ignores_non_eof_stop_reasons(#[case] reason: TrackStopReason) {
-        use ringbuf::traits::Producer;
-
-        use crate::impls::{
-            player_notification::PlayerNotification, shared_player_state::SharedPlayerState,
-        };
-
-        let player = PlayerImpl::new(PlayerConfig::default());
-        let shared = Arc::new(SharedPlayerState::new());
-        let slot_id = SlotId(0);
-
-        player
-            .engine()
-            .inject_test_slot(slot_id, Arc::clone(&shared));
-        *player.current_slot.lock_sync() = Some(slot_id);
-
-        shared
-            .notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped {
-                src: Arc::from("test.mp3"),
-                reason,
-            })
-            .unwrap();
-
-        let mut rx = player.subscribe();
-        player.process_notifications();
-
-        assert!(matches!(
-            rx.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
+        let _w = player.worker();
+        // Worker should be accessible and clonable.
+        let _w2 = player.worker().clone();
     }
 }

@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::delete_asset_dir;
 use crate::{
+    AssetResourceState,
     base::Assets,
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
@@ -324,6 +325,7 @@ where
             fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
@@ -336,6 +338,15 @@ where
     ) -> AssetsResult<Self::Res> {
         self.touch_and_maybe_evict(self.inner.asset_root(), None);
         self.inner.open_resource_with_ctx(key, ctx)
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.touch_and_maybe_evict(self.inner.asset_root(), None);
+        self.inner.acquire_resource_with_ctx(key, ctx)
     }
 }
 

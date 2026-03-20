@@ -44,6 +44,7 @@ mod key;
 mod lease;
 mod mem_store;
 mod process;
+mod state;
 mod store;
 mod unified;
 
@@ -57,5 +58,6 @@ pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};
 pub use process::ProcessChunkFn;
-pub use store::{AssetResource, AssetStoreBuilder, StoreOptions};
+pub use state::AssetResourceState;
+pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};
 pub use unified::AssetStore;

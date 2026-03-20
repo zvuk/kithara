@@ -6,7 +6,7 @@
 //! Firewheel output buffers.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     num::NonZeroU32,
     sync::{Arc, atomic::Ordering},
 };
@@ -23,10 +23,11 @@ use ringbuf::{
     HeapCons,
     traits::{Consumer, Producer},
 };
-use thunderdome::{Arena, Index};
+use thunderdome::Index;
 use tracing::warn;
 
 use super::{
+    arena_registry::ArenaRegistry,
     crossfade::CrossfadeSettings,
     player_notification::PlayerNotification,
     player_resource::PlayerResource,
@@ -78,8 +79,7 @@ pub(crate) struct PlayerNodeProcessor {
     sample_rate: NonZeroU32,
     scratch_bufs: [PcmBuf; 4],
     shared_state: Arc<SharedPlayerState>,
-    tracks: Arena<PlayerTrack>,
-    tracks_index: HashMap<Arc<str>, Index>,
+    tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     tracks_transitions: VecDeque<TrackTransition>,
 }
 
@@ -99,8 +99,7 @@ impl PlayerNodeProcessor {
             sample_rate,
             scratch_bufs,
             shared_state,
-            tracks: Arena::with_capacity(MAX_TRACKS),
-            tracks_index: HashMap::with_capacity(MAX_TRACKS),
+            tracks: ArenaRegistry::with_capacity(MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(MAX_TRACKS),
         }
     }
@@ -134,12 +133,12 @@ impl PlayerNodeProcessor {
                 PlayerCmd::SetCrossfadeCurve(curve) => {
                     self.crossfade.curve = curve;
                     let fade_curve = self.crossfade.fade_curve();
-                    for (_, track) in &mut self.tracks {
+                    for (_, track) in self.tracks.iter_mut() {
                         track.set_fade_curve(fade_curve);
                     }
                 }
                 PlayerCmd::SetPlaybackRate(rate) => {
-                    for (_, track) in &self.tracks {
+                    for (_, track) in self.tracks.iter() {
                         if let Ok(resource) = track.resource().try_lock() {
                             resource.set_playback_rate(rate);
                         }
@@ -151,8 +150,7 @@ impl PlayerNodeProcessor {
 
     /// Load a new track into the arena.
     fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
-        if let Some(idx) = self.tracks_index.remove(&src) {
-            self.tracks.remove(idx);
+        if self.tracks.remove(&src).is_some() {
             self.shared_state
                 .notification_tx
                 .lock_sync()
@@ -173,8 +171,7 @@ impl PlayerNodeProcessor {
             self.sample_rate,
             self.crossfade.fade_curve(),
         );
-        let idx = self.tracks.insert(track);
-        self.tracks_index.insert(Arc::clone(&src), idx);
+        self.tracks.insert(Arc::clone(&src), track);
 
         self.shared_state
             .notification_tx
@@ -185,8 +182,7 @@ impl PlayerNodeProcessor {
 
     /// Unload a track from the arena.
     fn unload_track(&mut self, src: &Arc<str>) {
-        if let Some(idx) = self.tracks_index.remove(src) {
-            self.tracks.remove(idx);
+        if self.tracks.remove(src).is_some() {
             self.shared_state
                 .notification_tx
                 .lock_sync()
@@ -206,9 +202,9 @@ impl PlayerNodeProcessor {
             self.tracks_transitions.clear();
 
             // Find current leading track for automatic fade-out
-            let maybe_old = self.tracks_index.iter().find_map(|(key, &idx)| {
+            let maybe_old = self.tracks.iter_keys().find_map(|(key, idx)| {
                 self.tracks
-                    .get(idx)
+                    .get_by_index(*idx)
                     .filter(|t| t.state().is_leading())
                     .map(|_| Arc::clone(key))
             });
@@ -229,9 +225,7 @@ impl PlayerNodeProcessor {
             let track_src = match transition {
                 TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
             };
-            if let Some(track_index) = self.tracks_index.get(&track_src)
-                && let Some(track) = self.tracks.get_mut(*track_index)
-            {
+            if let Some(track) = self.tracks.get_mut(&track_src) {
                 match transition {
                     TrackTransition::FadeIn(_) => {
                         // Only seek if the track has progressed past the start.
@@ -269,22 +263,24 @@ impl PlayerNodeProcessor {
     /// same state (e.g. all Playing), eviction order is non-deterministic
     /// because `HashMap` iteration order is undefined.
     fn evict_tracks_if_needed(&mut self) {
-        while self.tracks_index.len() >= MAX_TRACKS {
+        while self.tracks.len() >= MAX_TRACKS {
             let eviction_candidate = self
-                .tracks_index
-                .iter()
+                .tracks
+                .iter_keys()
                 .min_by_key(|(_, idx)| {
-                    self.tracks.get(**idx).map_or(0, |t| match t.state() {
-                        TrackState::Finished => 0,
-                        TrackState::FadingOut => 1,
-                        TrackState::Preloading => 2,
-                        TrackState::Paused => 3,
-                        TrackState::FadingIn => 4,
-                        TrackState::Playing => 5,
-                    })
+                    self.tracks
+                        .get_by_index(**idx)
+                        .map_or(0, |t| match t.state() {
+                            TrackState::Finished => 0,
+                            TrackState::FadingOut => 1,
+                            TrackState::Preloading => 2,
+                            TrackState::Paused => 3,
+                            TrackState::FadingIn => 4,
+                            TrackState::Playing => 5,
+                        })
                 })
                 .map(|(key, idx)| {
-                    let state = self.tracks.get(*idx).map(PlayerTrack::state);
+                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
                     (Arc::clone(key), state)
                 });
 
@@ -295,8 +291,7 @@ impl PlayerNodeProcessor {
                         "evicting a Playing track to make room for a new track"
                     );
                 }
-                if let Some(idx) = self.tracks_index.remove(&key) {
-                    self.tracks.remove(idx);
+                if self.tracks.remove(&key).is_some() {
                     self.shared_state
                         .notification_tx
                         .lock_sync()
@@ -315,7 +310,7 @@ impl PlayerNodeProcessor {
             return;
         }
 
-        for (_, track) in &mut self.tracks {
+        for (_, track) in self.tracks.iter_mut() {
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
                     track.seek(seconds);
@@ -332,7 +327,7 @@ impl PlayerNodeProcessor {
     /// Update fade duration for all tracks.
     fn apply_fade_duration(&mut self, duration: f32) {
         self.crossfade.duration = duration;
-        for (_, track) in &mut self.tracks {
+        for (_, track) in self.tracks.iter_mut() {
             track.update_fade_duration(duration, self.sample_rate);
         }
     }
@@ -345,7 +340,7 @@ impl PlayerNodeProcessor {
         let mut finished_indices: [Option<Index>; MAX_TRACKS] = [None; MAX_TRACKS];
         let mut count = 0;
 
-        for (idx, track) in &self.tracks {
+        for (idx, track) in self.tracks.iter() {
             if track.state() == TrackState::Finished && count < MAX_TRACKS {
                 finished_indices[count] = Some(idx);
                 count += 1;
@@ -353,9 +348,8 @@ impl PlayerNodeProcessor {
         }
 
         for idx in finished_indices[..count].iter().flatten() {
-            if let Some(track) = self.tracks.remove(*idx) {
+            if let Some(track) = self.tracks.remove_by_index(*idx) {
                 let src = Arc::clone(track.src());
-                self.tracks_index.retain(|_, v| *v != *idx);
                 self.shared_state
                     .notification_tx
                     .lock_sync()
@@ -367,7 +361,7 @@ impl PlayerNodeProcessor {
 
     /// Update position and duration from the leading track.
     fn update_position_duration(&self) {
-        for (_, track) in &self.tracks {
+        for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.shared_state
                     .position
@@ -409,7 +403,7 @@ impl PlayerNodeProcessor {
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
 
-        for (_, track) in &mut self.tracks {
+        for (_, track) in self.tracks.iter_mut() {
             if is_playing && track.state().is_playing() {
                 // Clear mix_bufs (wet signal) before each track
                 for ch_buffer in &mut mix_bufs {
@@ -448,7 +442,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             .store(new_sr.get(), Ordering::Relaxed);
 
         // Update host_sample_rate for all active tracks
-        for (_, track) in &self.tracks {
+        for (_, track) in self.tracks.iter() {
             if let Ok(resource) = track.resource().try_lock() {
                 resource.set_host_sample_rate(new_sr);
             }
@@ -631,7 +625,6 @@ mod tests {
     fn processor_renders_silence_when_no_tracks() {
         let (processor, _tx) = make_processor();
         assert_eq!(processor.tracks.len(), 0);
-        assert_eq!(processor.tracks_index.len(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -673,7 +666,7 @@ mod tests {
 
         assert_eq!(processor.tracks.len(), expected_tracks);
         assert_eq!(
-            processor.tracks_index.contains_key("track1.mp3"),
+            processor.tracks.get("track1.mp3").is_some(),
             should_contain_track
         );
 
@@ -737,9 +730,7 @@ mod tests {
         .ok();
         processor.drain_commands();
 
-        if let Some(idx) = processor.tracks_index.get(&src)
-            && let Some(track) = processor.tracks.get_mut(*idx)
-        {
+        if let Some(track) = processor.tracks.get_mut(&src) {
             track.seek(12.0);
             assert!(track.position() >= 11.9);
         } else {
@@ -752,9 +743,7 @@ mod tests {
         .ok();
         processor.drain_commands();
 
-        if let Some(idx) = processor.tracks_index.get(&src)
-            && let Some(track) = processor.tracks.get(*idx)
-        {
+        if let Some(track) = processor.tracks.get(&src) {
             assert!(track.position() <= 0.001);
         } else {
             panic!("track must remain loaded");
@@ -775,9 +764,7 @@ mod tests {
 
         // Manually set state to finished
         let key: Arc<str> = Arc::from("track1.mp3");
-        if let Some(idx) = processor.tracks_index.get(&key)
-            && let Some(track) = processor.tracks.get_mut(*idx)
-        {
+        if let Some(track) = processor.tracks.get_mut(&key) {
             track.stop();
         }
 

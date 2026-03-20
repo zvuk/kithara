@@ -18,6 +18,7 @@ aes = { workspace = true }
 cbc = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-drm = { path = ".", default-features = false, features = ["internal"] }

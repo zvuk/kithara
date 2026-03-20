@@ -26,7 +26,12 @@ const SEEK_ITERATIONS: usize = 800;
 const PROBE_SIZE: usize = 64;
 const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::disk(false)]
@@ -136,7 +141,12 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 /// - or backfill rewind re-downloads evicted segments infinitely
 ///
 /// This test is RED before steps 4-6 fixes.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(90)))]
+#[kithara::test(
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[cfg(not(target_arch = "wasm32"))]
 async fn ephemeral_small_cache_reads_entire_stream() {
     let temp_dir = TestTempDir::new();

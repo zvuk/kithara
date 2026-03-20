@@ -52,7 +52,12 @@ fn warn_tracing_setup(warn_filter: EnvFilter) {
 /// 3. Rodio decoder can be created from the stream
 ///
 /// Note: This test uses a local test server.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_basic_hls_playback(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -117,7 +122,12 @@ async fn test_basic_hls_playback(
 }
 
 /// Test that verifies HLS session creation without actual playback.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_session_creation(
     _warn_tracing_setup: (),
     temp_dir: TestTempDir,
@@ -150,7 +160,12 @@ async fn test_hls_session_creation(
 }
 
 /// Test HLS with init segments.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_with_init_segments(
     _warn_tracing_setup: (),
     temp_dir: TestTempDir,
@@ -169,7 +184,12 @@ async fn test_hls_with_init_segments(
 }
 
 /// Test HLS with different options configurations.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_with_different_options(
     _warn_tracing_setup: (),
     temp_dir: TestTempDir,
@@ -187,7 +207,12 @@ async fn test_hls_with_different_options(
 }
 
 /// Test HLS session error handling with invalid URLs.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")]
 #[case("not-a-valid-url")]
 #[case("")]
@@ -220,7 +245,12 @@ async fn test_hls_invalid_url_handling(
 
 /// Test that INIT segment comes first in byte stream (offset 0).
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_init_segment_at_stream_start(
     _warn_tracing_setup: (),
     temp_dir: TestTempDir,
@@ -268,7 +298,12 @@ async fn test_init_segment_at_stream_start(
 }
 
 /// Test HLS with limited cache.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_without_cache(
     _warn_tracing_setup: (),
     temp_dir: TestTempDir,

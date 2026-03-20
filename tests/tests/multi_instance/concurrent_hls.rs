@@ -174,7 +174,13 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 // Tests
 
 /// 2 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn two_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
@@ -207,7 +213,13 @@ async fn two_hls_instances(_tracing_setup: ()) {
 }
 
 /// 4 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn four_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
@@ -238,7 +250,13 @@ async fn four_hls_instances(_tracing_setup: ()) {
 }
 
 /// 8 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn eight_hls_instances(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 
@@ -269,7 +287,13 @@ async fn eight_hls_instances(_tracing_setup: ()) {
 }
 
 /// 4 concurrent HLS instances with auto ABR (2 variants).
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn four_hls_instances_with_abr(_tracing_setup: ()) {
     let wav_data = generate_wav_data();
 

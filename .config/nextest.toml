@@ -2,10 +2,18 @@
 fail-fast = false
 test-threads = 4
 
+# Heavy stress tests must run alone to avoid resource contention.
+[[profile.default.overrides]]
+filter = 'binary(suite_heavy)'
+threads-required = 4
+
 [profile.ci]
 fail-fast = false
 test-threads = 4
 
+[[profile.ci.overrides]]
+filter = 'binary(suite_heavy)'
+threads-required = 4
 # Fast-only profile: heavy tests are excluded via -E filter in justfile.
 [profile.fast]
 fail-fast = false

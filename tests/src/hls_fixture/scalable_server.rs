@@ -180,16 +180,23 @@ mod native {
                 async move { serve_segment(&c, &filename).await }
             });
 
-            // When head_reported_segment_size is set, HEAD returns a different
-            // Content-Length than the actual GET body (simulates HTTP compression).
-            let seg_route = if config.head_reported_segment_size.is_some() {
-                seg_route.head(move |Path(_filename): Path<String>| {
-                    let c = Arc::clone(&cfg_seg_head);
-                    async move { serve_segment_head(&c).await }
-                })
-            } else {
-                seg_route
-            };
+            // HEAD handler: when head_reported_segment_size is set, returns a
+            // different Content-Length (simulates HTTP compression). Otherwise
+            // returns the actual segment size computed cheaply (no encryption or
+            // data generation) so that calculate_size_map HEAD requests don't
+            // block the downloader.
+            let cfg_seg_head_default = Arc::clone(&config);
+            let seg_route = seg_route.head(move |Path(filename): Path<String>| {
+                let c_override = Arc::clone(&cfg_seg_head);
+                let c_default = Arc::clone(&cfg_seg_head_default);
+                async move {
+                    if c_override.head_reported_segment_size.is_some() {
+                        serve_segment_head(&c_override).await
+                    } else {
+                        serve_segment_head_default(&c_default, &filename)
+                    }
+                }
+            });
 
             let app = Router::new()
                 .route(
@@ -354,6 +361,44 @@ mod native {
         let size = config
             .head_reported_segment_size
             .unwrap_or(config.segment_size);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_LENGTH,
+            size.to_string().parse().unwrap(),
+        );
+        (axum::http::StatusCode::OK, headers)
+    }
+
+    /// Efficient HEAD response: computes Content-Length without generating
+    /// or encrypting segment data. For encrypted segments returns the
+    /// PKCS7-padded size.
+    fn serve_segment_head_default(
+        config: &HlsTestServerConfig,
+        filename: &str,
+    ) -> (axum::http::StatusCode, axum::http::HeaderMap) {
+        let plaintext_size = if let Some(ref per_variant) = config.custom_data_per_variant {
+            let (variant, segment) = parse_segment_filename(filename).unwrap_or((0, 0));
+            per_variant
+                .get(variant)
+                .map_or(config.segment_size, |data| {
+                    let start = segment * config.segment_size;
+                    (start + config.segment_size).min(data.len()) - start
+                })
+        } else if let Some(data) = &config.custom_data {
+            let (_variant, segment) = parse_segment_filename(filename).unwrap_or((0, 0));
+            let start = segment * config.segment_size;
+            (start + config.segment_size).min(data.len()) - start
+        } else {
+            config.segment_size
+        };
+
+        let size = if config.encryption.is_some() {
+            // PKCS7 padding: always adds 1..=16 bytes to reach next 16-byte boundary
+            plaintext_size + (16 - plaintext_size % 16)
+        } else {
+            plaintext_size
+        };
+
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::CONTENT_LENGTH,

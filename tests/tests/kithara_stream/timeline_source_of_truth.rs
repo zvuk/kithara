@@ -10,24 +10,67 @@ use std::{
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
-    Timeline,
+    DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
 struct TimelineSource {
+    coord: TimelineCoord,
     data: Vec<u8>,
+}
+
+struct TimelineCoord {
+    demand: DemandSlot<()>,
     timeline: Timeline,
+}
+
+impl TimelineCoord {
+    fn new(timeline: Timeline) -> Self {
+        Self {
+            demand: DemandSlot::new(),
+            timeline,
+        }
+    }
+}
+
+impl TransferCoordination<()> for TimelineCoord {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn demand(&self) -> &DemandSlot<()> {
+        &self.demand
+    }
 }
 
 impl TimelineSource {
     fn new(data: Vec<u8>, timeline: Timeline) -> Self {
-        Self { data, timeline }
+        Self {
+            coord: TimelineCoord::new(timeline),
+            data,
+        }
     }
 }
 
 impl Source for TimelineSource {
     type Error = io::Error;
+    type Topology = ();
+    type Layout = ();
+    type Coord = TimelineCoord;
+    type Demand = ();
+
+    fn topology(&self) -> &Self::Topology {
+        &()
+    }
+
+    fn layout(&self) -> &Self::Layout {
+        &()
+    }
+
+    fn coord(&self) -> &Self::Coord {
+        &self.coord
+    }
 
     fn wait_range(
         &mut self,
@@ -48,16 +91,15 @@ impl Source for TimelineSource {
         let available = &self.data[start..];
         let n = available.len().min(buf.len());
         buf[..n].copy_from_slice(&available[..n]);
-        self.timeline.set_byte_position(offset + n as u64);
         Ok(ReadOutcome::Data(n))
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
+        kithara_stream::SourcePhase::Ready
     }
 
     fn len(&self) -> Option<u64> {
         u64::try_from(self.data.len()).ok()
-    }
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
     }
 }
 
@@ -70,6 +112,10 @@ struct TimelineStream;
 
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
+    type Topology = ();
+    type Layout = ();
+    type Coord = TimelineCoord;
+    type Demand = ();
     type Source = TimelineSource;
     type Error = io::Error;
     type Events = ();

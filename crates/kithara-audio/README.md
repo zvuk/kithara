@@ -97,7 +97,7 @@ flowchart TB
 ```
 
 - **Stream backend thread** (`kithara-stream`): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
-- **Decode thread** (dedicated OS thread): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure.
+- **Decode thread** (shared `AudioWorker` OS thread): cooperative round-robin scheduler that checks `is_ready()` before each track step, calls `Decoder::next_chunk`, applies effects (resampler), and sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure. Multiple tracks share one worker thread via `AudioWorkerHandle`.
 - **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 

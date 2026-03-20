@@ -7,17 +7,6 @@ use std::sync::Arc;
 
 use crate::error::PlayError;
 
-/// Reason why a track transitioned into a stopped state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackStopReason {
-    /// The track naturally reached end-of-file.
-    Eof,
-    /// The track finished a fade-out transition.
-    FadeOut,
-    /// The track was explicitly stopped.
-    Stop,
-}
-
 /// Notifications emitted by the player processor on the audio thread.
 ///
 /// All variants carry an `Arc<str>` identifier for the track they refer to.
@@ -38,11 +27,8 @@ pub(crate) enum PlayerNotification {
     TrackAboutToEnd(Arc<str>),
     /// A track started audible playback (fade-in completed or `play()`).
     TrackPlaybackStarted(Arc<str>),
-    /// A track stopped playback for the given reason.
-    TrackPlaybackStopped {
-        src: Arc<str>,
-        reason: TrackStopReason,
-    },
+    /// A track stopped playback (EOF or `stop()`).
+    TrackPlaybackStopped(Arc<str>),
     /// A track was paused (fade-out completed).
     TrackPlaybackPaused(Arc<str>),
     /// The next track should be queued (position reached fade duration before end).
@@ -73,14 +59,6 @@ mod tests {
         PlayerNotification::TrackRequested(Arc::from("queued.mp3")),
         "TrackRequested",
         "queued.mp3"
-    )]
-    #[case(
-        PlayerNotification::TrackPlaybackStopped {
-            src: Arc::from("ended.mp3"),
-            reason: TrackStopReason::Eof,
-        },
-        "TrackPlaybackStopped",
-        "ended.mp3"
     )]
     fn notification_debug_format(
         #[case] n: PlayerNotification,

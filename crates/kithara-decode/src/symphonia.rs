@@ -181,12 +181,16 @@ impl SymphoniaInner {
         // Disable seek during initialization for ALL containers.
         // Some format readers (IsoMp4Reader) try to seek to end looking for atoms,
         // which breaks streaming scenarios. After initialization, seek is enabled.
-        let adapter = ReadSeekAdapter::new_seek_disabled(source);
+        //
+        // When config provides a byte_len_handle, the adapter shares the same
+        // Arc so that later update_byte_len() calls are visible to Symphonia.
+        let adapter = if let Some(ref handle) = config.byte_len_handle {
+            ReadSeekAdapter::new_seek_disabled_shared(source, Arc::clone(handle))
+        } else {
+            ReadSeekAdapter::new_seek_disabled(source)
+        };
 
-        let byte_len_handle = config
-            .byte_len_handle
-            .as_ref()
-            .map_or_else(|| adapter.byte_len_handle(), Arc::clone);
+        let byte_len_handle = adapter.byte_len_handle();
 
         // Keep handle to re-enable seek after initialization
         let seek_enabled_handle = adapter.seek_enabled_handle();
@@ -245,16 +249,20 @@ impl SymphoniaInner {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let adapter = if seek_enabled {
-            ReadSeekAdapter::new_seek_enabled(source)
-        } else {
-            ReadSeekAdapter::new_seek_disabled(source)
+        // Share the byte_len handle with config when provided, so
+        // update_byte_len() and MediaSource::byte_len() use the same Arc.
+        let adapter = match (&config.byte_len_handle, seek_enabled) {
+            (Some(handle), false) => {
+                ReadSeekAdapter::new_seek_disabled_shared(source, Arc::clone(handle))
+            }
+            (Some(handle), true) => {
+                ReadSeekAdapter::new_inner(source, Some(Arc::clone(handle)), true)
+            }
+            (None, true) => ReadSeekAdapter::new_seek_enabled(source),
+            (None, false) => ReadSeekAdapter::new_seek_disabled(source),
         };
 
-        let byte_len_handle = config
-            .byte_len_handle
-            .as_ref()
-            .map_or_else(|| adapter.byte_len_handle(), Arc::clone);
+        let byte_len_handle = adapter.byte_len_handle();
 
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
@@ -526,7 +534,7 @@ impl SymphoniaInner {
             track_id: Some(self.track_id),
         };
 
-        tracing::debug!(
+        tracing::trace!(
             position_secs = pos.as_secs_f64(),
             track_id = self.track_id,
             "sending seek to symphonia"
@@ -672,27 +680,33 @@ impl<R: Seek> ReadSeekAdapter<R> {
     /// Seek is disabled during decoder initialization to prevent format readers
     /// from seeking to end of stream looking for metadata atoms.
     /// Call `seek_enabled_handle().store(true, ...)` after initialization.
-    fn new_seek_disabled(mut inner: R) -> Self {
-        let byte_len = Arc::new(AtomicU64::new(0));
-        let seek_enabled = Arc::new(AtomicBool::new(false));
-        // Try to probe the byte length statically (works for Cursor, File, etc.)
-        if let Some(len) = Self::probe_byte_len(&mut inner) {
-            byte_len.store(len, Ordering::Release);
-        }
-        Self {
-            inner,
-            byte_len,
-            seek_enabled,
-        }
+    fn new_seek_disabled(inner: R) -> Self {
+        Self::new_inner(inner, None, false)
     }
 
     /// Create adapter with seek enabled from the start.
     ///
     /// Used for probe-based initialization where seek is needed for format detection.
-    fn new_seek_enabled(mut inner: R) -> Self {
-        let byte_len = Arc::new(AtomicU64::new(0));
-        let seek_enabled = Arc::new(AtomicBool::new(true));
-        // Try to probe the byte length statically (works for Cursor, File, etc.)
+    fn new_seek_enabled(inner: R) -> Self {
+        Self::new_inner(inner, None, true)
+    }
+
+    /// Create adapter with a shared byte-length handle and seek disabled.
+    ///
+    /// When a shared handle is provided, the adapter reports its `byte_len`
+    /// through the same `Arc<AtomicU64>` that `update_byte_len()` writes to.
+    /// This keeps Symphonia's view of stream length in sync with runtime
+    /// reconciliation (e.g., DRM decrypted sizes).
+    fn new_seek_disabled_shared(inner: R, handle: Arc<AtomicU64>) -> Self {
+        Self::new_inner(inner, Some(handle), false)
+    }
+
+    fn new_inner(mut inner: R, shared_handle: Option<Arc<AtomicU64>>, seek_enabled: bool) -> Self {
+        let byte_len = shared_handle.unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
+        let seek_enabled = Arc::new(AtomicBool::new(seek_enabled));
+        // Probe the byte length and store it. For shared handles, this
+        // overwrites the factory's value with the probed (adapter-local)
+        // value — both are expected to be identical at construction time.
         if let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }

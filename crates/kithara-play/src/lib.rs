@@ -40,6 +40,7 @@ pub use impls::{
     resource::Resource,
     source_type::SourceType,
 };
+pub use kithara_audio::{AudioWorkerHandle, ServiceClass};
 #[cfg(any(feature = "file", feature = "hls"))]
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
@@ -51,7 +52,7 @@ pub use traits::{
         bpm::{BeatGrid, BpmAnalyzer, BpmInfo, BpmSync},
         crossfade::{CrossfadeConfig, CrossfadeController, CrossfadeCurve},
         effects::{DjEffect, DjEffectKind},
-        eq::{EqConfig, Equalizer},
+        eq::Equalizer,
     },
     engine::Engine,
     item::PlayerItem,
@@ -64,6 +65,6 @@ pub use traits::{
     },
 };
 pub use types::{
-    ActionAtItemEnd, EqBand, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
+    ActionAtItemEnd, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
     TimeControlStatus, TimeRange, WaitingReason,
 };

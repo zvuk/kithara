@@ -43,6 +43,12 @@ pub enum AudioEvent {
         position: Duration,
         seek_epoch: SeekEpoch,
     },
+    /// Seek abandoned after exhausting retry budget.
+    SeekRejected {
+        epoch: SeekEpoch,
+        target: Duration,
+        attempts: u8,
+    },
     /// Decoding finished (EOF).
     EndOfStream,
 }

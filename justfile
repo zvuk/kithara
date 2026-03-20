@@ -260,7 +260,6 @@ android-aar:
     cargo xtask android --profile release
     cd android && ./gradlew :lib:assembleRelease -Pkithara.release=true -x generateKitharaFfi
     @echo "==> AAR: android/lib/build/outputs/aar/lib-release.aar"
-
 # --- apple ---
 
 # Build XCFramework for Apple platforms.

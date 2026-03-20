@@ -14,7 +14,12 @@ fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
 
 // Test Cases
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_master_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -29,7 +34,12 @@ async fn fetch_master_playlist_from_network(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_media_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -48,7 +58,12 @@ async fn fetch_media_playlist_from_network(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn resolve_url_with_base_override(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -71,7 +86,12 @@ async fn resolve_url_with_base_override(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_media_playlist_for_different_variants(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -97,7 +117,12 @@ async fn fetch_media_playlist_for_different_variants(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -121,7 +146,12 @@ async fn fetch_manager_caching_behavior(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
@@ -138,7 +168,12 @@ async fn fetch_manager_error_handling_invalid_url(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn resolve_multiple_relative_urls(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -171,7 +206,12 @@ async fn resolve_multiple_relative_urls(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(browser_timeout(5, 30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn fetch_manager_with_different_base_urls(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,

@@ -31,6 +31,10 @@ use syn::{FnArg, ImplItem, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Type, pars
 /// }
 /// ```
 #[proc_macro_attribute]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "proc_macro attribute, panics are compile errors"
+)]
 pub fn wasm_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemImpl);
     let mut free_fns = Vec::new();

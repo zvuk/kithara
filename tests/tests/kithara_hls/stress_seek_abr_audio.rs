@@ -158,7 +158,13 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
 /// 3. Verify switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
-#[kithara::test(native, tokio, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+)]
 async fn stress_seek_abr_audio(_tracing_setup: ()) {
     // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_init_segment());

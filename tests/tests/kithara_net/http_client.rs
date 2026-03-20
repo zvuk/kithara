@@ -367,7 +367,11 @@ async fn test_head_success(client: &HttpClient, url: Url) -> Result<Headers, Net
 
 // Parameterized tests
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("/test", b"Hello, World!")]
 #[case("/headers", b"Headers received")]
 async fn test_get_bytes_success_cases(
@@ -384,7 +388,11 @@ async fn test_get_bytes_success_cases(
     assert_eq!(result.unwrap(), Bytes::from(expected_data));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("/test")]
 #[case("/headers")]
 async fn test_stream_success_cases(
@@ -405,7 +413,11 @@ async fn test_stream_success_cases(
     assert_eq!(result.unwrap(), expected);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case(7, Some(11), b"World")]
 #[case(0, Some(4), b"Hello")]
 #[case(7, None, b"World!")]
@@ -425,7 +437,11 @@ async fn test_get_range_success_cases(
 }
 
 // Error handling tests - simplified to handle HttpError variant
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("/error404", 404, false)]
 #[case("/error500", 500, true)]
 #[case("/error429", 429, true)]
@@ -457,7 +473,11 @@ async fn test_http_errors(
     assert_eq!(error.is_retryable(), is_retryable);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_head_success_case(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/head-length");
@@ -469,7 +489,11 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
     assert_eq!(headers.get("content-type"), Some("text/plain"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_headers_variants(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/headers");
@@ -486,7 +510,11 @@ async fn test_headers_variants(#[future] test_server: TestServer, http_client: H
 }
 
 // Fix timeout tests - use appropriate timeouts
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case("/slow-headers", Duration::from_millis(1000), true)]
 #[case("/slow-body", Duration::from_millis(1000), true)]
 #[case("/timeout-test", Duration::from_millis(300), false)]
@@ -516,7 +544,11 @@ async fn test_timeout_variants(
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_retry_variants(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/retry-test");
@@ -530,7 +562,11 @@ async fn test_retry_variants(#[future] test_server: TestServer, http_client: Htt
     assert_eq!(result.unwrap(), Bytes::from("Success after retries"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_range_on_non_range_supporting_server(
     #[future] test_server: TestServer,
     http_client: HttpClient,
@@ -554,7 +590,11 @@ async fn test_range_on_non_range_supporting_server(
 }
 
 // Fix invalid URL test - use shorter timeout and expect connection error
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(1)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_invalid_url(http_client: HttpClient) {
     // Use a URL that should fail quickly (non-routable IP)
     let url = Url::parse("http://192.0.2.1:9999/invalid").unwrap();
@@ -578,7 +618,11 @@ async fn test_invalid_url(http_client: HttpClient) {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_stream_cancellation(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/slow-body");

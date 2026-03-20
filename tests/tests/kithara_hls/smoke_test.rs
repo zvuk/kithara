@@ -20,7 +20,12 @@ use url::Url;
 
 // Test Cases
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_session_creation(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -65,7 +70,12 @@ async fn test_hls_session_creation(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 #[case::plain(false)]
 #[case::with_init(true)]
 async fn test_hls_stream_creation(
@@ -90,7 +100,12 @@ async fn test_hls_stream_creation(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_session_events_consumption(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -129,7 +144,12 @@ async fn test_hls_session_events_consumption(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_invalid_url_handling(
     _tracing_setup: (),
     temp_dir: TestTempDir,
@@ -154,7 +174,12 @@ async fn test_hls_invalid_url_handling(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(5)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn test_hls_session_drop_cleanup(
     _tracing_setup: (),
     temp_dir: TestTempDir,

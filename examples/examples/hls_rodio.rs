@@ -20,10 +20,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let decoder = rodio::Decoder::new(stream)?;
 
     kithara_platform::tokio::task::spawn_blocking(move || {
-        let stream = rodio::OutputStreamBuilder::open_default_stream()?;
-        let sink = rodio::Sink::connect_new(stream.mixer());
-        sink.append(decoder);
-        sink.sleep_until_end();
+        let stream = rodio::DeviceSinkBuilder::open_default_sink()?;
+        let player = rodio::Player::connect_new(stream.mixer());
+        player.append(decoder);
+        player.sleep_until_end();
         Ok::<_, Box<dyn Error + Send + Sync>>(())
     })
     .await??;

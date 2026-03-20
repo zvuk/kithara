@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::{self, Debug},
     fs,
     ops::Range,
     path::Path,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -18,8 +18,57 @@ use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex, key::ResourceKey,
+    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
+    key::ResourceKey,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AccessMode {
+    Read,
+    Write,
+}
+
+type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
+
+struct LiveResource {
+    key: ResourceKey,
+    registry: Weak<Mutex<HashMap<ResourceKey, Weak<Self>>>>,
+    state: Mutex<AssetResourceState>,
+}
+
+impl LiveResource {
+    fn new(
+        key: ResourceKey,
+        registry: Weak<Mutex<HashMap<ResourceKey, Weak<Self>>>>,
+        state: AssetResourceState,
+    ) -> Self {
+        Self {
+            key,
+            registry,
+            state: Mutex::new(state),
+        }
+    }
+
+    fn set(&self, state: AssetResourceState) {
+        *self.state.lock_sync() = state;
+    }
+
+    fn snapshot(&self) -> AssetResourceState {
+        self.state.lock_sync().clone()
+    }
+}
+
+impl Drop for LiveResource {
+    fn drop(&mut self) {
+        let Some(registry) = self.registry.upgrade() else {
+            return;
+        };
+        let mut guard = registry.lock_sync();
+        if guard.get(&self.key).and_then(Weak::upgrade).is_none() {
+            guard.remove(&self.key);
+        }
+    }
+}
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
@@ -42,8 +91,22 @@ where
     cancel: CancellationToken,
     dirty: Arc<AtomicBool>,
     inner: Arc<A>,
+    live: Arc<Mutex<HashMap<ResourceKey, Weak<LiveResource>>>>,
     pins: Arc<Mutex<HashSet<String>>>,
     pool: BytePool,
+}
+
+impl<A> Debug for LeaseAssets<A>
+where
+    A: Assets,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pin_count = self.pins.try_lock().ok().map(|pins| pins.len());
+        f.debug_struct("LeaseAssets")
+            .field("dirty", &self.dirty.load(Ordering::Acquire))
+            .field("pin_count", &pin_count)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<A> LeaseAssets<A>
@@ -56,6 +119,7 @@ where
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
             inner,
+            live: Arc::new(Mutex::new(HashMap::new())),
             pins: Arc::new(Mutex::new(HashSet::new())),
             pool,
         }
@@ -73,6 +137,7 @@ where
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
             inner,
+            live: Arc::new(Mutex::new(HashMap::new())),
             pins: Arc::new(Mutex::new(HashSet::new())),
             pool,
         }
@@ -170,26 +235,64 @@ where
             })),
         })
     }
+
+    fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
+        let next = AssetResourceState::from(status);
+        let mut registry = self.live.lock_sync();
+        if let Some(existing) = registry.get(key).and_then(Weak::upgrade) {
+            let preserve_live = matches!(
+                existing.snapshot(),
+                AssetResourceState::Active | AssetResourceState::Failed(_)
+            ) && matches!(next, AssetResourceState::Committed { .. });
+            if !preserve_live {
+                existing.set(next);
+            }
+            return existing;
+        }
+
+        let live = Arc::new(LiveResource::new(
+            key.clone(),
+            Arc::downgrade(&self.live),
+            next,
+        ));
+        registry.insert(key.clone(), Arc::downgrade(&live));
+        live
+    }
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
 #[derive(Clone)]
-pub struct LeaseResource<R, L> {
+pub struct LeaseResource<R: ResourceExt, L> {
     inner: R,
     _lease: L,
+    mode: AccessMode,
     asset_root: String,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    drop_token: Option<Arc<()>>,
+    live: Option<Arc<LiveResource>>,
+    remove: Option<RemoveFn>,
+    resource_key: Option<ResourceKey>,
 }
 
 impl<R, L> Debug for LeaseResource<R, L>
 where
-    R: Debug,
+    R: ResourceExt + Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaseResource")
             .field("inner", &self.inner)
+            .field("mode", &self.mode)
             .field("asset_root", &self.asset_root)
             .finish_non_exhaustive()
+    }
+}
+
+impl<R: ResourceExt, L> LeaseResource<R, L> {
+    fn write_guard(&self, op: &str) {
+        assert!(
+            matches!(self.mode, AccessMode::Write),
+            "{op} requires acquire_resource*(); handle was opened via open_resource*()"
+        );
     }
 }
 
@@ -201,20 +304,26 @@ where
     delegate::delegate! {
         to self.inner {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn fail(&self, reason: String);
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
-            fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
             fn contains_range(&self, range: Range<u64>) -> bool;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
     }
 
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.write_guard("write_at");
+        self.inner.write_at(offset, data)
+    }
+
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.write_guard("commit");
         self.inner.commit(final_len)?;
+        if let Some(live) = &self.live {
+            live.set(AssetResourceState::from(self.inner.status()));
+        }
 
         // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
@@ -226,6 +335,52 @@ where
         }
 
         Ok(())
+    }
+
+    fn fail(&self, reason: String) {
+        self.write_guard("fail");
+        self.inner.fail(reason.clone());
+        if let Some(live) = &self.live {
+            live.set(AssetResourceState::Failed(reason));
+        }
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        self.write_guard("reactivate");
+        self.inner.reactivate()?;
+        if let Some(live) = &self.live {
+            live.set(AssetResourceState::Active);
+        }
+        Ok(())
+    }
+}
+
+impl<R, L> Drop for LeaseResource<R, L>
+where
+    R: ResourceExt,
+{
+    fn drop(&mut self) {
+        if !matches!(self.mode, AccessMode::Write) {
+            return;
+        }
+
+        if !matches!(
+            self.inner.status(),
+            ResourceStatus::Active | ResourceStatus::Failed(_)
+        ) {
+            return;
+        }
+
+        if let (Some(remove), Some(key)) = (&self.remove, &self.resource_key) {
+            if self
+                .drop_token
+                .as_ref()
+                .is_some_and(|token| Arc::strong_count(token) > 1)
+            {
+                return;
+            }
+            remove(key);
+        }
     }
 }
 
@@ -245,8 +400,14 @@ where
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn delete_asset(&self) -> AssetsResult<()>;
-            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if let Some(live) = self.live.lock_sync().get(key).and_then(Weak::upgrade) {
+            return Ok(live.snapshot());
+        }
+        self.inner.resource_state(key)
     }
 
     fn open_resource_with_ctx(
@@ -254,25 +415,106 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        let inner = self.inner.open_resource_with_ctx(key, ctx)?;
+        self.wrap_resource(key, ctx, AccessMode::Read)
+    }
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.wrap_resource(key, ctx, AccessMode::Write)
+    }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.live.lock_sync().remove(key);
+        self.inner.remove_resource(key)
+    }
+}
+
+impl<A> LeaseAssets<A>
+where
+    A: Assets,
+{
+    fn wrap_resource(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<A::Context>,
+        mode: AccessMode,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        let inner = match mode {
+            AccessMode::Read => self.inner.open_resource_with_ctx(key, ctx)?,
+            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, ctx)?,
+        };
+        self.wrap_opened_resource(key, inner, mode)
+    }
+
+    fn wrap_opened_resource(
+        &self,
+        key: &ResourceKey,
+        inner: A::Res,
+        mode: AccessMode,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        let live = self.open_live_resource(key, inner.status());
 
         if !self.is_active() {
             return Ok(LeaseResource {
                 inner,
                 _lease: LeaseGuard { inner: None },
+                mode,
                 asset_root: self.inner.asset_root().to_string(),
                 byte_recorder: None,
+                drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
+                live: Some(live),
+                remove: None,
+                resource_key: Some(key.clone()),
             });
         }
 
         let lease = self.pin(self.inner.asset_root())?;
+        let remove: RemoveFn = {
+            let inner = Arc::clone(&self.inner);
+            Arc::new(move |key: &ResourceKey| {
+                let _ = inner.remove_resource(key);
+            })
+        };
 
         Ok(LeaseResource {
             inner,
             _lease: lease,
+            mode,
             asset_root: self.inner.asset_root().to_string(),
             byte_recorder: self.byte_recorder.clone(),
+            drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
+            live: Some(live),
+            remove: Some(remove),
+            resource_key: Some(key.clone()),
         })
+    }
+
+    /// Open a resource through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource(
+        &self,
+        key: &ResourceKey,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        self.acquire_resource_with_ctx(key, None)
+    }
+
+    /// Open a resource with context through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<A::Context>,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        self.wrap_resource(key, ctx, AccessMode::Write)
     }
 }
 
@@ -353,8 +595,8 @@ mod tests {
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
 
-        // Open a resource — this pins `test_asset`
-        let _res = lease.open_resource(&key).unwrap();
+        // Acquire a resource — this pins `test_asset`
+        let _res = lease.acquire_resource(&key).unwrap();
 
         // Pins should be on disk immediately (eager persistence)
         let on_disk = load_persisted_pins(dir.path());
@@ -370,7 +612,7 @@ mod tests {
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
 
-        let _res = lease.open_resource(&key).unwrap();
+        let _res = lease.acquire_resource(&key).unwrap();
 
         // Dirty flag is already cleared by eager flush in pin()
         assert!(
@@ -388,7 +630,7 @@ mod tests {
         let key = ResourceKey::new("audio.mp3");
 
         let lease = make_lease(dir.path());
-        let res = lease.open_resource(&key).unwrap();
+        let res = lease.acquire_resource(&key).unwrap();
 
         // Pin is persisted eagerly
         assert!(load_persisted_pins(dir.path()).contains("test_asset"));
@@ -411,7 +653,7 @@ mod tests {
         let key = ResourceKey::new("audio.mp3");
 
         let lease = make_lease(dir.path());
-        let _res = lease.open_resource(&key).unwrap();
+        let _res = lease.acquire_resource(&key).unwrap();
 
         // While resource is still held, flush should persist the active pin
         lease.flush_pins().unwrap();
@@ -429,7 +671,7 @@ mod tests {
 
         let lease = make_lease(dir.path());
         let lease_clone = lease.clone();
-        let _res = lease_clone.open_resource(&key).unwrap();
+        let _res = lease_clone.acquire_resource(&key).unwrap();
 
         // Pin should be persisted eagerly, even through a clone
         assert!(

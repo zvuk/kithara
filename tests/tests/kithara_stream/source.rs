@@ -3,9 +3,7 @@
 use std::io::{self, Read, Seek, SeekFrom};
 
 use kithara_platform::time::Duration;
-use kithara_test_utils::memory_source::{
-    MemorySource, UnknownLenSource, memory_stream, unknown_len_stream,
-};
+use kithara_test_utils::memory_source::{MemorySource, memory_stream, unknown_len_stream};
 
 // Fixtures
 
@@ -21,7 +19,7 @@ fn small_data() -> Vec<u8> {
 
 // SeekFrom::Start tests
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(0, b"ABCDE")]
 #[case(5, b"FGHIJ")]
 #[case(10, b"KLMNO")]
@@ -45,7 +43,7 @@ fn seek_start_reads_correct_bytes(
     assert_eq!(&buf[..n], expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -68,7 +66,7 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 
 // SeekFrom::Current tests
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_current_forward(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -113,7 +111,7 @@ fn seek_current_backward(test_data: Vec<u8>) {
     assert_eq!(&buf[..n], b"FGHIJ");
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -130,7 +128,7 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 
 // SeekFrom::End tests
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case(-5, b"VWXYZ")]
 #[case(-10, b"QRSTU")]
 #[case(-26, b"ABCDE")]
@@ -151,7 +149,7 @@ fn seek_end_reads_correct_bytes(test_data: Vec<u8>, #[case] offset: i64, #[case]
     assert_eq!(&buf[..n], expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = MemorySource::new(test_data);
@@ -166,9 +164,9 @@ fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     assert_eq!(n, 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
-    let source = UnknownLenSource::new(test_data);
+    let source = MemorySource::without_len(test_data);
     let mut stream = unknown_len_stream(source);
 
     let result = stream.seek(SeekFrom::End(-5));
@@ -180,7 +178,7 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 
 // Error cases
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = MemorySource::new(test_data);
@@ -193,7 +191,7 @@ fn seek_past_eof_fails(test_data: Vec<u8>) {
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_negative_position_fails(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -205,7 +203,7 @@ fn seek_negative_position_fails(test_data: Vec<u8>) {
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -219,7 +217,7 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 
 // Multiple seeks
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -256,7 +254,7 @@ fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     assert_eq!(results[3], b'X');
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn position_tracks_correctly(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -288,7 +286,7 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 
 // Edge cases
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
@@ -306,7 +304,7 @@ fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     assert_eq!(pos, 10);
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = MemorySource::new(small_data);
@@ -323,7 +321,7 @@ fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     assert_eq!(buf[0], b'o'); // "Hello" -> last byte is 'o'
 }
 
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = MemorySource::new(small_data);

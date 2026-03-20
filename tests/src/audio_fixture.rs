@@ -50,7 +50,8 @@ mod native {
     use axum::{
         Router,
         body::Body,
-        http::{Response, StatusCode},
+        extract::Request,
+        http::{Response, StatusCode, header},
         routing::get,
     };
     use bytes::Bytes;
@@ -121,24 +122,54 @@ mod native {
         }
     }
 
-    /// Handler for WAV endpoint
-    async fn wav_endpoint() -> Response<Body> {
+    /// Parse `Range: bytes=start-end` header into (start, end) offsets.
+    fn parse_range(req: &Request, total: u64) -> Option<(u64, u64)> {
+        let range_val = req.headers().get(header::RANGE)?;
+        let range_str = range_val.to_str().ok()?;
+        let spec = range_str.strip_prefix("bytes=")?;
+        let (s, e) = spec.split_once('-')?;
+        let start: u64 = s.parse().unwrap_or(0);
+        let end: u64 = if e.is_empty() {
+            total - 1
+        } else {
+            e.parse().unwrap_or(total - 1).min(total - 1)
+        };
+        (start < total).then_some((start, end))
+    }
+
+    /// Serve a static byte slice with HTTP Range support.
+    fn serve_bytes(data: &'static [u8], content_type: &str, req: &Request) -> Response<Body> {
+        let total = data.len() as u64;
+
+        if let Some((start, end)) = parse_range(req, total) {
+            let slice = &data[start as usize..=end as usize];
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header("Content-Type", content_type)
+                .header("Content-Length", slice.len().to_string())
+                .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+                .header("Accept-Ranges", "bytes")
+                .body(Body::from(Bytes::from_static(slice)))
+                .unwrap();
+        }
+
         Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", "audio/wav")
-            .header("Content-Length", TINY_WAV_BYTES.len().to_string())
-            .body(Body::from(Bytes::from_static(TINY_WAV_BYTES)))
+            .header("Content-Type", content_type)
+            .header("Content-Length", total.to_string())
+            .header("Accept-Ranges", "bytes")
+            .body(Body::from(Bytes::from_static(data)))
             .unwrap()
     }
 
+    /// Handler for WAV endpoint
+    async fn wav_endpoint(req: Request) -> Response<Body> {
+        serve_bytes(TINY_WAV_BYTES, "audio/wav", &req)
+    }
+
     /// Handler for MP3 endpoint
-    async fn mp3_endpoint() -> Response<Body> {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "audio/mpeg")
-            .header("Content-Length", TEST_MP3_BYTES.len().to_string())
-            .body(Body::from(Bytes::from_static(TEST_MP3_BYTES)))
-            .unwrap()
+    async fn mp3_endpoint(req: Request) -> Response<Body> {
+        serve_bytes(TEST_MP3_BYTES, "audio/mpeg", &req)
     }
 }
 

@@ -38,7 +38,12 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
 }
 
 /// Create Decoder<Stream<File>> and verify spec.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_creates_successfully(
     #[future] server: AudioTestServer,
     temp_dir: TestTempDir,
@@ -57,7 +62,12 @@ async fn decoder_file_creates_successfully(
 }
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -70,7 +80,12 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Seek to 0: read, seek to beginning, read again.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -85,7 +100,12 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
 }
 
 /// Decoder<Stream<File>> reads MP3 samples and can seek forward.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -112,7 +132,12 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
 }
 
 /// Decoder<Stream<File>> can seek backward to the beginning.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -134,7 +159,12 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -159,7 +189,12 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Decoder<Stream<File>> events are emitted on seek.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
     let server = server.await;
     let url = server.mp3_url();

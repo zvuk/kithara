@@ -17,7 +17,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Diagnostic version with detailed logging and safety limits
-#[kithara::test(tokio, native, timeout(Duration::from_secs(15)))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(15)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn debug_sequential_read(
     _debug_tracing_setup: (),
     temp_dir: TestTempDir,

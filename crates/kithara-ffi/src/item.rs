@@ -172,7 +172,6 @@ impl AudioPlayerItem {
             ItemEventBridge::spawn(rx, observer, duration_seconds, CancellationToken::new());
         *self.event_bridge.lock_sync() = Some(bridge);
     }
-
     /// Atomically claim loading rights. Returns `true` if this call won.
     fn claim_loading(&self) -> bool {
         !self.loading.swap(true, Ordering::AcqRel)
@@ -204,7 +203,6 @@ impl AudioPlayerItem {
         })?;
 
         config::configure_resource(&mut config, &self.store.lock_sync());
-
         let bitrate = self.preferred_peak_bitrate();
         if bitrate > 0.0 {
             config = config.with_preferred_peak_bitrate(bitrate);

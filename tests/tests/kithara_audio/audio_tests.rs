@@ -218,7 +218,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
 
 #[kithara::test(tokio)]
 async fn test_seek_emits_matching_playback_progress() {
-    let (_tmp, config) = test_wav_config(10_000);
+    let (_tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -248,7 +248,7 @@ async fn test_seek_emits_matching_playback_progress() {
 
 #[kithara::test(tokio)]
 async fn test_seek_complete_emitted_only_after_output_commit() {
-    let (_tmp, config) = test_wav_config(10_000);
+    let (_tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -306,7 +306,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 #[case::single(false)]
 #[case::idempotent(true)]
 async fn test_audio_preload(#[case] second_preload: bool) {
@@ -329,4 +329,29 @@ async fn test_audio_preload(#[case] second_preload: bool) {
     let mut buf = [0.0f32; 64];
     let n = audio.read(&mut buf);
     assert!(n > 0);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn test_audio_preload_rearms_after_seek() {
+    let (_tmp, config) = test_wav_config(1000);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    let first_notify = preload_notify(&audio);
+    timeout(Duration::from_secs(1), first_notify.notified())
+        .await
+        .expect("initial preload notify must fire");
+    audio.preload();
+
+    let mut buf = [0.0f32; 64];
+    let n = audio.read(&mut buf);
+    assert!(n > 0, "initial read must produce samples");
+
+    audio.seek(Duration::from_millis(100)).unwrap();
+
+    let second_notify = preload_notify(&audio);
+    timeout(Duration::from_secs(1), second_notify.notified())
+        .await
+        .expect("seek must re-arm preload notify");
 }

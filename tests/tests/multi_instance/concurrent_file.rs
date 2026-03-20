@@ -112,7 +112,13 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + audio_loop),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn two_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 
@@ -145,7 +151,13 @@ async fn two_file_instances(_tracing_setup: ()) {
 }
 
 /// 4 concurrent File instances on a shared pool.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn four_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 
@@ -178,7 +190,13 @@ async fn four_file_instances(_tracing_setup: ()) {
 }
 
 /// 8 concurrent File instances on a shared pool.
-#[kithara::test(tokio, browser, serial, timeout(Duration::from_secs(180)))]
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
 async fn eight_file_instances(_tracing_setup: ()) {
     let server = AudioTestServer::new().await;
 

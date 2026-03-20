@@ -31,13 +31,15 @@ pub mod tokio;
 #[cfg(feature = "internal")]
 pub mod internal;
 
-pub use kithara_hang_detector::{HangDetector, hang_watchdog};
+pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
 };
-pub use thread::{Duration, JoinHandle, sleep, spawn};
+pub use thread::{
+    Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
