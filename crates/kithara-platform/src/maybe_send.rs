@@ -27,6 +27,40 @@ pub trait MaybeSync {}
 #[cfg(target_arch = "wasm32")]
 impl<T> MaybeSync for T {}
 
+/// Trait alias for `Future + MaybeSend`.
+///
+/// On native: `Future + Send` — allows `tokio::spawn`.
+/// On WASM: just `Future` — no `Send` requirement.
+///
+/// Use in return-position impl trait in trait methods:
+/// ```ignore
+/// fn poll_demand(&mut self) -> impl MaybeSendFuture<Output = Option<Plan>>;
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSendFuture: Future + Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Future + Send> MaybeSendFuture for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSendFuture: Future {}
+#[cfg(target_arch = "wasm32")]
+impl<T: Future> MaybeSendFuture for T {}
+
+/// Boxed future that is `Send` on native, unrestricted on WASM.
+///
+/// Use as return type in trait methods to make the returned future
+/// `Send`-compatible on native (enabling `tokio::spawn`) while keeping
+/// WASM compatibility.
+///
+/// ```ignore
+/// fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<Self::Plan>>;
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[cfg(target_arch = "wasm32")]
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
+
 /// Wrapper that unconditionally implements `Send` on WASM.
 ///
 /// On native, `WasmSend<T>` is `Send` only if `T: Send` (no magic).

@@ -10,11 +10,8 @@
 //! - Periodic yield to async runtime
 //! - Cancellation via `CancellationToken`
 
-#[cfg(test)]
-use std::future::Future;
-
 use futures::{StreamExt, stream::FuturesUnordered};
-use kithara_platform::{JoinHandle, tokio};
+use kithara_platform::{JoinHandle, MaybeSend, tokio};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -29,9 +26,14 @@ enum LoopControl {
     Restart,
 }
 
-/// Handle to the downloader worker (OS thread with optional shared runtime).
+/// Handle to the downloader worker — either an OS thread or an async task.
 #[cfg(not(target_arch = "wasm32"))]
-struct WorkerHandle(JoinHandle<()>);
+enum WorkerHandle {
+    /// Dedicated OS thread (fallback for current-thread runtimes).
+    Thread(JoinHandle<()>),
+    /// Async task on a shared runtime (zero extra OS threads).
+    Task(tokio::task::JoinHandle<()>),
+}
 
 /// Spawns and owns a Downloader task.
 ///
@@ -124,20 +126,15 @@ impl Backend {
         });
 
         if let Some(handle) = shared_handle {
-            // Reuse shared runtime — downloader runs on a helper thread that
-            // calls `handle.block_on()`. This avoids creating a new tokio
-            // runtime (no timer/io threads) while keeping the downloader's
-            // non-Send futures off the multi-thread pool.
-            debug!("Backend: reusing shared multi-thread runtime");
-            return WorkerHandle(kithara_platform::spawn(move || {
-                handle.block_on(Self::run_downloader(downloader, cancel));
-            }));
+            // Spawn as async task — zero extra OS threads.
+            debug!("Backend: spawning downloader as async task on shared runtime");
+            return WorkerHandle::Task(handle.spawn(Self::run_downloader(downloader, cancel)));
         }
 
         // Fallback: no multi-thread runtime available — dedicated thread
         // with its own current-thread runtime.
         debug!("Backend: fallback — creating dedicated current-thread runtime");
-        WorkerHandle(kithara_platform::spawn(move || {
+        WorkerHandle::Thread(kithara_platform::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -147,7 +144,7 @@ impl Backend {
     }
 
     #[kithara_hang_detector::hang_watchdog]
-    async fn run_downloader<D: Downloader>(mut dl: D, cancel: CancellationToken) {
+    async fn run_downloader<D: Downloader + MaybeSend>(mut dl: D, cancel: CancellationToken) {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;
         let mut steps_since_yield: usize = 0;
@@ -222,7 +219,7 @@ impl Backend {
         }
     }
 
-    async fn wait_while_throttled<D: Downloader>(
+    async fn wait_while_throttled<D: Downloader + MaybeSend>(
         dl: &mut D,
         cancel: &CancellationToken,
     ) -> Result<bool, ()> {
@@ -270,7 +267,7 @@ impl Backend {
         Ok(made_progress)
     }
 
-    async fn drain_demand_requests<D: Downloader>(
+    async fn drain_demand_requests<D: Downloader + MaybeSend>(
         dl: &mut D,
         cancel: &CancellationToken,
     ) -> Result<bool, ()> {
@@ -289,7 +286,7 @@ impl Backend {
         Ok(made_progress)
     }
 
-    async fn plan_next<D: Downloader>(
+    async fn plan_next<D: Downloader + MaybeSend>(
         dl: &mut D,
         cancel: &CancellationToken,
     ) -> Result<PlanOutcome<D::Plan>, ()> {
@@ -303,11 +300,14 @@ impl Backend {
         }
     }
 
-    async fn handle_idle<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
+    async fn handle_idle<D: Downloader + MaybeSend>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+    ) -> LoopControl {
         tokio::select! {
             biased;
             () = cancel.cancelled() => LoopControl::Exit,
-            () = dl.wait_for_work() => {
+            () = dl.demand_signal() => {
                 // Yield to let other tasks run (e.g. TUI updates).
                 tokio::task::yield_now().await;
                 // Completing an idle wait is forward progress: the downloader
@@ -320,7 +320,7 @@ impl Backend {
     }
 
     #[kithara_hang_detector::hang_watchdog]
-    async fn handle_batch<D: Downloader>(
+    async fn handle_batch<D: Downloader + MaybeSend>(
         dl: &mut D,
         cancel: &CancellationToken,
         plans: Vec<D::Plan>,
@@ -389,7 +389,10 @@ impl Backend {
         LoopControl::Continue { made_progress }
     }
 
-    async fn handle_step<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
+    async fn handle_step<D: Downloader + MaybeSend>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+    ) -> LoopControl {
         let result = tokio::select! {
             biased;
             () = cancel.cancelled() => {
@@ -419,7 +422,7 @@ impl Backend {
 
     /// Non-blocking demand poll: returns `Some(plan)` if demand is available,
     /// `None` if not (without waiting).
-    async fn try_poll_demand<D: Downloader>(
+    async fn try_poll_demand<D: Downloader + MaybeSend>(
         dl: &mut D,
         cancel: &CancellationToken,
     ) -> Option<D::Plan> {
@@ -435,7 +438,7 @@ impl Backend {
 
     /// Fetch a demand plan via I/O and commit. Returns Err(()) on cancellation
     /// or fatal error that should stop the downloader.
-    async fn fetch_and_commit_demand<D: Downloader>(
+    async fn fetch_and_commit_demand<D: Downloader + MaybeSend>(
         dl: &mut D,
         plan: D::Plan,
         cancel: &CancellationToken,
@@ -469,10 +472,17 @@ impl Drop for Backend {
         self.cancel.cancel();
 
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(WorkerHandle(join)) = self.worker.take()
-            && join.join().is_err()
-        {
-            debug!("Downloader worker panicked during shutdown");
+        if let Some(handle) = self.worker.take() {
+            match handle {
+                WorkerHandle::Thread(join) => {
+                    if join.join().is_err() {
+                        debug!("Downloader worker thread panicked during shutdown");
+                    }
+                }
+                WorkerHandle::Task(task) => {
+                    task.abort();
+                }
+            }
         }
     }
 }
@@ -485,7 +495,7 @@ mod tests {
 
     use std::{error::Error as StdError, fmt, future, sync::Arc, time::Duration};
 
-    use kithara_platform::{Mutex, tokio::sync::Notify};
+    use kithara_platform::{BoxFuture, Mutex, tokio::sync::Notify};
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -514,9 +524,11 @@ mod tests {
         type Fetch = u64;
         type Error = MockError;
 
-        async fn fetch(&self, plan: u64) -> Result<u64, MockError> {
-            self.demand_fetched.notify_one();
-            Ok(plan)
+        fn fetch(&self, plan: u64) -> BoxFuture<'_, Result<u64, MockError>> {
+            Box::pin(async move {
+                self.demand_fetched.notify_one();
+                Ok(plan)
+            })
         }
     }
 
@@ -539,20 +551,22 @@ mod tests {
             &self.io
         }
 
-        async fn poll_demand(&mut self) -> Option<u64> {
-            self.demand_queue.lock_sync().pop()
+        fn poll_demand(&mut self) -> BoxFuture<'_, Option<u64>> {
+            Box::pin(async move { self.demand_queue.lock_sync().pop() })
         }
 
-        async fn plan(&mut self) -> PlanOutcome<u64> {
-            PlanOutcome::Step
+        fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<u64>> {
+            Box::pin(async move { PlanOutcome::Step })
         }
 
-        async fn step(&mut self) -> Result<StepResult<u64>, MockError> {
-            self.step_entered.notify_one();
-            // Simulate stalled HTTP stream — block forever.
-            // (test timeout on native prevents actual hang)
-            future::pending::<()>().await;
-            Ok(StepResult::Item(0))
+        fn step(&mut self) -> BoxFuture<'_, Result<StepResult<u64>, MockError>> {
+            Box::pin(async move {
+                self.step_entered.notify_one();
+                // Simulate stalled HTTP stream — block forever.
+                // (test timeout on native prevents actual hang)
+                future::pending::<()>().await;
+                Ok(StepResult::Item(0))
+            })
         }
 
         fn commit(&mut self, _fetch: u64) {}
@@ -561,15 +575,15 @@ mod tests {
             false
         }
 
-        fn wait_ready(&self) -> impl Future<Output = ()> {
-            future::pending()
+        fn wait_ready(&self) -> BoxFuture<'_, ()> {
+            Box::pin(future::pending())
         }
 
-        fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
+        fn demand_signal(&self) -> BoxFuture<'static, ()> {
             let notify = Arc::clone(&self.demand_notify);
-            async move {
+            Box::pin(async move {
                 notify.notified().await;
-            }
+            })
         }
     }
 
@@ -627,12 +641,12 @@ mod tests {
             &self.io
         }
 
-        async fn poll_demand(&mut self) -> Option<u64> {
-            None
+        fn poll_demand(&mut self) -> BoxFuture<'_, Option<u64>> {
+            Box::pin(async move { None })
         }
 
-        async fn plan(&mut self) -> PlanOutcome<u64> {
-            PlanOutcome::Idle
+        fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<u64>> {
+            Box::pin(async move { PlanOutcome::Idle })
         }
 
         fn commit(&mut self, _fetch: u64) {}
@@ -641,15 +655,15 @@ mod tests {
             false
         }
 
-        fn wait_ready(&self) -> impl Future<Output = ()> {
-            future::pending()
+        fn wait_ready(&self) -> BoxFuture<'_, ()> {
+            Box::pin(future::pending())
         }
 
-        fn wait_for_work(&self) -> impl Future<Output = ()> {
+        fn demand_signal(&self) -> BoxFuture<'static, ()> {
             let notify = Arc::clone(&self.wake_notify);
-            async move {
+            Box::pin(async move {
                 notify.notified().await;
-            }
+            })
         }
     }
 
@@ -679,7 +693,7 @@ mod tests {
         });
         let handle = tokio::spawn(Backend::run_downloader(downloader, cancel.clone()));
 
-        // Idle wakeups with successful wait_for_work() count as progress,
+        // Idle wakeups with successful demand_signal() count as progress,
         // so the hang detector must NOT fire.  Let it run for 1.5× the
         // timeout and verify it stays alive.
         tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -703,11 +717,13 @@ mod tests {
         type Fetch = u64;
         type Error = MockError;
 
-        async fn fetch(&self, plan: u64) -> Result<u64, MockError> {
-            if plan == 1 {
-                self.release_slow.notified().await;
-            }
-            Ok(plan)
+        fn fetch(&self, plan: u64) -> BoxFuture<'_, Result<u64, MockError>> {
+            Box::pin(async move {
+                if plan == 1 {
+                    self.release_slow.notified().await;
+                }
+                Ok(plan)
+            })
         }
     }
 
@@ -728,17 +744,19 @@ mod tests {
             &self.io
         }
 
-        async fn poll_demand(&mut self) -> Option<u64> {
-            None
+        fn poll_demand(&mut self) -> BoxFuture<'_, Option<u64>> {
+            Box::pin(async move { None })
         }
 
-        async fn plan(&mut self) -> PlanOutcome<u64> {
-            if self.plan_sent {
-                PlanOutcome::Idle
-            } else {
-                self.plan_sent = true;
-                PlanOutcome::Batch(vec![0, 1])
-            }
+        fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<u64>> {
+            Box::pin(async move {
+                if self.plan_sent {
+                    PlanOutcome::Idle
+                } else {
+                    self.plan_sent = true;
+                    PlanOutcome::Batch(vec![0, 1])
+                }
+            })
         }
 
         fn commit(&mut self, fetch: u64) {
@@ -752,12 +770,12 @@ mod tests {
             false
         }
 
-        fn wait_ready(&self) -> impl Future<Output = ()> {
-            future::pending()
+        fn wait_ready(&self) -> BoxFuture<'_, ()> {
+            Box::pin(future::pending())
         }
 
-        fn wait_for_work(&self) -> impl Future<Output = ()> {
-            future::pending()
+        fn demand_signal(&self) -> BoxFuture<'static, ()> {
+            Box::pin(future::pending())
         }
     }
 

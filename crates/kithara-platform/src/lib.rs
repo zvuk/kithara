@@ -32,7 +32,7 @@ pub mod tokio;
 pub mod internal;
 
 pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
-pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
+pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,

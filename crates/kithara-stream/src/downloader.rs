@@ -8,15 +8,12 @@
 //! - Backend (in `backend.rs`): generic orchestrator (backpressure, demand, parallelism, yield)
 //!
 //! On wasm32, `Send` bounds are relaxed via [`MaybeSend`] — a conditional trait
-//! that equals `Send` on native and is a no-op on wasm32. This eliminates
+//! that compiles to `Send` on native and is auto-implemented for all types on
 //! the need for duplicate trait definitions.
 
-use std::{
-    error::Error as StdError,
-    future::{self, Future},
-};
+use std::error::Error as StdError;
 
-use kithara_platform::MaybeSend;
+use kithara_platform::{BoxFuture, MaybeSend};
 
 /// Outcome of [`Downloader::plan`].
 pub enum PlanOutcome<P> {
@@ -55,7 +52,7 @@ pub trait DownloaderIo: Clone + MaybeSend + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Execute a single fetch (network I/O).
-    fn fetch(&self, plan: Self::Plan) -> impl Future<Output = Result<Self::Fetch, Self::Error>>;
+    fn fetch(&self, plan: Self::Plan) -> BoxFuture<'_, Result<Self::Fetch, Self::Error>>;
 }
 
 /// Background downloader driven by Backend's orchestration loop.
@@ -81,17 +78,17 @@ pub trait Downloader: MaybeSend + 'static {
     /// Check for on-demand requests (e.g. seek).
     ///
     /// Returns a plan for immediate execution, bypassing backpressure.
-    fn poll_demand(&mut self) -> impl Future<Output = Option<Self::Plan>>;
+    fn poll_demand(&mut self) -> BoxFuture<'_, Option<Self::Plan>>;
 
     /// Plan next work batch.
-    fn plan(&mut self) -> impl Future<Output = PlanOutcome<Self::Plan>>;
+    fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<Self::Plan>>;
 
     /// Streaming step (when [`plan`](Self::plan) returned [`PlanOutcome::Step`]).
     ///
     /// Only needed for downloaders that return [`PlanOutcome::Step`] from [`plan`](Self::plan).
     /// Default: pends forever (never called if `plan` never returns `Step`).
-    fn step(&mut self) -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> {
-        future::pending()
+    fn step(&mut self) -> BoxFuture<'_, Result<StepResult<Self::Fetch>, Self::Error>> {
+        Box::pin(std::future::pending())
     }
 
     /// Commit a fetch result to storage/state.
@@ -101,7 +98,7 @@ pub trait Downloader: MaybeSend + 'static {
     fn should_throttle(&self) -> bool;
 
     /// Wait until throttle condition clears.
-    fn wait_ready(&self) -> impl Future<Output = ()>;
+    fn wait_ready(&self) -> BoxFuture<'_, ()>;
 
     /// Signal that on-demand data is needed (e.g. reader seek).
     ///
@@ -109,20 +106,10 @@ pub trait Downloader: MaybeSend + 'static {
     /// Used by Backend to interrupt a blocked [`step`](Self::step) call
     /// so that [`poll_demand`](Self::poll_demand) can be checked promptly.
     ///
-    /// `use<Self>` ensures the returned future does not capture the `&self`
-    /// lifetime, allowing Backend to hold it alongside `step(&mut self)`
-    /// in the same `tokio::select!`.
-    ///
     /// Default: never resolves (no demand signaling).
-    fn demand_signal(&self) -> impl Future<Output = ()> + use<Self> {
-        future::pending()
-    }
-
-    /// Wait for external signal that new work may be available.
-    ///
-    /// Called by Backend when [`plan`](Self::plan) returns [`PlanOutcome::Idle`].
-    /// Default: pends forever (never woken if no external signals).
-    fn wait_for_work(&self) -> impl Future<Output = ()> {
-        future::pending()
+    /// Returns a `Send` future that doesn't borrow self, enabling
+    /// concurrent use with `&mut self` methods in `select!`.
+    fn demand_signal(&self) -> BoxFuture<'static, ()> {
+        Box::pin(std::future::pending())
     }
 }
