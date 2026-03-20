@@ -29,16 +29,20 @@ use ringbuf::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
-use super::{
-    audio_worker::{AudioWorkerHandle, TrackRegistration},
-    config::{AudioConfig, create_effects, expected_output_spec},
-    source::{OffsetReader, SharedStream, StreamAudioSource},
-    thread_wake::ThreadWake,
-    track_fsm::ConsumerPhase,
-    worker::AudioCommand,
-    worker_types::{ServiceClass, TrackId},
+use crate::{
+    pipeline::{
+        config::{AudioConfig, create_effects, expected_output_spec},
+        source::{OffsetReader, SharedStream, StreamAudioSource},
+        track_fsm::ConsumerPhase,
+    },
+    traits::{DecodeError, DecodeResult, PcmReader},
+    worker::{
+        AudioCommand,
+        handle::{AudioWorkerHandle, TrackRegistration},
+        thread_wake::ThreadWake,
+        types::{ServiceClass, TrackId},
+    },
 };
-use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
@@ -680,7 +684,7 @@ where
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
-    ) -> super::source::DecoderFactory<T> {
+    ) -> crate::pipeline::source::DecoderFactory<T> {
         let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);

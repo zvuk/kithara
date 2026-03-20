@@ -23,11 +23,11 @@ use ringbuf::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
-use crate::pipeline::{
+use super::{
+    AudioCommand, AudioWorkerSource,
     thread_wake::ThreadWake,
-    worker::{AudioCommand, AudioWorkerSource},
-    worker_types::{ServiceClass, StepResult, TrackId, TrackIdGen},
-    worker_wake::WorkerWake,
+    types::{ServiceClass, StepResult, TrackId, TrackIdGen},
+    wake::WorkerWake,
 };
 
 // ---------------------------------------------------------------------------
@@ -507,10 +507,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::pipeline::{
-        track_fsm::{TrackStep, WaitingReason},
-        worker::{AudioCommand, AudioWorkerSource},
-        worker_types::ServiceClass,
+    use crate::{
+        pipeline::track_fsm::{TrackStep, WaitingReason},
+        worker::{AudioCommand, AudioWorkerSource, types::ServiceClass},
     };
 
     // -- Mock source ----------------------------------------------------------

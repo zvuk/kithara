@@ -38,12 +38,14 @@ impl WorkerWake {
     ///
     /// Returns `true` if woken by [`wake`](Self::wake), `false` on timeout.
     /// Clears the flag on successful wake.
+    #[kithara_hang_detector::hang_watchdog]
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
         let deadline = kithara_platform::time::Instant::now() + timeout;
         let mut guard = self.woken.lock_sync();
         loop {
             if *guard {
                 *guard = false;
+                hang_reset!();
                 return true;
             }
             let (new_guard, result) = self.condvar.wait_sync_timeout(guard, deadline);
@@ -51,11 +53,14 @@ impl WorkerWake {
             if *guard {
                 *guard = false;
                 drop(guard);
+                hang_reset!();
                 return true;
             }
             if result.timed_out() {
+                hang_reset!();
                 return false;
             }
+            hang_tick!();
         }
     }
 }

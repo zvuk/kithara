@@ -1,4 +1,4 @@
-//! Audio worker types, traits, and effects utilities.
+//! Audio worker traits and effects utilities.
 
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
@@ -40,7 +40,7 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
 }
 
 /// Apply effects chain to a chunk.
-pub(super) fn apply_effects(
+pub(crate) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
     mut chunk: PcmChunk,
 ) -> Option<PcmChunk> {
@@ -51,7 +51,7 @@ pub(super) fn apply_effects(
 }
 
 /// Flush effects chain at end of stream.
-pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
+pub(crate) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
     let mut chunk: Option<PcmChunk> = None;
     for effect in &mut *effects {
         chunk = match chunk.take() {
@@ -63,7 +63,7 @@ pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmC
 }
 
 /// Reset effects chain (e.g. after seek).
-pub(super) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
+pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
     for effect in &mut *effects {
         effect.reset();
     }

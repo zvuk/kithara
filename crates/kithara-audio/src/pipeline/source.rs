@@ -20,15 +20,13 @@ use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Tim
 use tracing::{debug, trace, warn};
 
 use crate::{
-    pipeline::{
-        track_fsm::{
-            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState,
-            ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag,
-            TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
-        },
-        worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
+    pipeline::track_fsm::{
+        ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState, ResumeState,
+        SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag, TrackState, TrackStep,
+        WaitContext, WaitingReason, map_source_phase,
     },
     traits::AudioEffect,
+    worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
 };
 
 /// Shared stream wrapper for format change detection.
