@@ -128,6 +128,7 @@ impl Backend {
             // calls `handle.block_on()`. This avoids creating a new tokio
             // runtime (no timer/io threads) while keeping the downloader's
             // non-Send futures off the multi-thread pool.
+            debug!("Backend: reusing shared multi-thread runtime");
             return WorkerHandle(kithara_platform::spawn(move || {
                 handle.block_on(Self::run_downloader(downloader, cancel));
             }));
@@ -135,6 +136,7 @@ impl Backend {
 
         // Fallback: no multi-thread runtime available — dedicated thread
         // with its own current-thread runtime.
+        debug!("Backend: fallback — creating dedicated current-thread runtime");
         WorkerHandle(kithara_platform::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
