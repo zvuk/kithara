@@ -989,20 +989,6 @@ impl Source for HlsSource {
             return SourcePhase::Eof;
         }
 
-        // Mirror the phase_at() ABR stall check for the parameterless case.
-        let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
-        let segments = self.segments.lock_sync();
-        let abr_stall = if abr_variant != segments.layout_variant() {
-            let max_end = segments.max_end_offset();
-            max_end == 0 || pos >= max_end
-        } else {
-            false
-        };
-        drop(segments);
-        if abr_stall {
-            return SourcePhase::Ready;
-        }
-
         SourcePhase::Waiting
     }
 
@@ -1115,22 +1101,6 @@ impl Source for HlsSource {
         let variant = match reader_variant {
             Some(reader) if reader == hinted_variant => reader,
             Some(_reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
-            // When the decoder is fenced on the old variant and ABR switched
-            // to a different codec, report the hinted variant so that
-            // detect_format_change sees the codec change and triggers decoder
-            // recreation. Without this, media_info keeps reporting the old
-            // codec and the worker hangs in wait_range.
-            // Guard: variant_fence must be active (decoder is reading the old
-            // variant) — without it, this branch would incorrectly override
-            // the reader variant after a successful layout switch.
-            Some(reader)
-                if self.variant_fence.is_some()
-                    && hinted_variant < self.playlist_state.num_variants()
-                    && self.playlist_state.variant_codec(reader)
-                        != self.playlist_state.variant_codec(hinted_variant) =>
-            {
-                hinted_variant
-            }
             Some(reader) => reader,
             None if has_hinted_variant => hinted_variant,
             None if hinted_variant < self.playlist_state.num_variants() => hinted_variant,
@@ -1159,23 +1129,10 @@ impl Source for HlsSource {
         if !self.coord.timeline().is_flushing() && !self.coord.timeline().is_seek_pending() {
             let mut segments = self.segments.lock_sync();
             if segments.layout_variant() != current_variant {
-                // Wait briefly for the size map if the downloader hasn't
-                // computed it yet. Without expected_sizes, the byte map
-                // offsets for uncommitted segments collapse to zero.
-                if self.playlist_state.segment_sizes(current_variant).is_none() {
-                    drop(segments);
-                    for _ in 0..200 {
-                        if self.playlist_state.segment_sizes(current_variant).is_some() {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    segments = self.segments.lock_sync();
-                }
+                segments.set_layout_variant(current_variant);
                 if let Some(sizes) = self.playlist_state.segment_sizes(current_variant) {
                     segments.set_expected_sizes(current_variant, sizes);
                 }
-                segments.set_layout_variant(current_variant);
             }
         }
 

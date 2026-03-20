@@ -1187,28 +1187,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
         use kithara_stream::SourcePhase;
 
-        // ABR stall early-out: when phase() detects the ABR variant
-        // mismatch (Ready) but phase_at does NOT see Ready (no committed
-        // data at the read range), trigger format change directly. This
-        // avoids entering the decode loop whose wait_range would spin.
-        if self.shared_stream.phase() == SourcePhase::Ready
-            && !self.source_is_ready()
-            && let Some((new_info, target_offset)) = self.detect_format_change()
-        {
-            debug!(
-                target_offset,
-                "step_decoding: ABR stall — triggering format change"
-            );
-            self.start_recreating_decoder(
-                RecreateCause::FormatBoundary,
-                new_info,
-                RecreateNext::Decode,
-                target_offset,
-                0,
-            );
-            return TrackStep::StateChanged;
-        }
-
         if !self.source_is_ready() {
             let phase = self.shared_stream.phase();
             trace!(

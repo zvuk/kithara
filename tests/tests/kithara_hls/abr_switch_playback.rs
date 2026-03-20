@@ -83,7 +83,7 @@ async fn abr_switch_real_assets_does_not_hang(_tracing_setup: (), temp_dir: Test
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "15")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::drm_abr_auto("/drm/master.m3u8", true)]
 #[case::hls_abr_auto("/hls/master.m3u8", true)]

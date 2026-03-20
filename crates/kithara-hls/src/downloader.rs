@@ -676,25 +676,17 @@ impl HlsDownloader {
             media_url: dl.media.url.clone(),
         };
 
-        // Reconcile actual (post-DRM-decrypt) size BEFORE committing so that
-        // the byte map rebuild inside commit_segment uses correct offsets.
-        // Without this, encrypted HEAD sizes create gaps between committed
-        // segments in the byte map, causing find_at_offset misses after
-        // decoder recreation on a different DRM variant.
-        self.playlist_state
-            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
-        {
-            let mut segments = self.segments.lock_sync();
-            if let Some(sizes) = self.playlist_state.segment_sizes(dl.variant) {
-                segments.set_expected_sizes(dl.variant, sizes);
-            }
-            segments.commit_segment(dl.variant, dl.segment_index, data);
-        }
+        self.segments
+            .lock_sync()
+            .commit_segment(dl.variant, dl.segment_index, data);
 
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
         let next_download = current_download.max(end_offset);
         self.coord.timeline().set_download_position(next_download);
+
+        self.playlist_state
+            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
 
         // Sync reconciled sizes back to StreamIndex expected_sizes so that
         // byte offsets for uncommitted segments stay accurate after DRM decrypt.

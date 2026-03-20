@@ -114,7 +114,7 @@ pub(crate) enum WaitContext {
 
 /// Why the source is not ready, mirroring relevant `SourcePhase` variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum WaitingReason {
     /// Generic wait — data not yet available.
     Waiting,
@@ -166,7 +166,7 @@ pub(crate) struct DecoderSession {
 }
 
 /// Result of a single `step_track()` call.
-#[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum TrackStep<C> {
     /// Produced a chunk ready for the consumer.
     Produced(Fetch<C>),
@@ -182,7 +182,7 @@ pub enum TrackStep<C> {
 
 /// Fieldless discriminant of [`TrackState`] for external phase queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
+#[cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 pub enum TrackPhaseTag {
     Decoding,
     SeekRequested,
