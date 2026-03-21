@@ -21,7 +21,6 @@ workspace = true
 
 [dependencies]
 kithara = { workspace = true }
-kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 

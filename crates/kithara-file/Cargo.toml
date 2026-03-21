@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 bytes = { workspace = true }
-delegate = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-assets = { workspace = true }
@@ -26,7 +25,6 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
-crossbeam-queue = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

@@ -3796,7 +3796,6 @@ dependencies = [
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
- "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -3897,7 +3896,6 @@ dependencies = [
  "kithara",
  "kithara-events",
  "kithara-platform",
- "kithara-play",
  "ndk-context",
  "rustls-platform-verifier",
  "thiserror 2.0.18",
@@ -3917,8 +3915,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
- "crossbeam-queue",
- "delegate",
  "derivative",
  "derive_setters",
  "futures",
@@ -3958,7 +3954,6 @@ dependencies = [
  "kithara-play",
  "kithara-storage",
  "kithara-stream",
- "kithara-workspace-hack",
  "libfuzzer-sys",
  "tempfile",
  "tokio-util",
@@ -3983,7 +3978,6 @@ name = "kithara-hang-detector-macros"
 version = "0.1.0"
 dependencies = [
  "kithara-workspace-hack",
- "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
@@ -3996,7 +3990,6 @@ dependencies = [
  "axum",
  "bytes",
  "cbc",
- "crossbeam-queue",
  "derivative",
  "derive_setters",
  "futures",
@@ -4061,7 +4054,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-wasm",
  "memory-stats",
  "mmap-io",
  "postcard",
@@ -4070,7 +4062,6 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
- "serial_test",
  "tempfile",
  "thirtyfour",
  "tokio",
@@ -9951,7 +9942,6 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "glob",
- "kithara-workspace-hack",
  "regex",
  "tempfile",
 ]

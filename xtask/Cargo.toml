@@ -12,7 +12,6 @@ cargo_metadata = { workspace = true }
 anyhow = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
-kithara-workspace-hack = { version = "0.1", path = "../crates/kithara-workspace-hack" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -17,7 +17,6 @@ derive_setters = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }

@@ -30,7 +30,6 @@ url = { workspace = true }
 tracing = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
-crossbeam-queue = { workspace = true }
 rangemap = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
