@@ -263,13 +263,58 @@ release-apple:
     - macos
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v/'
-      when: manual
   before_script:
     - !reference [.setup, before_script]
     - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
   script:
     - just release-apple
+    - cp /tmp/KitharaFFIInternal.xcframework.zip .
+    - |
+      CHECKSUM=$(swift package compute-checksum KitharaFFIInternal.xcframework.zip)
+      PACKAGE_BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kithara"
+      PACKAGE_URL="${PACKAGE_BASE_URL}/${CI_COMMIT_TAG}/KitharaFFIInternal.xcframework.zip"
+      echo "CHECKSUM=$CHECKSUM" >> release.env
+      echo "PACKAGE_URL=$PACKAGE_URL" >> release.env
+      echo "PACKAGE_BASE_URL=$PACKAGE_BASE_URL" >> release.env
+      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+           --upload-file KitharaFFIInternal.xcframework.zip \
+           "$PACKAGE_URL"
   artifacts:
     paths:
-      - /tmp/KitharaFFIInternal.xcframework.zip
+      - KitharaFFIInternal.xcframework.zip
+    reports:
+      dotenv: release.env
     expire_in: 90 days
+
+release-apple-publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: release-apple
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  script:
+    - echo "Creating release $CI_COMMIT_TAG (checksum $CHECKSUM)"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: $CI_COMMIT_TAG
+    description: |
+      ## XCFramework checksum
+      ```
+      $CHECKSUM
+      ```
+
+      ## Swift Package Manager
+      ```swift
+      .package(url: "https://gitlab.zvq.me/disrupt/kithara", from: "<version>")
+      ```
+      For private registry, set `KITHARA_BINARY_BASE_URL`:
+      ```bash
+      KITHARA_BINARY_BASE_URL="$PACKAGE_BASE_URL" swift package resolve
+      ```
+    assets:
+      links:
+        - name: KitharaFFIInternal.xcframework.zip
+          url: $PACKAGE_URL
+          link_type: package
