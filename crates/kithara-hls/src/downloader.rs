@@ -1118,6 +1118,41 @@ impl HlsDownloader {
             }
         }
 
+        // ABR switched variant while all segments of the previous variant were
+        // already downloaded.  The cursor sits at the end of the old variant's
+        // segment count, which equals or exceeds `num_segments` for the new
+        // variant.  Without this check the downloader would stay idle forever
+        // and the new variant's segments would never be fetched.
+        //
+        // Only rewind when the new variant has ZERO committed segments — this
+        // means the ABR decision happened after all old-variant segments were
+        // already downloaded (fast network / localhost).
+        //
+        // When the new variant already has committed segments (the normal
+        // midstream flow already fetched them), do NOT rewind: downloading
+        // the gap at the beginning would cause the decoder to replay from
+        // offset 0 instead of continuing from the switch point.
+        let current_variant = self.layout_variant();
+        if current_variant != variant {
+            let new_variant_empty = self
+                .segments
+                .lock_sync()
+                .variant_segments(variant)
+                .is_none_or(crate::stream_index::VariantSegments::is_empty);
+            if new_variant_empty {
+                debug!(
+                    current_variant,
+                    new_variant = variant,
+                    num_segments,
+                    "ABR variant switch in tail state (no segments yet); \
+                     resetting cursor to segment 0"
+                );
+                self.reset_cursor(0);
+                self.coord.condvar.notify_all();
+                return false;
+            }
+        }
+
         let stream_end = self.effective_total_bytes().unwrap_or(0);
         let playback_at_end =
             stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;
@@ -1771,12 +1806,13 @@ mod tests {
             .store(0, Ordering::Release);
         downloader.coord.timeline().set_eof(false);
         downloader.coord.timeline().set_byte_position(200);
-        assert!(downloader.handle_tail_state(1, 2));
+        // ABR variant (0) differs from requested variant (1): tail state
+        // must exit so the downloader fetches the missing variant segments.
         assert!(
-            downloader.coord.timeline().eof(),
-            "playlist should reach EOF when committed variant has no missing tail gaps"
+            !downloader.handle_tail_state(1, 2),
+            "must exit tail state when layout != variant and new variant has missing segments"
         );
-        assert_eq!(downloader.current_segment_index(), 2);
+        assert_eq!(downloader.current_segment_index(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -2094,16 +2130,13 @@ mod tests {
 
         downloader.coord.timeline().set_eof(false);
         downloader.coord.timeline().set_byte_position(300);
-        assert!(downloader.handle_tail_state(1, 3));
+        // Layout (V0) differs from requested variant (V1): tail state must
+        // exit so the downloader fetches V1 segments from the beginning.
         assert!(
-            downloader.coord.timeline().eof(),
-            "playlist should emit EOF when stale committed variant is unrelated to tail gaps"
+            !downloader.handle_tail_state(1, 3),
+            "must exit tail state to download new variant segments"
         );
-        assert_eq!(downloader.current_segment_index(), 3);
-        assert_eq!(
-            downloader.coord.abr_variant_index.load(Ordering::Acquire),
-            0
-        );
+        assert_eq!(downloader.current_segment_index(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -2160,12 +2193,13 @@ mod tests {
 
         downloader.coord.timeline().set_eof(false);
         downloader.coord.timeline().set_byte_position(200);
-        assert!(downloader.handle_tail_state(1, 2));
+        // Layout (V0) differs from requested variant (V1): ABR has switched.
+        // Tail state must exit so the downloader fetches V1 segments.
         assert!(
-            downloader.coord.timeline().eof(),
-            "playlist should reach EOF when tail is committed on different variant"
+            !downloader.handle_tail_state(1, 2),
+            "must exit tail state to download new variant segments"
         );
-        assert_eq!(downloader.current_segment_index(), 2);
+        assert_eq!(downloader.current_segment_index(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -2295,15 +2329,17 @@ mod tests {
             }
         }
 
-        assert!(downloader.handle_tail_state(1, 3));
+        // Layout (V0) differs from requested variant (V1): ABR has switched
+        // and the new variant's segments haven't been downloaded.
+        // Tail state must exit so the downloader can fetch them.
+        assert!(
+            !downloader.handle_tail_state(1, 3),
+            "must exit tail state to download new variant segments"
+        );
         assert_eq!(
             downloader.current_segment_index(),
-            3,
-            "tail handler must not rewind into an unseen variant before a real midstream switch"
-        );
-        assert!(
-            !downloader.coord.timeline().eof(),
-            "tail handler must keep playback alive while buffered data is still readable"
+            0,
+            "cursor must rewind to first missing segment of new variant"
         );
     }
 
