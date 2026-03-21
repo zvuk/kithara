@@ -25,7 +25,6 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
@@ -38,6 +37,7 @@ disable-hang-detector = [
 ]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

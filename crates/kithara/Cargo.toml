@@ -27,6 +27,8 @@ kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
