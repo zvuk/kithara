@@ -12,7 +12,7 @@ mod native {
         sync::{Arc, Mutex as StdMutex},
     };
 
-    use axum::{Router, routing::get};
+    use axum::{Router, middleware, routing::get};
     use kithara_test_utils::TestHttpServer;
     use url::Url;
 
@@ -78,7 +78,7 @@ mod native {
                 .route("/key.bin", get(key_endpoint))
                 .route("/aes/key.bin", get(|| async { aes128_key_bytes() }))
                 .route("/aes/seg0.bin", get(|| async { aes128_ciphertext() }))
-                .layer(axum::middleware::from_fn(
+                .layer(middleware::from_fn(
                     move |req: axum::extract::Request, next: axum::middleware::Next| {
                         let counts = request_counts_clone.clone();
                         async move {

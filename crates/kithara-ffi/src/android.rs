@@ -8,6 +8,7 @@ use jni::{
     objects::{GlobalRef, JClass, JObject},
     sys::jint,
 };
+use rustls_platform_verifier::android as rustls_android;
 use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
@@ -41,7 +42,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         }
     }
 
-    if let Err(err) = rustls_platform_verifier::android::init_with_env(&mut env, context) {
+    if let Err(err) = rustls_android::init_with_env(&mut env, context) {
         let message = format!("failed to initialize rustls platform verifier: {err}");
         error!(message = %message);
         let _ = env.throw_new("java/lang/IllegalStateException", &message);

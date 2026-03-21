@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
+use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -98,14 +99,14 @@ pub fn duration_to_seconds(d: Duration) -> f64 {
 /// # Errors
 ///
 /// Returns [`FfiError::InvalidArgument`] for empty or malformed URLs.
-pub fn parse_url(s: &str) -> FfiResult<url::Url> {
+pub fn parse_url(s: &str) -> FfiResult<Url> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err(FfiError::InvalidArgument {
             reason: "empty URL".to_string(),
         });
     }
-    url::Url::parse(trimmed).map_err(|e| FfiError::InvalidArgument {
+    Url::parse(trimmed).map_err(|e| FfiError::InvalidArgument {
         reason: format!("invalid URL: {e}"),
     })
 }

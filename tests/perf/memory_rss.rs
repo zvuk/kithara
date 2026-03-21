@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -43,7 +44,7 @@ const RSS_BUDGET_MB: usize = 30;
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
-    let _guard = hotpath::FunctionsGuardBuilder::new("rss_budget").build();
+    let _guard = FunctionsGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(BUDGET_RUNS);
 
     for run in 0..BUDGET_RUNS {
@@ -138,7 +139,7 @@ const LEAK_TOLERANCE_MB: usize = 5;
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
-    let _guard = hotpath::FunctionsGuardBuilder::new("rss_leak").build();
+    let _guard = FunctionsGuardBuilder::new("rss_leak").build();
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
 

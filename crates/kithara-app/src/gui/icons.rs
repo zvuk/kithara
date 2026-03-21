@@ -1,4 +1,7 @@
-use iced::{Color, Element, Length, widget::svg};
+use iced::{
+    Color, Element, Length,
+    widget::svg::{self, Handle as SvgHandle, Svg},
+};
 
 /// Phosphor Regular SVG icons used throughout the UI.
 #[derive(Debug, Clone, Copy)]
@@ -44,8 +47,8 @@ impl Icon {
 
     /// Render this icon as an SVG widget with the given size and color.
     pub(crate) fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
-        let handle = svg::Handle::from_memory(self.bytes());
-        svg::Svg::new(handle)
+        let handle = SvgHandle::from_memory(self.bytes());
+        Svg::new(handle)
             .width(Length::Fixed(size))
             .height(Length::Fixed(size))
             .style(move |_theme, _status| svg::Style { color: Some(color) })

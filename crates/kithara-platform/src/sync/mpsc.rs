@@ -61,13 +61,15 @@ impl<T> Receiver<T> {
 }
 
 #[cfg(target_arch = "wasm32")]
+use wasm_safe_thread::mpsc as wasm_mpsc;
+#[cfg(target_arch = "wasm32")]
 pub use wasm_safe_thread::mpsc::{RecvError, SendError, TryRecvError};
 
 /// Create a new unbounded channel.
 #[cfg(target_arch = "wasm32")]
 #[must_use]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let (tx, rx) = wasm_safe_thread::mpsc::channel();
+    let (tx, rx) = wasm_mpsc::channel();
     (Sender(tx), Receiver(rx))
 }
 

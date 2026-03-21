@@ -14,6 +14,10 @@ use std::{
     task::{Context, Poll},
 };
 
+use futures::channel::oneshot;
+use tokio_with_wasm::alias as tww_alias;
+use tww_alias::task as tww_task;
+
 /// Spawn an async task on the current thread's executor.
 ///
 /// On a Web Worker, wraps with `task_begin`/`task_finished` lifecycle hooks.
@@ -23,7 +27,7 @@ where
     F: Future<Output = T> + 'static,
     T: 'static,
 {
-    let (tx, rx) = futures::channel::oneshot::channel();
+    let (tx, rx) = oneshot::channel();
 
     if crate::thread::is_worker_thread() {
         wasm_safe_thread::task_begin();
@@ -32,7 +36,7 @@ where
             wasm_safe_thread::task_finished();
         });
     } else {
-        let handle = tokio_with_wasm::alias::task::spawn(future);
+        let handle = tww_task::spawn(future);
         wasm_bindgen_futures::spawn_local(async move {
             match handle.await {
                 Ok(val) => {
@@ -57,14 +61,14 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let (tx, rx) = futures::channel::oneshot::channel();
+    let (tx, rx) = oneshot::channel();
 
     if crate::thread::is_worker_thread() {
         let _ = crate::thread::spawn(move || {
             let _ = tx.send(Ok(f()));
         });
     } else {
-        let handle = tokio_with_wasm::alias::task::spawn_blocking(f);
+        let handle = tww_task::spawn_blocking(f);
         wasm_bindgen_futures::spawn_local(async move {
             match handle.await {
                 Ok(val) => {
@@ -82,7 +86,7 @@ where
 
 /// Handle to a spawned async task.
 pub struct JoinHandle<T> {
-    rx: futures::channel::oneshot::Receiver<Result<T, JoinError>>,
+    rx: oneshot::Receiver<Result<T, JoinError>>,
 }
 
 impl<T> Future for JoinHandle<T> {

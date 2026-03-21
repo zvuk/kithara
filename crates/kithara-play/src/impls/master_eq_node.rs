@@ -12,7 +12,7 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::effects::eq::{EqBandConfig, FilterKind, compute_coefficients};
+use kithara_audio::{EqBandConfig, FilterKind, compute_coefficients};
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 

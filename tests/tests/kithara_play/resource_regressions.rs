@@ -7,7 +7,7 @@ use axum::{
     Router,
     body::Body,
     extract::Request,
-    http::{StatusCode, header},
+    http::{Method, StatusCode, header},
     response::Response,
     routing::get,
 };
@@ -16,9 +16,12 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{Hls, HlsConfig},
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{
+        PlayerConfig, PlayerImpl, Resource, ResourceConfig, internal::offline::resource_from_reader,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{
     thread,
@@ -41,7 +44,7 @@ const HLS_CHANNELS: f64 = 2.0;
     reason = "axum handler signature requires owned Request"
 )]
 fn serve_mp3_with_range(req: Request) -> Response {
-    if req.method() == axum::http::Method::HEAD {
+    if req.method() == Method::HEAD {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
@@ -744,14 +747,14 @@ async fn stress_offline_crossfade_no_gaps() {
     let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
         let p = local_mp3.clone();
         async move {
-            let file_cfg = kithara_file::FileConfig::new(kithara_file::FileSrc::Local(p));
-            let audio_cfg = AudioConfig::<kithara_file::File>::new(file_cfg)
+            let file_cfg = FileConfig::new(FileSrc::Local(p));
+            let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
                 .with_hint("mp3")
                 .with_worker(w);
-            let audio = Audio::<Stream<kithara_file::File>>::new(audio_cfg)
+            let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
                 .expect("create local MP3 audio");
-            kithara::play::internal::offline::resource_from_reader(audio)
+            resource_from_reader(audio)
         }
     };
 
@@ -765,7 +768,7 @@ async fn stress_offline_crossfade_no_gaps() {
                 .with_media_info(wav_info)
                 .with_worker(w);
             let audio = Audio::<Stream<Hls>>::new(acfg).await.expect("HLS audio");
-            let mut r = kithara::play::internal::offline::resource_from_reader(audio);
+            let mut r = resource_from_reader(audio);
             timeout(READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload");

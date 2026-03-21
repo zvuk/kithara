@@ -4,7 +4,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::HttpClient;
 use kithara_storage::{ResourceExt, ResourceStatus};
@@ -71,7 +71,7 @@ impl File {
             .cancel(cancel)
             .build();
 
-        let key = kithara_assets::ResourceKey::absolute(path);
+        let key = ResourceKey::absolute(path);
         let res = store.open_resource(&key).map_err(SourceError::Assets)?;
         let len = res.len();
 

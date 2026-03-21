@@ -9,7 +9,10 @@ use std::{
 };
 
 use kithara::play::{Resource, ResourceConfig};
-use kithara_platform::{Mutex, tokio::sync::Notify};
+use kithara_platform::{
+    Mutex,
+    tokio::{runtime as tokio_runtime, sync::Notify},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -38,7 +41,7 @@ pub struct AudioPlayerItem {
     /// Shared audio worker — set by `AudioPlayer` when item is inserted.
     pub(crate) worker: Mutex<Option<kithara::audio::AudioWorkerHandle>>,
     /// Shared runtime — set by `AudioPlayer` when item is inserted.
-    pub(crate) runtime: Mutex<Option<kithara_platform::tokio::runtime::Handle>>,
+    pub(crate) runtime: Mutex<Option<tokio_runtime::Handle>>,
 }
 
 /// Internal configuration built from item properties before loading.

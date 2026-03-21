@@ -4,7 +4,8 @@ use std::str;
 
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
-    tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
+    tags::VariantStream as HlsVariantStreamTag,
+    types::{DecryptionKey as HlsDecryptionKey, EncryptionMethod as HlsEncryptionMethod},
 };
 use kithara_abr::VariantInfo;
 use kithara_platform::time::Duration;
@@ -208,10 +209,10 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<MediaPlaylist> {
-    fn map_encryption_method(m: hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
+    fn map_encryption_method(m: HlsEncryptionMethod) -> EncryptionMethod {
         match m {
-            hls_m3u8::types::EncryptionMethod::Aes128 => EncryptionMethod::Aes128,
-            hls_m3u8::types::EncryptionMethod::SampleAes => EncryptionMethod::SampleAes,
+            HlsEncryptionMethod::Aes128 => EncryptionMethod::Aes128,
+            HlsEncryptionMethod::SampleAes => EncryptionMethod::SampleAes,
             other => EncryptionMethod::Other(other.to_string()),
         }
     }

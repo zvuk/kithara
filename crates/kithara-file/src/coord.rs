@@ -8,8 +8,9 @@ use std::{
     },
 };
 
-use kithara_platform::tokio::sync::{Notify, futures::Notified};
+use kithara_platform::tokio as platform_tokio;
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
+use platform_tokio::sync::{Notify, futures};
 
 pub struct FileCoord {
     demand: DemandSlot<Range<u64>>,
@@ -87,11 +88,11 @@ impl FileCoord {
         self.demand.take()
     }
 
-    pub(crate) fn notified_reader_advance(&self) -> Notified<'_> {
+    pub(crate) fn notified_reader_advance(&self) -> futures::Notified<'_> {
         self.reader_advanced.notified()
     }
 
-    pub(crate) fn notified_downloader_wake(&self) -> Notified<'_> {
+    pub(crate) fn notified_downloader_wake(&self) -> futures::Notified<'_> {
         self.downloader_wake.notified()
     }
 }

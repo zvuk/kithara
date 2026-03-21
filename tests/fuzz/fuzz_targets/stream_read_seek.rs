@@ -11,8 +11,8 @@ use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    DemandSlot, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
+    StreamResult, StreamType, Timeline, TransferCoordination,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -163,8 +163,8 @@ impl Source for ScriptSource {
         }
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
-        kithara_stream::SourcePhase::Ready
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Ready
     }
 
     fn len(&self) -> Option<u64> {

@@ -69,7 +69,10 @@ mod server {
         Router,
         body::Body,
         extract::{DefaultBodyLimit, Path, State},
-        http::{HeaderMap, Response, StatusCode, header},
+        http::{
+            HeaderMap, Method, Response, StatusCode,
+            header::{self, HeaderName, HeaderValue},
+        },
         routing::{delete, get, post},
     };
     use kithara_platform::time::sleep;
@@ -80,6 +83,7 @@ mod server {
     };
     use tokio::{net::TcpListener, sync::RwLock};
     use tower_http::{cors::CorsLayer, services::ServeDir, set_header::SetResponseHeaderLayer};
+    use uuid::Uuid;
 
     // Session Types
 
@@ -627,7 +631,7 @@ seg/v{}_2.bin
     async fn create_fixed_hls_session(
         State(state): State<AppState>,
     ) -> axum::Json<SessionResponse> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::FixedHls(FixedHlsData),
@@ -652,7 +656,7 @@ seg/v{}_2.bin
         let init_len = data.inits.first().map_or(0, |i| i.len() as u64);
         let total_bytes =
             init_len + config.segments_per_variant as u64 * config.segment_size as u64;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::Hls(Box::new(data)),
@@ -673,7 +677,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: AbrSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::Abr(AbrData { config }),
@@ -691,7 +695,7 @@ seg/v{}_2.bin
     async fn create_audio_fixtures_session(
         State(state): State<AppState>,
     ) -> axum::Json<SessionResponse> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::AudioFixtures(AudioFixturesData {
@@ -715,7 +719,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: FileSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::File(Box::new(FileData {
@@ -739,7 +743,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: HttpTestSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let route_counts = config
             .routes
@@ -893,7 +897,7 @@ seg/v{}_2.bin
     async fn session_segment_head(
         State(state): State<AppState>,
         Path((id, _filename)): Path<(String, String)>,
-    ) -> Result<(StatusCode, [(header::HeaderName, String); 1]), StatusCode> {
+    ) -> Result<(StatusCode, [(HeaderName, String); 1]), StatusCode> {
         let sessions = state.sessions.read().await;
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         let size = match &session.kind {
@@ -1151,7 +1155,7 @@ seg/v{}_2.bin
         State(state): State<AppState>,
         Path((id, path)): Path<(String, String)>,
         headers: HeaderMap,
-        method: axum::http::Method,
+        method: Method,
     ) -> Result<Response<Body>, StatusCode> {
         let sessions = state.sessions.read().await;
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
@@ -1201,7 +1205,7 @@ seg/v{}_2.bin
             return Ok(build_range_response(
                 &body_data,
                 &headers,
-                method != axum::http::Method::HEAD,
+                method != Method::HEAD,
             ));
         }
 
@@ -1210,7 +1214,7 @@ seg/v{}_2.bin
         for (key, value) in &route.headers {
             builder = builder.header(key.as_str(), value.as_str());
         }
-        if method == axum::http::Method::HEAD {
+        if method == Method::HEAD {
             builder = builder.header(header::CONTENT_LENGTH, body_data.len().to_string());
             Ok(builder.body(Body::empty()).unwrap())
         } else {
@@ -1439,8 +1443,8 @@ seg/v{}_2.bin
             .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
             .layer(CorsLayer::permissive())
             .layer(SetResponseHeaderLayer::overriding(
-                header::HeaderName::from_static("cross-origin-resource-policy"),
-                header::HeaderValue::from_static("cross-origin"),
+                HeaderName::from_static("cross-origin-resource-policy"),
+                HeaderValue::from_static("cross-origin"),
             ));
 
         let addr = format!("127.0.0.1:{port}");

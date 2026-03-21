@@ -7,7 +7,8 @@
 //! `JoinHandle`, `JoinError`, etc.). On WASM, `spawn` and `spawn_blocking` are
 //! overridden with Worker-lifecycle-aware versions.
 
-pub use tokio_with_wasm::alias::task::*;
+pub use tokio_alias::task::*;
+use tokio_with_wasm::alias as tokio_alias;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;

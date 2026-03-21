@@ -514,6 +514,7 @@ impl Downloader for FileDownloader {
 mod tests {
     use std::sync::Arc;
 
+    use futures::stream as futures_stream;
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_storage::ResourceStatus;
@@ -563,7 +564,7 @@ mod tests {
         res.write_at(0, &[0u8; 1000]).unwrap();
 
         // Pending stream simulates a stalled sequential download.
-        let stream = futures::stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
+        let stream = futures_stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
         let writer = Writer::new(stream, res.clone(), cancel.clone());
 
         let mut dl = FileDownloader {

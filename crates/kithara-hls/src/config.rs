@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, fmt::Debug, sync::Arc};
 
 use bytes::Bytes;
 use derivative::Derivative;
@@ -8,6 +8,7 @@ use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
+use kithara_platform::tokio as platform_tokio;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -40,7 +41,7 @@ pub struct KeyOptions {
 }
 
 fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut fmt::Formatter) -> fmt::Result {
-    fmt::Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
+    Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
 }
 
 impl KeyOptions {
@@ -104,7 +105,7 @@ pub struct HlsConfig {
     /// falls back to a dedicated thread.
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
-    pub runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    pub runtime: Option<platform_tokio::runtime::Handle>,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Master playlist URL.

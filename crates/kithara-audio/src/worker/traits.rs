@@ -3,7 +3,7 @@
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
 
-use crate::{pipeline::track_fsm::TrackStep, traits::AudioEffect};
+use crate::{pipeline::track_fsm, traits::AudioEffect};
 
 /// Command for audio worker (non-seek commands only).
 ///
@@ -31,7 +31,7 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
     /// - `Blocked` — source not ready; caller should wait for a wake.
     /// - `Eof` — end of stream (may transition out via seek-after-EOF).
     /// - `Failed` — terminal failure.
-    fn step_track(&mut self) -> TrackStep<Self::Chunk>;
+    fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
 
     fn handle_command(&mut self, cmd: Self::Command);
 

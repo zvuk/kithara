@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use kithara_decode::DecodeError;
 use url::Url;
 
 use crate::impls::config::ResourceSrc;
@@ -30,7 +31,7 @@ impl SourceType {
     /// # Errors
     ///
     /// Returns `DecodeError` if no suitable feature is enabled for the given source.
-    pub fn detect(src: &ResourceSrc) -> Result<Self, kithara_decode::DecodeError> {
+    pub fn detect(src: &ResourceSrc) -> Result<Self, DecodeError> {
         match src {
             #[cfg(feature = "file")]
             ResourceSrc::Path(path) => Ok(Self::LocalFile(path.clone())),
@@ -45,13 +46,13 @@ impl SourceType {
                 return Ok(Self::RemoteFile(url.clone()));
 
                 #[cfg(not(feature = "file"))]
-                Err(kithara_decode::DecodeError::DecodeError(
+                Err(DecodeError::DecodeError(
                     "no suitable feature enabled for this URL (enable `file` or `hls`)".to_string(),
                 ))
             }
 
             #[cfg(not(feature = "file"))]
-            ResourceSrc::Path(_) => Err(kithara_decode::DecodeError::DecodeError(
+            ResourceSrc::Path(_) => Err(DecodeError::DecodeError(
                 "local file support requires the `file` feature".to_string(),
             )),
         }

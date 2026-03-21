@@ -1,7 +1,7 @@
 //! Audio pipeline struct and public API.
 
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,
     num::NonZeroU32,
     sync::{
@@ -12,7 +12,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
@@ -617,7 +617,7 @@ where
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
-            .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
+            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
         debug!("Audio::new — Stream created");
 
         debug!("Audio::new — spawning probe task...");
@@ -629,7 +629,7 @@ where
             Ok::<_, DecodeError>(stream)
         })
         .await
-        .map_err(|e| DecodeError::Io(io::Error::other(format!("probe task panicked: {e}"))))??;
+        .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
         Ok(stream)
     }
@@ -656,13 +656,9 @@ where
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
-                kithara_decode::DecoderFactory::create_from_media_info(
-                    shared_stream,
-                    info,
-                    decoder_config,
-                )
+                DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
             } else {
-                kithara_decode::DecoderFactory::create_with_probe(
+                DecoderFactory::create_with_probe(
                     shared_stream,
                     hint_for_decoder.as_deref(),
                     decoder_config,
@@ -670,7 +666,7 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}"))))??;
+        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
         debug!("Audio::new — decoder created");
         Ok(decoder)
     }
@@ -719,7 +715,7 @@ where
                 epoch: current_epoch,
                 ..Default::default()
             };
-            match kithara_decode::DecoderFactory::create_for_recreate(
+            match DecoderFactory::create_for_recreate(
                 || OffsetReader::new(stream.clone(), base_offset),
                 info,
                 config,

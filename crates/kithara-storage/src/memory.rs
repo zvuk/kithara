@@ -11,6 +11,7 @@ use std::{fmt, path::Path};
 
 use kithara_bufpool::{PooledOwned, byte_pool};
 use kithara_platform::Mutex;
+use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -72,7 +73,7 @@ impl Driver for MemDriver {
                 buf[..data_len].copy_from_slice(&data);
             }
             let len = data_len as u64;
-            let mut available = rangemap::RangeSet::new();
+            let mut available = RangeSet::new();
             if len > 0 {
                 available.insert(0..len);
             }

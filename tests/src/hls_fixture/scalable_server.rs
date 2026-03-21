@@ -144,7 +144,12 @@ mod native {
     use std::{sync::Arc, time::Duration};
 
     use aes::Aes128;
-    use axum::{Router, extract::Path, routing::get};
+    use axum::{
+        Router,
+        extract::Path,
+        http::{HeaderMap, StatusCode, header},
+        routing::get,
+    };
     use cbc::{
         Encryptor,
         cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
@@ -355,18 +360,13 @@ mod native {
     }
 
     /// HEAD response for segments with mismatched Content-Length.
-    async fn serve_segment_head(
-        config: &HlsTestServerConfig,
-    ) -> (axum::http::StatusCode, axum::http::HeaderMap) {
+    async fn serve_segment_head(config: &HlsTestServerConfig) -> (StatusCode, HeaderMap) {
         let size = config
             .head_reported_segment_size
             .unwrap_or(config.segment_size);
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            axum::http::header::CONTENT_LENGTH,
-            size.to_string().parse().unwrap(),
-        );
-        (axum::http::StatusCode::OK, headers)
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_LENGTH, size.to_string().parse().unwrap());
+        (StatusCode::OK, headers)
     }
 
     /// Efficient HEAD response: computes Content-Length without generating
@@ -375,7 +375,7 @@ mod native {
     fn serve_segment_head_default(
         config: &HlsTestServerConfig,
         filename: &str,
-    ) -> (axum::http::StatusCode, axum::http::HeaderMap) {
+    ) -> (StatusCode, HeaderMap) {
         let plaintext_size = if let Some(ref per_variant) = config.custom_data_per_variant {
             let (variant, segment) = parse_segment_filename(filename).unwrap_or((0, 0));
             per_variant
@@ -399,12 +399,9 @@ mod native {
             plaintext_size
         };
 
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            axum::http::header::CONTENT_LENGTH,
-            size.to_string().parse().unwrap(),
-        );
-        (axum::http::StatusCode::OK, headers)
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_LENGTH, size.to_string().parse().unwrap());
+        (StatusCode::OK, headers)
     }
 
     async fn serve_segment(config: &HlsTestServerConfig, filename: &str) -> Vec<u8> {

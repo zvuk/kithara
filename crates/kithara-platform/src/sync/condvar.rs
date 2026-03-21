@@ -3,17 +3,20 @@
 //! * **Native** — [`parking_lot::Condvar`].
 //! * **WASM** — [`wasm_safe_thread::condvar::Condvar`].
 
+#[cfg(not(target_arch = "wasm32"))]
+use parking_lot::Condvar as ParkingLotCondvar;
+
 use super::MutexGuard;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct Condvar(parking_lot::Condvar);
+pub struct Condvar(ParkingLotCondvar);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Condvar {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
-        Self(parking_lot::Condvar::new())
+        Self(ParkingLotCondvar::new())
     }
 
     #[inline]
@@ -51,14 +54,17 @@ impl Default for Condvar {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub struct Condvar(wasm_safe_thread::condvar::Condvar);
+type WstCondvar = wasm_safe_thread::condvar::Condvar;
+
+#[cfg(target_arch = "wasm32")]
+pub struct Condvar(WstCondvar);
 
 #[cfg(target_arch = "wasm32")]
 impl Condvar {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
-        Self(wasm_safe_thread::condvar::Condvar::new())
+        Self(WstCondvar::new())
     }
 
     #[inline]

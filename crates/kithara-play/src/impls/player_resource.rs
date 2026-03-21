@@ -11,7 +11,9 @@ use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
-use crate::{error::PlayError, impls::resource::Resource};
+use crate::error::PlayError;
+#[rustfmt::skip]
+use crate::impls::resource::Resource;
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///

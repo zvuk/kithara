@@ -7,6 +7,7 @@ files:
   - tests/**/*.rs
 ignores:
   - crates/kithara-test-macros/**
+  - crates/kithara-hang-detector-macros/**
 rule:
   all:
     - kind: scoped_identifier
@@ -19,6 +20,7 @@ rule:
     - not:
         inside:
           kind: use_declaration
+          stopBy: end
     - not:
         inside:
           kind: attribute_item

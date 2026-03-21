@@ -5,7 +5,10 @@
 
 use std::sync::LazyLock;
 
-use kithara_platform::tokio::runtime;
+use kithara_platform::{
+    sync::mpsc,
+    tokio::runtime::{self, Builder as RuntimeBuilder},
+};
 
 #[cfg(feature = "backend-uniffi")]
 uniffi::setup_scaffolding!();
@@ -25,9 +28,9 @@ pub mod types;
 /// Runs a single-threaded tokio runtime on a dedicated OS thread.
 /// Only requires the `rt` feature (no `rt-multi-thread`), compatible with iOS.
 pub(crate) static FFI_RUNTIME: LazyLock<runtime::Handle> = LazyLock::new(|| {
-    let (tx, rx) = kithara_platform::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     kithara_platform::spawn(move || {
-        let rt = runtime::Builder::new_current_thread()
+        let rt = RuntimeBuilder::new_current_thread()
             .enable_all()
             .build()
             .expect("failed to create FFI tokio runtime");

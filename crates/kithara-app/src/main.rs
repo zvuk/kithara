@@ -1,7 +1,16 @@
-use std::{io, sync::Arc};
+use std::{
+    io::{self, IsTerminal},
+    sync::Arc,
+};
 
 use clap::Parser;
 use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig, prelude::PlayerImpl};
+#[cfg(not(feature = "tui"))]
+use kithara_app::gui;
+#[cfg(feature = "gui")]
+use kithara_app::gui::GuiFrontend;
+#[cfg(feature = "tui")]
+use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
 use kithara_app::{
     config::AppConfig, controls::AppController, frontend::Frontend, playlist::Playlist,
 };
@@ -36,7 +45,7 @@ type AppResult<T = ()> = Result<T, AppError>;
 fn resolve_mode(mode: Mode) -> Mode {
     match mode {
         Mode::Auto => {
-            if io::IsTerminal::is_terminal(&io::stdin()) {
+            if io::stdin().is_terminal() {
                 Mode::Tui
             } else {
                 Mode::Gui
@@ -66,12 +75,12 @@ fn main() -> AppResult {
             Mode::Tui => &["off"],
             _ => &["info"],
         };
-        kithara_app::tui::init_tracing(log_directives, mode == Mode::Tui)?;
+        init_tui_tracing(log_directives, mode == Mode::Tui)?;
     }
     #[cfg(not(feature = "tui"))]
     {
         // GUI-only: simple tracing init without CRLF writer.
-        kithara_app::gui::init_tracing()?;
+        gui::init_tracing()?;
     }
 
     // Create player and controller.
@@ -86,14 +95,14 @@ fn main() -> AppResult {
     match mode {
         #[cfg(feature = "tui")]
         Mode::Tui | Mode::Auto => {
-            let mut frontend = kithara_app::tui::TuiFrontend::new(&config)?;
+            let mut frontend = TuiFrontend::new(&config)?;
             frontend.start(&mut controller)?;
             frontend.run_loop(&mut controller)?;
             frontend.shutdown()?;
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
-            let mut frontend = kithara_app::gui::GuiFrontend::new(&config)?;
+            let mut frontend = GuiFrontend::new(&config)?;
             frontend.start(&mut controller)?;
             frontend.run_loop(&mut controller)?;
             frontend.shutdown()?;

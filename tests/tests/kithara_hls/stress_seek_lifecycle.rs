@@ -26,7 +26,7 @@ use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig}
 use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{Level, info, warn};
 
 use crate::common::test_defaults::SawWav;
 
@@ -167,7 +167,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(Level::DEBUG)
         .with_env_filter(kithara_test_utils::rust_log_filter(
             "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
         ))

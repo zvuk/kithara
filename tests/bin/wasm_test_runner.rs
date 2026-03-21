@@ -7,7 +7,14 @@
 //! forwarded. When the process exits, the fixture server dies with it.
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::{env, ffi::OsString, fs, path::PathBuf, process, time::Instant};
+use std::{
+    env,
+    ffi::OsString,
+    fs,
+    path::PathBuf,
+    process::{self, Command, Stdio},
+    time::Instant,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::{Duration, sleep};
@@ -21,7 +28,7 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> process::ExitStatus {
     let shim_dir = install_worker_shim_alias().expect("failed to prepare worker shim alias");
-    let mut runner = process::Command::new("wasm-bindgen-test-runner");
+    let mut runner = Command::new("wasm-bindgen-test-runner");
     runner
         .current_dir(shim_dir.path())
         .env("WASM_BINDGEN_USE_BROWSER", "1")
@@ -130,10 +137,10 @@ async fn main() {
             })
             .expect("could not find fixture_server binary next to wasm_test_runner");
 
-        let mut child = process::Command::new(&fixture_bin)
+        let mut child = Command::new(&fixture_bin)
             .env("FIXTURE_PORT", port.to_string())
-            .stdout(process::Stdio::piped())
-            .stderr(process::Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| {
                 panic!(

@@ -1,8 +1,8 @@
 use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
 
-use crate::{
-    error::PlayError, events::EngineEvent, traits::dj::crossfade::CrossfadeConfig, types::SlotId,
-};
+#[rustfmt::skip]
+use crate::traits::dj::crossfade::CrossfadeConfig;
+use crate::{error::PlayError, events::EngineEvent, types::SlotId};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),

@@ -8,7 +8,7 @@
 use std::io;
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus};
 use kithara_stream::{Writer, WriterItem};
 use kithara_test_utils::kithara;
@@ -34,7 +34,7 @@ async fn writer_stream_end_does_not_commit_resource() {
         Ok(Bytes::from(vec![0u8; 512])),
         Ok(Bytes::from(vec![1u8; 256])),
     ];
-    let source_stream = futures::stream::iter(data);
+    let source_stream = stream::iter(data);
 
     let cancel = CancellationToken::new();
     let mut writer: Writer<io::Error> = Writer::new(source_stream, res.clone(), cancel);

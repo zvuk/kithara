@@ -6,7 +6,9 @@
 //! scheduling goes through `tokio_with_wasm`.
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use tokio_with_wasm::alias::runtime::*;
+pub use tokio_alias::runtime::*;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio_with_wasm::alias as tokio_alias;
 
 /// Runtime handle shim for wasm32.
 ///

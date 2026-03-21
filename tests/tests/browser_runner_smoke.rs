@@ -1,4 +1,6 @@
 #[cfg(target_arch = "wasm32")]
+use js_sys::Reflect;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, JsValue};
 
 #[kithara::test(
@@ -10,7 +12,7 @@ async fn executes_inside_browser_runner() {
     #[cfg(target_arch = "wasm32")]
     {
         let global = js_sys::global();
-        let has_document = js_sys::Reflect::has(&global, &JsValue::from_str("document"))
+        let has_document = Reflect::has(&global, &JsValue::from_str("document"))
             .expect("Reflect::has(document) must succeed");
         let is_worker = global
             .dyn_into::<web_sys::DedicatedWorkerGlobalScope>()

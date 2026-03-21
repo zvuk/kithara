@@ -9,12 +9,12 @@ use crate::{
     controls::AppController,
     frontend::{Frontend, FrontendError},
     playlist::Playlist,
-    theme::tui::TuiPalette,
+    theme::tui,
 };
 
 /// TUI frontend using ratatui.
 pub struct TuiFrontend {
-    palette: TuiPalette,
+    palette: tui::TuiPalette,
     track_names: Vec<String>,
     urls: Vec<String>,
 }
@@ -27,7 +27,7 @@ impl Frontend for TuiFrontend {
             .collect();
 
         Ok(Self {
-            palette: TuiPalette::from(config.palette),
+            palette: config.palette.into(),
             track_names,
             urls: config.tracks.clone(),
         })

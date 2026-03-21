@@ -20,7 +20,7 @@ use std::{
     collections::VecDeque,
     ffi::c_void,
     fmt,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     marker::PhantomData,
     mem, ptr, slice,
     sync::{
@@ -473,8 +473,8 @@ impl AppleInner {
         if status != noErr {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioFileStreamOpen failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioFileStreamOpen failed: {}", err_str),
             ))));
         }
@@ -518,8 +518,8 @@ impl AppleInner {
                 }
                 let err_str = os_status_to_string(status);
                 warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
-                return Err(DecodeError::Backend(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
+                return Err(DecodeError::Backend(Box::new(IoError::new(
+                    ErrorKind::InvalidData,
                     format!("AudioFileStreamParseBytes failed: {}", err_str),
                 ))));
             }
@@ -591,8 +591,8 @@ impl AppleInner {
             }
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioConverterNew failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioConverterNew failed: {}", err_str),
             ))));
         }
@@ -781,7 +781,7 @@ impl AppleInner {
                     err = %err_str,
                     "Apple decoder: AudioConverterFillComplexBuffer failed"
                 );
-                return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+                return Err(DecodeError::Backend(Box::new(IoError::other(format!(
                     "AudioConverterFillComplexBuffer failed: {}",
                     err_str
                 )))));
@@ -858,8 +858,8 @@ impl AppleInner {
         if status != noErr && status != kAudioFileStreamError_NotOptimized {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, bytes = n, "Apple decoder: parse failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioFileStreamParseBytes failed: {}", err_str),
             ))));
         }

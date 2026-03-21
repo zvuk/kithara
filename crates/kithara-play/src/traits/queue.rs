@@ -1,6 +1,8 @@
 use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
 
-use crate::{events::PlayerEvent, traits::item::PlayerItem, types::SlotId};
+#[rustfmt::skip]
+use crate::traits::item::PlayerItem;
+use crate::{events::PlayerEvent, types::SlotId};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),

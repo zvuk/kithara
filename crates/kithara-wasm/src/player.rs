@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use js_sys::Promise;
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::wasm_support;
 use kithara_wasm_macros::wasm_export;
@@ -264,9 +265,9 @@ impl Player {
 /// Returns a `Promise` that resolves after worker spawn.
 #[allow(unreachable_pub)]
 #[wasm_bindgen]
-pub fn player_new() -> js_sys::Promise {
+pub fn player_new() -> Promise {
     if let Err(err) = player().ensure_worker_started() {
-        return js_sys::Promise::reject(&err);
+        return Promise::reject(&err);
     }
-    js_sys::Promise::resolve(&JsValue::UNDEFINED)
+    Promise::resolve(&JsValue::UNDEFINED)
 }

@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Error as IoError, Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
 };
@@ -10,8 +10,8 @@ use std::{
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    DemandSlot, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
+    StreamResult, StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -94,8 +94,8 @@ impl Source for TimelineSource {
         Ok(ReadOutcome::Data(n))
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> kithara_stream::SourcePhase {
-        kithara_stream::SourcePhase::Ready
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Ready
     }
 
     fn len(&self) -> Option<u64> {
@@ -123,7 +123,7 @@ impl StreamType for TimelineStream {
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config
             .source
-            .ok_or_else(|| io::Error::other("missing source"))
+            .ok_or_else(|| IoError::other("missing source"))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {

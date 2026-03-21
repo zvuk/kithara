@@ -27,11 +27,12 @@ use super::{
     player_resource::PlayerResource,
     player_track::TrackTransition,
 };
+#[rustfmt::skip]
+use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::PlayerEvent,
     impls::{player_notification::PlayerNotification, resource::Resource},
-    traits::engine::Engine,
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
 

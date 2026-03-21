@@ -5,7 +5,7 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
-    events::{AudioEvent, EventBus},
+    events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -219,10 +219,10 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     loop {
         while let Ok(ev) = events_rx.try_recv() {
             match ev {
-                kithara::events::Event::Audio(AudioEvent::FormatDetected { .. }) => {
+                Event::Audio(AudioEvent::FormatDetected { .. }) => {
                     got_format = true;
                 }
-                kithara::events::Event::Audio(AudioEvent::SeekComplete { .. }) => {
+                Event::Audio(AudioEvent::SeekComplete { .. }) => {
                     got_seek = true;
                 }
                 _ => {}

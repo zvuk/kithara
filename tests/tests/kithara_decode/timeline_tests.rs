@@ -100,8 +100,9 @@ mod hls_timeline {
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-    use kithara_test_utils::wav::create_saw_wav;
+    use kithara_test_utils::{TestTempDir, wav::create_saw_wav};
     use tokio_util::sync::CancellationToken;
+    use tracing::Level;
 
     use crate::common::test_defaults::SawWav;
 
@@ -118,7 +119,7 @@ mod hls_timeline {
     async fn test_hls_timeline_segment_tracking() {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
-            .with_max_level(tracing::Level::DEBUG)
+            .with_max_level(Level::DEBUG)
             .with_env_filter(kithara_test_utils::rust_log_filter(
                 "kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
             ))
@@ -139,7 +140,7 @@ mod hls_timeline {
         .await;
 
         let url = server.url("/master.m3u8").unwrap();
-        let temp_dir = kithara_test_utils::TestTempDir::new();
+        let temp_dir = TestTempDir::new();
         let cancel = CancellationToken::new();
 
         let hls_config = HlsConfig::new(url)

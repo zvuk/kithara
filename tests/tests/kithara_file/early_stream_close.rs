@@ -21,7 +21,7 @@ use axum::{
     Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -39,6 +39,7 @@ use kithara_platform::{
 };
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::EnvFilter;
 
 const TOTAL_SIZE: usize = 1_024_000;
 const STREAM_CLOSES_AT: usize = 512_000;
@@ -68,7 +69,7 @@ async fn handle_request(
     let method = req.method().clone();
 
     // HEAD request — return correct Content-Length
-    if method == axum::http::Method::HEAD {
+    if method == Method::HEAD {
         tracing::info!("Server: HEAD request - Content-Length: {}", TOTAL_SIZE);
         return (
             StatusCode::OK,
@@ -167,7 +168,7 @@ async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, TestHt
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::default()
+            EnvFilter::default()
                 .add_directive("kithara_file=debug".parse().unwrap())
                 .add_directive("kithara_stream::writer=debug".parse().unwrap())
                 .add_directive("kithara_storage=debug".parse().unwrap()),

@@ -9,11 +9,12 @@ use iced::Size;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
+use self::app::Kithara;
 use crate::{
     config::AppConfig,
     controls::AppController,
     frontend::{Frontend, FrontendError},
-    theme::gui::GuiPalette,
+    theme::gui,
 };
 
 /// Initialize tracing for GUI-only mode (no CRLF writer needed).
@@ -32,14 +33,14 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
-    palette: GuiPalette,
+    palette: gui::GuiPalette,
     tracks: Vec<String>,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
-            palette: GuiPalette::from(config.palette),
+            palette: config.palette.into(),
             tracks: config.tracks.clone(),
         })
     }
@@ -56,13 +57,13 @@ impl Frontend for GuiFrontend {
 
         // iced owns the tokio runtime — this must NOT be called from within block_on().
         iced::application(
-            move || app::Kithara::new(player.clone(), tracks.clone(), true, palette),
+            move || Kithara::new(player.clone(), tracks.clone(), true, palette),
             update::update,
             view::view,
         )
         .title("Kithara")
-        .theme(app::Kithara::theme)
-        .subscription(app::Kithara::subscription)
+        .theme(Kithara::theme)
+        .subscription(Kithara::subscription)
         .window_size(Size::new(448.0, 734.0))
         .run()?;
 

@@ -6,13 +6,16 @@
 use std::ops::{Deref, DerefMut};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct RwLock<T>(parking_lot::RwLock<T>);
+use parking_lot::RwLock as ParkingLotRwLock;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct RwLock<T>(ParkingLotRwLock<T>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<T> RwLock<T> {
     #[inline]
     pub fn new(value: T) -> Self {
-        Self(parking_lot::RwLock::new(value))
+        Self(ParkingLotRwLock::new(value))
     }
 
     #[inline]
@@ -68,13 +71,16 @@ impl<T> DerefMut for RwLockWriteGuard<'_, T> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub struct RwLock<T>(wasm_safe_thread::rwlock::RwLock<T>);
+type WstRwLock<T> = wasm_safe_thread::rwlock::RwLock<T>;
+
+#[cfg(target_arch = "wasm32")]
+pub struct RwLock<T>(WstRwLock<T>);
 
 #[cfg(target_arch = "wasm32")]
 impl<T> RwLock<T> {
     #[inline]
     pub fn new(value: T) -> Self {
-        Self(wasm_safe_thread::rwlock::RwLock::new(value))
+        Self(WstRwLock::new(value))
     }
 
     #[inline]

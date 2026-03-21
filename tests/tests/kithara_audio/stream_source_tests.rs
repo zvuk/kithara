@@ -2,7 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Error as IoError, Read, Seek, SeekFrom},
     ops::Range,
     panic,
     sync::{
@@ -21,8 +21,9 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, DemandSlot, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    AudioCodec, DemandSlot, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
+    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
+    TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -214,9 +215,7 @@ impl Source for TestSource {
     ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
         let state = self.state.lock_sync();
         if let Some(error) = &state.seek_anchor_error {
-            return Err(kithara_stream::StreamError::Source(io::Error::other(
-                error.clone(),
-            )));
+            return Err(StreamError::Source(IoError::other(error.clone())));
         }
         let anchor = state.seek_anchor;
         let set_position = state.seek_anchor_sets_position;
@@ -233,9 +232,9 @@ impl Source for TestSource {
         state.seek_landing_anchor = anchor;
     }
 
-    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.coord.timeline.is_flushing() {
-            return kithara_stream::SourcePhase::Seeking;
+            return SourcePhase::Seeking;
         }
         if self
             .state
@@ -243,7 +242,7 @@ impl Source for TestSource {
             .ready_until
             .is_some_and(|ready_until| range.start >= ready_until)
         {
-            return kithara_stream::SourcePhase::Waiting;
+            return SourcePhase::Waiting;
         }
         if self
             .state
@@ -251,9 +250,9 @@ impl Source for TestSource {
             .len
             .is_some_and(|total| total > 0 && range.start >= total)
         {
-            return kithara_stream::SourcePhase::Eof;
+            return SourcePhase::Eof;
         }
-        kithara_stream::SourcePhase::Ready
+        SourcePhase::Ready
     }
 
     fn demand_range(&self, range: Range<u64>) {
@@ -279,14 +278,14 @@ impl StreamType for TestStream {
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| io::Error::other("no source"))
+        config.source.ok_or_else(|| IoError::other("no source"))
     }
 
     fn build_stream_context(
         _source: &Self::Source,
         timeline: Timeline,
     ) -> Arc<dyn kithara_stream::StreamContext> {
-        Arc::new(kithara_stream::NullStreamContext::new(timeline))
+        Arc::new(NullStreamContext::new(timeline))
     }
 }
 

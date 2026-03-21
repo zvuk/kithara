@@ -1,16 +1,18 @@
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::num::NonZeroU32;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use std::sync::LazyLock;
 #[cfg(target_arch = "wasm32")]
-use std::{num::NonZeroU32, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::OnceLock, time::Duration};
 
-use firewheel::{
-    FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
-};
+#[rustfmt::skip]
+use firewheel::nodes::volume_pan::VolumePanNode;
+use firewheel::{FirewheelConfig, Volume, channel_config::ChannelCount, diff::Memo, node::NodeID};
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
 use kithara_platform::{
@@ -690,7 +692,7 @@ fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
 fn ensure_ctx(state: &mut SessionState, sample_rate: u32) -> Result<(), String> {
     if state.ctx.is_none() {
         let config = FirewheelConfig {
-            num_graph_outputs: firewheel::channel_config::ChannelCount::STEREO,
+            num_graph_outputs: ChannelCount::STEREO,
             ..FirewheelConfig::default()
         };
         let mut ctx = RuntimeCtx::new(config);

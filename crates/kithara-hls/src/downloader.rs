@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use futures::future::join_all;
 use kithara_abr::{
     AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource,
@@ -466,7 +467,7 @@ impl HlsDownloader {
             .iter()
             .map(|url| fetch.get_content_length(url))
             .collect();
-        let media_lengths = futures::future::join_all(media_futs).await;
+        let media_lengths = join_all(media_futs).await;
 
         let mut offsets = Vec::with_capacity(num_segments);
         let mut segment_sizes = Vec::with_capacity(num_segments);

@@ -12,7 +12,8 @@ use iced::{
             Handle as SliderHandle, HandleShape as SliderHandleShape, Rail as SliderRail,
             Status as SliderStatus, Style as SliderStyle,
         },
-        svg, text, vertical_slider,
+        svg::{Handle as SvgHandle, Svg},
+        text, vertical_slider,
     },
 };
 
@@ -67,7 +68,7 @@ fn format_time(seconds: f32) -> String {
 
 fn view_header(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let logo = svg::Svg::new(svg::Handle::from_memory(
+    let logo = Svg::new(SvgHandle::from_memory(
         include_bytes!("../../assets/logo.svg") as &[u8],
     ))
     .width(Length::Fixed(48.0))

@@ -596,7 +596,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.value {
-            Some(v) => fmt::Debug::fmt(v, f),
+            Some(v) => v.fmt(f),
             None => write!(f, "<taken>"),
         }
     }

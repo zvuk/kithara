@@ -2,7 +2,10 @@
 
 //! In-memory asset store backend.
 
-use std::{io, path::Path};
+use std::{
+    io::{Error as IoError, ErrorKind},
+    path::Path,
+};
 
 use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
@@ -73,7 +76,7 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
-        Err(io::Error::new(io::ErrorKind::NotFound, "resource missing").into())
+        Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
     }
 
     fn acquire_resource_with_ctx(

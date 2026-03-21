@@ -6,13 +6,14 @@
 
 pub use std::time::Duration;
 use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
+    hash::{DefaultHasher, Hash, Hasher},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_safe_thread::Builder as WasmThreadBuilder;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub type Thread = std::thread::Thread;
@@ -196,7 +197,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    wasm_safe_thread::Builder::new()
+    WasmThreadBuilder::new()
         .shim_name(SHIM_NAME.to_owned())
         .spawn(move || {
             // Each WASM Worker has its own module instance with separate globals.

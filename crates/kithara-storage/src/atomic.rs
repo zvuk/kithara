@@ -13,6 +13,9 @@
 use std::fs;
 use std::{io::Write, ops::Range, path::Path};
 
+#[cfg(not(target_arch = "wasm32"))]
+use tempfile::NamedTempFile;
+
 use crate::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 
 /// Decorator for crash-safe whole-file writes.
@@ -60,7 +63,7 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
             let _ = fs::create_dir_all(parent);
 
             // 1. Create unique temp file via `tempfile` crate.
-            let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            let mut tmp = NamedTempFile::new_in(parent)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write tmpfile: {e}")))?;
 
             // 2. Write data to temp file.

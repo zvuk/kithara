@@ -75,6 +75,7 @@ impl StreamContext for HlsStreamContext {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use url::Url;
 
     use super::*;
     use crate::stream_index::SegmentData;
@@ -94,7 +95,7 @@ mod tests {
                 init_len: 0,
                 media_len: 200,
                 init_url: None,
-                media_url: url::Url::parse("https://example.com/seg.m4s").unwrap(),
+                media_url: Url::parse("https://example.com/seg.m4s").unwrap(),
             },
         );
         let variant = Arc::new(AtomicUsize::new(2));
@@ -123,7 +124,7 @@ mod tests {
                 init_len: 0,
                 media_len: 200,
                 init_url: None,
-                media_url: url::Url::parse("https://example.com/seg-2.m4s").unwrap(),
+                media_url: Url::parse("https://example.com/seg-2.m4s").unwrap(),
             },
         );
         variant.store(3, Ordering::Relaxed);

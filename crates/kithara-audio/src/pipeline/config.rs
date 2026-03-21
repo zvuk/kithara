@@ -18,7 +18,7 @@ use portable_atomic::AtomicF32;
 use crate::{
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
-    worker::handle::AudioWorkerHandle,
+    worker::handle,
 };
 
 /// Default number of preload chunks.
@@ -80,7 +80,7 @@ pub struct AudioConfig<T: StreamType> {
     /// spawning a dedicated OS thread. When `None` (default), a standalone
     /// worker is created automatically for backward compatibility.
     #[setters(skip)]
-    pub worker: Option<AudioWorkerHandle>,
+    pub worker: Option<handle::AudioWorkerHandle>,
 }
 
 impl<T: StreamType> AudioConfig<T> {
@@ -121,7 +121,7 @@ impl<T: StreamType> AudioConfig<T> {
     ///
     /// Multiple tracks sharing one worker run on a single OS thread via
     /// cooperative round-robin scheduling.
-    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
+    pub fn with_worker(mut self, worker: handle::AudioWorkerHandle) -> Self {
         self.worker = Some(worker);
         self
     }
@@ -169,6 +169,8 @@ pub(crate) fn create_effects(
 #[cfg(test)]
 mod tests {
     use kithara_decode::PcmChunk;
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_file::FileConfig;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -190,7 +192,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn audio_config_with_effect_adds_to_chain() {
-        let config = AudioConfig::<kithara_file::File>::new(kithara_file::FileConfig::default())
+        let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
             .with_effect(Box::new(PassthroughEffect))
             .with_effect(Box::new(PassthroughEffect));
         assert_eq!(config.effects.len(), 2);

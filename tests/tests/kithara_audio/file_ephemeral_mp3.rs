@@ -5,7 +5,7 @@ use axum::{
     Router,
     body::Body,
     extract::Request,
-    http::{StatusCode, header},
+    http::{Method, StatusCode, header},
     response::Response,
     routing::get,
 };
@@ -17,7 +17,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::TestHttpServer;
+use kithara_test_utils::{TestHttpServer, TestTempDir};
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 
@@ -26,7 +26,7 @@ const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
     reason = "axum handler signature requires owned Request"
 )]
 fn serve_mp3_with_range(req: Request) -> Response {
-    if req.method() == axum::http::Method::HEAD {
+    if req.method() == Method::HEAD {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
@@ -92,7 +92,7 @@ fn app() -> Router {
 #[kithara::test(tokio)]
 async fn audio_file_ephemeral_mp3_does_not_end_early() {
     let server = TestHttpServer::new(app()).await;
-    let temp_dir = kithara_test_utils::TestTempDir::new();
+    let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url("/test.mp3").into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));

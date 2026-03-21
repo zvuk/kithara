@@ -35,10 +35,13 @@ use super::{
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
+#[rustfmt::skip]
+use crate::traits::dj::crossfade::CrossfadeConfig;
+#[rustfmt::skip]
+use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::EngineEvent,
-    traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
     types::{SessionDuckingMode, SlotId},
 };
 

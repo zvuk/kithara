@@ -5,13 +5,13 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
-use firewheel::{
-    dsp::{
-        fade::FadeCurve,
-        filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
-        mix::{Mix, MixDSP},
-    },
-    param::smoother::SmootherConfig,
+#[rustfmt::skip]
+use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;
+#[rustfmt::skip]
+use firewheel::param::smoother::SmootherConfig;
+use firewheel::dsp::{
+    fade::FadeCurve,
+    mix::{Mix, MixDSP},
 };
 use kithara_audio::ServiceClass;
 use kithara_platform::Mutex;

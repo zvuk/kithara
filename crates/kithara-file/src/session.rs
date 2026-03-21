@@ -245,6 +245,7 @@ mod tests {
     use std::sync::Arc;
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
+    use kithara_events::Event;
     use kithara_platform::time::{Duration, sleep, timeout};
     use kithara_stream::{ReadOutcome, Source, Timeline};
     use kithara_test_utils::kithara;
@@ -408,7 +409,7 @@ mod tests {
 
         let event = events.try_recv().expect("expected file event");
         match event {
-            kithara_events::Event::File(FileEvent::ByteProgress { position, total }) => {
+            Event::File(FileEvent::ByteProgress { position, total }) => {
                 assert_eq!(position, 3);
                 assert_eq!(total, Some(6));
             }

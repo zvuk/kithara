@@ -46,7 +46,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::io;
+    use std::io::{self, Error as IoError, ErrorKind};
 
     use super::*;
 
@@ -62,7 +62,7 @@ mod tests {
 
     #[kithara::test]
     fn test_source_error_display() {
-        let io_err = io::Error::new(io::ErrorKind::NotFound, "file missing");
+        let io_err = IoError::new(ErrorKind::NotFound, "file missing");
         let err: StreamError<io::Error> = StreamError::Source(io_err);
         assert_eq!(err.to_string(), "source error: file missing");
     }

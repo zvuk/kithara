@@ -25,7 +25,7 @@
 //! ```
 
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, ErrorKind, Read, Seek, SeekFrom},
     marker::PhantomData,
     panic::{self, AssertUnwindSafe},
     sync::{
@@ -44,12 +44,15 @@ use symphonia::{
             audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
         },
         errors::Error as SymphoniaError,
-        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType, probe::Hint},
+        io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
         units::{Time, Timestamp},
     },
-    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
+    default::{
+        formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
+        get_codecs, get_probe,
+    },
 };
 
 use crate::{
@@ -277,7 +280,7 @@ impl SymphoniaInner {
         let meta_opts = MetadataOptions::default();
 
         tracing::debug!(hint = ?config.hint, seek_enabled, "Probing format");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = get_probe()
             .probe(&probe_hint, mss, format_opts, meta_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
@@ -382,7 +385,7 @@ impl SymphoniaInner {
         let decoder_opts = AudioDecoderOptions {
             verify: config.verify,
         };
-        let decoder = symphonia::default::get_codecs()
+        let decoder = get_codecs()
             .make_audio_decoder(&codec_params, &decoder_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
@@ -414,7 +417,7 @@ impl SymphoniaInner {
     }
 
     /// Calculate duration from track metadata.
-    fn calculate_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
+    fn calculate_duration(track: &Track) -> Option<Duration> {
         let num_frames = track.num_frames?;
         let time_base = track.time_base?;
         let time = time_base.calc_time(Timestamp::new(num_frames as i64))?;
@@ -452,7 +455,7 @@ impl SymphoniaInner {
                     self.decoder.reset();
                     continue;
                 }
-                Err(SymphoniaError::IoError(ref e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(SymphoniaError::IoError(ref e)) if e.kind() == ErrorKind::UnexpectedEof => {
                     tracing::debug!("Treating UnexpectedEof as EOF");
                     return Ok(None);
                 }
@@ -746,7 +749,7 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
     }
 }
 
-impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeekAdapter<R> {
+impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
     fn is_seekable(&self) -> bool {
         self.seek_enabled.load(Ordering::Acquire)
     }

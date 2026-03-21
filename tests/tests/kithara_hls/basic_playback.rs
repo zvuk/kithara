@@ -13,6 +13,8 @@ use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_platform::{time::sleep, tokio::task::spawn};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
+#[cfg(not(target_arch = "wasm32"))]
+use rodio::Decoder;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -96,7 +98,7 @@ async fn test_basic_hls_playback(
     info!("Creating rodio decoder...");
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let decoder_result = spawn_blocking(move || rodio::Decoder::new(stream)).await;
+        let decoder_result = spawn_blocking(move || Decoder::new(stream)).await;
 
         match decoder_result {
             Ok(_decoder) => {

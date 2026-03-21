@@ -1,8 +1,11 @@
 use kithara_platform::time::Duration;
 
+#[rustfmt::skip]
+use crate::traits::dj::bpm::BpmInfo;
+#[rustfmt::skip]
+use crate::traits::session::RouteDescription;
 use crate::{
     time::MediaTime,
-    traits::{dj::bpm::BpmInfo, session::RouteDescription},
     types::{ItemStatus, PlayerStatus, SlotId, TimeControlStatus, TimeRange, WaitingReason},
 };
 

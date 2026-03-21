@@ -12,13 +12,16 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
-use kithara::{assets::AssetStoreBuilder, storage::ResourceExt};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara::{
+    assets::{AssetStoreBuilder, ResourceKey},
+    storage::ResourceExt,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -32,7 +35,7 @@ use kithara_test_utils::wav::create_saw_wav;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
-use tracing::info;
+use tracing::{Level, info};
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn ephemeral_backend_creates_mem_resource() {
@@ -41,7 +44,7 @@ fn ephemeral_backend_creates_mem_resource() {
         .asset_root(Some("test"))
         .build();
 
-    let key = kithara::assets::ResourceKey::new("seg_0.m4s");
+    let key = ResourceKey::new("seg_0.m4s");
     let res = backend
         .acquire_resource(&key)
         .expect("open ephemeral resource");
@@ -64,7 +67,7 @@ fn disk_backend_creates_mmap_resource() {
         .ephemeral(false)
         .build();
 
-    let key = kithara::assets::ResourceKey::new("seg_0.m4s");
+    let key = ResourceKey::new("seg_0.m4s");
     let res = backend.acquire_resource(&key).expect("open disk resource");
     assert!(
         res.path().is_some(),
@@ -113,7 +116,7 @@ fn count_files(dir: &Path) -> usize {
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(Level::DEBUG)
         .with_env_filter(kithara_test_utils::rust_log_filter(
             "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
         ))

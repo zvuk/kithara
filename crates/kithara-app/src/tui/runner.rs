@@ -18,7 +18,7 @@ use crate::{
     controls::{AppController, PlayerControls},
     crossfade::{CrossfadeClock, ProgressLog},
     events::{UiMsg, format_seconds, is_progress_event, source_note},
-    theme::tui::TuiPalette,
+    theme::tui,
 };
 
 const CONTROL_POLL_MS: u64 = 100;
@@ -41,7 +41,7 @@ pub(super) async fn run_tui(
     controller: &mut AppController,
     urls: Vec<String>,
     track_names: Vec<String>,
-    palette: TuiPalette,
+    palette: tui::TuiPalette,
 ) -> RunnerResult {
     let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -135,7 +135,7 @@ fn run_ui_loop(
     ui_tx: &mpsc::Sender<UiMsg>,
     ui_rx: &mpsc::Receiver<UiMsg>,
     stop_rx: &mpsc::Receiver<()>,
-    palette: TuiPalette,
+    palette: tui::TuiPalette,
 ) -> RunnerResult {
     let track_count = track_names.len();
     let dashboard = Dashboard::new(track_names, palette);

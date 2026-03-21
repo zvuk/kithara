@@ -6,8 +6,9 @@
 
 use std::sync::{Arc, atomic::AtomicU32};
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::{
-    audio::{AudioEffect, ResamplerParams, ResamplerQuality},
+    audio::{AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality},
     bufpool::pcm_pool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
 };
@@ -35,15 +36,12 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
 }
 
 #[hotpath::measure]
-fn resampler_process_single(resampler: &mut kithara::audio::ResamplerProcessor, chunk: &PcmChunk) {
+fn resampler_process_single(resampler: &mut ResamplerProcessor, chunk: &PcmChunk) {
     let _ = resampler.process(chunk.clone());
 }
 
 #[hotpath::measure]
-fn resampler_passthrough_process(
-    resampler: &mut kithara::audio::ResamplerProcessor,
-    chunk: &PcmChunk,
-) {
+fn resampler_passthrough_process(resampler: &mut ResamplerProcessor, chunk: &PcmChunk) {
     let _ = resampler.process(chunk.clone());
 }
 
@@ -51,7 +49,7 @@ fn resampler_passthrough_process(
 /// Measures: process overhead, actual resampling work, buffer management.
 #[hotpath::measure]
 fn resampler_full_process_cycle(
-    resampler: &mut kithara::audio::ResamplerProcessor,
+    resampler: &mut ResamplerProcessor,
     chunk: &PcmChunk,
 ) -> Option<PcmChunk> {
     resampler.process(chunk.clone())
@@ -72,7 +70,7 @@ enum PerfScenario {
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
 #[ignore]
 fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
-    let _guard = hotpath::FunctionsGuardBuilder::new(label).build();
+    let _guard = FunctionsGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::QualityComparison => {
             let input_spec = PcmSpec {
@@ -97,7 +95,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                     input_spec.channels as usize,
                 )
                 .with_quality(quality);
-                let mut resampler = kithara::audio::ResamplerProcessor::new(params);
+                let mut resampler = ResamplerProcessor::new(params);
                 let chunk = create_test_chunk(test_frames, input_spec);
 
                 for _ in 0..10 {
@@ -121,7 +119,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             let host_rate = Arc::new(AtomicU32::new(spec.sample_rate));
             let params = ResamplerParams::new(host_rate, spec.sample_rate, spec.channels as usize)
                 .with_quality(ResamplerQuality::Good);
-            let mut resampler = kithara::audio::ResamplerProcessor::new(params);
+            let mut resampler = ResamplerProcessor::new(params);
             let chunk = create_test_chunk(2048, spec);
 
             for _ in 0..10 {
@@ -184,7 +182,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                 input_spec.channels as usize,
             )
             .with_quality(ResamplerQuality::High);
-            let mut resampler = kithara::audio::ResamplerProcessor::new(params);
+            let mut resampler = ResamplerProcessor::new(params);
             let chunk_sizes = [512, 1024, 2048, 4096];
 
             for &size in &chunk_sizes {

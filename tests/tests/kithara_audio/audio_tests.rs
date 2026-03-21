@@ -4,23 +4,22 @@ use std::{fs::File, io::Write};
 
 use kithara_audio::internal::audio::*;
 use kithara_events::{AudioEvent, SeekLifecycleStage};
+use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::{create_test_wav, kithara};
 use ringbuf::traits::Consumer;
+use tempfile::NamedTempFile;
 
 /// Write test WAV to a temp file and return config for it.
-fn test_wav_config(
-    sample_count: usize,
-) -> (tempfile::NamedTempFile, AudioConfig<kithara_file::File>) {
+fn test_wav_config(sample_count: usize) -> (NamedTempFile, AudioConfig<kithara_file::File>) {
     let wav_data = create_test_wav(sample_count, 44100, 2);
-    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let tmp = NamedTempFile::new().unwrap();
     File::create(tmp.path())
         .unwrap()
         .write_all(&wav_data)
         .unwrap();
-    let file_config =
-        kithara_file::FileConfig::new(kithara_file::FileSrc::Local(tmp.path().to_path_buf()));
+    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()));
     let config = AudioConfig::<kithara_file::File>::new(file_config).with_hint("wav");
     (tmp, config)
 }
@@ -68,8 +67,8 @@ fn test_audio_config_with_media_info() {
         .with_container(ContainerFormat::Wav)
         .with_sample_rate(44100);
 
-    let config = AudioConfig::<kithara_file::File>::new(kithara_file::FileConfig::default())
-        .with_media_info(info.clone());
+    let config =
+        AudioConfig::<kithara_file::File>::new(FileConfig::default()).with_media_info(info.clone());
 
     assert!(config.media_info.is_some());
     assert_eq!(

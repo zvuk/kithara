@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 pub mod engine {
-    pub use crate::{
-        EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
-        traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
-    };
+    #[rustfmt::skip]
+    pub use crate::traits::dj::crossfade::CrossfadeConfig;
+    #[rustfmt::skip]
+    pub use crate::traits::engine::Engine;
+    pub use crate::{EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId};
 
     #[must_use]
     pub fn slot_id(value: u64) -> SlotId {
@@ -16,7 +17,7 @@ pub mod engine {
 pub mod offline {
     use std::sync::{Arc, atomic::Ordering};
 
-    use firewheel::{FirewheelConfig, FirewheelCtx};
+    use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
     use kithara_platform::Mutex;
     use ringbuf::{
         HeapRb,
@@ -52,7 +53,7 @@ pub mod offline {
         #[must_use]
         pub fn new(sample_rate: u32) -> Self {
             let fw_config = FirewheelConfig {
-                num_graph_outputs: firewheel::channel_config::ChannelCount::STEREO,
+                num_graph_outputs: ChannelCount::STEREO,
                 ..FirewheelConfig::default()
             };
             let mut ctx = FirewheelCtx::<OfflineBackend>::new(fw_config);

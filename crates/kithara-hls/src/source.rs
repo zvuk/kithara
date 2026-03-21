@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use kithara_abr::Variant;
+use kithara_abr::{AbrController, Variant};
 use kithara_assets::{AssetResourceState, ResourceKey};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{
@@ -1327,7 +1327,7 @@ pub(crate) fn build_pair(
     abr_opts.variants = abr_variants;
 
     let cancel = config.cancel.clone().unwrap_or_default();
-    let abr = kithara_abr::AbrController::new(abr_opts);
+    let abr = AbrController::new(abr_opts);
     let abr_variant_index = abr.variant_index_handle();
     let timeline = Timeline::new();
     timeline.set_total_duration(playlist_state.track_duration());
