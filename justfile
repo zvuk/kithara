@@ -35,7 +35,7 @@ machete:
 
 # Validate workspace architecture.
 arch:
-    cargo xtask arch
+    cargo xtask quality arch
 
 # Generate and open API docs.
 doc:

@@ -10015,8 +10015,10 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "glob",
  "kithara-workspace-hack",
  "regex",
+ "tempfile",
 ]
 
 [[package]]

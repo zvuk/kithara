@@ -1,12 +1,25 @@
-use std::{
-    fs,
-    io::{BufRead, BufReader},
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{fs, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+
+use crate::util::{check_rust_target, check_tool};
+
+#[derive(Clone, Copy, Debug, clap::Subcommand)]
+pub(crate) enum AndroidCommand {
+    /// Build Android shared libraries and Kotlin bindings.
+    Build {
+        /// Build profile.
+        #[arg(long, default_value_t = crate::BuildProfile::Release)]
+        profile: crate::BuildProfile,
+    },
+}
+
+pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
+    match cmd {
+        AndroidCommand::Build { profile } => run_build(profile),
+    }
+}
 
 const ANDROID_API_LEVEL: &str = "26";
 const RUST_TARGETS: &[(&str, &str)] = &[
@@ -14,34 +27,6 @@ const RUST_TARGETS: &[(&str, &str)] = &[
     ("armv7-linux-androideabi", "armeabi-v7a"),
     ("x86_64-linux-android", "x86_64"),
 ];
-
-fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
-    let ok = Command::new(tool)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !ok {
-        bail!("{tool} not found. Install with: {install_hint}");
-    }
-    Ok(())
-}
-
-fn check_rust_target(target: &str) -> Result<bool> {
-    let output = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .context("failed to run rustup target list --installed")?;
-    let reader = BufReader::new(output.stdout.as_slice());
-    for line in reader.lines() {
-        if line.context("reading rustup output")? == target {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
 
 fn recreate_dir(path: &Path) -> Result<()> {
     if path.exists() {
@@ -51,7 +36,7 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run(profile: crate::BuildProfile) -> Result<()> {
+fn run_build(profile: crate::BuildProfile) -> Result<()> {
     // 1. Check prerequisites.
     check_tool("cargo", &["ndk", "--help"], "cargo install cargo-ndk")?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;

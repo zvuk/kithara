@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 mod android;
+mod apple;
 mod arch;
 mod perf_compare;
 mod quality;
 mod util;
-mod xcframework;
 
+use android::AndroidCommand;
+use apple::AppleCommand;
 use quality::QualityCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -35,8 +37,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Validate workspace architecture.
-    Arch,
     /// Compare perf results.
     PerfCompare {
         /// Path to the current results file.
@@ -52,17 +52,15 @@ enum Command {
         #[command(subcommand)]
         command: QualityCommand,
     },
-    /// Build Android shared libraries and Kotlin bindings.
+    /// Android build tasks.
     Android {
-        /// Build profile.
-        #[arg(long, default_value_t = BuildProfile::Release)]
-        profile: BuildProfile,
+        #[command(subcommand)]
+        command: AndroidCommand,
     },
-    /// Build an `XCFramework`.
-    Xcframework {
-        /// Build profile.
-        #[arg(long, default_value_t = BuildProfile::Release)]
-        profile: BuildProfile,
+    /// Apple build tasks.
+    Apple {
+        #[command(subcommand)]
+        command: AppleCommand,
     },
 }
 
@@ -70,14 +68,13 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Arch => arch::run(),
         Command::PerfCompare {
             current,
             baseline,
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
         Command::Quality { command } => quality::run(command),
-        Command::Android { profile } => android::run(profile),
-        Command::Xcframework { profile } => xcframework::run(profile),
+        Command::Android { command } => android::run(command),
+        Command::Apple { command } => apple::run(command),
     }
 }
