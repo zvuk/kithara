@@ -2,14 +2,14 @@
 
 This file is the canonical repo-level contract for Codex, Claude Code, Cursor, and other coding agents.
 Use it for repo-wide coding conventions, path routing, and stable coordination shapes.
-Use `docs/workflow/rust-ai.md` for the recommended execution flow.
+Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 
 ## Authority
 
 - `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
-- `docs/workflow/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
-- `docs/plans/_template.md` is the required plan shape for split or other non-trivial tasks.
-- If two documents disagree: `AGENTS.md` wins over `docs/workflow/*`, which wins over crate `README.md`, which wins over tool-specific shims.
+- `.docs/workflow/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
+- `.docs/plans/_template.md` is the required plan shape for split or other non-trivial tasks.
+- If two documents disagree: `AGENTS.md` wins over `.docs/workflow/*`, which wins over crate `README.md`, which wins over tool-specific shims.
 
 ## Core Principles
 
@@ -193,7 +193,7 @@ Risks or follow-ups:
 - Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
 - Read only the repo docs and crate READMEs that match the owned paths.
 - The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
-- If a task needs a plan, follow `docs/workflow/rust-ai.md` and `docs/plans/_template.md`.
+- If a task needs a plan, follow `.docs/workflow/rust-ai.md` and `.docs/plans/_template.md`.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `README.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.

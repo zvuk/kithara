@@ -50,14 +50,14 @@ For detailed crate-level rules, follow `AGENTS.md` routing and read the owning `
 
 ## When a full plan is required
 
-Use `docs/plans/_template.md` when the task:
+Use `.docs/plans/_template.md` when the task:
 
 - changes public API or shared types;
 - changes workflow, tooling, hooks, or docs that affect multiple agents;
 - affects wasm or perf-sensitive behavior;
 - uses split execution.
 
-Create or update the plan in `docs/plans/YYYY-MM-DD-<slug>.md`.
+Create or update the plan in `.docs/plans/YYYY-MM-DD-<slug>.md`.
 
 A small single-owner change with a clear boundary can work from the `Task Packet` alone.
 

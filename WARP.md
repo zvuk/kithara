@@ -6,7 +6,7 @@ This repo does not keep a separate `.codex/rules/` layer. Keep Codex routing her
 
 Then load:
 
-- `docs/workflow/rust-ai.md`
+- `.docs/workflow/rust-ai.md`
 - the matching crate `README.md` files
 - `tests/README.md` when touching tests, fixtures, browser coverage, or repo tooling
 

@@ -53,8 +53,7 @@ hotpath-*.json
 log*.txt
 crates/kithara-wasm/dist
 
-# Local docs / plans
-.docs/
+# Local Claude artifacts
 .claude/*.md
 .claude-octopus
 .claude/debates

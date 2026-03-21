@@ -14,7 +14,7 @@ just test-all
 
 Complete the environment setup from [README.md#environment-setup](README.md#environment-setup) before relying on the `just` workflow.
 
-The canonical local workflow for both humans and AI agents lives in [docs/workflow/rust-ai.md](docs/workflow/rust-ai.md).
+The canonical local workflow for both humans and AI agents lives in [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md).
 
 ## Before Submitting a PR
 
@@ -35,7 +35,7 @@ brew install worktrunk
 wt config shell install
 ```
 
-See [`AGENTS.md`](AGENTS.md) for the full coding rules and [docs/plans/_template.md](docs/plans/_template.md) for the required task-plan format on non-trivial changes.
+See [`AGENTS.md`](AGENTS.md) for the full coding rules and [.docs/plans/_template.md](.docs/plans/_template.md) for the required task-plan format on non-trivial changes.
 
 ## Architecture
 

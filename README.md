@@ -95,7 +95,7 @@ just lint-fast
 just lint-full
 ```
 
-The day-to-day workflow for both humans and AI agents lives in [docs/workflow/rust-ai.md](docs/workflow/rust-ai.md). Use [docs/plans/_template.md](docs/plans/_template.md) for non-trivial tasks.
+The day-to-day workflow for both humans and AI agents lives in [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md). Use [.docs/plans/_template.md](.docs/plans/_template.md) for non-trivial tasks.
 
 ## Environment Setup
 
@@ -186,7 +186,7 @@ cargo run -p kithara --example player --features file,hls -- [FILE_URL] [HLS_URL
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [docs/workflow/rust-ai.md](docs/workflow/rust-ai.md) for the local-first task flow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md) for the local-first task flow.
 
 ## Rules
 

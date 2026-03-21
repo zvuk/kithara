@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 @AGENTS.md
-@docs/workflow/rust-ai.md
+@.docs/workflow/rust-ai.md
 
 ## Claude Notes
 
