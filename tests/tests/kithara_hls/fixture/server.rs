@@ -3,7 +3,7 @@
 //! Provides `TestServer` with routes for master/media playlists and segments.
 //! On native: in-process axum server. On WASM: delegates to external fixture server.
 
-// ── Native implementation ──────────────────────────────────────────
+// Native implementation
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -126,7 +126,7 @@ mod native {
     }
 }
 
-// ── WASM implementation ────────────────────────────────────────────
+// WASM implementation
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -181,7 +181,7 @@ pub(crate) async fn test_server() -> TestServer {
     TestServer::new().await
 }
 
-// ── Shared content generators (used by native server + tests) ──────
+// Shared content generators (used by native server + tests)
 
 /// Master playlist with standard bitrates
 #[cfg(not(target_arch = "wasm32"))]

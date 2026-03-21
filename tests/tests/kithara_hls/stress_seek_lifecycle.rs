@@ -259,7 +259,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
-        // ── Phase 1: Warmup until ABR switch ─────────────────────────
+        // Phase 1: Warmup until ABR switch
         info!("Phase 1: warmup — reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
@@ -293,7 +293,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
             warn!("ABR switch not detected during warmup — continuing anyway");
         }
 
-        // ── Phase 2: 2000 rapid random seeks ─────────────────────────
+        // Phase 2: 2000 rapid random seeks
         info!("Phase 2: {STRESS_SEEK_ITERATIONS} rapid random seeks");
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;

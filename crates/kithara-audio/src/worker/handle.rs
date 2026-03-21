@@ -33,9 +33,7 @@ use super::{
     wake::WorkerWake,
 };
 
-// ---------------------------------------------------------------------------
 // Public types
-// ---------------------------------------------------------------------------
 
 /// Command sent from [`AudioWorkerHandle`] to the shared worker thread.
 pub(crate) enum WorkerCmd {
@@ -147,9 +145,7 @@ impl Default for AudioWorkerHandle {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Internal: TrackSlot
-// ---------------------------------------------------------------------------
 
 /// Per-track state inside the worker thread.
 struct TrackSlot {
@@ -321,9 +317,7 @@ impl TrackSlot {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Worker loop
-// ---------------------------------------------------------------------------
 
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
@@ -508,9 +502,7 @@ fn drain_worker_commands(
     false
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -529,7 +521,7 @@ mod tests {
         worker::{AudioCommand, AudioWorkerSource, types::ServiceClass},
     };
 
-    // -- Mock source ----------------------------------------------------------
+    // Mock source
 
     struct MockSource {
         timeline: Timeline,
@@ -597,7 +589,7 @@ mod tests {
         }
     }
 
-    // -- Helpers --------------------------------------------------------------
+    // Helpers
 
     fn make_registration(
         source: MockSource,
@@ -676,7 +668,7 @@ mod tests {
         received
     }
 
-    // -- Tests ----------------------------------------------------------------
+    // Tests
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
@@ -927,7 +919,7 @@ mod tests {
         handle.shutdown();
     }
 
-    // -- Starvation tests ---------------------------------------------------
+    // Starvation tests
 
     /// A slow/blocked track must not starve a producing track.
     ///

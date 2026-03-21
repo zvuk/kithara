@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use kithara_test_utils::fixture_protocol::DelayRule;
 
-// ── Config (cross-platform) ────────────────────────────────────────
+// Config (cross-platform)
 
 /// AES-128 encryption configuration for test server.
 pub struct EncryptionConfig {
@@ -92,7 +92,7 @@ impl Default for HlsTestServerConfig {
     }
 }
 
-// ── Shared verification logic (cross-platform) ─────────────────────
+// Shared verification logic (cross-platform)
 
 /// Compute expected byte for verification (shared logic for server + tests).
 ///
@@ -137,7 +137,7 @@ fn expected_byte_at_impl(config: &HlsTestServerConfig, variant: usize, offset: u
     }
 }
 
-// ── Native implementation ──────────────────────────────────────────
+// Native implementation
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -493,7 +493,7 @@ mod native {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::HlsTestServer;
 
-// ── WASM implementation ────────────────────────────────────────────
+// WASM implementation
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {

@@ -81,7 +81,7 @@ mod server {
     use tokio::{net::TcpListener, sync::RwLock};
     use tower_http::{cors::CorsLayer, services::ServeDir, set_header::SetResponseHeaderLayer};
 
-    // ── Session Types ──────────────────────────────────────────────
+    // Session Types
 
     enum SessionKind {
         FixedHls(FixedHlsData),
@@ -138,7 +138,7 @@ mod server {
 
     type Sessions = Arc<RwLock<HashMap<String, Session>>>;
 
-    // ── App State ──────────────────────────────────────────────────
+    // App State
 
     #[derive(Clone)]
     struct AppState {
@@ -155,7 +155,7 @@ mod server {
         segment_durations_secs: Vec<f64>,
     }
 
-    // ── Static fixture generation (backwards compat) ───────────────
+    // Static fixture generation (backwards compat)
 
     const SAMPLE_RATE: u32 = 44100;
     const CHANNELS: u16 = 2;
@@ -228,7 +228,7 @@ mod server {
         pl
     }
 
-    // ── HLS data generation ────────────────────────────────────────
+    // HLS data generation
 
     fn generate_hls_data(config: &HlsSessionConfig) -> HlsData {
         let mut segments = Vec::with_capacity(config.variant_count);
@@ -290,7 +290,7 @@ mod server {
         }
     }
 
-    // ── Fixed HLS helpers ──────────────────────────────────────────
+    // Fixed HLS helpers
 
     fn fixed_test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
         generate_segment(variant, segment, 200_000)
@@ -414,7 +414,7 @@ seg/v{}_2.bin
         cipher.to_vec()
     }
 
-    // ── HLS playlist generation ────────────────────────────────────
+    // HLS playlist generation
 
     fn hls_master_playlist(config: &HlsSessionConfig) -> String {
         let mut pl = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
@@ -458,7 +458,7 @@ seg/v{}_2.bin
         pl
     }
 
-    // ── ABR helpers ────────────────────────────────────────────────
+    // ABR helpers
 
     fn abr_media_playlist(variant: usize, has_init: bool) -> String {
         let mut s = String::new();
@@ -503,7 +503,7 @@ seg/v{}_2.bin
         data
     }
 
-    // ── AES-128 encryption ─────────────────────────────────────────
+    // AES-128 encryption
 
     fn encrypt_aes128_cbc(data: &[u8], key: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         use aes::Aes128;
@@ -539,7 +539,7 @@ seg/v{}_2.bin
         )
     }
 
-    // ── Range request support ──────────────────────────────────────
+    // Range request support
 
     fn parse_range_header(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
         let value = headers.get(header::RANGE)?.to_str().ok()?.trim();
@@ -618,7 +618,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Route Handlers ─────────────────────────────────────────────
+    // Route Handlers
 
     async fn health() -> &'static str {
         "ok"
@@ -773,7 +773,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Session-based route handlers ───────────────────────────────
+    // Session-based route handlers
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_master(
@@ -1046,7 +1046,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Audio fixtures route handler ─────────────────────────────────
+    // Audio fixtures route handler
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_audio_file(
@@ -1071,7 +1071,7 @@ seg/v{}_2.bin
             .unwrap())
     }
 
-    // ── File download route handlers ─────────────────────────────────
+    // File download route handlers
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_file_get(
@@ -1145,7 +1145,7 @@ seg/v{}_2.bin
             .unwrap())
     }
 
-    // ── HTTP test route handler ─────────────────────────────────────
+    // HTTP test route handler
 
     async fn session_http_test(
         State(state): State<AppState>,
@@ -1218,7 +1218,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Static route handlers (backwards compat) ───────────────────
+    // Static route handlers (backwards compat)
 
     async fn static_master_uniform() -> &'static str {
         "#EXTM3U\n\
@@ -1305,7 +1305,7 @@ seg/v{}_2.bin
         fixture.wav_data[start..end].to_vec()
     }
 
-    // ── Parsing helpers ────────────────────────────────────────────
+    // Parsing helpers
 
     fn parse_variant_from_playlist(filename: &str) -> Option<usize> {
         let name = filename.strip_suffix(".m3u8")?;
@@ -1349,7 +1349,7 @@ seg/v{}_2.bin
             .ok()
     }
 
-    // ── Session cleanup ────────────────────────────────────────────
+    // Session cleanup
 
     async fn cleanup_expired_sessions(sessions: Sessions) {
         loop {
@@ -1362,7 +1362,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Server entry point ─────────────────────────────────────────
+    // Server entry point
 
     pub(crate) async fn run(port: u16) {
         let uniform_sizes = vec![UNIFORM_SEGMENT_SIZE; STATIC_SEGMENT_COUNT];

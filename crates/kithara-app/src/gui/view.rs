@@ -499,9 +499,7 @@ fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'st
         .into()
 }
 
-// ---------------------------------------------------------------------------
 // Style helpers — all take GuiPalette and return closures
-// ---------------------------------------------------------------------------
 
 fn root_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| ContainerStyle::default().background(p.bg).color(p.text)

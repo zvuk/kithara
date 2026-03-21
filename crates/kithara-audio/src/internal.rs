@@ -172,7 +172,7 @@ pub mod source {
         source.0.state.phase_tag()
     }
 
-    // ---- Test compatibility helpers ----
+    // Test compatibility helpers
     // These wrap step_track() to provide the old fetch_next/apply_pending_seek
     // calling patterns used by integration tests.
 
@@ -218,7 +218,7 @@ pub mod source {
         }
     }
 
-    // ---- Test-only state accessors (overlay fields still present) ----
+    // Test-only state accessors (overlay fields still present)
 
     pub fn set_base_offset<T: StreamType>(source: &mut StreamAudioSource<T>, base_offset: u64) {
         source.0.session.base_offset = base_offset;

@@ -38,7 +38,7 @@ impl EmbeddedAudio {
     }
 }
 
-// --- Native-only: AudioTestServer (axum) ---
+// Native-only: AudioTestServer (axum)
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {

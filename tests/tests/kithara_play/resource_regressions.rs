@@ -738,7 +738,7 @@ async fn stress_offline_crossfade_no_gaps() {
     // Local MP3 path (simulates disk-cached file, like production).
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    // --- Helper: create MP3 resource (NO preload — match production timing) ---
+    // Helper: create MP3 resource (NO preload — match production timing)
     let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
         let p = local_mp3.clone();
         async move {
@@ -753,7 +753,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // --- Helper: create and preload an HLS resource ---
+    // Helper: create and preload an HLS resource
     let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
         let u = hls_url.clone();
         async move {
@@ -771,7 +771,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // --- Helper: render N blocks, collect stats ---
+    // Helper: render N blocks, collect stats
     struct PhaseStats {
         label: String,
         blocks: u32,
@@ -835,7 +835,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // ===== Scenario 1: MP3 → HLS =====
+    // Scenario 1: MP3 to HLS
     let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_phase(&mut player, 40, "MP3 solo");
@@ -845,25 +845,25 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_phase(&mut player, 80, "MP3→HLS fade");
 
-    // ===== Scenario 2: HLS → MP3 =====
+    // Scenario 2: HLS to MP3
     let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(50)).await;
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_phase(&mut player, 80, "HLS→MP3 fade");
 
-    // ===== Scenario 3: MP3 → MP3 =====
+    // Scenario 3: MP3 to MP3
     let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(50)).await;
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_phase(&mut player, 80, "MP3→MP3 fade");
 
-    // ===== Report =====
+    // Report
     eprintln!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
     for s in [&s1a, &s1b, &s2, &s3] {
         eprintln!("  {s}");
     }
 
-    // ===== Scenario 4: repeated HLS→MP3 (intermittent glitch) =====
+    // Scenario 4: repeated HLS to MP3 (intermittent glitch)
     // User reports: "чаще всего при переключении с hls на mp3,
     // это длится около 2х секунд". Run multiple iterations to catch it.
     eprintln!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
@@ -901,7 +901,7 @@ async fn stress_offline_crossfade_no_gaps() {
          max_render={worst_render:?}"
     );
 
-    // ===== Assertions =====
+    // Assertions
     let all = [&s1b, &s2, &s3];
     for s in &all {
         assert!(

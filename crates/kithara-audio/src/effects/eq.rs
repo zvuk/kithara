@@ -507,7 +507,7 @@ mod tests {
         assert!(eq.flush().is_none());
     }
 
-    // --- FilterKind tests ---
+    // FilterKind tests
 
     #[kithara::test]
     fn filter_kind_default_is_peaking() {
@@ -610,7 +610,7 @@ mod tests {
         );
     }
 
-    // --- Smooth transition tests ---
+    // Smooth transition tests
 
     #[kithara::test]
     fn eq_gain_change_starts_smoothing() {
@@ -699,7 +699,7 @@ mod tests {
         );
     }
 
-    // --- Helpers ---
+    // Helpers
 
     /// Process enough audio for the smoother to converge.
     fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {

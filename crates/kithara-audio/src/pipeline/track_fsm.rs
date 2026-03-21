@@ -9,9 +9,7 @@ use std::time::Duration;
 use kithara_decode::{DecodeError, InnerDecoder};
 use kithara_stream::{Fetch, MediaInfo, SourcePhase, SourceSeekAnchor};
 
-// ---------------------------------------------------------------------------
 // TrackState — worker-side FSM
-// ---------------------------------------------------------------------------
 
 /// Explicit state machine for a single audio track in the worker thread.
 ///
@@ -209,9 +207,7 @@ pub(crate) enum ConsumerPhase {
     Failed,
 }
 
-// ---------------------------------------------------------------------------
 // TrackState methods
-// ---------------------------------------------------------------------------
 
 impl TrackState {
     /// Returns `true` for terminal states that will never transition.
@@ -237,9 +233,7 @@ impl TrackState {
     }
 }
 
-// ---------------------------------------------------------------------------
 // ConsumerPhase methods
-// ---------------------------------------------------------------------------
 
 impl ConsumerPhase {
     /// Returns `true` for terminal states.
@@ -248,9 +242,7 @@ impl ConsumerPhase {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SourcePhase → WaitingReason mapping
-// ---------------------------------------------------------------------------
+// SourcePhase to WaitingReason mapping
 
 /// Map a `SourcePhase` to an optional `WaitingReason`.
 ///
@@ -266,9 +258,7 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

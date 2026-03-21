@@ -3,7 +3,7 @@
 //! Provides `AbrTestServer` for testing throughput-based bitrate switching.
 //! On native: in-process axum server. On WASM: delegates to external fixture server.
 
-// ── Native implementation ──────────────────────────────────────────
+// Native implementation
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -166,7 +166,7 @@ mod native {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::AbrTestServer;
 
-// ── WASM implementation ────────────────────────────────────────────
+// WASM implementation
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -223,7 +223,7 @@ mod wasm {
 #[cfg(target_arch = "wasm32")]
 pub(crate) use wasm::AbrTestServer;
 
-// ── Shared helpers (cross-platform) ────────────────────────────────
+// Shared helpers (cross-platform)
 
 /// Generate master playlist with custom bitrates
 pub(crate) fn master_playlist(v0_bw: u64, v1_bw: u64, v2_bw: u64) -> String {

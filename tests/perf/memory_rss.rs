@@ -27,7 +27,7 @@ use tracing::info;
 
 const MB: usize = 1024 * 1024;
 
-// ── Test 1: RSS budget ───────────────────────────────────────────────────
+// Test 1: RSS budget
 
 const BUDGET_RUNS: usize = 3;
 const BUDGET_PLAYBACK_SECS: u64 = 10;
@@ -123,7 +123,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     );
 }
 
-// ── Test 2: No RSS leak ──────────────────────────────────────────────────
+// Test 2: No RSS leak
 
 const LEAK_PLAYBACK_SECS: u64 = 15;
 const LEAK_WARMUP_SECS: u64 = 5;

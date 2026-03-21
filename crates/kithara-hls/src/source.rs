@@ -109,14 +109,14 @@ impl ReadSegment {
 }
 
 impl HlsSource {
-    // --- construction / handles ---
+    // construction / handles
 
     /// Set the backend (called after downloader is spawned).
     pub(crate) fn set_backend(&mut self, backend: kithara_stream::Backend) {
         self._backend = Some(backend);
     }
 
-    // --- variant resolution ---
+    // variant resolution
 
     /// Current variant for source operations (read, seek, demand).
     ///
@@ -160,7 +160,7 @@ impl HlsSource {
         self.variant_fence
     }
 
-    // --- segment lookup ---
+    // segment lookup
 
     /// Returns `(variant, segment_index)` for the segment at the current reader position,
     /// falling back to the last committed segment if no segment covers the exact position.
@@ -293,7 +293,7 @@ impl HlsSource {
             .map(|seg_ref| seg_ref.segment_index)
     }
 
-    // --- phase / state ---
+    // phase / state
 
     /// Check if the read position is past the effective end of stream.
     fn is_past_eof(&self, segments: &StreamIndex, range: &Range<u64>) -> bool {
@@ -446,7 +446,7 @@ impl HlsSource {
         }
     }
 
-    // --- read ---
+    // read
 
     /// Read from a loaded segment.
     ///
@@ -514,7 +514,7 @@ impl HlsSource {
         Ok(Some(bytes_read))
     }
 
-    // --- seek ---
+    // seek
 
     fn resolve_seek_anchor(&self, position: Duration) -> Result<SourceSeekAnchor, HlsError> {
         let variants = self.playlist_state.num_variants();
@@ -649,7 +649,7 @@ impl HlsSource {
         );
     }
 
-    // --- on-demand segment requests ---
+    // on-demand segment requests
 
     fn push_segment_request(
         &self,
@@ -2337,7 +2337,7 @@ mod tests {
         }
     }
 
-    // --- Source::phase() trait method tests ---
+    // Source::phase() trait method tests
 
     /// Build source for phase tests — resets `stopped` flag that
     /// `HlsDownloader::drop` sets when the downloader half is discarded.
@@ -2424,7 +2424,7 @@ mod tests {
         assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Waiting);
     }
 
-    // --- Source::phase() parameterless override tests ---
+    // Source::phase() parameterless override tests
 
     #[kithara::test]
     fn hls_phase_parameterless_ready_when_segment_loaded() {

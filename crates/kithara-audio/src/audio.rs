@@ -1153,7 +1153,7 @@ mod tests {
         )
     }
 
-    // ---- ConsumerPhase transition tests ----
+    // ConsumerPhase transition tests
 
     #[kithara::test]
     fn consumer_phase_starts_buffering() {

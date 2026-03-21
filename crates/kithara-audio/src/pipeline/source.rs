@@ -980,9 +980,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Private helpers (renamed from old AudioWorkerSource methods)
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn boundary_end(&self, start: u64) -> u64 {
@@ -1177,9 +1175,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FSM step methods
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
@@ -1527,9 +1523,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AudioWorkerSource trait implementation
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;
