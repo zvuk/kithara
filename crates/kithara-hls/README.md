@@ -141,6 +141,12 @@ flowchart LR
 - On ABR mid-stream switch, metadata offsets are no longer trusted for old layout, so source wakes sequential downloader instead of forcing stale offset lookup.
 - `Eof` is returned only when timeline is marked EOF and requested range starts at/after effective total bytes.
 
+## Agent guardrails
+
+- Keep topology, committed layout, residency, and ABR state as separate buckets. Do not collapse them into one convenience state object.
+- Seek and `wait_range` must follow the current virtual or committed layout truth. Use explicit translation boundaries when metadata and committed offsets differ.
+- Segment shape and boundary semantics are part of the contract. Do not treat init-bearing versus media-only layout as incidental data.
+
 ## Integration
 
 Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetStore`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.

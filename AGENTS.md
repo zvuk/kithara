@@ -1,238 +1,204 @@
-# Kithara — coding rules for autonomous agents
+# Kithara Agent Index
 
-## 0.f) No speculative code / no future-proofing
-**Rule (normative):** agents **must not** add code "for the future" that is unused within the current task/checkbox and not part of a public contract.
+This file is the canonical repo-level contract for Codex, Claude Code, Cursor, and other coding agents.
+Use it for repo-wide coding conventions, path routing, and stable coordination shapes.
+Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 
-Prohibited:
-- Adding unused helper functions/methods/fields "just in case";
-- Adding "introspection", "debug helpers", "potential extensions" unless used right now;
-- Leaving "convenience" methods without tests or usage;
-- Adding alternative branches/behavior variants without an explicit task requirement.
+## Authority
 
-## 0.d) Dependency hygiene: no duplicates
-**Rule:** agents **must not** add a new dependency if the needed functionality already exists in the workspace or the standard library.
+- `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
+- `.docs/workflow/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
+- `.docs/plans/_template.md` is the required plan shape for split or other non-trivial tasks.
+- If two documents disagree: `AGENTS.md` wins over `.docs/workflow/*`, which wins over crate `README.md`, which wins over tool-specific shims.
 
-Before adding any new crate:
-1) Check `kithara/Cargo.toml` (`[workspace.dependencies]`) — a suitable library may already be present;
-2) Prefer what already exists (e.g., use `tracing` for logging, do not add `log`);
-3) If an equivalent is already available — **do not add** a new dependency.
-
-If a new dependency is unavoidable:
-- Justify the need in the task/PR description (1-2 sentences explaining what current dependencies do not cover);
-- Add it **first** to `[workspace.dependencies]`, then reference it in the target crate as `{ workspace = true }`.
-
-## 0) Core principles
+## Core Principles
 
 - Minimal magic and hidden dependencies.
-- Predictability, testability, reproducibility.
-- Components must be loosely coupled and replaceable.
-- Code is the source of truth. Longer explanations go in the `README` of the corresponding subcrate.
+- Predictability, testability, and reproducibility.
+- Components should stay loosely coupled and replaceable.
+- Code is the source of truth. Longer contracts and invariants belong in the owning crate `README.md`.
 
-## 1) Dependency management (workspace-first)
+## Non-Negotiables
 
-**Rule:** all dependencies are added to the workspace first, then referenced in individual crates.
+- No speculative code. Do not add helpers, branches, or abstractions that are not used by the current task.
+- Workspace-first dependencies. Add versions only in the root workspace and reuse existing crates when possible.
+- Shared media types live in `kithara-stream`. Do not duplicate `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere.
+- Default visibility is `pub(crate)`. Public named-field types exposed across crates should be `#[non_exhaustive]`.
+- Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
+- Keep production code in `src/` and substantial fixtures in `tests/`.
+- Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
+- Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
+- Prefer generics and composition over near-duplicate protocol-specific types.
+- Use `tracing`, not `println!` or `dbg!`, in production code.
+- Keep imports at the top of the file. Avoid local `use` statements in production code.
+- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
+- No separator comments and no ad-hoc style variants that conflict with workspace lint rules.
+- Keep comments short and local. Put longer contracts and invariants in crate `README.md`.
+- Do not use destructive git commands unless the user explicitly asks for them.
 
-### 1.1 Where to declare versions
-- Dependency versions are declared in the root `Cargo.toml` workspace under:
-  - `[workspace.dependencies]`
-- This applies to all dependency kinds:
-  - regular (`dependencies`)
-  - dev (`dev-dependencies`)
-  - build (`build-dependencies`)
+## Dependency Management
 
-### 1.2 How to reference in crates
-- In a crate's `Cargo.toml`, reference dependencies without a version:
-  - `dep = { workspace = true }`
-- No versions in subcrates. To change a version, update only `[workspace.dependencies]`.
+### Workspace-first
 
-### 1.3 Prohibitions
-- Do not add "temporary" dependencies without real need.
-- Do not pull heavy dependencies for a small utility (evaluate cost first).
-- Do not duplicate the same dependency with different features across crates without a clear reason.
+- Declare dependency versions only in the root `Cargo.toml` under `[workspace.dependencies]`.
+- Reference dependencies from crates with `{ workspace = true }`.
+- Do not add duplicate or overlapping crates when the workspace or standard library already covers the need.
 
----
+### Dependency hygiene
 
-## 2) Code style (short and stable)
+- Do not add temporary dependencies without a real need.
+- Do not pull in a heavy crate for a small utility without checking cost first.
+- If a new dependency is unavoidable, justify it in the task, plan, or PR description and add it to `[workspace.dependencies]` first.
 
-### 2.0 Imports and short names (no deep namespaces)
-**Rule:** avoid "triple-nested" paths like `some_lib::some_mod::some_func` in code.
+## Code Style
 
-- All `use` imports must be **at the top of the file** (including `use some_lib::some_mod;`) — **do not place `use` inside functions/methods/blocks**.
-- Prefer top-of-file imports and short, readable names in the body.
-- Full paths are allowed only when they **clearly improve** readability (e.g., resolving name conflicts or single-use references).
+### Imports and qualified paths
 
-### 2.1 Naming
-- Choose the simplest and shortest names possible for functions/methods/types.
-- Prefer standard, obvious words (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`) when they accurately reflect the meaning.
-- Avoid "clever"/long names that encode internal implementation or refactoring history.
-
-### 2.2 Comments and documentation
-**Goal:** minimize stale comments; keep explanations close to interfaces.
-
-- In-code comments — short, single-line only.
-- Do not add walls of comments at the top of files.
-- Do not write comments that restate the obvious.
-- Anything requiring explanation (contracts, invariants, lifecycle, protocols, cache schemes) goes in the `README.md` of the corresponding subcrate.
-
-### 2.3 File size and decomposition
-**Goal:** Rust files should stay small to simplify navigation and reduce review cost.
-
-- Do not let a single `.rs` file grow indefinitely.
-- If a file starts becoming a "dump of abstractions", extract:
-  - types into separate files,
-  - implementations into `mod.rs` + `*.rs`,
-  - policies/strategies into separate modules.
-- Heuristics (what to extract):
-  - large `enum`/`struct` + their `impl` blocks,
-  - subsystems (e.g.: `lru_index`, `fs_layout`, `atomic_write`, `url_canon`, `key_processor`).
-
-### Tests and fixtures: `src/` is for prod code only
-**Rule:** `src/` must contain only code being tested (prod code). Test infrastructure must not leak into `src/`.
-
-- If a test requires **substantial fixtures** (local server, large playlists/segments, content generators, request counters, complex scenarios) — these are **integration tests**:
-  - Place them in `crates/<crate>/tests/` (e.g., `tests/fixture.rs`, `tests/integration_*.rs`);
-  - Extract fixtures into `crates/<crate>/tests/fixture/` (submodules) if there are many.
-- `src/` may only contain:
-  - small unit tests next to the code,
-  - very small test helpers under `#[cfg(test)]` that do not turn `src/` into a "fixture warehouse".
-- Do not add "large" fixtures/servers to `src/` even under `#[cfg(test)]`.
-- Criterion for "substantial fixtures": if it does not fit compactly into a single unit test or requires a separate struct/protocol — it belongs in `tests/`.
-
-
----
-
-## 3) Test-driven development (TDD)
-
-**Rule:** changes are driven by tests that describe desired behavior.
-
-### 4.1 Workflow
-1) Define behavior through test(s) (integration/unit — as appropriate).
-2) Run tests and verify the new test fails for the expected reason.
-3) Implement the minimal code to make the test pass.
-4) Refactor only after all tests pass.
-
-### 4.2 Test requirements
-- Tests must be deterministic.
-- Tests must not depend on external network.
-- Tests must be reasonable in log/data volume (no reading gigabytes, no noisy dumps).
-- Tests capture the contract, not accidental implementation details.
-
----
-
-## 4) Generic programming (generics-first)
-
-**Rule:** extensibility is achieved through generics and abstractions, not copy-paste and tight coupling.
-
-### 4.1 Prefer standard and tokio abstractions
-**Goal:** fewer reinventions, more ecosystem compatibility.
-- Where possible, use standard and `tokio` traits/types and their idioms:
-  - conversions (`From`, `TryFrom`, `Into`, `AsRef`),
-  - errors (`std::error::Error`, `thiserror`),
-  - iterators and adapters (`Iterator`, `IntoIterator`),
-  - I/O traits (`Read`, `Seek`, `Write`, `AsyncRead`, `AsyncWrite` where appropriate),
-  - `tokio` channels/synchronization (if the component is already on tokio) instead of custom solutions.
-- If a standard trait fits, do not introduce a new "almost identical" trait.
-
-### 4.2 Using generics
-- Make base structures generic over:
-  - event type,
-  - source/transport type,
-  - cache/storage type,
-  - policy (ABR/eviction), etc.
-- Extend behavior through type parameters, traits, and composition.
-
-### 4.3 Prohibitions
-- Do not create "nearly identical" structs for HLS/MP3 when differences can be expressed via generic/trait.
-- Do not create "God traits" with dozens of methods — prefer several small ones.
-
----
-
-## 5) Visibility and API surface
-
-### 5.1 Default to `pub(crate)`
-**Rule:** new items must be `pub(crate)` unless they are part of a documented public contract.
-- Do not use bare `pub` for internal helpers, intermediate types, or implementation details.
-- The `unreachable_pub` lint (enabled workspace-wide) will flag `pub` items that are not reachable from outside their crate.
-- When promoting `pub(crate)` to `pub`, verify the item is tested and documented.
-
-### 5.2 `#[non_exhaustive]` on public types
-**Rule:** public enums and structs with named fields exposed across crate boundaries must be `#[non_exhaustive]`.
-- This prevents downstream code (including AI-generated code in wrong crates) from constructing values directly.
-- Forces use of constructors and builder patterns that can enforce invariants.
-- Exceptions: small, stable types that are unlikely to gain new variants/fields (e.g., `VariantId(usize)`).
-
-### 5.3 Single definition for shared types
-**Rule:** shared types (`AudioCodec`, `ContainerFormat`, `MediaInfo`) live in `kithara-stream`. **Never** duplicate type definitions across crates.
-- Before creating a new public type, search the workspace: `grep -r 'pub struct YourType\|pub enum YourType' crates/`.
-- If a type exists, import it — do not create a parallel definition.
-- `cargo xtask arch` enforces this automatically.
-
----
-
-## 6) Loose coupling and modularity
-
-**Goal:** components must be independent blocks that can be assembled into a system.
-
-### 6.1 Separation of concerns
-- Cache — separate component.
-- Network/download — separate component.
-- HLS orchestration — separate component.
-- Decoding — separate component.
-
-### 6.2 Inter-crate dependencies
-- Avoid circular dependencies.
-- Dependencies point "downward" toward base abstractions, never back up.
-- Facade layer (if present) aggregates components but must not contain "smart" logic.
-- `cargo xtask arch` validates dependency direction in CI.
-
-### 6.3 Encapsulation
-- External code must not know about internal cache details (paths/files/lease format).
-- External code must not depend on a specific HTTP client unless it is part of the contract.
-
----
-
-## 7) Linting/formatting and unified settings
-**Goal:** uniform formatting and lint rules across the entire workspace.
-
-- Agents must use and respect workspace configs:
-  - `rustfmt.toml`
-  - `clippy.toml`
-  - `deny.toml`
-- To change lint policy:
-  - prefer changes in these files (single source of truth),
-  - do not configure per-crate without a reason.
-- To unify settings via `workspace.metadata`, do so in the root `Cargo.toml`, not in subcrates.
-
-### Lint and test failures are your responsibility
-**Rule:** the repository has a pre-commit hook that enforces clean builds, clippy, and formatting. If `cargo clippy` or `cargo test` reports errors, **assume they are caused by your changes** and fix them. Do not dismiss failures as "pre-existing" or "unrelated" — committed code has already passed the hook. If you genuinely believe an error predates your changes, verify by checking the relevant code with `git diff` or `git stash` before claiming it.
-
-### Code Style Rules (enforced by lint tooling, including `sgconfig.yml`)
-- **No separator comments** (`// ====...`, `// ────...`) — use plain `//` section headers.
-- **No inline qualified paths** — import everything at the top of the file via `use`; do not use `std::io::Error` in function bodies (write `io::Error`).
-- **Struct fields ordered**: `pub` (alphabetical) → `pub(crate)` (alphabetical) → private (alphabetical). Exceptions: serde/bincode types with positional serialization.
-- **`lib.rs`/`mod.rs`**: only `mod` declarations and `pub use` re-exports. Code and tests go in separate files.
-
----
-
-## 8) General quality rules (brief)
-
-- No `unwrap()`/`expect()` in prod code without a very strong justification.
-- Errors must be typed and include context (what was being done, with which resource).
-- Logs — minimal and useful; never log secrets (keys/tokens/key bytes).
-- **Logging (normative):**
-  - Use `tracing` (`trace!`, `debug!`, `info!`, `warn!`, `error!`) with appropriate levels instead of `println!` / `print!` / `dbg!`;
-  - Add context via fields (e.g.: `asset_id`, `url`, `resource`, `variant`, `segment_idx`, `bytes`, `attempt`, `timeout_ms`);
-  - Do not leave "temporary" prints in prod code (acceptable sparingly in tests, but `tracing` is still preferred).
-- Any changes to public APIs must be accompanied by tests that capture the contract.
+- Keep `use` imports at the top of the file. Do not place `use` inside functions, methods, or blocks.
+- Prefer short readable names in the body over repeated deep qualified paths.
+- Full paths are acceptable only when they clearly improve readability, such as resolving a name conflict.
 
 ### Naming
-- Choose the simplest and shortest names possible for functions/methods/types.
-- Prefer standard, obvious words (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`) when they accurately reflect the meaning.
-- Avoid "clever"/long names that encode internal implementation or refactoring history.
 
----
+- Choose the simplest and shortest names that still describe the real meaning.
+- Prefer standard, obvious words such as `open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, and `recv` when they fit.
+- Avoid clever or overly long names that encode implementation history instead of meaning.
 
-## 9) Resolving rule conflicts
+### Comments and documentation
 
-- If a product requirement conflicts with these rules — discuss a compromise first and update `AGENTS.md`.
-- Any forced rule bypass must be explained in the `README` of the corresponding subcrate (brief, to the point).
+- Keep in-code comments short and local.
+- Do not add large comment blocks at the top of files.
+- Do not restate the obvious in comments.
+- Contracts, invariants, lifecycle, protocol, or cache explanations belong in the owning crate `README.md`.
+
+### File size and decomposition
+
+- Do not let a single `.rs` file grow into a dump of abstractions.
+- Extract large types, big `impl` blocks, or distinct subsystems into their own files or modules.
+- Prefer `mod.rs` plus focused sibling files over one oversized source file.
+
+### Tests and fixtures
+
+- `src/` is for production code, not for a growing fixture warehouse.
+- Large fixtures, local servers, generated content, and multi-step scenarios belong in `tests/`.
+- Small unit tests and tiny helpers under `#[cfg(test)]` are fine next to the code.
+
+## Test-Driven Development
+
+- Behavior changes should be driven by tests that describe the intended contract.
+- Tests must be deterministic.
+- Tests must not depend on the external network.
+- Tests should capture the contract, not an incidental implementation detail.
+- Test logs and generated data should stay at a reasonable size.
+
+## Generic Programming
+
+- Prefer standard and `tokio` abstractions when they fit instead of inventing near-identical custom traits.
+- Extend behavior through type parameters, traits, and composition instead of copy-paste specialization.
+- Do not create near-duplicate HLS and file types when the difference can be expressed generically.
+- Avoid large "god traits". Prefer several smaller traits with clearer ownership.
+
+## Visibility And API Surface
+
+### Default visibility
+
+- New items should be `pub(crate)` unless they are part of a documented public contract.
+- Do not use bare `pub` for internal helpers or implementation details.
+- When promoting something to `pub`, verify that it is intentional, documented, and covered by tests.
+
+### Public types
+
+- Public enums and public named-field structs exposed across crate boundaries should be `#[non_exhaustive]`.
+- Small, obviously stable exceptions are allowed when extension is unlikely and direct construction is part of the intended contract.
+
+### Shared types
+
+- Shared types such as `AudioCodec`, `ContainerFormat`, and `MediaInfo` live in `kithara-stream`.
+- Before introducing a new shared type, search the workspace and reuse an existing canonical type when possible.
+
+## Loose Coupling And Modularity
+
+- Keep cache, network, orchestration, decode, and playback responsibilities separate.
+- Avoid circular dependencies.
+- Dependencies should point downward toward base abstractions, not back upward into higher-level orchestration.
+- Facade layers may aggregate components, but should not hide "smart" logic that belongs lower in the stack.
+- External code must not depend on internal cache layout or a specific HTTP client unless that is explicitly part of the contract.
+
+## Linting, Formatting, And Unified Settings
+
+- Respect workspace-wide config such as `rustfmt.toml`, `clippy.toml`, `deny.toml`, and `sgconfig.yml`.
+- Change lint policy in the shared config files instead of creating per-crate drift unless there is a strong reason.
+- The pre-commit hook expects clean formatting, linting, and tests. If they fail after your change, assume your change caused it until proven otherwise.
+
+### Style rules enforced by tooling
+
+- No separator comments such as `// ====`.
+- Import names at the top of the file rather than using inline qualified paths in function bodies.
+- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
+
+## General Quality Rules
+
+- Errors should be typed and include context about what failed and on which resource.
+- Logs should be useful and should not leak secrets.
+- Use `tracing` fields for context such as `asset_id`, `url`, `resource`, `variant`, `segment_idx`, `bytes`, `attempt`, or `timeout_ms`.
+- Do not leave temporary prints in production code.
+- Any public API change should come with tests that capture the contract.
+
+## Coordination Shapes
+
+<task_packet>
+Goal:
+Affected paths:
+Read first:
+Same-as example:
+Constraints:
+Non-goals:
+Expected output:
+Validation scope:
+Split proposal:
+</task_packet>
+
+<split_policy>
+Prefer split execution when write boundaries are explicit and independent.
+
+Every split task must define:
+- owned paths per agent
+- forbidden paths per agent
+- required reads per agent
+- sequencing dependencies
+- one integrator owner
+
+Do not split when two agents would contend on the same file, the same shared type, or the same unresolved design boundary.
+</split_policy>
+
+<handoff_contract>
+Done:
+Remaining:
+Touched paths:
+Decisions made:
+Validation:
+Open risks:
+</handoff_contract>
+
+<final_report>
+Changed files:
+Commands run:
+Risks or follow-ups:
+</final_report>
+
+## Working Rules
+
+- Start from a task packet, even if you have to synthesize it from the user prompt or issue.
+- Treat a non-trivial task packet as incomplete until `Constraints`, `Non-goals`, and `Validation scope` are filled in.
+- Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
+- Read only the repo docs and crate READMEs that match the owned paths.
+- The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
+- If a task needs a plan, follow `.docs/workflow/rust-ai.md` and `.docs/plans/_template.md`.
+- If shared boundaries are unclear, stop and clarify before implementation.
+- Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `README.md` files.
+- Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.
+
+## Resolving Rule Conflicts
+
+- If a product requirement conflicts with these rules, discuss the compromise first and update `AGENTS.md`.
+- Any forced rule bypass should be explained briefly in the owning crate `README.md`.

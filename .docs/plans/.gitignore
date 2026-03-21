@@ -1,0 +1,5 @@
+# Keep the shared plan template in git.
+# Individual task plans stay local by default.
+*
+!.gitignore
+!_template.md

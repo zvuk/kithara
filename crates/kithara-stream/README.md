@@ -94,6 +94,12 @@ The fundamental design pattern:
 4. **Backpressure**: downloader pauses via `should_throttle()` when too far ahead of the reader.
 5. **On-demand**: reader can request specific ranges (for seeks) that bypass backpressure.
 
+## Agent guardrails
+
+- Keep `kithara-stream` generic. Do not move HLS-, file-, or surface-specific policy into shared contracts.
+- Treat `wait_range`, `read_at`, backpressure, and on-demand behavior as contract surface. Fix the owned invariant instead of adding surface-specific hacks around them.
+- Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` rather than creating parallel cross-crate types.
+
 ## Integration
 
 Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType`. `kithara-decode` consumes `Stream<T>` for decoding. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.

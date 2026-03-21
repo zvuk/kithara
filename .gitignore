@@ -54,21 +54,13 @@ hotpath-*.json
 log*.txt
 crates/kithara-wasm/dist
 
-# Local docs / plans
-.docs/
+# Local Claude artifacts
 .claude/*.md
 .claude-octopus
 .claude/debates
-.claude/commands/
-.claude/skills/
+.claude/worktrees/
+.claude/settings.local.json
 
-# OpenSpec / AI tool configs
-.codex/
-.gemini/
-.opencode/
-.github/prompts/
-.github/skills/
-openspec/
 crates/kithara-wasm/pkg
 
 # Swift / Xcode
@@ -88,7 +80,6 @@ tests/fuzz/coverage
 android/.gradle/
 android/**/build/
 android/local.properties
-tests/fuzz/corpus
 
 # Node.js
 package-lock.json

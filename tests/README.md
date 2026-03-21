@@ -78,10 +78,16 @@ Shared protocol types live in `kithara-test-utils/src/fixture_protocol.rs`:
 - `HlsSessionConfig`, `AbrSessionConfig`, `FixedHlsSessionConfig`
 - `DataMode` (TestPattern, SawWav, PerVariantPcm)
 - `InitMode` (None, WavHeader)
-- `DelayRule` — declarative delay rules replacing closure-based `segment_delay`
+- `DelayRule` - declarative delay rules replacing closure-based `segment_delay`
 - `SessionResponse` (session_id, base_url, total_bytes, init_len)
 
-Data generation functions (`generate_segment`, `expected_byte_at_test_pattern`, `create_pcm_segments`) are also in `fixture_protocol.rs` — shared between server and client for byte-level verification.
+Data generation functions (`generate_segment`, `expected_byte_at_test_pattern`, `create_pcm_segments`) are also in `fixture_protocol.rs` - shared between server and client for byte-level verification.
+
+## Agent guardrails
+
+- Start with the smallest deterministic repro and contract test. Escalate to heavy, live, or stress coverage only after the owned contract is captured.
+- Tests should validate the owner boundary of the runtime or API. Do not make fixtures or harnesses silently compensate for production behavior.
+- Choose the suite and `#[kithara::test]` flags from the contract you are exercising, not from local convenience.
 
 ## Running Tests
 

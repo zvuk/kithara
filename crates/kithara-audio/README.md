@@ -156,6 +156,12 @@ On ABR variant switch, `StreamAudioSource` detects the format change via `media_
 
 On seek, epoch is incremented atomically. The worker tags each decoded chunk with the current epoch. The consumer discards stale chunks (old epoch), preventing leftover data from reaching output after a seek.
 
+## Agent guardrails
+
+- `kithara-audio` owns decoder lifecycle, seek or session state, effects reset timing, and stale chunk invalidation.
+- Prefer explicit FSM or session objects for multi-step control flow. Avoid scattering new `pending_*` or shadow flags across worker, source, and consumer layers.
+- Audio should consume source contracts, not reconstruct HLS or file policy from protocol-specific heuristics.
+
 ## Integration
 
 Sits between `kithara-decode` (synchronous Symphonia wrapper) and the consumer (rodio, cpal, custom). Depends on `kithara-stream` for `Stream<T>` and `kithara-bufpool` for zero-allocation PCM buffers.

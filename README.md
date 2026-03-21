@@ -81,19 +81,11 @@ flowchart LR
 ## Getting Started
 
 ```bash
-# Build
-cargo build --workspace
-
-# Install task runner + git hooks (recommended)
+# Install the task runner
 cargo install just --locked
-cargo install cargo-nextest --locked
-# Install prek:
-# https://github.com/j178/prek
-prek install -f
 
-# Optional: worktree workflow for parallel agents
-brew install worktrunk
-wt config shell install
+# Complete the environment setup from the section below
+cargo build --workspace
 
 # Test (nextest + doctests)
 just test-all
@@ -102,6 +94,62 @@ just test-all
 just lint-fast
 just lint-full
 ```
+
+The day-to-day workflow for both humans and AI agents lives in [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md). Use [.docs/plans/_template.md](.docs/plans/_template.md) for non-trivial tasks.
+
+## Environment Setup
+
+Set up both the host environment and the local tooling before relying on the `just` workflow.
+
+### Host Dependencies
+
+- Linux: install `libasound2-dev`
+- macOS: install Xcode Command Line Tools
+
+### Required Tooling
+
+- `cargo-nextest` for `just test*`
+- `ast-grep` for `just lint-fast` and `just lint-full`
+- nightly `rustfmt` for `just fmt` and `just fmt-check`
+- `prek` for the configured pre-commit and pre-push hooks
+
+One reasonable setup is:
+
+```bash
+cargo install cargo-nextest --locked
+cargo install ast-grep --locked
+rustup toolchain install nightly --component rustfmt
+```
+
+Install `prek` with your preferred Python toolchain manager, for example:
+
+```bash
+python3 -m pip install --user prek
+prek install -f
+```
+
+### Recommended Tooling
+
+- `cargo-deny` for dependency audits
+- `cargo-machete` for unused dependency scans
+- `cargo-hack` for feature-powerset checks
+- `cargo-semver-checks` for public API compatibility checks
+
+Example installation:
+
+```bash
+cargo install cargo-deny --locked
+cargo install cargo-machete --locked
+cargo install cargo-hack --locked
+cargo install cargo-semver-checks --locked
+```
+
+### Optional Tooling
+
+- `worktrunk` as a convenience wrapper over `git worktree`
+- `wasm-slim` for wasm size checks
+- `critcmp` for benchmark comparison
+- `chromedriver` or another WebDriver binary for browser-based flows
 
 ## Demo Players
 
@@ -138,7 +186,7 @@ cargo run -p kithara --example player --features file,hls -- [FILE_URL] [HLS_URL
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding rules, and PR guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md) for the local-first task flow.
 
 ## Rules
 
