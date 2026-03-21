@@ -4,16 +4,20 @@
 //! On wasm32: `Instant` uses [`web_time`], `sleep` uses `setTimeout`,
 //! and `timeout` races the future against a `setTimeout`-based deadline.
 
+#[cfg(target_arch = "wasm32")]
+use std::pin::pin;
 pub use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
+use futures::future::{self as future_util, Either};
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio_with_wasm::alias::time::sleep;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]
 pub async fn sleep(duration: Duration) {
-    use wasm_bindgen::JsCast;
-
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let set_timeout: js_sys::Function = js_sys::Reflect::get(
@@ -66,14 +70,10 @@ pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, Time
 where
     F: Future,
 {
-    use std::pin::pin;
-
-    use futures::future::{self, Either};
-
     let deadline = pin!(sleep(duration));
     let work = pin!(future);
 
-    match future::select(work, deadline).await {
+    match future_util::select(work, deadline).await {
         Either::Left((output, _)) => Ok(output),
         Either::Right(((), _)) => Err(TimeoutError),
     }

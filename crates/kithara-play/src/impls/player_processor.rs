@@ -490,7 +490,7 @@ mod tests {
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
-    use kithara_audio::{DecodeResult, PcmReader};
+    use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration, tokio::sync::broadcast};
@@ -773,11 +773,6 @@ mod tests {
     }
 
     fn create_mock_player_resource(src: &str) -> Arc<PlatformMutex<PlayerResource>> {
-        use kithara_audio::mock::TestPcmReader;
-        use kithara_decode::PcmSpec;
-
-        use crate::impls::resource::Resource;
-
         let spec = PcmSpec {
             channels: 2,
             sample_rate: 44100,

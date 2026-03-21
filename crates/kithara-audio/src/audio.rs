@@ -1038,6 +1038,7 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
+    use ringbuf::traits::Producer;
 
     use super::*;
 
@@ -1163,7 +1164,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_transitions_to_playing_on_first_chunk() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
         let chunk = make_chunk(&[0.1, 0.2]);
         let fetch = Fetch::new(chunk, false, 0);
@@ -1175,8 +1175,6 @@ mod tests {
 
     #[kithara::test]
     fn read_preserves_partial_chunk_tail_across_calls() {
-        use ringbuf::traits::Producer;
-
         let (mut audio, mut tx) = audio_with_channel();
         let spec = PcmSpec {
             channels: 2,
@@ -1221,7 +1219,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_seek_pending_to_playing_on_chunk() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
 
         // Seek sets SeekPending
@@ -1239,7 +1236,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_eof_terminates() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
 
         let fetch = Fetch::new(PcmChunk::default(), true, 0);

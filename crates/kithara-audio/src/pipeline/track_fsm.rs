@@ -262,6 +262,9 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    use kithara_decode::{PcmSpec, mock::infinite_inner_decoder_loose};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -448,10 +451,6 @@ mod tests {
 
     #[kithara::test]
     fn decoder_session_construction() {
-        use std::sync::{Arc, atomic::AtomicBool};
-
-        use kithara_decode::{PcmSpec, mock::infinite_inner_decoder_loose};
-
         let media_info = MediaInfo {
             channels: Some(2),
             codec: None,

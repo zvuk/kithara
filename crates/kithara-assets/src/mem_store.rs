@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
-    base::Assets,
+    base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
 };
@@ -50,8 +50,7 @@ impl Assets for MemAssetStore {
     type Context = ();
     type IndexRes = MemResource;
 
-    fn capabilities(&self) -> crate::base::Capabilities {
-        use crate::base::Capabilities;
+    fn capabilities(&self) -> Capabilities {
         Capabilities::CACHE | Capabilities::PROCESSING
     }
 
@@ -168,7 +167,6 @@ mod tests {
 
     #[kithara::test]
     fn mem_store_capabilities() {
-        use crate::base::Capabilities;
         let store = make_mem_store();
         let caps = store.capabilities();
         assert!(caps.contains(Capabilities::CACHE));

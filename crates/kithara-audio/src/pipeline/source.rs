@@ -16,7 +16,9 @@ use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::Mutex;
-use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Timeline};
+use kithara_stream::{
+    Fetch, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
+};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -59,9 +61,9 @@ impl<T: StreamType> SharedStream<T> {
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.
-            fn phase(&self) -> kithara_stream::SourcePhase;
+            fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
-            fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             /// Signal that the given byte range will be needed soon.
             fn demand_range(&self, range: Range<u64>);
             /// Wake blocked `wait_range()` calls and downstream waiters.
@@ -995,7 +997,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(start..end)
     }
 
-    fn source_phase_for_boundary(&self, start: u64) -> kithara_stream::SourcePhase {
+    fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
         let end = self.boundary_end(start);
         self.shared_stream.phase_at(start..end)
     }
@@ -1003,9 +1005,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
         matches!(
             self.shared_stream.phase_at(range),
-            kithara_stream::SourcePhase::Ready
-                | kithara_stream::SourcePhase::Eof
-                | kithara_stream::SourcePhase::Seeking
+            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
     }
 
@@ -1032,7 +1032,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn source_phase_for_wait_context(&self, context: &WaitContext) -> kithara_stream::SourcePhase {
+    fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
                 SeekMode::Anchor(anchor) => self.source_phase_for_boundary(anchor.byte_offset),
@@ -1179,8 +1179,6 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         if !self.source_is_ready() {
             let phase = self.shared_stream.phase();
             trace!(
@@ -1251,11 +1249,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return TrackStep::Blocked(reason);
             }
             match phase {
-                kithara_stream::SourcePhase::Cancelled => {
+                SourcePhase::Cancelled => {
                     self.state = TrackState::Failed(TrackFailure::SourceCancelled);
                     return TrackStep::Failed;
                 }
-                kithara_stream::SourcePhase::Stopped => {
+                SourcePhase::Stopped => {
                     self.state = TrackState::Failed(TrackFailure::SourceStopped);
                     return TrackStep::Failed;
                 }
@@ -1283,8 +1281,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn step_waiting_for_source(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         let Some((phase, stored_reason)) = (match &self.state {
             TrackState::WaitingForSource { context, reason } => {
                 Some((self.source_phase_for_wait_context(context), *reason))
@@ -1363,8 +1359,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn step_recreating_decoder(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         let recreate = match &self.state {
             TrackState::RecreatingDecoder(recreate) => recreate.clone(),
             _ => return TrackStep::StateChanged,

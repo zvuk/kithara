@@ -6,6 +6,7 @@ use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
 use kithara_platform::{tokio, tokio::sync::broadcast};
+use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
@@ -100,8 +101,6 @@ impl Resource {
         mut config: AudioConfig<kithara_file::File>,
         src: Arc<str>,
     ) -> DecodeResult<Self> {
-        use kithara_stream::Stream;
-
         // Extract existing bus from stream config, or create a new one.
         let bus = config
             .stream
@@ -127,8 +126,6 @@ impl Resource {
         mut config: AudioConfig<kithara_hls::Hls>,
         src: Arc<str>,
     ) -> DecodeResult<Self> {
-        use kithara_stream::Stream;
-
         // Extract existing bus from stream config, or create a new one.
         let bus = config
             .stream
@@ -263,7 +260,7 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_events::{AudioEvent, Event};
-    use kithara_platform::{time::Duration, tokio::sync::broadcast};
+    use kithara_platform::{time, time::Duration, tokio::sync::broadcast};
     use kithara_test_utils::kithara;
 
     use super::Resource;
@@ -367,8 +364,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
-        use kithara_platform::time;
-
         let (resource, sender) = make_resource_with_sender();
         let mut rx = resource.subscribe();
 

@@ -3765,7 +3765,6 @@ mod tests {
 
         downloader.cursor.reset_fill(2);
 
-        use crate::coord::SegmentRequest;
         downloader.coord.requeue_segment_request(SegmentRequest {
             segment_index: 1,
             variant: 1,

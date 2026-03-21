@@ -23,8 +23,8 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
 use kithara_stream::{
-    DownloadCursor, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, StreamError, StreamResult,
-    Timeline,
+    DownloadCursor, MediaInfo, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    StreamResult, Timeline,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -880,11 +880,11 @@ impl Source for HlsSource {
 
             // Waiting sub-states — log and continue spinning.
             let phase = if waiting_metadata {
-                kithara_stream::SourcePhase::WaitingMetadata
+                SourcePhase::WaitingMetadata
             } else if waiting_demand {
-                kithara_stream::SourcePhase::WaitingDemand
+                SourcePhase::WaitingDemand
             } else {
-                kithara_stream::SourcePhase::Waiting
+                SourcePhase::Waiting
             };
             trace!(
                 range_start = range.start,
@@ -934,8 +934,7 @@ impl Source for HlsSource {
         clippy::significant_drop_tightening,
         reason = "segments guard used across multiple checks"
     )]
-    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
-        use kithara_stream::SourcePhase;
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let segments = self.segments.lock_sync();
         if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
             return SourcePhase::Cancelled;
@@ -962,9 +961,7 @@ impl Source for HlsSource {
         SourcePhase::Waiting
     }
 
-    fn phase(&self) -> kithara_stream::SourcePhase {
-        use kithara_stream::SourcePhase;
-
+    fn phase(&self) -> SourcePhase {
         let pos = self.coord.timeline().byte_position();
 
         if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
@@ -1385,7 +1382,7 @@ pub(crate) fn build_pair(
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroUsize, path::Path};
+    use std::{num::NonZeroUsize, path::Path, thread, time::Duration as StdDuration};
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::DecryptContext;
@@ -1916,8 +1913,6 @@ mod tests {
 
     #[kithara::test]
     fn wait_range_reissues_request_after_pending_request_is_cleared() {
-        use std::{thread, time::Duration as StdDuration};
-
         let mut source = build_test_source(1);
         source.coord.stopped.store(false, Ordering::Release);
         let request = SegmentRequest {
@@ -2358,7 +2353,7 @@ mod tests {
         res.write_at(0, &[0u8; 100]).unwrap();
         res.commit(Some(100)).unwrap();
 
-        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Ready);
+        assert_eq!(source.phase_at(0..50), SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -2370,8 +2365,8 @@ mod tests {
         let res = source.fetch.backend().acquire_resource(&key).unwrap();
         res.write_at(0, &[0u8; 16]).unwrap();
 
-        assert_eq!(source.phase_at(0..16), kithara_stream::SourcePhase::Ready);
-        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(source.phase_at(0..16), SourcePhase::Ready);
+        assert_eq!(source.phase_at(0..50), SourcePhase::Waiting);
     }
 
     #[kithara::test]
@@ -2382,7 +2377,7 @@ mod tests {
             .timeline()
             .initiate_seek(Duration::from_secs(0));
 
-        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Seeking);
+        assert_eq!(source.phase_at(0..50), SourcePhase::Seeking);
     }
 
     #[kithara::test]
@@ -2392,7 +2387,7 @@ mod tests {
         push_segment(&source.segments, 0, 0, 0, 100);
         source.coord.timeline().set_eof(true);
 
-        assert_eq!(source.phase_at(200..250), kithara_stream::SourcePhase::Eof);
+        assert_eq!(source.phase_at(200..250), SourcePhase::Eof);
     }
 
     #[kithara::test]
@@ -2400,10 +2395,7 @@ mod tests {
         let source = build_test_source(1);
         source.coord.cancel.cancel();
 
-        assert_eq!(
-            source.phase_at(0..50),
-            kithara_stream::SourcePhase::Cancelled
-        );
+        assert_eq!(source.phase_at(0..50), SourcePhase::Cancelled);
     }
 
     #[kithara::test]
@@ -2411,17 +2403,14 @@ mod tests {
         let source = build_test_source(1);
         source.coord.stopped.store(true, Ordering::Release);
 
-        assert_eq!(
-            source.phase_at(0..50),
-            kithara_stream::SourcePhase::Cancelled
-        );
+        assert_eq!(source.phase_at(0..50), SourcePhase::Cancelled);
     }
 
     #[kithara::test]
     fn hls_phase_waiting_when_no_data() {
         let source = build_phase_test_source(1);
 
-        assert_eq!(source.phase_at(0..50), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(source.phase_at(0..50), SourcePhase::Waiting);
     }
 
     // Source::phase() parameterless override tests
@@ -2437,7 +2426,7 @@ mod tests {
         res.write_at(0, &[0u8; 100]).unwrap();
         res.commit(Some(100)).unwrap();
 
-        assert_eq!(source.phase(), kithara_stream::SourcePhase::Ready);
+        assert_eq!(source.phase(), SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -2449,13 +2438,13 @@ mod tests {
         let res = source.fetch.backend().acquire_resource(&key).unwrap();
         res.write_at(0, &[0u8; 16]).unwrap();
 
-        assert_eq!(source.phase(), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(source.phase(), SourcePhase::Waiting);
     }
 
     #[kithara::test]
     fn hls_phase_parameterless_waiting_when_no_segments() {
         let source = build_phase_test_source(1);
 
-        assert_eq!(source.phase(), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(source.phase(), SourcePhase::Waiting);
     }
 }

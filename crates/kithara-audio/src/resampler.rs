@@ -11,6 +11,7 @@ use std::{
     },
 };
 
+use audioadapter_buffers::direct::SequentialSliceOfVecs;
 use derive_setters::Setters;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
@@ -90,8 +91,6 @@ impl ResamplerKind {
         input: &[Vec<f32>],
         output: &mut [Vec<f32>],
     ) -> Result<(usize, usize), rubato::ResampleError> {
-        use audioadapter_buffers::direct::SequentialSliceOfVecs;
-
         let channels = input.len();
         let input_frames = input[0].len();
         let output_frames = output[0].len();

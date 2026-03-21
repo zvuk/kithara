@@ -4,6 +4,7 @@
 //! * **Native** — `std::thread` (OS threads).
 //! * **WASM** — `wasm_safe_thread` (Web Workers).
 
+use std::hash::{Hash, Hasher};
 pub use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
@@ -250,7 +251,6 @@ pub fn park_timeout(duration: Duration) {
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
-    use std::hash::{Hash, Hasher};
     let id = current().id();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
@@ -261,7 +261,6 @@ pub fn current_thread_id() -> u64 {
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
-    use std::hash::{Hash, Hasher};
     let id = current().id();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);

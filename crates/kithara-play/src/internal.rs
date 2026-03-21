@@ -18,7 +18,10 @@ pub mod offline {
 
     use firewheel::{FirewheelConfig, FirewheelCtx};
     use kithara_platform::Mutex;
-    use ringbuf::{HeapRb, traits::Split};
+    use ringbuf::{
+        HeapRb,
+        traits::{Producer, Split},
+    };
 
     use crate::impls::{
         offline_backend::{OfflineBackend, OfflineConfig},
@@ -101,8 +104,6 @@ pub mod offline {
         ///
         /// Panics if the command channel is full.
         pub fn load_and_fadein(&mut self, resource: crate::Resource, src: &str) {
-            use ringbuf::traits::Producer;
-
             let src: Arc<str> = Arc::from(src);
             let pr = PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
             self.cmd_tx
@@ -135,7 +136,6 @@ pub mod offline {
         ///
         /// Panics if the command channel is full.
         pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
-            use ringbuf::traits::Producer;
             self.shared_state
                 .seek_epoch
                 .store(seek_epoch, Ordering::SeqCst);

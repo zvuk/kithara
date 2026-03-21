@@ -148,7 +148,7 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{collections::HashSet, path::PathBuf};
 
     use kithara_test_utils::kithara;
     use url::Url;
@@ -380,7 +380,6 @@ mod tests {
 
     #[kithara::test]
     fn test_resource_key_absolute_hash_differs() {
-        use std::collections::HashSet;
         let abs = ResourceKey::absolute("/tmp/a.mp3");
         let rel = ResourceKey::new("/tmp/a.mp3");
         let mut set = HashSet::new();

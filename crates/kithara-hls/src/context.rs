@@ -77,11 +77,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::stream_index::SegmentData;
 
     #[kithara::test]
     fn test_hls_stream_context_reads_atomics() {
-        use crate::stream_index::SegmentData;
-
         let timeline = Timeline::new();
         timeline.set_byte_position(1000);
         // Create StreamIndex with 4 variants and 20 segments

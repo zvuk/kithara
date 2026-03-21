@@ -5,6 +5,8 @@
 //! PlayerNode[slotN] -> VolPanNode[slotN] -> PlayerEqNode -> PlayerVolPanNode -> SessionDucking -> GraphOut
 //! ```
 
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -16,6 +18,10 @@ use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, tokio::sync::broadcast};
 use portable_atomic::AtomicF32;
+#[cfg(test)]
+use ringbuf::HeapRb;
+#[cfg(test)]
+use ringbuf::traits::Split;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
 
@@ -427,8 +433,6 @@ impl EngineImpl {
     /// Inject a test slot handle without starting the audio session.
     #[cfg(test)]
     pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {
-        use ringbuf::{HeapRb, traits::Split};
-
         let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
         self.active_slots.lock_sync().push(slot_id);
         self.slot_registry.lock_sync().insert(
@@ -444,7 +448,6 @@ impl EngineImpl {
 
 #[cfg(test)]
 pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
-    use std::sync::OnceLock;
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }

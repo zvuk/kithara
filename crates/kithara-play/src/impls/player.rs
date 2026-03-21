@@ -27,7 +27,7 @@ use super::{
 use crate::{
     error::PlayError,
     events::PlayerEvent,
-    impls::resource::Resource,
+    impls::{player_notification::PlayerNotification, resource::Resource},
     traits::engine::Engine,
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
@@ -464,8 +464,6 @@ impl PlayerImpl {
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// when a track finishes via EOF.
     pub fn process_notifications(&self) {
-        use crate::impls::player_notification::PlayerNotification;
-
         let Some(slot_id) = *self.current_slot.lock_sync() else {
             return;
         };

@@ -77,6 +77,8 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -112,8 +114,6 @@ mod tests {
 
     #[kithara::test]
     fn shared_state_notification_channel_works() {
-        use std::sync::Arc;
-
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx

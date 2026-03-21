@@ -32,6 +32,7 @@ use super::{
     types::{ServiceClass, StepResult, TrackId, TrackIdGen},
     wake::WorkerWake,
 };
+use crate::pipeline::track_fsm::TrackStep;
 
 // Public types
 
@@ -196,8 +197,6 @@ impl TrackSlot {
 
     /// One cooperative step: drain commands, step FSM, push at most one chunk.
     fn step(&mut self) -> StepResult {
-        use crate::pipeline::track_fsm::TrackStep;
-
         if self.cancel.is_cancelled() || self.terminal {
             return StepResult::NoProgress;
         }
@@ -506,7 +505,13 @@ fn drain_worker_commands(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use kithara_decode::PcmChunk;
     use kithara_platform::tokio::sync::Notify;
@@ -933,8 +938,6 @@ mod tests {
     /// rate sufficient for glitch-free playback.
     #[kithara::test]
     fn shared_worker_blocking_track_does_not_starve_producing_track() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         struct BlockingSource {
             timeline: Timeline,
             blocking: Arc<AtomicBool>,
@@ -1012,8 +1015,6 @@ mod tests {
     /// still receive enough chunks for glitch-free playback.
     #[kithara::test]
     fn shared_worker_sync_blocking_step_starves_other_tracks() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         struct SlowDecodeSource {
             timeline: Timeline,
             block_ms: u64,

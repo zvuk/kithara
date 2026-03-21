@@ -762,6 +762,7 @@ mod tests {
     use std::io::Cursor;
 
     use kithara_test_utils::{create_test_wav, kithara};
+    use symphonia::core::io::MediaSource;
 
     use super::*;
     use crate::traits::AudioDecoder;
@@ -908,8 +909,6 @@ mod tests {
 
     #[kithara::test]
     fn test_read_seek_adapter_byte_len() {
-        use symphonia::core::io::MediaSource;
-
         let data = vec![0u8; 5000];
         let cursor = Cursor::new(data);
         let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
@@ -925,8 +924,6 @@ mod tests {
 
     #[kithara::test]
     fn test_read_seek_adapter_dynamic_update() {
-        use symphonia::core::io::MediaSource;
-
         let data = vec![0u8; 1000];
         let cursor = Cursor::new(data);
         let adapter = ReadSeekAdapter::new_seek_disabled(cursor);

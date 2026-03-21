@@ -21,8 +21,8 @@ use crate::{
     HlsError, HlsResult,
     ids::{SegmentIndex, VariantIndex},
     parsing::{
-        MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream, parse_master_playlist,
-        parse_media_playlist,
+        EncryptionMethod, MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream,
+        parse_master_playlist, parse_media_playlist,
     },
     playlist::PlaylistState,
 };
@@ -444,8 +444,6 @@ impl<N: Net> FetchManager<N> {
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {
-        use crate::parsing::EncryptionMethod;
-
         let Some(seg_key) = key else {
             return Ok(None);
         };

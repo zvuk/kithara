@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
-    base::Assets,
+    base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
 };
@@ -99,8 +99,7 @@ impl Assets for DiskAssetStore {
     type Context = ();
     type IndexRes = MmapResource;
 
-    fn capabilities(&self) -> crate::base::Capabilities {
-        use crate::base::Capabilities;
+    fn capabilities(&self) -> Capabilities {
         if self.asset_root.is_empty() {
             // Local-file mode: absolute keys only, no decorators.
             Capabilities::PROCESSING
