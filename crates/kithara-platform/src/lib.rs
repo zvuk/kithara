@@ -24,6 +24,8 @@
 
 mod maybe_send;
 pub mod sync;
+#[cfg(not(target_arch = "wasm32"))]
+mod test_env;
 pub mod thread;
 pub mod time;
 pub mod tokio;
@@ -37,13 +39,8 @@ pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use test_env::test_env_lock;
 pub use thread::{
     Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn,
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-#[must_use]
-pub fn test_env_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-}

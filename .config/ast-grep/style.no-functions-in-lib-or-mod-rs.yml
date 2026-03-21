@@ -5,5 +5,9 @@ language: Rust
 files:
   - crates/**/src/lib.rs
   - crates/**/src/**/mod.rs
+ignores:
+  - crates/kithara-wasm-macros/**
+  - crates/kithara-hang-detector-macros/**
+  - crates/kithara-test-macros/**
 rule:
   kind: function_item
