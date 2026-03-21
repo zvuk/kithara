@@ -16,9 +16,9 @@ use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
 use crate::{
-    pipeline::audio_worker::AudioWorkerHandle,
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
+    worker::handle::AudioWorkerHandle,
 };
 
 /// Default number of preload chunks.
@@ -128,7 +128,7 @@ impl<T: StreamType> AudioConfig<T> {
 }
 
 /// Compute expected output spec after effects (primarily resampling).
-pub(super) fn expected_output_spec(
+pub(crate) fn expected_output_spec(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
 ) -> PcmSpec {
@@ -144,7 +144,7 @@ pub(super) fn expected_output_spec(
 }
 
 /// Create effects chain for audio pipeline.
-pub(super) fn create_effects(
+pub(crate) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     playback_rate: &Arc<AtomicF32>,

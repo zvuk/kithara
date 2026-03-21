@@ -96,6 +96,15 @@ pub struct HlsConfig {
     pub headers: Option<Headers>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
+    /// Shared tokio runtime handle for the downloader.
+    ///
+    /// When provided, the downloader runs as an async task on this runtime
+    /// instead of spawning a dedicated OS thread. When `None`, the downloader
+    /// auto-detects: reuses a multi-thread runtime if available, otherwise
+    /// falls back to a dedicated thread.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub runtime: Option<kithara_platform::tokio::runtime::Handle>,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Master playlist URL.

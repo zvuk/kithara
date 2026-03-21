@@ -119,7 +119,8 @@ impl Kithara {
 
         Task::perform(
             async move {
-                let config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
+                let mut config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
+                player.prepare_config(&mut config);
                 let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
 
                 // Single-slot model: always use slot 0 to avoid index overflow.

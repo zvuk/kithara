@@ -3,13 +3,13 @@
 //! Contains `FileDownloader` implementing `Downloader` trait,
 //! `FileIo` implementing `DownloaderIo`, and supporting types.
 
-use std::{error::Error, fmt, future::Future, ops::Range, sync::Arc};
+use std::{error::Error, fmt, ops::Range, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::AssetResource;
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_platform::{WasmSend, tokio};
+use kithara_platform::{BoxFuture, WasmSend, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
     DownloadCursor, Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem,
@@ -64,39 +64,45 @@ impl DownloaderIo for FileIo {
     type Fetch = FileFetch;
     type Error = FileDownloadError;
 
-    async fn fetch(&self, plan: Self::Plan) -> Result<Self::Fetch, Self::Error> {
-        let range = plan.range;
-        let spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
+    fn fetch(&self, plan: Self::Plan) -> BoxFuture<'_, Result<Self::Fetch, Self::Error>> {
+        Box::pin(async move {
+            let range = plan.range;
+            let spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
 
-        match self
-            .net_client
-            .get_range(self.url.clone(), spec, self.headers.clone())
-            .await
-        {
-            Ok(stream) => {
-                let mut writer =
-                    Writer::with_offset(stream, self.res.clone(), self.cancel.clone(), range.start);
+            match self
+                .net_client
+                .get_range(self.url.clone(), spec, self.headers.clone())
+                .await
+            {
+                Ok(stream) => {
+                    let mut writer = Writer::with_offset(
+                        stream,
+                        self.res.clone(),
+                        self.cancel.clone(),
+                        range.start,
+                    );
 
-                while let Some(result) = writer.next().await {
-                    match result {
-                        Ok(WriterItem::ChunkWritten { .. }) => {}
-                        Ok(WriterItem::StreamEnded { .. }) => break,
-                        Err(e) => {
-                            tracing::warn!(?e, "range download failed");
-                            let msg = e.to_string();
-                            self.res.fail(msg.clone());
-                            return Err(FileDownloadError { msg });
+                    while let Some(result) = writer.next().await {
+                        match result {
+                            Ok(WriterItem::ChunkWritten { .. }) => {}
+                            Ok(WriterItem::StreamEnded { .. }) => break,
+                            Err(e) => {
+                                tracing::warn!(?e, "range download failed");
+                                let msg = e.to_string();
+                                self.res.fail(msg.clone());
+                                return Err(FileDownloadError { msg });
+                            }
                         }
                     }
+                    tracing::debug!(start = range.start, end = range.end, "range fetched");
+                    Ok(FileFetch::RangeDone)
                 }
-                tracing::debug!(start = range.start, end = range.end, "range fetched");
-                Ok(FileFetch::RangeDone)
+                Err(e) => {
+                    tracing::warn!(?e, "failed to start range request");
+                    Err(FileDownloadError { msg: e.to_string() })
+                }
             }
-            Err(e) => {
-                tracing::warn!(?e, "failed to start range request");
-                Err(FileDownloadError { msg: e.to_string() })
-            }
-        }
+        })
     }
 }
 
@@ -277,119 +283,125 @@ impl Downloader for FileDownloader {
         &self.io
     }
 
-    async fn poll_demand(&mut self) -> Option<FilePlan> {
-        let range = self.coord.take_range_request()?;
+    fn poll_demand(&mut self) -> BoxFuture<'_, Option<FilePlan>> {
+        Box::pin(async move {
+            let range = self.coord.take_range_request()?;
 
-        // Cancel sequential download when demand arrives — bandwidth is better
-        // spent on the data the reader actually needs (gap-filling).
-        self.switch_phase_for_demand();
-        self.reactivate_for_demand()?;
+            // Cancel sequential download when demand arrives — bandwidth is better
+            // spent on the data the reader actually needs (gap-filling).
+            self.switch_phase_for_demand();
+            self.reactivate_for_demand()?;
 
-        tracing::debug!(
-            start = range.start,
-            end = range.end,
-            "processing on-demand range request"
-        );
-        Some(FilePlan { range })
+            tracing::debug!(
+                start = range.start,
+                end = range.end,
+                "processing on-demand range request"
+            );
+            Some(FilePlan { range })
+        })
     }
 
-    async fn plan(&mut self) -> PlanOutcome<FilePlan> {
-        match &self.cursor {
-            DownloadCursor::Stream { from: _ } => PlanOutcome::Step,
-            DownloadCursor::Fill { floor: _, next: _ } => {
-                // Collect up to 4 gaps, each up to 2MB.
-                let mut plans = Vec::new();
-                let gap_chunk_size: u64 = 2 * 1024 * 1024;
-                let gap_batch_size: usize = 4;
-                let total = self.coord.total_bytes().unwrap_or(0);
+    fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<FilePlan>> {
+        Box::pin(async move {
+            match &self.cursor {
+                DownloadCursor::Stream { from: _ } => PlanOutcome::Step,
+                DownloadCursor::Fill { floor: _, next: _ } => {
+                    // Collect up to 4 gaps, each up to 2MB.
+                    let mut plans = Vec::new();
+                    let gap_chunk_size: u64 = 2 * 1024 * 1024;
+                    let gap_batch_size: usize = 4;
+                    let total = self.coord.total_bytes().unwrap_or(0);
 
-                let mut gap_cursor: u64 = 0;
-                for _ in 0..gap_batch_size {
-                    let Some(gap) = self.res.next_gap(gap_cursor, total) else {
-                        break;
-                    };
-                    let clamped_end = (gap.start + gap_chunk_size).min(gap.end);
-                    plans.push(FilePlan {
-                        range: gap.start..clamped_end,
-                    });
-                    gap_cursor = clamped_end;
-                }
+                    let mut gap_cursor: u64 = 0;
+                    for _ in 0..gap_batch_size {
+                        let Some(gap) = self.res.next_gap(gap_cursor, total) else {
+                            break;
+                        };
+                        let clamped_end = (gap.start + gap_chunk_size).min(gap.end);
+                        plans.push(FilePlan {
+                            range: gap.start..clamped_end,
+                        });
+                        gap_cursor = clamped_end;
+                    }
 
-                if plans.is_empty() {
-                    // No more gaps — check if complete.
-                    if self.res.next_gap(0, total).is_none() && total > 0 {
-                        if let Err(e) = self.res.commit(self.coord.total_bytes()) {
-                            tracing::error!(?e, "failed to commit resource after gap-filling");
-                            self.res.fail(format!("commit failed: {e}"));
-                            self.bus.publish(FileEvent::DownloadError {
-                                error: format!("commit failed: {e}"),
-                            });
-                        } else if let Some(total) = self.coord.total_bytes() {
-                            self.bus
-                                .publish(FileEvent::DownloadComplete { total_bytes: total });
-                        }
-                        self.cursor.mark_complete();
-                        PlanOutcome::Complete
-                    } else {
-                        // No gaps found but not complete — wait for on-demand requests.
-                        // This can happen when total_size is unknown.
-                        tokio::select! {
-                            () = self.coord.notified_downloader_wake() => {
-                                PlanOutcome::Step // Re-check on next iteration
+                    if plans.is_empty() {
+                        // No more gaps — check if complete.
+                        if self.res.next_gap(0, total).is_none() && total > 0 {
+                            if let Err(e) = self.res.commit(self.coord.total_bytes()) {
+                                tracing::error!(?e, "failed to commit resource after gap-filling");
+                                self.res.fail(format!("commit failed: {e}"));
+                                self.bus.publish(FileEvent::DownloadError {
+                                    error: format!("commit failed: {e}"),
+                                });
+                            } else if let Some(total) = self.coord.total_bytes() {
+                                self.bus
+                                    .publish(FileEvent::DownloadComplete { total_bytes: total });
+                            }
+                            self.cursor.mark_complete();
+                            PlanOutcome::Complete
+                        } else {
+                            // No gaps found but not complete — wait for on-demand requests.
+                            // This can happen when total_size is unknown.
+                            tokio::select! {
+                                () = self.coord.notified_downloader_wake() => {
+                                    PlanOutcome::Step // Re-check on next iteration
+                                }
                             }
                         }
+                    } else {
+                        PlanOutcome::Batch(plans)
                     }
-                } else {
-                    PlanOutcome::Batch(plans)
                 }
+                // A committed remote file may still need future on-demand range
+                // fetches after cache eviction, so stay idle until demand arrives.
+                DownloadCursor::Complete => PlanOutcome::Idle,
             }
-            // A committed remote file may still need future on-demand range
-            // fetches after cache eviction, so stay idle until demand arrives.
-            DownloadCursor::Complete => PlanOutcome::Idle,
-        }
+        })
     }
 
-    async fn step(&mut self) -> Result<StepResult<FileFetch>, FileDownloadError> {
-        // If sequential ended, wait for on-demand or transition.
-        if !self.cursor.is_stream() {
-            return Ok(StepResult::PhaseChange);
-        }
-
-        // Lazily open the HTTP stream on first step.
-        let writer = self.ensure_writer().await?;
-
-        // Sequential download continues.
-        let Some(result) = writer.next().await else {
-            // Writer exhausted (empty stream case).
-            self.cursor.mark_complete();
-            return Ok(StepResult::PhaseChange);
-        };
-
-        match result {
-            Ok(WriterItem::ChunkWritten {
-                offset,
-                len: chunk_len,
-            }) => Ok(StepResult::Item(FileFetch::Chunk {
-                offset,
-                len: chunk_len as u64,
-            })),
-            Ok(WriterItem::StreamEnded { total_bytes }) => {
-                Ok(StepResult::Item(FileFetch::StreamEnded { total_bytes }))
+    fn step(&mut self) -> BoxFuture<'_, Result<StepResult<FileFetch>, FileDownloadError>> {
+        Box::pin(async move {
+            // If sequential ended, wait for on-demand or transition.
+            if !self.cursor.is_stream() {
+                return Ok(StepResult::PhaseChange);
             }
-            Err(e) => {
-                tracing::warn!("download failed: {}", e);
-                self.bus.publish(FileEvent::DownloadError {
-                    error: e.to_string(),
-                });
-                // Transition to gap-filling on error.
-                if self.coord.total_bytes().is_some() {
-                    self.cursor.reopen_fill(0, 0);
-                    Ok(StepResult::PhaseChange)
-                } else {
-                    Err(FileDownloadError { msg: e.to_string() })
+
+            // Lazily open the HTTP stream on first step.
+            let writer = self.ensure_writer().await?;
+
+            // Sequential download continues.
+            let Some(result) = writer.next().await else {
+                // Writer exhausted (empty stream case).
+                self.cursor.mark_complete();
+                return Ok(StepResult::PhaseChange);
+            };
+
+            match result {
+                Ok(WriterItem::ChunkWritten {
+                    offset,
+                    len: chunk_len,
+                }) => Ok(StepResult::Item(FileFetch::Chunk {
+                    offset,
+                    len: chunk_len as u64,
+                })),
+                Ok(WriterItem::StreamEnded { total_bytes }) => {
+                    Ok(StepResult::Item(FileFetch::StreamEnded { total_bytes }))
+                }
+                Err(e) => {
+                    tracing::warn!("download failed: {}", e);
+                    self.bus.publish(FileEvent::DownloadError {
+                        error: e.to_string(),
+                    });
+                    // Transition to gap-filling on error.
+                    if self.coord.total_bytes().is_some() {
+                        self.cursor.reopen_fill(0, 0);
+                        Ok(StepResult::PhaseChange)
+                    } else {
+                        Err(FileDownloadError { msg: e.to_string() })
+                    }
                 }
             }
-        }
+        })
     }
 
     fn commit(&mut self, fetch: FileFetch) {
@@ -478,30 +490,23 @@ impl Downloader for FileDownloader {
         download_pos.saturating_sub(reader_pos) > limit
     }
 
-    fn wait_ready(&self) -> impl Future<Output = ()> {
+    fn wait_ready(&self) -> BoxFuture<'_, ()> {
         // Extract Arc references to avoid capturing &self (which is not Send
         // because Writer contains a non-Sync dyn Stream).
         let coord = Arc::clone(&self.coord);
-        async move {
+        Box::pin(async move {
             tokio::select! {
                 () = coord.notified_reader_advance() => {}
                 () = coord.notified_downloader_wake() => {}
             }
-        }
+        })
     }
 
-    fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
+    fn demand_signal(&self) -> BoxFuture<'static, ()> {
         let coord = Arc::clone(&self.coord);
-        async move {
+        Box::pin(async move {
             coord.notified_downloader_wake().await;
-        }
-    }
-
-    fn wait_for_work(&self) -> impl Future<Output = ()> {
-        let coord = Arc::clone(&self.coord);
-        async move {
-            coord.notified_downloader_wake().await;
-        }
+        })
     }
 }
 

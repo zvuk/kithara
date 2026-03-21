@@ -1,6 +1,6 @@
 //! `rodio::Source` implementation for [`Audio`].
 
-use crate::pipeline::Audio;
+use crate::audio::Audio;
 
 impl<S> Iterator for Audio<S> {
     type Item = f32;

@@ -53,4 +53,5 @@ mod kithara_net;
 mod kithara_play;
 mod kithara_storage;
 mod kithara_stream;
+mod thread_budget;
 mod timeout_guard;

@@ -355,3 +355,34 @@ async fn test_audio_preload_rearms_after_seek() {
         .await
         .expect("seek must re-arm preload notify");
 }
+
+/// `preloaded` is a one-way latch: once set by `preload()`, it must
+/// survive seeks.  If seek resets it, the audio callback switches to
+/// blocking recv — parking the thread on every empty ringbuf poll.
+#[kithara::test(tokio)]
+async fn preloaded_survives_seek() {
+    use kithara_audio::internal::audio::is_preloaded;
+
+    let (_tmp, config) = test_wav_config(44100 * 2);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .expect("create audio");
+
+    let notify = preload_notify(&audio);
+    timeout(Duration::from_secs(1), notify.notified())
+        .await
+        .expect("initial preload");
+    audio.preload();
+    assert!(is_preloaded(&audio));
+
+    audio.seek(Duration::from_millis(100)).unwrap();
+    assert!(is_preloaded(&audio), "seek must not reset preloaded");
+
+    let post_notify = preload_notify(&audio);
+    timeout(Duration::from_secs(2), post_notify.notified())
+        .await
+        .expect("worker must deliver after seek");
+    let mut buf = [0.0f32; 4096];
+    let n = audio.read(&mut buf);
+    assert!(n > 0, "must read samples after seek");
+}

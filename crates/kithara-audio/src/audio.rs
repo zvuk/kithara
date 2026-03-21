@@ -29,16 +29,20 @@ use ringbuf::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
-use super::{
-    audio_worker::{AudioWorkerHandle, TrackRegistration},
-    config::{AudioConfig, create_effects, expected_output_spec},
-    source::{OffsetReader, SharedStream, StreamAudioSource},
-    thread_wake::ThreadWake,
-    track_fsm::ConsumerPhase,
-    worker::AudioCommand,
-    worker_types::{ServiceClass, TrackId},
+use crate::{
+    pipeline::{
+        config::{AudioConfig, create_effects, expected_output_spec},
+        source::{OffsetReader, SharedStream, StreamAudioSource},
+        track_fsm::ConsumerPhase,
+    },
+    traits::{DecodeError, DecodeResult, PcmReader},
+    worker::{
+        AudioCommand,
+        handle::{AudioWorkerHandle, TrackRegistration},
+        thread_wake::ThreadWake,
+        types::{ServiceClass, TrackId},
+    },
 };
-use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
@@ -178,6 +182,14 @@ pub struct Audio<S> {
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
+    /// Whether non-blocking recv is active.
+    ///
+    /// Returns `false` after `seek()` until `preload()` is called again.
+    #[must_use]
+    pub fn is_preloaded(&self) -> bool {
+        self.preloaded
+    }
+
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
     pub fn pcm_rx(&mut self) -> &mut HeapCons<Fetch<PcmChunk>> {
@@ -410,8 +422,11 @@ impl<S> Audio<S> {
             worker.wake();
         }
 
-        // Reset preload flag — first read after seek will be blocking if needed
-        self.preloaded = false;
+        // Keep preloaded flag unchanged.  Resetting to false switches
+        // Audio::read() to blocking recv, which parks the audio callback
+        // thread on every empty ringbuf poll — causing persistent crossfade
+        // glitches.  The preloaded flag is a one-way latch: once preload()
+        // sets it to true, it stays true for the lifetime of this Audio.
 
         trace!(?position, epoch, "seek initiated via Timeline");
         Ok(())
@@ -565,7 +580,7 @@ impl<S> Audio<S> {
         self.current_chunk = Some(chunk);
         self.chunk_offset = 0;
 
-        // Transition to Playing on first chunk received
+        // Transition to Playing on first chunk received.
         if matches!(
             self.consumer_phase,
             ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
@@ -680,7 +695,7 @@ where
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
-    ) -> super::source::DecoderFactory<T> {
+    ) -> crate::pipeline::source::DecoderFactory<T> {
         let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);

@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashSet,
-    future::Future,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -13,7 +12,7 @@ use kithara_abr::{
 };
 use kithara_assets::{AssetResourceState, ResourceKey};
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
-use kithara_platform::{time::Instant, tokio};
+use kithara_platform::{BoxFuture, time::Instant, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{DownloadCursor, Downloader, DownloaderIo, PlanOutcome};
 use tracing::{debug, trace};
@@ -107,51 +106,53 @@ impl DownloaderIo for HlsIo {
     type Fetch = HlsFetch;
     type Error = HlsError;
 
-    async fn fetch(&self, plan: HlsPlan) -> Result<HlsFetch, HlsError> {
-        let start = Instant::now();
+    fn fetch(&self, plan: HlsPlan) -> BoxFuture<'_, Result<HlsFetch, HlsError>> {
+        Box::pin(async move {
+            let start = Instant::now();
 
-        let init_fut = {
-            let fetch = Arc::clone(&self.fetch);
-            async move {
-                if plan.need_init {
-                    match fetch.load_init_segment(plan.variant).await {
-                        Ok(m) => (Some(m.url), m.len),
-                        Err(e) => {
-                            tracing::warn!(
-                                variant = plan.variant,
-                                error = %e,
-                                "init segment load failed"
-                            );
-                            (None, 0)
+            let init_fut = {
+                let fetch = Arc::clone(&self.fetch);
+                async move {
+                    if plan.need_init {
+                        match fetch.load_init_segment(plan.variant).await {
+                            Ok(m) => (Some(m.url), m.len),
+                            Err(e) => {
+                                tracing::warn!(
+                                    variant = plan.variant,
+                                    error = %e,
+                                    "init segment load failed"
+                                );
+                                (None, 0)
+                            }
                         }
+                    } else {
+                        (None, 0)
                     }
-                } else {
-                    (None, 0)
                 }
-            }
-        };
+            };
 
-        let (media_result, (init_url, init_len)) = tokio::join!(
-            self.fetch.load_media_segment_with_source_for_epoch(
-                plan.variant,
-                plan.segment_index,
-                plan.seek_epoch,
-            ),
-            init_fut,
-        );
+            let (media_result, (init_url, init_len)) = tokio::join!(
+                self.fetch.load_media_segment_with_source_for_epoch(
+                    plan.variant,
+                    plan.segment_index,
+                    plan.seek_epoch,
+                ),
+                init_fut,
+            );
 
-        let duration = start.elapsed();
-        let (media, media_cached) = media_result?;
+            let duration = start.elapsed();
+            let (media, media_cached) = media_result?;
 
-        Ok(HlsFetch {
-            init_len,
-            init_url,
-            media,
-            media_cached,
-            segment_index: plan.segment_index,
-            variant: plan.variant,
-            duration,
-            seek_epoch: plan.seek_epoch,
+            Ok(HlsFetch {
+                init_len,
+                init_url,
+                media,
+                media_cached,
+                segment_index: plan.segment_index,
+                variant: plan.variant,
+                duration,
+                seek_epoch: plan.seek_epoch,
+            })
         })
     }
 }
@@ -1365,12 +1366,12 @@ impl Downloader for HlsDownloader {
         &self.io
     }
 
-    async fn poll_demand(&mut self) -> Option<HlsPlan> {
-        self.poll_demand_impl().await
+    fn poll_demand(&mut self) -> BoxFuture<'_, Option<HlsPlan>> {
+        Box::pin(async move { self.poll_demand_impl().await })
     }
 
-    async fn plan(&mut self) -> PlanOutcome<HlsPlan> {
-        self.plan_impl().await
+    fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<HlsPlan>> {
+        Box::pin(async move { self.plan_impl().await })
     }
 
     fn commit(&mut self, fetch: HlsFetch) {
@@ -1496,15 +1497,20 @@ impl Downloader for HlsDownloader {
         false
     }
 
-    async fn wait_ready(&self) {
-        if self.coord.timeline().is_flushing() || !self.should_throttle() {
-            return;
-        }
-        self.coord.notified_reader_advanced().await;
+    fn wait_ready(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            if self.coord.timeline().is_flushing() || !self.should_throttle() {
+                return;
+            }
+            self.coord.notified_reader_advanced().await;
+        })
     }
 
-    fn wait_for_work(&self) -> impl Future<Output = ()> {
-        self.coord.notified_reader_advanced()
+    fn demand_signal(&self) -> BoxFuture<'static, ()> {
+        let coord = Arc::clone(&self.coord);
+        Box::pin(async move {
+            coord.notified_reader_advanced().await;
+        })
     }
 }
 

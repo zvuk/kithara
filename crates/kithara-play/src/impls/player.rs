@@ -132,6 +132,29 @@ impl PlayerImpl {
         self.engine.worker()
     }
 
+    /// Runtime handle captured by this player's engine.
+    ///
+    /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
+    /// the app's runtime instead of creating per-stream runtimes.
+    #[must_use]
+    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+        self.engine.runtime()
+    }
+
+    /// Apply shared worker, host sample rate, and runtime to a resource
+    /// config so the resource integrates with this player's engine.
+    ///
+    /// Call this before [`Resource::new`] to ensure the resource shares
+    /// the player's decode thread, resampler is pre-initialised with the
+    /// correct ratio, and downloaders reuse the app's tokio runtime.
+    pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
+        config.worker = Some(self.engine.worker().clone());
+        config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
+        if let Some(rt) = self.engine.runtime() {
+            config.runtime = Some(rt.clone());
+        }
+    }
+
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.items.lock_sync().len()
@@ -622,6 +645,17 @@ impl PlayerImpl {
         // Propagate current playback rate to the resource's audio pipeline.
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
+
+        // Propagate host sample rate so the resampler is already initialised
+        // with the correct ratio.  Without this, the resampler starts in
+        // passthrough (host_sr = 0) and is recreated on the first worker
+        // step when the real host rate becomes visible — the expensive
+        // `make_sincs` call blocks the worker thread and starves other
+        // tracks during crossfade.
+        let host_sr = self.engine.master_sample_rate();
+        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
+            resource.set_host_sample_rate(sr);
+        }
 
         let src = Arc::clone(resource.src());
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);

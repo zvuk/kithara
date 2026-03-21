@@ -169,7 +169,11 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Short timeout keeps the audio worker responsive for round-robin
+/// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+/// lasts ~46ms. A 10ms budget gives the worker time to serve other
+/// tracks and still refill the ringbuf before the audio callback drains it.
+const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -188,12 +192,29 @@ impl<T: StreamType> Read for Stream<T> {
             let pos = timeline.byte_position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            // Wait for data to be available (blocking)
-            match self
-                .source
-                .wait_range(range, WAIT_RANGE_TIMEOUT)
-                .map_err(|e| io::Error::other(e.to_string()))?
-            {
+            // Wait for data to be available.
+            // In cooperative mode (short timeout), a timeout is not fatal —
+            // it means "data not ready yet, try again later". We convert it
+            // to an interrupted signal so the decode loop yields to the worker.
+            let wait_result = self.source.wait_range(range, WAIT_RANGE_TIMEOUT);
+            let wait_outcome = match wait_result {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("budget exceeded") {
+                        // Seek in progress — surface to the audio worker.
+                        if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                            return Err(io::Error::other("seek pending"));
+                        }
+                        // No seek — data simply isn't ready yet, spin.
+                        hang_tick!();
+                        kithara_platform::thread::yield_now();
+                        continue;
+                    }
+                    return Err(io::Error::other(msg));
+                }
+            };
+            match wait_outcome {
                 WaitOutcome::Ready => {}
                 WaitOutcome::Eof => return Ok(0),
                 WaitOutcome::Interrupted => {

@@ -25,6 +25,7 @@ Icon?
 # Zed
 /.zed/*
 !/.zed/debug.json
+!/.zed/tasks.json
 
 # Editor swap/backup files
 *~

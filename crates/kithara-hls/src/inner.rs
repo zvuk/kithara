@@ -176,7 +176,7 @@ impl StreamType for Hls {
 
         // Spawn downloader on a dedicated thread.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.
-        let backend = kithara_stream::Backend::new(downloader, &cancel);
+        let backend = kithara_stream::Backend::new(downloader, &cancel, config.runtime.clone());
         source.set_backend(backend);
 
         Ok(source)

@@ -52,13 +52,14 @@ pub(super) async fn run_tui(
 
     // Load tracks.
     for (i, url) in urls.iter().enumerate() {
-        let config = match ResourceConfig::new(url) {
+        let mut config = match ResourceConfig::new(url) {
             Ok(c) => c,
             Err(err) => {
                 tracing::warn!(?err, url, "invalid URL, skipping");
                 continue;
             }
         };
+        player.prepare_config(&mut config);
         match Resource::new(config).await {
             Ok(resource) => {
                 let source_events = resource.subscribe();
@@ -385,7 +386,8 @@ fn switch_track(
     let handle = tokio::runtime::Handle::current();
     let url = &urls[index];
     let resource = handle.block_on(async {
-        let config = ResourceConfig::new(url)?;
+        let mut config = ResourceConfig::new(url)?;
+        player.prepare_config(&mut config);
         Resource::new(config).await
     })?;
     let events = resource.subscribe();

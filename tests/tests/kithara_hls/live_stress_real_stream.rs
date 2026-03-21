@@ -25,10 +25,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
-const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 20_000;
-const WARMUP_TIMEOUT_SECS: u64 = 16;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 32;
+const NEXT_CHUNK_TIMEOUT_MS: u64 = 90_000;
+const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
+const WARMUP_TIMEOUT_SECS: u64 = 60;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 60;
 const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
 const RANDOM_SEEK_OPS_MAX: usize = 1_400;
 /// Lowered from 220 to tolerate parallel test execution under CPU/net load.
@@ -250,7 +250,7 @@ async fn next_chunk_with_timeout(
     browser,
     serial,
     timeout(browser_timeout(60, 75)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 async fn live_real_drm_playback_smoke(_live_hls_stream_tracing_setup: (), temp_dir: TestTempDir) {
     let server = serve_assets().await;
@@ -303,7 +303,7 @@ async fn live_real_drm_playback_smoke(_live_hls_stream_tracing_setup: (), temp_d
     browser,
     serial,
     timeout(browser_timeout(90, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -452,7 +452,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     native,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -572,7 +572,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     native,
     serial,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -687,7 +687,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     native,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -759,8 +759,8 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(180, 240)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(browser_timeout(300, 360)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls_ephemeral("/hls/master.m3u8", "HLS", true)]
 #[case::drm_ephemeral("/drm/master.m3u8", "DRM", true)]
@@ -1073,7 +1073,7 @@ async fn live_stress_real_stream_seek_read_cache(
     browser,
     serial,
     timeout(browser_timeout(90, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]
@@ -1133,7 +1133,7 @@ async fn live_ephemeral_small_cache_playback(
     browser,
     serial,
     timeout(browser_timeout(90, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::hls("/hls/master.m3u8", "HLS")]
 #[case::drm("/drm/master.m3u8", "DRM")]

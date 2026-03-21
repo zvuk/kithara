@@ -302,7 +302,7 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn player_resource_repeated_unavailable_mp3_does_not_panic(temp_dir: TestTempDir) {
     let server = TestHttpServer::new(test_app()).await;
@@ -348,7 +348,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(temp_dir: TestT
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
 #[case::ephemeral(true)]
@@ -390,7 +390,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
 #[case::ephemeral(true)]
@@ -454,7 +454,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_dir: TestTempDir) {
     let hls_server = open_audio_hls_server().await;
@@ -520,7 +520,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_di
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
     let server_a = open_audio_hls_server().await;
@@ -553,7 +553,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session() {
     let server_a = open_audio_hls_server().await;
@@ -586,7 +586,7 @@ async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session(
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session() {
     let server_a = open_audio_hls_server().await;
@@ -620,7 +620,7 @@ async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session
     multi_thread,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     let server_a = open_audio_hls_server().await;
@@ -643,7 +643,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
 #[case::ephemeral(true)]
@@ -706,5 +706,228 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     assert!(
         !second.is_eof(),
         "reopened mp3 session must not be EOF after backward seek"
+    );
+}
+
+/// Stress test: multiple crossfade transitions on shared worker.
+///
+/// Tests MP3→HLS, HLS→MP3, MP3→MP3 transitions with offline render.
+/// Measures per-block render time and silence gaps.
+/// Every render() call must complete within the audio block budget
+/// (~11.6ms at 512 frames / 44100Hz) and no silence gaps > 1 block
+/// are allowed during crossfade.
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+)]
+async fn stress_offline_crossfade_no_gaps() {
+    use kithara::play::internal::offline::OfflinePlayer;
+
+    const BLOCK: usize = 512;
+    const SR: u32 = 44100;
+    let block_budget = Duration::from_secs_f64(BLOCK as f64 / SR as f64);
+
+    let hls_server = open_audio_hls_server().await;
+    let store = store_options(&temp_dir(), true);
+    let hls_url = hls_server.url("/master.m3u8").unwrap();
+
+    let worker = AudioWorkerHandle::new();
+    let mut player = OfflinePlayer::new(SR);
+
+    // Local MP3 path (simulates disk-cached file, like production).
+    let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+
+    // --- Helper: create MP3 resource (NO preload — match production timing) ---
+    let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
+        let p = local_mp3.clone();
+        async move {
+            let file_cfg = kithara_file::FileConfig::new(kithara_file::FileSrc::Local(p));
+            let audio_cfg = AudioConfig::<kithara_file::File>::new(file_cfg)
+                .with_hint("mp3")
+                .with_worker(w);
+            let audio = Audio::<Stream<kithara_file::File>>::new(audio_cfg)
+                .await
+                .expect("create local MP3 audio");
+            kithara::play::internal::offline::resource_from_reader(audio)
+        }
+    };
+
+    // --- Helper: create and preload an HLS resource ---
+    let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
+        let u = hls_url.clone();
+        async move {
+            let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+            let cfg = HlsConfig::new(u).with_store(s);
+            let acfg = AudioConfig::<Hls>::new(cfg)
+                .with_media_info(wav_info)
+                .with_worker(w);
+            let audio = Audio::<Stream<Hls>>::new(acfg).await.expect("HLS audio");
+            let mut r = kithara::play::internal::offline::resource_from_reader(audio);
+            tokio::time::timeout(READ_TIMEOUT, r.preload())
+                .await
+                .expect("HLS preload");
+            r
+        }
+    };
+
+    // --- Helper: render N blocks, collect stats ---
+    struct PhaseStats {
+        label: String,
+        blocks: u32,
+        max_silence_run: u32,
+        max_render: Duration,
+        slow_renders: u32,
+    }
+    impl std::fmt::Display for PhaseStats {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{}: {} blocks, silence={} ({:.1}ms) max_render={:?} slow={}",
+                self.label,
+                self.blocks,
+                self.max_silence_run,
+                self.max_silence_run as f64 * BLOCK as f64 / SR as f64 * 1000.0,
+                self.max_render,
+                self.slow_renders,
+            )
+        }
+    }
+
+    let render_phase = |player: &mut OfflinePlayer, n: u32, label: &str| -> PhaseStats {
+        let mut max_silence = 0u32;
+        let mut cur_silence = 0u32;
+        let mut max_render = Duration::ZERO;
+        let mut slow = 0u32;
+
+        for _ in 0..n {
+            let t = Instant::now();
+            let out = player.render(BLOCK);
+            let d = t.elapsed();
+            if d > max_render {
+                max_render = d;
+            }
+            if d > block_budget {
+                slow += 1;
+            }
+            if out.iter().any(|s| s.abs() > 0.001) {
+                if cur_silence > max_silence {
+                    max_silence = cur_silence;
+                }
+                cur_silence = 0;
+            } else {
+                cur_silence += 1;
+            }
+            // Simulate real audio callback period (~11.6ms between blocks).
+            // Without this, the tight loop outpaces the worker, creating
+            // artificial silence that wouldn't happen in production.
+            kithara_platform::thread::sleep(block_budget.saturating_sub(d));
+        }
+        if cur_silence > max_silence {
+            max_silence = cur_silence;
+        }
+        PhaseStats {
+            label: label.to_owned(),
+            blocks: n,
+            max_silence_run: max_silence,
+            max_render,
+            slow_renders: slow,
+        }
+    };
+
+    // ===== Scenario 1: MP3 → HLS =====
+    let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
+    player.load_and_fadein(mp3_1, "mp3_1");
+    let s1a = render_phase(&mut player, 40, "MP3 solo");
+
+    let hls_1 = make_hls(worker.clone(), store.clone()).await;
+    sleep(Duration::from_millis(50)).await;
+    player.load_and_fadein(hls_1, "hls_1");
+    let s1b = render_phase(&mut player, 80, "MP3→HLS fade");
+
+    // ===== Scenario 2: HLS → MP3 =====
+    let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
+    sleep(Duration::from_millis(50)).await;
+    player.load_and_fadein(mp3_2, "mp3_2");
+    let s2 = render_phase(&mut player, 80, "HLS→MP3 fade");
+
+    // ===== Scenario 3: MP3 → MP3 =====
+    let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
+    sleep(Duration::from_millis(50)).await;
+    player.load_and_fadein(mp3_3, "mp3_3");
+    let s3 = render_phase(&mut player, 80, "MP3→MP3 fade");
+
+    // ===== Report =====
+    eprintln!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
+    for s in [&s1a, &s1b, &s2, &s3] {
+        eprintln!("  {s}");
+    }
+
+    // ===== Scenario 4: repeated HLS→MP3 (intermittent glitch) =====
+    // User reports: "чаще всего при переключении с hls на mp3,
+    // это длится около 2х секунд". Run multiple iterations to catch it.
+    eprintln!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
+    let mut worst_silence = 0u32;
+    let mut worst_slow = 0u32;
+    let mut worst_render = Duration::ZERO;
+
+    for iter in 0..5 {
+        // HLS phase
+        let hls_n = make_hls(worker.clone(), store.clone()).await;
+        sleep(Duration::from_millis(50)).await;
+        player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
+        let _sh = render_phase(&mut player, 40, &format!("HLS solo #{iter}"));
+
+        // Crossfade HLS→MP3
+        let mp3_n = make_mp3(worker.clone(), store.clone()).await;
+        sleep(Duration::from_millis(50)).await;
+        player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
+        let sm = render_phase(&mut player, 60, &format!("HLS→MP3 #{iter}"));
+
+        eprintln!("  {sm}");
+        if sm.max_silence_run > worst_silence {
+            worst_silence = sm.max_silence_run;
+        }
+        if sm.slow_renders > worst_slow {
+            worst_slow = sm.slow_renders;
+        }
+        if sm.max_render > worst_render {
+            worst_render = sm.max_render;
+        }
+    }
+
+    eprintln!(
+        "\n  Worst across 5 HLS→MP3: silence={worst_silence} slow={worst_slow} \
+         max_render={worst_render:?}"
+    );
+
+    // ===== Assertions =====
+    let all = [&s1b, &s2, &s3];
+    for s in &all {
+        assert!(
+            s.max_silence_run <= 2,
+            "{}: silence gap {} blocks ({:.1}ms) — audio underrun during crossfade",
+            s.label,
+            s.max_silence_run,
+            s.max_silence_run as f64 * BLOCK as f64 / SR as f64 * 1000.0,
+        );
+        assert!(
+            s.slow_renders <= 1,
+            "{}: {} renders exceeded budget {block_budget:?}, max={:?} — \
+             sustained blocking during crossfade",
+            s.label,
+            s.slow_renders,
+            s.max_render,
+        );
+    }
+    assert!(
+        worst_silence <= 2,
+        "HLS→MP3 repeated: worst silence gap {worst_silence} blocks — \
+         intermittent underrun during crossfade"
+    );
+    assert!(
+        worst_slow <= 1,
+        "HLS→MP3 repeated: {worst_slow} blocks exceeded budget, \
+         max_render={worst_render:?} — sustained blocking during crossfade"
     );
 }

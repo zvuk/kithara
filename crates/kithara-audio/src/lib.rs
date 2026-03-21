@@ -38,6 +38,7 @@
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 // Internal modules
+mod audio;
 pub mod effects;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
@@ -46,14 +47,17 @@ mod resampler;
 #[cfg(feature = "rodio")]
 mod rodio;
 mod traits;
+pub(crate) mod worker;
 
 #[cfg(feature = "internal")]
 pub mod internal;
 
 // Public API exports
+pub use audio::Audio;
 pub use effects::eq::{
     EqBandConfig, EqEffect, FilterKind, compute_coefficients, generate_log_spaced_bands,
 };
-pub use pipeline::{Audio, AudioConfig, AudioWorkerHandle, ServiceClass};
+pub use pipeline::config::AudioConfig;
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};
+pub use worker::{handle::AudioWorkerHandle, types::ServiceClass};

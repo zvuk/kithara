@@ -1,26 +1,27 @@
 [profile.default]
 fail-fast = false
-test-threads = 4
+test-threads = "num-cpus"
+slow-timeout = { period = "120s", terminate-after = 3 }
 
-# Heavy stress tests must run alone to avoid resource contention.
+# Stress tests that use blocking audio reads (recv_outcome_blocking)
+# need exclusive CPU — run one at a time.
 [[profile.default.overrides]]
-filter = 'binary(suite_heavy)'
-threads-required = 4
+filter = "binary(suite_stress)"
+threads-required = "num-cpus"
 
 [profile.ci]
 fail-fast = false
-test-threads = 4
+test-threads = "num-cpus"
 
-[[profile.ci.overrides]]
-filter = 'binary(suite_heavy)'
-threads-required = 4
 # Fast-only profile: heavy tests are excluded via -E filter in justfile.
 [profile.fast]
 fail-fast = false
-test-threads = 4
+test-threads = "num-cpus"
 
 # Stress-only profile: run only the heavy test binary.
+# No thread limit — a real audio player shares the machine with many
+# other processes. Tests must pass under CPU contention.
 [profile.stress]
 fail-fast = false
-test-threads = 1
+test-threads = "num-cpus"
 slow-timeout = { period = "60s", terminate-after = 5 }

@@ -5,7 +5,7 @@ pub mod audio {
 
     use kithara_platform::tokio::sync::Notify;
 
-    pub use crate::{AudioConfig, pipeline::audio::Audio};
+    pub use crate::{AudioConfig, audio::Audio};
 
     impl<S> Audio<S> {
         #[must_use]
@@ -38,6 +38,11 @@ pub mod audio {
     pub fn seek_epoch<S>(audio: &Audio<S>) -> u64 {
         audio.test_seek_epoch()
     }
+
+    #[must_use]
+    pub fn is_preloaded<S>(audio: &Audio<S>) -> bool {
+        audio.is_preloaded()
+    }
 }
 
 pub mod source {
@@ -52,10 +57,7 @@ pub mod source {
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
-    use crate::{
-        pipeline::{track_fsm, worker::AudioWorkerSource},
-        traits::AudioEffect,
-    };
+    use crate::{pipeline::track_fsm, traits::AudioEffect, worker::AudioWorkerSource};
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
 

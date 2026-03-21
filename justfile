@@ -43,20 +43,24 @@ doc:
 
 # --- tests ---
 
+# Cargo profile for test binaries: "dev" (debug) or "test-release" (optimised).
+test-cargo-profile := env("TEST_CARGO_PROFILE", "test-release")
+
 test:
-    cargo nextest run --workspace --exclude kithara-fuzz
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile {{test-cargo-profile}}
 
 test-ci:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast
+    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast --cargo-profile {{test-cargo-profile}}
 
 test-doc:
     cargo test --doc --workspace --exclude kithara-fuzz
 
+# Fast iteration: debug build, no heavy tests.
 test-fast:
     cargo nextest run --workspace --exclude kithara-fuzz --profile fast -E 'not binary(suite_heavy)'
 
 test-stress:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)'
+    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile {{test-cargo-profile}}
 
 test-all: test test-doc
 

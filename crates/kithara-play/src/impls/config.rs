@@ -151,6 +151,11 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
+    /// Shared tokio runtime handle for downloader tasks.
+    ///
+    /// When set, downloader threads reuse this runtime instead of creating
+    /// their own. When `None`, auto-detected from current context.
+    pub runtime: Option<kithara_platform::tokio::runtime::Handle>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     ///
     /// When set, all resources sharing the same worker decode on a single
@@ -226,6 +231,7 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
+            runtime: None,
             worker: None,
         })
     }
@@ -290,6 +296,7 @@ impl ResourceConfig {
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
+        file_config.runtime = self.runtime.clone();
 
         let mut config = AudioConfig::<kithara_file::File>::new(file_config);
 
@@ -371,6 +378,7 @@ impl ResourceConfig {
         if let Some(cancel) = self.cancel {
             hls_config = hls_config.with_cancel(cancel);
         }
+        hls_config.runtime = self.runtime;
 
         let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
 
