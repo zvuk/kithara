@@ -273,7 +273,7 @@ xcframework *ARGS:
 # Build XCFramework (debug) and run the Swift demo app.
 apple-demo:
     just xcframework --profile debug
-    cd apple && swift run KitharaDemo
+    cd apple && KITHARA_LOCAL_DEV=1 swift run KitharaDemo
 
 # Build XCFramework, zip, and compute checksum for SPM distribution.
 release-apple:
