@@ -317,6 +317,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
 opt-level = 2
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 2
 [profile.dev.package.symphonia-format-isomp4]
 opt-level = 2
 
