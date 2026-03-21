@@ -81,17 +81,17 @@ mod tests {
     fn patch_file_applies_replacements() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
-        std::fs::write(&path, "hello world, hello rust").unwrap();
+        fs::write(&path, "hello world, hello rust").unwrap();
         patch_file(&path, &[("hello", "hi")]).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi world, hi rust");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hi world, hi rust");
     }
 
     #[test]
     fn patch_file_no_match_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
-        std::fs::write(&path, "unchanged content").unwrap();
+        fs::write(&path, "unchanged content").unwrap();
         patch_file(&path, &[("missing", "replacement")]).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "unchanged content");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "unchanged content");
     }
 }

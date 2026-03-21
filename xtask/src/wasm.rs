@@ -1,0 +1,421 @@
+use std::{fs, path::Path, process::Command, sync::LazyLock};
+
+use anyhow::{Context, Result, bail};
+use cargo_metadata::MetadataCommand;
+use regex::Regex;
+
+use crate::util::check_tool;
+
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum WasmCommand {
+    /// Build WASM demo app via Trunk.
+    Build {
+        /// Build profile.
+        #[arg(long, default_value_t = crate::BuildProfile::Release)]
+        profile: crate::BuildProfile,
+    },
+    /// Trunk post-build hook: patch generated files for COEP compatibility.
+    Postbuild {
+        /// Trunk staging directory (defaults to `TRUNK_STAGING_DIR` env).
+        #[arg(long, env = "TRUNK_STAGING_DIR")]
+        staging_dir: String,
+    },
+}
+
+pub(crate) fn run(cmd: WasmCommand) -> Result<()> {
+    match cmd {
+        WasmCommand::Build { profile } => run_build(profile),
+        WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// wasm build
+// ---------------------------------------------------------------------------
+
+fn check_rust_target_nightly(target: &str) -> Result<bool> {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed", "--toolchain", "nightly"])
+        .output()
+        .context("rustup target list")?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|l| l == target))
+}
+
+fn check_rust_component_nightly(component: &str) -> Result<()> {
+    let output = Command::new("rustup")
+        .args(["component", "list", "--installed", "--toolchain", "nightly"])
+        .output()
+        .context("rustup component list")?;
+    let installed = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|l| l.starts_with(component));
+    if !installed {
+        bail!(
+            "{component} not installed. Run: rustup component add {component} --toolchain nightly"
+        );
+    }
+    Ok(())
+}
+
+fn run_build(profile: crate::BuildProfile) -> Result<()> {
+    // 1. Check prerequisites.
+    check_tool("trunk", &["--version"], "cargo install trunk")?;
+    check_tool(
+        "rustup",
+        &["run", "nightly", "rustc", "--version"],
+        "rustup toolchain install nightly",
+    )?;
+    if !check_rust_target_nightly("wasm32-unknown-unknown")? {
+        bail!(
+            "wasm32-unknown-unknown not installed. \
+             Run: rustup target add wasm32-unknown-unknown --toolchain nightly"
+        );
+    }
+    check_rust_component_nightly("rust-src")?;
+
+    // 2. Resolve wasm crate dir.
+    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
+    let root = metadata.workspace_root.as_std_path();
+    let wasm_dir = root.join("crates/kithara-wasm");
+
+    // 3. Run trunk build.
+    println!("==> Building kithara-wasm");
+    let mut cmd = Command::new("trunk");
+    cmd.args(["build", "--config", "Trunk.toml"]);
+    if matches!(profile, crate::BuildProfile::Release) {
+        cmd.arg("--release");
+    }
+    cmd.env("RUSTUP_TOOLCHAIN", "nightly");
+    cmd.current_dir(&wasm_dir);
+
+    let status = cmd.status().context("failed to run trunk build")?;
+    if !status.success() {
+        bail!("trunk build failed");
+    }
+
+    println!("==> Done! Output in {}/dist/", wasm_dir.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// wasm postbuild
+// ---------------------------------------------------------------------------
+
+// --- HTML transformations ---
+
+static RE_INTEGRITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#" integrity="[^"]*""#).expect("valid regex"));
+static RE_CROSSORIGIN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#" crossorigin="[^"]*""#).expect("valid regex"));
+static RE_MODULEPRELOAD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<link rel="modulepreload"[^>]*>"#).expect("valid regex"));
+static RE_PRELOAD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<link rel="preload"[^>]*>"#).expect("valid regex"));
+
+fn strip_html_attrs(content: &str) -> String {
+    let s = RE_INTEGRITY.replace_all(content, "");
+    let s = RE_CROSSORIGIN.replace_all(&s, "");
+    let s = RE_MODULEPRELOAD.replace_all(&s, "");
+    RE_PRELOAD.replace_all(&s, "").into_owned()
+}
+
+fn rewrite_paths(content: &str) -> String {
+    content
+        .replace("from '/kithara-wasm.js'", "from './kithara-wasm.js'")
+        .replace(
+            "module_or_path: '/kithara-wasm_bg.wasm'",
+            "module_or_path: './kithara-wasm_bg.wasm'",
+        )
+}
+
+// --- JS transformations ---
+
+const TEXT_DECODER_POLYFILL: &str = "\
+if(typeof TextDecoder===\"undefined\"){\
+globalThis.TextDecoder=class{constructor(){}\
+decode(b){if(!b||!b.length)return\"\";let r=\"\";\
+for(let i=0;i<b.length;i++)r+=String.fromCharCode(b[i]);return r}};\
+globalThis.TextEncoder=class{constructor(){}\
+encode(s){const a=new Uint8Array(s.length);\
+for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a}\
+encodeInto(s,d){const e=this.encode(s);d.set(e);\
+return{read:s.length,written:e.length}}}}\n";
+
+fn apply_text_decoder_polyfill(content: &str) -> String {
+    content.replace(
+        "let cachedTextDecoder",
+        &format!("{TEXT_DECODER_POLYFILL}let cachedTextDecoder"),
+    )
+}
+
+const BOOT_LOCK_FN: &str = "\
+function __wstLockedInit(s,mod,mem,m){\
+const bl=(m&&m.__wst_boot_lock_ptr)||0;\
+if(bl>0){\
+const li=new Int32Array(mem.buffer),lx=bl>>>2;\
+while(Atomics.compareExchange(li,lx,0,1)!==0)Atomics.wait(li,lx,1,10);}\
+try{s.initSync({module:mod,memory:mem,thread_stack_size:1048576});}\
+finally{if(bl>0){\
+const li2=new Int32Array(mem.buffer),lx2=bl>>>2;\
+Atomics.store(li2,lx2,0);Atomics.notify(li2,lx2);}}}";
+
+fn apply_inline_patches(content: &str) -> String {
+    content
+        // 1. Disable cleanup handler (8-byte leak per thread).
+        .replace(
+            "__cleanup_handler(exitStatePtr);",
+            "/* cleanup disabled: 8-byte leak per thread */",
+        )
+        // 2. Fix double-decrement bug in Worker error handler.
+        .replace(
+            "throw err;",
+            "if (typeof close === \"function\") { close(); }",
+        )
+        // 3. Inject boot lock function.
+        .replace(
+            "let __wstExitStatePtr = 0;",
+            &format!("let __wstExitStatePtr = 0; {BOOT_LOCK_FN}"),
+        )
+        // 4. Replace initSync with locked version.
+        .replace(
+            "shim.initSync({ module, memory, thread_stack_size: 1048576 });",
+            "__wstLockedInit(shim, module, memory, meta);",
+        )
+        // 5. Pass boot lock pointer to Workers.
+        .replace(
+            "__wst_parent_managed: true",
+            "__wst_parent_managed: true, __wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)",
+        )
+}
+
+// --- Player class generation ---
+
+static RE_PLAYER_CLASS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^export class Player\b").expect("valid regex"));
+static RE_PLAYER_NEW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^export function player_new\(").expect("valid regex"));
+static RE_PLAYER_FN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^export function (player_[a-z_]+)\(([^)]*)\)").expect("valid regex")
+});
+
+fn generate_player_class(js: &str) -> Option<String> {
+    if RE_PLAYER_CLASS.is_match(js) || !RE_PLAYER_NEW.is_match(js) {
+        return None;
+    }
+
+    let mut methods = Vec::new();
+    for cap in RE_PLAYER_FN.captures_iter(js) {
+        let fname = &cap[1];
+        let params = &cap[2];
+        let Some(method) = fname.strip_prefix("player_") else {
+            continue;
+        };
+        if method == "new" {
+            methods
+                .push("    constructor(readyPromise) { this._ready = readyPromise; }".to_owned());
+            methods.push(
+                "    static async create() \
+                 { const p = player_new(); const inst = new Player(p); await p; return inst; }"
+                    .to_owned(),
+            );
+        } else if params.is_empty() {
+            methods.push(format!("    {method}() {{ return {fname}(); }}"));
+        } else {
+            methods.push(format!(
+                "    {method}({params}) {{ return {fname}({params}); }}"
+            ));
+        }
+    }
+    methods.sort();
+    Some(format!(
+        "export class Player {{\n{}\n}}",
+        methods.join("\n")
+    ))
+}
+
+// --- checkRuntime JS ---
+
+const CHECK_RUNTIME_JS: &str = r#"
+
+// --- Auto-generated by xtask wasm postbuild ---
+
+/**
+ * Check if the browser environment supports SharedArrayBuffer + COEP/COOP.
+ * Returns { ok: boolean, reason?: string, waitingForReload?: boolean }.
+ */
+export function checkRuntime() {
+    const crossOriginIsolated = self.crossOriginIsolated === true;
+    const secureContext = self.isSecureContext === true;
+    const sharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
+
+    if (secureContext && sharedArrayBuffer && crossOriginIsolated) {
+        sessionStorage.removeItem('kithara_coi_reloaded');
+        return { ok: true };
+    }
+
+    const waitingForReload =
+        secureContext && !crossOriginIsolated &&
+        typeof navigator.serviceWorker !== 'undefined' &&
+        !navigator.serviceWorker.controller;
+
+    if (waitingForReload) {
+        navigator.serviceWorker.ready.then(() => {
+            if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
+                sessionStorage.removeItem('kithara_coi_reloaded');
+                return;
+            }
+            if (sessionStorage.getItem('kithara_coi_reloaded') === '1') return;
+            sessionStorage.setItem('kithara_coi_reloaded', '1');
+            window.location.reload();
+        }).catch(() => {});
+        return { ok: false, waitingForReload: true, reason: 'Waiting for COI service worker to activate' };
+    }
+
+    return {
+        ok: false,
+        waitingForReload: false,
+        reason: `secureContext=${secureContext} crossOriginIsolated=${crossOriginIsolated} sharedArrayBuffer=${sharedArrayBuffer}`,
+    };
+}
+"#;
+
+// --- postbuild orchestrator ---
+
+fn run_postbuild(staging_dir: &str) -> Result<()> {
+    let dir = Path::new(staging_dir);
+    anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
+
+    // 1. Patch index.html.
+    let index = dir.join("index.html");
+    let content = fs::read_to_string(&index).context("read index.html")?;
+    let content = strip_html_attrs(&content);
+    let content = rewrite_paths(&content);
+    fs::write(&index, content).context("write index.html")?;
+
+    // 2. Patch kithara-wasm.js.
+    let js = dir.join("kithara-wasm.js");
+    if js.exists() {
+        let content = fs::read_to_string(&js).context("read kithara-wasm.js")?;
+        let content = apply_text_decoder_polyfill(&content);
+        let mut content = content + CHECK_RUNTIME_JS;
+        if let Some(class) = generate_player_class(&content) {
+            content.push('\n');
+            content.push_str(&class);
+            println!("post-build: Player class appended");
+        }
+        fs::write(&js, content).context("write kithara-wasm.js")?;
+        println!("post-build: kithara-wasm.js patched");
+    }
+
+    // 3. Patch inline0.js files via glob.
+    let pattern = format!("{}/snippets/wasm_safe_thread-*/inline0.js", dir.display());
+    for entry in glob::glob(&pattern).context("glob inline0.js")? {
+        let path = entry.context("glob entry")?;
+        let content = fs::read_to_string(&path)?;
+        let content = apply_inline_patches(&content);
+        fs::write(&path, content)?;
+        println!("post-build: patched {}", path.display());
+    }
+
+    println!("post-build: done");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_integrity_and_crossorigin_attrs() {
+        let input = r#"<link rel="stylesheet" href="s.css" integrity="sha384-abc" crossorigin="anonymous">"#;
+        let result = strip_html_attrs(input);
+        assert_eq!(result, r#"<link rel="stylesheet" href="s.css">"#);
+    }
+
+    #[test]
+    fn strip_modulepreload_and_preload_tags() {
+        let input = r#"<link rel="modulepreload" href="foo.js"><p>keep</p><link rel="preload" href="bar.wasm" as="fetch">"#;
+        let result = strip_html_attrs(input);
+        assert_eq!(result, "<p>keep</p>");
+    }
+
+    #[test]
+    fn rewrite_absolute_to_relative_paths() {
+        let input = "from '/kithara-wasm.js'\nmodule_or_path: '/kithara-wasm_bg.wasm'";
+        let result = rewrite_paths(input);
+        assert_eq!(
+            result,
+            "from './kithara-wasm.js'\nmodule_or_path: './kithara-wasm_bg.wasm'"
+        );
+    }
+
+    #[test]
+    fn polyfill_text_decoder() {
+        let input = "let cachedTextDecoder = new TextDecoder();";
+        let result = apply_text_decoder_polyfill(input);
+        assert!(result.starts_with("if(typeof TextDecoder===\"undefined\")"));
+        assert!(result.contains("let cachedTextDecoder"));
+    }
+
+    #[test]
+    fn disable_cleanup_handler() {
+        let input = "something;\n__cleanup_handler(exitStatePtr);\nmore;";
+        let result = apply_inline_patches(input);
+        assert!(result.contains("/* cleanup disabled: 8-byte leak per thread */"));
+        assert!(!result.contains("__cleanup_handler"));
+    }
+
+    #[test]
+    fn fix_double_decrement() {
+        let input = "catch(err) { postMessage(err); throw err; }";
+        let result = apply_inline_patches(input);
+        assert!(result.contains("if (typeof close === \"function\") { close(); }"));
+        assert!(!result.contains("throw err;"));
+    }
+
+    #[test]
+    fn inject_boot_lock() {
+        let input = "let __wstExitStatePtr = 0;\nself.onmessage = ...";
+        let result = apply_inline_patches(input);
+        assert!(result.contains("function __wstLockedInit"));
+    }
+
+    #[test]
+    fn replace_init_sync_with_locked() {
+        let input = "shim.initSync({ module, memory, thread_stack_size: 1048576 });";
+        let result = apply_inline_patches(input);
+        assert!(result.contains("__wstLockedInit(shim, module, memory, meta);"));
+    }
+
+    #[test]
+    fn pass_boot_lock_ptr_to_workers() {
+        let input = "{ __wst_parent_managed: true }";
+        let result = apply_inline_patches(input);
+        assert!(result.contains("__wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)"));
+    }
+
+    #[test]
+    fn generate_player_class_wraps_exports() {
+        let js = "export function player_new() {}\n\
+                   export function player_play() {}\n\
+                   export function player_seek(pos) {}";
+        let class = generate_player_class(js).expect("should generate class");
+        assert!(class.contains("static async create()"));
+        assert!(class.contains("play() { return player_play(); }"));
+        assert!(class.contains("seek(pos) { return player_seek(pos); }"));
+    }
+
+    #[test]
+    fn player_class_skipped_when_native_export() {
+        let js = "export class Player { }";
+        assert!(generate_player_class(js).is_none());
+    }
+
+    #[test]
+    fn player_class_skipped_when_no_player_new() {
+        let js = "export function other_func() {}";
+        assert!(generate_player_class(js).is_none());
+    }
+}

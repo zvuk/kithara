@@ -8,10 +8,12 @@ mod arch;
 mod perf_compare;
 mod quality;
 mod util;
+mod wasm;
 
 use android::AndroidCommand;
 use apple::AppleCommand;
 use quality::QualityCommand;
+use wasm::WasmCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum BuildProfile {
@@ -62,6 +64,11 @@ enum Command {
         #[command(subcommand)]
         command: AppleCommand,
     },
+    /// WASM build and post-build tasks.
+    Wasm {
+        #[command(subcommand)]
+        command: WasmCommand,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -76,5 +83,6 @@ fn main() -> anyhow::Result<()> {
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),
+        Command::Wasm { command } => wasm::run(command),
     }
 }
