@@ -3,10 +3,10 @@ fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 3 }
 
-# Stress tests need most of the CPU — each reserves half the available
-# slots, so at most 2 run in parallel and nothing else starves them.
+# Stress tests that use blocking audio reads (recv_outcome_blocking)
+# need exclusive CPU — run one at a time.
 [[profile.default.overrides]]
-filter = "binary(suite_heavy)"
+filter = "binary(suite_stress)"
 threads-required = "num-cpus"
 
 [profile.ci]

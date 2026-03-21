@@ -121,6 +121,8 @@ impl Kithara {
             async move {
                 let mut config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
                 config.worker = Some(player.worker().clone());
+                config.host_sample_rate =
+                    std::num::NonZeroU32::new(player.engine().master_sample_rate());
                 if let Some(rt) = player.runtime() {
                     config.runtime = Some(rt.clone());
                 }

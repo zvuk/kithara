@@ -381,10 +381,7 @@ impl Engine for EngineImpl {
     }
 
     fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate;
-        }
-        self.session.query_sample_rate(self.config.sample_rate)
+        Self::master_sample_rate(self)
     }
 
     fn master_channels(&self) -> u16 {
@@ -414,6 +411,19 @@ impl Engine for EngineImpl {
 }
 
 impl EngineImpl {
+    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
+    ///
+    /// Returns the config default if the engine is not running yet.
+    /// Used to pre-initialise the resampler in `ResourceConfig` so that
+    /// `make_sincs` runs during `Audio::new()` (off the worker thread)
+    /// instead of lazily on the first `step_track()` call.
+    pub fn master_sample_rate(&self) -> u32 {
+        if !self.running.load(Ordering::Acquire) {
+            return self.config.sample_rate;
+        }
+        self.session.query_sample_rate(self.config.sample_rate)
+    }
+
     /// Inject a test slot handle without starting the audio session.
     #[cfg(test)]
     pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {

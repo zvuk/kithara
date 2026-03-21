@@ -632,6 +632,17 @@ impl PlayerImpl {
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
 
+        // Propagate host sample rate so the resampler is already initialised
+        // with the correct ratio.  Without this, the resampler starts in
+        // passthrough (host_sr = 0) and is recreated on the first worker
+        // step when the real host rate becomes visible — the expensive
+        // `make_sincs` call blocks the worker thread and starves other
+        // tracks during crossfade.
+        let host_sr = self.engine.master_sample_rate();
+        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
+            resource.set_host_sample_rate(sr);
+        }
+
         let src = Arc::clone(resource.src());
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
         let arc_resource = Arc::new(Mutex::new(player_resource));

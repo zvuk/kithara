@@ -67,7 +67,7 @@ impl Resource {
     ///
     /// Audio events from the reader are forwarded to the bus as `Event::Audio`.
     /// Use this for custom sources.
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let bus = EventBus::new(64);
 

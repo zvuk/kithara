@@ -182,6 +182,14 @@ pub struct Audio<S> {
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
+    /// Whether non-blocking recv is active.
+    ///
+    /// Returns `false` after `seek()` until `preload()` is called again.
+    #[must_use]
+    pub fn is_preloaded(&self) -> bool {
+        self.preloaded
+    }
+
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
     pub fn pcm_rx(&mut self) -> &mut HeapCons<Fetch<PcmChunk>> {
@@ -414,8 +422,11 @@ impl<S> Audio<S> {
             worker.wake();
         }
 
-        // Reset preload flag — first read after seek will be blocking if needed
-        self.preloaded = false;
+        // Keep preloaded flag unchanged.  Resetting to false switches
+        // Audio::read() to blocking recv, which parks the audio callback
+        // thread on every empty ringbuf poll — causing persistent crossfade
+        // glitches.  The preloaded flag is a one-way latch: once preload()
+        // sets it to true, it stays true for the lifetime of this Audio.
 
         trace!(?position, epoch, "seek initiated via Timeline");
         Ok(())
@@ -569,7 +580,7 @@ impl<S> Audio<S> {
         self.current_chunk = Some(chunk);
         self.chunk_offset = 0;
 
-        // Transition to Playing on first chunk received
+        // Transition to Playing on first chunk received.
         if matches!(
             self.consumer_phase,
             ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }

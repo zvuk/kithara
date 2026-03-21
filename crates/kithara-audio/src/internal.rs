@@ -38,6 +38,11 @@ pub mod audio {
     pub fn seek_epoch<S>(audio: &Audio<S>) -> u64 {
         audio.test_seek_epoch()
     }
+
+    #[must_use]
+    pub fn is_preloaded<S>(audio: &Audio<S>) -> bool {
+        audio.is_preloaded()
+    }
 }
 
 pub mod source {

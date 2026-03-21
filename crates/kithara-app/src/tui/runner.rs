@@ -60,6 +60,7 @@ pub(super) async fn run_tui(
             }
         };
         config.worker = Some(player.worker().clone());
+        config.host_sample_rate = std::num::NonZeroU32::new(player.engine().master_sample_rate());
         if let Some(rt) = player.runtime() {
             config.runtime = Some(rt.clone());
         }
@@ -391,6 +392,7 @@ fn switch_track(
     let resource = handle.block_on(async {
         let mut config = ResourceConfig::new(url)?;
         config.worker = Some(player.worker().clone());
+        config.host_sample_rate = std::num::NonZeroU32::new(player.engine().master_sample_rate());
         if let Some(rt) = player.runtime() {
             config.runtime = Some(rt.clone());
         }

@@ -154,6 +154,10 @@ name = "suite_heavy"
 path = "tests/suite_heavy.rs"
 
 [[test]]
+name = "suite_stress"
+path = "tests/suite_stress.rs"
+
+[[test]]
 name = "suite_perf"
 path = "perf/suite_perf.rs"
 required-features = ["perf"]
