@@ -1,5 +1,5 @@
 ruleDirs:
-  - rules/ast-grep
+  - .config/ast-grep
 languageGlobs:
   Yaml:
     - Cargo.toml
