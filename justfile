@@ -237,7 +237,7 @@ wasm-test:
 
 # Build wasm demo app.
 wasm-build:
-    bash crates/kithara-wasm/build-wasm.sh
+    cargo xtask wasm build
 
 wasm-size-check:
     @toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"; \
@@ -257,18 +257,18 @@ wasm-size-check:
 
 # Build Android JNI libraries and Kotlin bindings.
 android *ARGS:
-    cargo xtask android {{ARGS}}
+    cargo xtask android build {{ARGS}}
 
 # Build release AAR (includes JNI libs and Kotlin bindings).
 android-aar:
-    cargo xtask android --profile release
+    cargo xtask android build --profile release
     cd android && ./gradlew :lib:assembleRelease -Pkithara.release=true -x generateKitharaFfi
     @echo "==> AAR: android/lib/build/outputs/aar/lib-release.aar"
 # --- apple ---
 
 # Build XCFramework for Apple platforms.
 xcframework *ARGS:
-    cargo xtask xcframework {{ARGS}}
+    cargo xtask apple build {{ARGS}}
 
 # Build XCFramework (debug) and run the Swift demo app.
 apple-demo:

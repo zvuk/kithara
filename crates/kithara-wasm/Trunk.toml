@@ -11,5 +11,5 @@ headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder
 # Strip integrity/crossorigin attrs that break under COEP require-corp.
 [[hooks]]
 stage = "post_build"
-command = "bash"
-command_arguments = ["post-build.sh"]
+command = "cargo"
+command_arguments = ["xtask", "wasm", "postbuild"]
