@@ -21,10 +21,12 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{
+    thread,
     time::{Duration, Instant, sleep},
     tokio,
 };
 use kithara_test_utils::{TestHttpServer, TestTempDir, create_saw_wav, temp_dir};
+use tokio::time::timeout;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -269,7 +271,7 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        tokio::time::timeout(READ_TIMEOUT, resource.preload())
+        timeout(READ_TIMEOUT, resource.preload())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"));
         let read = resource.read(&mut buf);
@@ -764,7 +766,7 @@ async fn stress_offline_crossfade_no_gaps() {
                 .with_worker(w);
             let audio = Audio::<Stream<Hls>>::new(acfg).await.expect("HLS audio");
             let mut r = kithara::play::internal::offline::resource_from_reader(audio);
-            tokio::time::timeout(READ_TIMEOUT, r.preload())
+            timeout(READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload");
             r
@@ -821,7 +823,7 @@ async fn stress_offline_crossfade_no_gaps() {
             // Simulate real audio callback period (~11.6ms between blocks).
             // Without this, the tight loop outpaces the worker, creating
             // artificial silence that wouldn't happen in production.
-            kithara_platform::thread::sleep(block_budget.saturating_sub(d));
+            thread::sleep(block_budget.saturating_sub(d));
         }
         if cur_silence > max_silence {
             max_silence = cur_silence;

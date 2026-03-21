@@ -6,6 +6,7 @@ use std::io;
 
 use bytes::Bytes;
 use futures::StreamExt;
+use kithara_platform::tokio::sync::mpsc::channel;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
 use kithara_test_utils::kithara;
@@ -194,7 +195,7 @@ async fn writer_with_offset_cancellation() {
     let start_offset: u64 = 500;
 
     // Use a channel-based stream so we can control when chunks arrive.
-    let (tx, rx) = kithara_platform::tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(4);
+    let (tx, rx) = channel::<Result<Bytes, io::Error>>(4);
     let source = tokio_stream::wrappers::ReceiverStream::new(rx);
 
     let cancel = CancellationToken::new();

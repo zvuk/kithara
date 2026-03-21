@@ -5,7 +5,7 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
-use kithara_platform::{tokio, tokio::sync::broadcast};
+use kithara_platform::tokio::{sync::broadcast, task::spawn as task_spawn};
 use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
@@ -75,7 +75,7 @@ impl Resource {
         // Forward AudioEvents from the generic PcmReader into the unified EventBus.
         let forward_bus = bus.clone();
         let mut decode_rx = reader.decode_events();
-        tokio::task::spawn(async move {
+        task_spawn(async move {
             loop {
                 match decode_rx.recv().await {
                     Ok(event) => forward_bus.publish(event),

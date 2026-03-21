@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use kithara_platform::{tokio, tokio::sync::Notify};
+use kithara_platform::tokio::sync::{Notify, futures::Notified};
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
 
 pub struct FileCoord {
@@ -87,11 +87,11 @@ impl FileCoord {
         self.demand.take()
     }
 
-    pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
+    pub(crate) fn notified_reader_advance(&self) -> Notified<'_> {
         self.reader_advanced.notified()
     }
 
-    pub(crate) fn notified_downloader_wake(&self) -> tokio::sync::futures::Notified<'_> {
+    pub(crate) fn notified_downloader_wake(&self) -> Notified<'_> {
         self.downloader_wake.notified()
     }
 }

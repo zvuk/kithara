@@ -8,7 +8,10 @@ use kithara::{
     play::{Engine, EngineEvent, PlayerEvent},
     prelude::{PlayerImpl, Resource, ResourceConfig},
 };
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{
+    sync::broadcast::{Receiver, error::RecvError},
+    task::{JoinHandle, spawn_blocking},
+};
 
 use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
@@ -85,7 +88,7 @@ pub(super) async fn run_tui(
     let player_for_ui = player.clone();
     let ui_tx_for_loop = ui_tx.clone();
     let urls_for_loop = urls.clone();
-    let mut ui_handle = tokio::task::spawn_blocking(move || {
+    let mut ui_handle = spawn_blocking(move || {
         run_ui_loop(
             &player_for_ui,
             &urls_for_loop,
@@ -438,10 +441,7 @@ fn switch_track(
     Ok(())
 }
 
-fn forward_player_events(
-    mut rx: tokio::sync::broadcast::Receiver<PlayerEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+fn forward_player_events(mut rx: Receiver<PlayerEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -464,10 +464,7 @@ fn forward_player_events(
     })
 }
 
-fn forward_engine_events(
-    mut rx: tokio::sync::broadcast::Receiver<EngineEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+fn forward_engine_events(mut rx: Receiver<EngineEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -491,10 +488,10 @@ fn forward_engine_events(
 }
 
 fn forward_source_events(
-    mut rx: tokio::sync::broadcast::Receiver<kithara::prelude::Event>,
+    mut rx: Receiver<kithara::prelude::Event>,
     source: String,
     tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {

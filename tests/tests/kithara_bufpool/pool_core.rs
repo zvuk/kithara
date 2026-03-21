@@ -1,4 +1,5 @@
 use kithara_bufpool::internal::*;
+use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::kithara;
 
 #[kithara::test]
@@ -178,7 +179,7 @@ async fn test_multi_threaded_contention() {
     let mut handles = Vec::with_capacity(num_threads);
     for t in 0..num_threads {
         let pool = Arc::clone(&pool);
-        handles.push(kithara_platform::tokio::task::spawn_blocking(move || {
+        handles.push(spawn_blocking(move || {
             for i in 0..iterations {
                 let mut buf = pool.get_with(|b| b.resize(64, 0));
                 let tag = u8::try_from((t * iterations + i) & 0xFF).expect("tag must fit into u8");

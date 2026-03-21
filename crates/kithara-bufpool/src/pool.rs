@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, thread::current_thread_id};
 
 use crate::growth::BudgetExhausted;
 
@@ -166,7 +166,7 @@ where
             clippy::cast_possible_truncation,
             reason = "modulo SHARDS guarantees result fits in usize"
         )]
-        let idx = (kithara_platform::thread::current_thread_id() as usize) % SHARDS;
+        let idx = (current_thread_id() as usize) % SHARDS;
         idx
     }
 

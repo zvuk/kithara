@@ -14,7 +14,7 @@ use kithara::{
     file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -108,7 +108,7 @@ async fn stress_random_seek_read_synthetic_wav(tracing_setup: ()) {
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     // Steps 5-7: Run seek+read loop in blocking thread
-    let result = kithara_platform::tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 

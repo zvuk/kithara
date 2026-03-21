@@ -20,7 +20,10 @@ use kithara_integration_tests::hls_fixture::{
     TestServer,
     abr::{AbrTestServer, master_playlist},
 };
-use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{
+    time::sleep,
+    tokio::task::{spawn, spawn_blocking},
+};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -145,7 +148,7 @@ async fn test_driver_abr_seek_backward(
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let switches_clone = variant_switches.clone();
 
-    kithara_platform::tokio::task::spawn(async move {
+    spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
                 Event::Hls(HlsEvent::VariantApplied {

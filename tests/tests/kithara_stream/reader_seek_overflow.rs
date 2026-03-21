@@ -38,7 +38,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
@@ -181,7 +181,7 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
         source: Some(source),
     };
     // Uses a simple blocking wrapper since MockStream::create is trivial.
-    kithara_platform::tokio::runtime::Runtime::new()
+    Runtime::new()
         .expect("runtime creation should succeed")
         .block_on(Stream::new(config))
         .expect("stream creation should succeed")

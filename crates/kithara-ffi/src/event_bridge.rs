@@ -9,7 +9,7 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara::play::{PlayerEvent, PlayerImpl};
-use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio::sync::broadcast};
+use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{observer::PlayerObserver, player::QueueEntry, types::FfiPlayerEvent};
@@ -54,7 +54,7 @@ impl EventBridge {
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             loop {
-                kithara_platform::tokio::select! {
+                tokio::select! {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {

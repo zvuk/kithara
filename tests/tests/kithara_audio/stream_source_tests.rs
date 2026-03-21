@@ -18,7 +18,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
     mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
 };
-use kithara_platform::{Mutex, thread};
+use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, DemandSlot, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream, StreamResult,
@@ -306,7 +306,7 @@ fn test_stream_from_source(source: TestSource) -> Stream<TestStream> {
     let config = TestConfig {
         source: Some(source),
     };
-    kithara_platform::tokio::runtime::Runtime::new()
+    Runtime::new()
         .unwrap()
         .block_on(Stream::new(config))
         .unwrap()

@@ -5,7 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_platform::{sync::mpsc, tokio};
+use kithara_platform::{sync::mpsc, tokio, tokio::task::spawn as task_spawn};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 
 use crate::commands::WorkerCmd;
@@ -23,7 +23,7 @@ const CROSSFADE_SECONDS: f32 = 5.0;
 pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     clog!("[WORKER] engine worker started");
 
-    tokio::task::spawn(async move {
+    task_spawn(async move {
         clog!("[WORKER] spawn: creating PlayerConfig");
         let config = PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS);
         clog!("[WORKER] spawn: creating PlayerImpl");

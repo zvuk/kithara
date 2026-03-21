@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     DemandSlot, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
@@ -138,7 +138,7 @@ fn stream_must_use_source_timeline_as_single_position_truth() {
         source: Some(TimelineSource::new(vec![1, 2, 3, 4], timeline.clone())),
     };
 
-    let mut stream = kithara_platform::tokio::runtime::Runtime::new()
+    let mut stream = Runtime::new()
         .expect("runtime")
         .block_on(Stream::<TimelineStream>::new(config))
         .expect("stream");
@@ -175,7 +175,7 @@ fn read_must_succeed_while_flushing() {
         source: Some(TimelineSource::new(data, timeline.clone())),
     };
 
-    let mut stream = kithara_platform::tokio::runtime::Runtime::new()
+    let mut stream = Runtime::new()
         .expect("runtime")
         .block_on(Stream::<TimelineStream>::new(config))
         .expect("stream");

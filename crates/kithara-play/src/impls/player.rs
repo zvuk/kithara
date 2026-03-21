@@ -13,7 +13,10 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, tokio::sync::broadcast};
+use kithara_platform::{
+    Mutex,
+    tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
+};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
 use tracing::{debug, warn};
@@ -137,7 +140,7 @@ impl PlayerImpl {
     /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
     /// the app's runtime instead of creating per-stream runtimes.
     #[must_use]
-    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.engine.runtime()
     }
 

@@ -15,7 +15,11 @@ use std::{
 };
 
 use derivative::Derivative;
-use kithara_platform::{Condvar, Mutex};
+use kithara_platform::{
+    Condvar, Mutex,
+    thread::yield_now,
+    time::{Duration as PlatformDuration, Instant},
+};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -369,9 +373,8 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             );
 
             hang_tick!();
-            kithara_platform::thread::yield_now();
-            let deadline = kithara_platform::time::Instant::now()
-                + kithara_platform::time::Duration::from_millis(50);
+            yield_now();
+            let deadline = Instant::now() + PlatformDuration::from_millis(50);
             let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }

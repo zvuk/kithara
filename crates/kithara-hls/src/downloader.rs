@@ -15,6 +15,7 @@ use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::{BoxFuture, time::Instant, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{DownloadCursor, Downloader, DownloaderIo, PlanOutcome};
+use tokio::task::yield_now as task_yield_now;
 use tracing::{debug, trace};
 use url::Url;
 
@@ -802,7 +803,7 @@ impl HlsDownloader {
 
     async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
         if self.coord.timeline().is_flushing() {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             return None;
         }
 
@@ -1036,7 +1037,7 @@ impl HlsDownloader {
 
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
         if self.coord.timeline().is_flushing() {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             return PlanOutcome::Idle;
         }
 
@@ -1564,7 +1565,7 @@ mod tests {
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_platform::time::Instant;
+    use kithara_platform::{Mutex, time::Instant};
     use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
     use kithara_stream::{AudioCodec, Downloader, PlanOutcome, Timeline};
     use kithara_test_utils::kithara;
@@ -1908,7 +1909,7 @@ mod tests {
             AssetResourceState::Active
         );
 
-        let segments = kithara_platform::Mutex::new(StreamIndex::new(1, 1));
+        let segments = Mutex::new(StreamIndex::new(1, 1));
         let coord = crate::coord::HlsCoord::new(
             CancellationToken::new(),
             Timeline::new(),

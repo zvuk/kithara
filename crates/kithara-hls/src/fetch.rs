@@ -813,6 +813,7 @@ mod tests {
     use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
+    use tokio::{task::yield_now as task_yield_now, time::sleep as tokio_sleep};
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};
     use url::Url;
@@ -948,7 +949,7 @@ mod tests {
     ) -> Result<ByteStream, NetError> {
         SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
         let stream = stream::once(async move {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             Ok(Bytes::from(format!("payload:{url}")))
         });
         Ok(ByteStream::without_headers(Box::pin(stream)))
@@ -961,7 +962,7 @@ mod tests {
     ) -> Result<ByteStream, NetError> {
         SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
         let stream = stream::once(async move {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            tokio_sleep(Duration::from_millis(25)).await;
             Ok(Bytes::from(format!("payload:{url}")))
         });
         Ok(ByteStream::without_headers(Box::pin(stream)))

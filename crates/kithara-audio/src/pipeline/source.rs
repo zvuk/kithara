@@ -15,7 +15,7 @@ use std::{
 use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{
     Fetch, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
 };
@@ -914,7 +914,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn decode_next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             hang_tick!();
-            kithara_platform::thread::yield_now();
+            yield_now();
 
             // Exit immediately when a seek is pending so the worker
             // loop can call apply_pending_seek().  This guard is

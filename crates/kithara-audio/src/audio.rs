@@ -14,9 +14,14 @@ use std::{
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
-    tokio,
-    tokio::sync::{Notify, broadcast},
+    thread::park_timeout,
+    tokio::{
+        sync::{Notify, broadcast},
+        task::spawn_blocking,
+    },
 };
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
@@ -521,15 +526,15 @@ impl<S> Audio<S> {
     fn wait_for_fetch() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            kithara_platform::thread::park_timeout(RECV_BACKOFF);
+            park_timeout(RECV_BACKOFF);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
-            if kithara_platform::thread::is_worker_thread() {
-                kithara_platform::thread::park_timeout(RECV_BACKOFF);
+            if is_worker_thread() {
+                park_timeout(RECV_BACKOFF);
             } else {
-                kithara_platform::thread::sleep(RECV_BACKOFF);
+                thread_sleep(RECV_BACKOFF);
             }
         }
     }
@@ -616,7 +621,7 @@ where
         debug!("Audio::new — Stream created");
 
         debug!("Audio::new — spawning probe task...");
-        let stream = tokio::task::spawn_blocking(move || {
+        let stream = spawn_blocking(move || {
             let mut stream = stream;
             let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
             let _ = stream.read(&mut probe_buf);
@@ -649,7 +654,7 @@ where
         };
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
-        let decoder = tokio::task::spawn_blocking(move || {
+        let decoder = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
                 kithara_decode::DecoderFactory::create_from_media_info(
                     shared_stream,

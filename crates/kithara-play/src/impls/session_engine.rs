@@ -13,7 +13,11 @@ use firewheel::{
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
-use kithara_platform::{Mutex, sync::mpsc};
+use kithara_platform::{
+    Mutex,
+    sync::mpsc,
+    thread::{sleep as thread_sleep, spawn_named},
+};
 #[cfg(not(target_arch = "wasm32"))]
 use ringbuf::{
     HeapCons,
@@ -189,7 +193,7 @@ impl SessionClient {
                 Ok(()) => return Ok(()),
                 Err(returned) => {
                     pending = returned;
-                    kithara_platform::thread::sleep(Duration::from_micros(100));
+                    thread_sleep(Duration::from_micros(100));
                 }
             }
         }
@@ -377,7 +381,7 @@ fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
             let _ = reply_tx.send_sync(reply);
             continue;
         }
-        kithara_platform::thread::sleep(Duration::from_micros(100));
+        thread_sleep(Duration::from_micros(100));
     }
 }
 
@@ -388,7 +392,7 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
         SESSION_CLIENT
             .get_or_init(|| {
                 let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(64).split();
-                let _ = kithara_platform::thread::spawn_named("kithara-engine", move || {
+                let _ = spawn_named("kithara-engine", move || {
                     engine_thread(cmd_rx);
                 });
                 Arc::new(SessionClient {

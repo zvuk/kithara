@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
+use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration};
 use kithara_storage::WaitOutcome;
 
 use crate::{
@@ -208,7 +208,7 @@ impl<T: StreamType> Read for Stream<T> {
                         }
                         // No seek — data simply isn't ready yet, spin.
                         hang_tick!();
-                        kithara_platform::thread::yield_now();
+                        yield_now();
                         continue;
                     }
                     return Err(io::Error::other(msg));
@@ -222,7 +222,7 @@ impl<T: StreamType> Read for Stream<T> {
                         // Some sources use Interrupted as a recoverable
                         // "retry wait_range" signal when seek is not active.
                         hang_tick!();
-                        kithara_platform::thread::yield_now();
+                        yield_now();
                         continue;
                     }
                     // Use `Other` instead of `Interrupted` because Symphonia
@@ -260,7 +260,7 @@ impl<T: StreamType> Read for Stream<T> {
                 ReadOutcome::Retry => {
                     // Resource evicted — go back to wait_range.
                     hang_tick!();
-                    kithara_platform::thread::yield_now();
+                    yield_now();
                     continue;
                 }
             }

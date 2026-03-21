@@ -12,7 +12,10 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_platform::time::{Instant, sleep};
+use kithara_platform::{
+    time::{Instant, sleep},
+    tokio::task::spawn,
+};
 use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -129,7 +132,7 @@ async fn live_stress_real_mp3_seek_read_cache(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = kithara_platform::tokio::task::spawn(async move {
+    let events_task = spawn(async move {
         while let Ok(event) = events.recv().await {
             let Event::File(file_event) = event else {
                 continue;

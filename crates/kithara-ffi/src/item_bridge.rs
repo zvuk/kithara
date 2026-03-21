@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::tokio::sync::broadcast;
+use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -43,7 +43,7 @@ impl ItemEventBridge {
         crate::FFI_RUNTIME.spawn(async move {
             let mut last_buffered = None;
             loop {
-                kithara_platform::tokio::select! {
+                tokio::select! {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {

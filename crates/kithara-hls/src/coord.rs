@@ -5,7 +5,10 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize},
 };
 
-use kithara_platform::{Condvar, tokio, tokio::sync::Notify};
+use kithara_platform::{
+    Condvar, tokio,
+    tokio::sync::{Notify, futures::Notified},
+};
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
 use tokio_util::sync::CancellationToken;
 
@@ -85,7 +88,7 @@ impl HlsCoord {
         self.timeline.clone()
     }
 
-    pub(crate) fn notified_reader_advanced(&self) -> tokio::sync::futures::Notified<'_> {
+    pub(crate) fn notified_reader_advanced(&self) -> Notified<'_> {
         self.reader_advanced.notified()
     }
 }

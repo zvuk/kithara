@@ -13,7 +13,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::{StreamExt, stream::FuturesUnordered};
-use kithara_platform::{JoinHandle, MaybeSend, tokio};
+use kithara_platform::{
+    JoinHandle, MaybeSend,
+    thread::{spawn_named, yield_now},
+    tokio,
+};
+#[cfg(target_arch = "wasm32")]
+use tokio::task::spawn as task_spawn;
+use tokio::task::yield_now as task_yield_now;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -98,7 +105,7 @@ impl Backend {
             let _ = runtime;
             // On WASM, spawn the downloader as an async task on the current
             // Worker's tokio runtime instead of creating a dedicated Web Worker.
-            tokio::task::spawn(Self::run_downloader(downloader, task_cancel));
+            task_spawn(Self::run_downloader(downloader, task_cancel));
             None
         };
 
@@ -140,7 +147,7 @@ impl Backend {
         // with its own current-thread runtime.
         debug!("Backend: fallback — creating dedicated current-thread runtime");
         let id = DOWNLOAD_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        WorkerHandle::Thread(kithara_platform::thread::spawn_named(
+        WorkerHandle::Thread(spawn_named(
             format!("kithara-download-worker-{id}"),
             move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -181,7 +188,7 @@ impl Backend {
             };
 
             hang_tick!();
-            kithara_platform::thread::yield_now();
+            yield_now();
             made_progress |= throttle_progress;
 
             let control = match outcome {
@@ -222,7 +229,7 @@ impl Backend {
             // 4. Periodic yield (only when not throttled — backpressure loop
             //    already yields to runtime via wait_ready).
             if made_progress && !dl.should_throttle() && steps_since_yield >= yield_interval {
-                tokio::task::yield_now().await;
+                task_yield_now().await;
                 steps_since_yield = 0;
             }
         }
@@ -318,7 +325,7 @@ impl Backend {
             () = cancel.cancelled() => LoopControl::Exit,
             () = dl.demand_signal() => {
                 // Yield to let other tasks run (e.g. TUI updates).
-                tokio::task::yield_now().await;
+                task_yield_now().await;
                 // Completing an idle wait is forward progress: the downloader
                 // successfully blocked until woken.  Without this the hang
                 // detector fires on legitimate post-download idle (all
@@ -335,7 +342,7 @@ impl Backend {
         plans: Vec<D::Plan>,
     ) -> LoopControl {
         if plans.is_empty() {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             return LoopControl::Restart;
         }
 
@@ -505,6 +512,7 @@ mod tests {
     use std::{error::Error as StdError, fmt, future, sync::Arc, time::Duration};
 
     use kithara_platform::{BoxFuture, Mutex, tokio::sync::Notify};
+    use tokio::time::{sleep as tokio_sleep, timeout as tokio_timeout};
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -696,7 +704,7 @@ mod tests {
             async move {
                 while !wake_cancel.is_cancelled() {
                     wake_notify.notify_one();
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio_sleep(Duration::from_millis(10)).await;
                 }
             }
         });
@@ -705,7 +713,7 @@ mod tests {
         // Idle wakeups with successful demand_signal() count as progress,
         // so the hang detector must NOT fire.  Let it run for 1.5× the
         // timeout and verify it stays alive.
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        tokio_sleep(Duration::from_millis(1500)).await;
         assert!(
             !handle.is_finished(),
             "downloader should stay alive during idle wakeups"
@@ -805,7 +813,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let handle = tokio::spawn(Backend::run_downloader(downloader, cancel.clone()));
 
-        tokio::time::timeout(Duration::from_millis(250), first_commit.notified())
+        tokio_timeout(Duration::from_millis(250), first_commit.notified())
             .await
             .expect("first batch item must commit before the slowest fetch completes");
         assert_eq!(

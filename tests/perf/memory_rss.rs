@@ -20,7 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
 use memory_stats::memory_stats;
 use tracing::info;
@@ -68,7 +68,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let samples = spawn_blocking(move || {
             let mut buf = vec![0f32; 4096];
             let mut rss_samples = Vec::new();
-            let start = kithara_platform::time::Instant::now();
+            let start = Instant::now();
             let mut last_sample = start;
 
             while start.elapsed() < Duration::from_secs(BUDGET_PLAYBACK_SECS) {
@@ -81,7 +81,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                     if let Some(stats) = memory_stats() {
                         rss_samples.push(stats.physical_mem);
                     }
-                    last_sample = kithara_platform::time::Instant::now();
+                    last_sample = Instant::now();
                 }
             }
             rss_samples
@@ -155,7 +155,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        let start = kithara_platform::time::Instant::now();
+        let start = Instant::now();
         let mut warmup_rss = None;
         let mut final_rss = 0usize;
 

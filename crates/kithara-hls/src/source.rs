@@ -17,6 +17,7 @@ use kithara_assets::{AssetResourceState, ResourceKey};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{
     Condvar, Mutex,
+    thread::yield_now,
     time::{Duration, Instant},
     tokio,
     tokio::sync::Notify,
@@ -919,7 +920,7 @@ impl Source for HlsSource {
             segments = self.segments.lock_sync();
 
             hang_tick!();
-            kithara_platform::thread::yield_now();
+            yield_now();
             let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
             let (_segments, _wait_result) =
                 self.coord.condvar.wait_sync_timeout(segments, deadline);

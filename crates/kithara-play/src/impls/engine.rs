@@ -16,7 +16,10 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, tokio::sync::broadcast};
+use kithara_platform::{
+    Mutex,
+    tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
+};
 use portable_atomic::AtomicF32;
 #[cfg(test)]
 use ringbuf::HeapRb;
@@ -104,7 +107,7 @@ pub struct EngineImpl {
     ///
     /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
-    runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    runtime: Option<RuntimeHandle>,
 }
 
 impl EngineImpl {
@@ -133,7 +136,7 @@ impl EngineImpl {
             session,
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::new(),
-            runtime: kithara_platform::tokio::runtime::Handle::try_current().ok(),
+            runtime: RuntimeHandle::try_current().ok(),
         }
     }
 
@@ -215,7 +218,7 @@ impl EngineImpl {
     /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
     /// the app's runtime instead of spawning per-stream runtimes.
     #[must_use]
-    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.runtime.as_ref()
     }
 
