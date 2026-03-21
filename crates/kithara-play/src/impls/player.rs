@@ -141,6 +141,20 @@ impl PlayerImpl {
         self.engine.runtime()
     }
 
+    /// Apply shared worker, host sample rate, and runtime to a resource
+    /// config so the resource integrates with this player's engine.
+    ///
+    /// Call this before [`Resource::new`] to ensure the resource shares
+    /// the player's decode thread, resampler is pre-initialised with the
+    /// correct ratio, and downloaders reuse the app's tokio runtime.
+    pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
+        config.worker = Some(self.engine.worker().clone());
+        config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
+        if let Some(rt) = self.engine.runtime() {
+            config.runtime = Some(rt.clone());
+        }
+    }
+
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.items.lock_sync().len()

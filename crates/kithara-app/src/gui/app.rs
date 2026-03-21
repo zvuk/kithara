@@ -120,12 +120,7 @@ impl Kithara {
         Task::perform(
             async move {
                 let mut config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
-                config.worker = Some(player.worker().clone());
-                config.host_sample_rate =
-                    std::num::NonZeroU32::new(player.engine().master_sample_rate());
-                if let Some(rt) = player.runtime() {
-                    config.runtime = Some(rt.clone());
-                }
+                player.prepare_config(&mut config);
                 let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
 
                 // Single-slot model: always use slot 0 to avoid index overflow.

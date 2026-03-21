@@ -59,11 +59,7 @@ pub(super) async fn run_tui(
                 continue;
             }
         };
-        config.worker = Some(player.worker().clone());
-        config.host_sample_rate = std::num::NonZeroU32::new(player.engine().master_sample_rate());
-        if let Some(rt) = player.runtime() {
-            config.runtime = Some(rt.clone());
-        }
+        player.prepare_config(&mut config);
         match Resource::new(config).await {
             Ok(resource) => {
                 let source_events = resource.subscribe();
@@ -391,11 +387,7 @@ fn switch_track(
     let url = &urls[index];
     let resource = handle.block_on(async {
         let mut config = ResourceConfig::new(url)?;
-        config.worker = Some(player.worker().clone());
-        config.host_sample_rate = std::num::NonZeroU32::new(player.engine().master_sample_rate());
-        if let Some(rt) = player.runtime() {
-            config.runtime = Some(rt.clone());
-        }
+        player.prepare_config(&mut config);
         Resource::new(config).await
     })?;
     let events = resource.subscribe();
