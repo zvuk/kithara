@@ -2305,9 +2305,9 @@ dependencies = [
 
 [[package]]
 name = "firewheel-graph"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50e0fbec6ce61420f55a2a80f81a413dece71c2761ee061ac02c4eb648959b72"
+checksum = "5170837306fe74dc919ec5a7c27eb9bd7a732af7856fdd8ab1f47bb9c0625adc"
 dependencies = [
  "arrayvec",
  "bevy_platform",
@@ -7616,7 +7616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.59.0",

@@ -16,7 +16,7 @@ stages:
     - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
 
 default:
-  image: rust:1.88
+  image: rust:latest
   tags:
     - cce-feature
 
@@ -100,7 +100,7 @@ test:
 msrv:
   stage: test
   needs: [lint]
-  image: rust:1.88
+  image: rust:1.89
   before_script:
     - !reference [.setup, before_script]
   script:
