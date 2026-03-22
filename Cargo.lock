@@ -3954,6 +3954,7 @@ dependencies = [
  "kithara-play",
  "kithara-storage",
  "kithara-stream",
+ "kithara-workspace-hack",
  "libfuzzer-sys",
  "tempfile",
  "tokio-util",
@@ -9942,6 +9943,7 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "glob",
+ "kithara-workspace-hack",
  "regex",
  "tempfile",
 ]
