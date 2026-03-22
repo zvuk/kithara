@@ -18,7 +18,8 @@ filter = """
   test(stress_chunk_integrity) |
   test(stress_seek_lifecycle) |
   test(live_stress_real_stream) |
-  test(stream_continues_after_seek)
+  test(stream_continues_after_seek) |
+  test(seek_sequence_from_log_real_stream_drm)
 """
 retries = 2
 
