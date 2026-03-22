@@ -45,6 +45,14 @@ use crate::{
     types::{SessionDuckingMode, SlotId},
 };
 
+/// Capacity of the engine event broadcast channel.
+const ENGINE_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Capacity of the player command ring buffer for slot communication.
+/// Ringbuf capacity for slot commands in tests.
+#[cfg(test)]
+const SLOT_CMD_RINGBUF_CAPACITY: usize = 32;
+
 /// Configuration for the audio engine.
 #[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
@@ -120,7 +128,7 @@ impl EngineImpl {
     /// to begin audio processing.
     #[must_use]
     pub fn new(config: EngineConfig) -> Self {
-        let (events_tx, _) = broadcast::channel(64);
+        let (events_tx, _) = broadcast::channel(ENGINE_EVENT_CHANNEL_CAPACITY);
         let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool
@@ -439,7 +447,7 @@ impl EngineImpl {
     /// Inject a test slot handle without starting the audio session.
     #[cfg(test)]
     pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {
-        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
+        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(SLOT_CMD_RINGBUF_CAPACITY).split();
         self.active_slots.lock_sync().push(slot_id);
         self.slot_registry.lock_sync().insert(
             slot_id,

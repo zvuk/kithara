@@ -8,6 +8,12 @@ use url::Url;
 
 use crate::error::{AssetsError, AssetsResult};
 
+/// Default HTTPS port.
+const DEFAULT_HTTPS_PORT: u16 = 443;
+
+/// Default HTTP port.
+const DEFAULT_HTTP_PORT: u16 = 80;
+
 /// Key type for addressing resources within an asset.
 ///
 /// A `ResourceKey` identifies a single resource (file) within an asset store.
@@ -79,6 +85,8 @@ impl ResourceKey {
 /// stripped during canonicalization).
 #[must_use]
 pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
+    const HASH_PREFIX_LEN: usize = 16;
+
     // Use canonical form for consistent hashing.
     // Fall back to raw URL if canonicalization fails (e.g., file:// URLs).
     let canonical = canonicalize_for_asset(url).unwrap_or_else(|_| url.as_str().to_string());
@@ -90,7 +98,7 @@ pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
         hasher.update(name.as_bytes());
     }
     let hash_result = hasher.finalize();
-    hex::encode(&hash_result[..16])
+    hex::encode(&hash_result[..HASH_PREFIX_LEN])
 }
 
 /// Canonicalizes a URL for asset identification.
@@ -134,7 +142,7 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 
     // Remove default ports
     match (canonical.scheme(), canonical.port()) {
-        ("https", Some(443)) | ("http", Some(80)) => {
+        ("https", Some(DEFAULT_HTTPS_PORT)) | ("http", Some(DEFAULT_HTTP_PORT)) => {
             let _ = canonical.set_port(None);
         }
         _ => {}

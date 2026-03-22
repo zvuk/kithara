@@ -34,9 +34,11 @@ impl Frontend for TuiFrontend {
     }
 
     fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError> {
+        const WORKER_THREADS: usize = 2;
+        const MAX_BLOCKING_THREADS: usize = 4;
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .max_blocking_threads(4)
+            .worker_threads(WORKER_THREADS)
+            .max_blocking_threads(MAX_BLOCKING_THREADS)
             .enable_all()
             .build()?;
 

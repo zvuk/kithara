@@ -21,6 +21,15 @@ use kithara_stream::{
 };
 use tracing::{debug, trace, warn};
 
+/// Nanoseconds per second for frame/duration conversion.
+const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+/// Decode progress logging interval in chunks.
+const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
+
+/// Default read-ahead size in bytes when segment range is unknown.
+const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
+
 use crate::{
     pipeline::track_fsm::{
         ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState, ResumeState,
@@ -745,7 +754,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return Duration::ZERO;
         }
         let nanos = (frames as u128)
-            .saturating_mul(1_000_000_000)
+            .saturating_mul(NANOS_PER_SEC)
             .saturating_div(u128::from(spec.sample_rate));
         #[expect(
             clippy::cast_possible_truncation,
@@ -763,7 +772,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let frames = duration
             .as_nanos()
             .saturating_mul(u128::from(spec.sample_rate))
-            .saturating_div(1_000_000_000);
+            .saturating_div(NANOS_PER_SEC);
         frames.min(usize::MAX as u128) as usize
     }
 
@@ -947,7 +956,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
                     self.track_chunk(&chunk);
 
-                    if self.chunks_decoded.is_multiple_of(100) {
+                    if self
+                        .chunks_decoded
+                        .is_multiple_of(DECODE_PROGRESS_LOG_INTERVAL)
+                    {
                         trace!(
                             chunks = self.chunks_decoded,
                             samples = self.total_samples,
@@ -987,8 +999,8 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl<T: StreamType> StreamAudioSource<T> {
     fn boundary_end(&self, start: u64) -> u64 {
         self.shared_stream.len().map_or_else(
-            || start.saturating_add(32 * 1024),
-            |len| start.saturating_add(32 * 1024).min(len),
+            || start.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+            |len| start.saturating_add(DEFAULT_READ_AHEAD_BYTES).min(len),
         )
     }
 
@@ -1017,7 +1029,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             .shared_stream
             .current_segment_range()
             .filter(|seg| seg.start <= pos && pos < seg.end)
-            .map_or_else(|| pos.saturating_add(32 * 1024), |seg| seg.end);
+            .map_or_else(
+                || pos.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+                |seg| seg.end,
+            );
         let check_end = self
             .shared_stream
             .len()

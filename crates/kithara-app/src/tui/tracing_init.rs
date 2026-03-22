@@ -21,12 +21,13 @@ impl<W> CrlfWriter<W> {
 
 impl<W: Write> Write for CrlfWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        const CRLF_OVERHEAD: usize = 8;
+
         if !buf.contains(&b'\n') {
             self.inner.write_all(buf)?;
             return Ok(buf.len());
         }
-
-        let mut out = Vec::with_capacity(buf.len() + 8);
+        let mut out = Vec::with_capacity(buf.len() + CRLF_OVERHEAD);
         for byte in buf {
             if *byte == b'\n' {
                 out.push(b'\r');

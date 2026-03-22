@@ -104,7 +104,8 @@ impl Kithara {
     /// 100 ms tick subscription for player state sync.
     #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        iced_time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+        const TICK_INTERVAL_MS: u64 = 100;
+        iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
     }
 
     /// Asynchronously load a track by playlist index.

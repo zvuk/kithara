@@ -36,6 +36,12 @@ use crate::{
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
 
+/// Capacity of the player event broadcast channel.
+const PLAYER_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Minimum playback rate to prevent stalling.
+const MIN_PLAYBACK_RATE: f32 = 0.01;
+
 /// Configuration for the player.
 #[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
@@ -107,7 +113,7 @@ impl PlayerImpl {
         };
         let engine = EngineImpl::new(engine_config);
 
-        let (events_tx, _) = broadcast::channel(64);
+        let (events_tx, _) = broadcast::channel(PLAYER_EVENT_CHANNEL_CAPACITY);
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
@@ -215,7 +221,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate().max(0.01);
+        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
@@ -259,7 +265,7 @@ impl PlayerImpl {
     /// Updates the local rate and propagates to the audio pipeline resampler
     /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        let clamped = rate.max(0.01);
+        let clamped = rate.max(MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
         self.playback_rate_shared.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));

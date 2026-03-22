@@ -4,13 +4,64 @@ severity: warning
 language: Rust
 files:
   - crates/**/src/**/*.rs
+ignores:
+  - crates/kithara-test-macros/**
+  - crates/kithara-test-utils/**
 rule:
   any:
     - all:
         - kind: integer_literal
         - not:
             regex: '^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$'
+        - not:
+            regex: '^0b[01]+$'
+        - not:
+            inside:
+              kind: const_item
+              stopBy: end
+        - not:
+            inside:
+              kind: static_item
+              stopBy: end
+        - not:
+            inside:
+              kind: field_expression
+              field: field
+        - not:
+            inside:
+              kind: type_arguments
+              stopBy: end
+        - not:
+            inside:
+              kind: macro_invocation
+              stopBy: end
+        - not:
+            inside:
+              all:
+                - kind: mod_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)'
+                    stopBy: end
+              stopBy: end
     - all:
         - kind: float_literal
         - not:
             regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)(?:f(?:32|64))?$'
+        - not:
+            inside:
+              kind: const_item
+              stopBy: end
+        - not:
+            inside:
+              kind: static_item
+              stopBy: end
+        - not:
+            inside:
+              all:
+                - kind: mod_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)'
+                    stopBy: end
+              stopBy: end

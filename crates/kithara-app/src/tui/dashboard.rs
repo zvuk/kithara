@@ -13,6 +13,22 @@ use crate::theme::tui::TuiPalette;
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
 
+const PROGRESS_BAR_OVERHEAD: usize = 14;
+
+const BAR_COL_TRACK_PCT: u16 = 25;
+const BAR_COL_PROGRESS_PCT: u16 = 25;
+const BAR_COL_QUEUE_PCT: u16 = 12;
+const BAR_COL_CROSSFADE_PCT: u16 = 10;
+const BAR_COL_VOLUME_PCT: u16 = 8;
+const BAR_COL_NOTE_PCT: u16 = 20;
+
+const ELLIPSIS_LEN: usize = 3;
+
+const PERCENT_SCALE: f32 = 100.0;
+
+const MS_PER_SECOND: u64 = 1000;
+const SECONDS_PER_MINUTE: u64 = 60;
+
 /// TUI dashboard widget for the Kithara player.
 ///
 /// Renders playlist, progress bar, volume, and status information
@@ -118,17 +134,17 @@ impl Dashboard {
     fn render_bar(&self, frame: &mut Frame, area: Rect) {
         let c = &self.colors;
         let chunks = Layout::horizontal([
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(12),
-            Constraint::Percentage(10),
-            Constraint::Percentage(8),
-            Constraint::Percentage(20),
+            Constraint::Percentage(BAR_COL_TRACK_PCT),
+            Constraint::Percentage(BAR_COL_PROGRESS_PCT),
+            Constraint::Percentage(BAR_COL_QUEUE_PCT),
+            Constraint::Percentage(BAR_COL_CROSSFADE_PCT),
+            Constraint::Percentage(BAR_COL_VOLUME_PCT),
+            Constraint::Percentage(BAR_COL_NOTE_PCT),
         ])
         .split(area);
 
         let progress_bar_width = usize::from(chunks[1].width)
-            .saturating_sub(14)
+            .saturating_sub(PROGRESS_BAR_OVERHEAD)
             .max(MIN_PROGRESS_BAR_WIDTH);
         let icon = if self.playing { '▶' } else { '⏸' };
         let active_track = self
@@ -153,9 +169,9 @@ impl Dashboard {
             ),
             self.crossfade_progress.map_or_else(
                 || "xf -".to_string(),
-                |progress| format!("xf {:>3.0}%", progress * 100.0),
+                |progress| format!("xf {:>3.0}%", progress * PERCENT_SCALE),
             ),
-            format!("🔉{:>3.0}%", self.volume * 100.0),
+            format!("🔉{:>3.0}%", self.volume * PERCENT_SCALE),
             clamp_text(self.last_note.as_deref().unwrap_or("-"), NOTE_MAX_CHARS),
         ];
 
@@ -196,10 +212,10 @@ fn clamp_text(text: &str, max_chars: usize) -> String {
     if count <= max_chars {
         return text.to_string();
     }
-    if max_chars <= 3 {
+    if max_chars <= ELLIPSIS_LEN {
         return text.chars().take(max_chars).collect();
     }
-    let keep = max_chars - 3;
+    let keep = max_chars - ELLIPSIS_LEN;
     let mut out: String = text.chars().take(keep).collect();
     out.push_str("...");
     out
@@ -218,8 +234,8 @@ fn fit_cell(text: &str, width: usize) -> String {
 }
 
 fn format_ms(ms: u64) -> String {
-    let total_seconds = ms / 1000;
-    let minutes = total_seconds / 60;
-    let seconds = total_seconds % 60;
+    let total_seconds = ms / MS_PER_SECOND;
+    let minutes = total_seconds / SECONDS_PER_MINUTE;
+    let seconds = total_seconds % SECONDS_PER_MINUTE;
     format!("{minutes:02}:{seconds:02}")
 }

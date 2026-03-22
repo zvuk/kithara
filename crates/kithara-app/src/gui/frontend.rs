@@ -10,6 +10,12 @@ use crate::{
     theme::gui,
 };
 
+/// Default window width in logical pixels.
+const WINDOW_WIDTH: f32 = 448.0;
+
+/// Default window height in logical pixels.
+const WINDOW_HEIGHT: f32 = 734.0;
+
 /// Initialize tracing for GUI-only mode (no CRLF writer needed).
 ///
 /// # Errors
@@ -57,7 +63,7 @@ impl Frontend for GuiFrontend {
         .title("Kithara")
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
-        .window_size(Size::new(448.0, 734.0))
+        .window_size(Size::new(WINDOW_WIDTH, WINDOW_HEIGHT))
         .run()?;
 
         Ok(())

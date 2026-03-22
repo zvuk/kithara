@@ -14,6 +14,9 @@ use kithara_platform::tokio::sync::broadcast;
 use kithara_storage::ResourceExt;
 use tokio_util::sync::CancellationToken;
 
+/// Capacity of the HLS event bus.
+const EVENT_BUS_CAPACITY: usize = 16;
+
 use crate::source::build_pair;
 pub use crate::{
     config::HlsConfig,
@@ -66,7 +69,7 @@ pub fn make_test_source_with_fetch(
         fetch,
         segments,
         playlist_state,
-        bus: EventBus::new(16),
+        bus: EventBus::new(EVENT_BUS_CAPACITY),
         variant_fence: None,
         _backend: None,
     }

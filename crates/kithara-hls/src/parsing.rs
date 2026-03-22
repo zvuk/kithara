@@ -13,6 +13,9 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;
 
+/// AES initialization vector length in bytes.
+const IV_LEN: usize = 16;
+
 /// Identifies a variant within a parsed master playlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariantId(pub usize);
@@ -49,7 +52,7 @@ pub struct KeyInfo {
     /// The URI of the encryption key. Can be relative to the playlist.
     pub uri: Option<String>,
     /// The initialization vector (IV), if specified.
-    pub iv: Option<[u8; 16]>,
+    pub iv: Option<[u8; IV_LEN]>,
     /// The key format, e.g., "identity".
     pub key_format: Option<String>,
     /// The key format version(s).

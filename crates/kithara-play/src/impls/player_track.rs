@@ -19,6 +19,9 @@ use ringbuf::{HeapProd, traits::Producer};
 
 use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
 
+/// Minimum number of channels required for stereo processing.
+const MIN_STEREO_CHANNELS: usize = 2;
+
 /// Default fade duration in seconds.
 pub(crate) const DEFAULT_FADE_DURATION: f32 = 1.0;
 
@@ -155,7 +158,7 @@ impl PlayerTrack {
             self.observed_position = position;
             self.observed_duration = duration;
 
-            if scratch_bufs.len() >= 2 && mix_bufs.len() >= 2 {
+            if scratch_bufs.len() >= MIN_STEREO_CHANNELS && mix_bufs.len() >= MIN_STEREO_CHANNELS {
                 let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
                 let output_l = &mut output_l_slice[0];
                 let output_r = &mut output_r_slice[0];

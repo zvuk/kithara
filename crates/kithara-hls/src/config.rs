@@ -14,9 +14,12 @@ use url::Url;
 
 use crate::error::HlsResult;
 
+/// AES initialization vector length in bytes.
+const IV_LEN: usize = 16;
+
 #[derive(Clone, Debug)]
 pub struct KeyContext {
-    pub iv: Option<[u8; 16]>,
+    pub iv: Option<[u8; IV_LEN]>,
     pub url: Url,
 }
 

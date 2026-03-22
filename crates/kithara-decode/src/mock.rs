@@ -13,6 +13,15 @@ use unimock::{MockFn, Unimock, matching};
 pub use crate::traits::InnerDecoderMock;
 use crate::{DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
 
+/// Default PCM sample value for mock audio.
+const SAMPLE_VALUE: f32 = 0.5;
+
+/// Default chunk size for infinite mock decoder.
+const MOCK_CHUNK_SIZE: usize = 1024;
+
+/// Default mock track duration in seconds.
+const MOCK_DURATION_SECS: u64 = 220;
+
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
     inner: StdMutex<T>,
@@ -191,7 +200,7 @@ fn build_infinite_inner_decoder(
                         spec,
                         ..Default::default()
                     },
-                    pcm_pool().attach(vec![0.5; 1024]),
+                    pcm_pool().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
                 )))
             }))
             .at_least_times(0),
@@ -214,7 +223,7 @@ fn build_infinite_inner_decoder(
             .at_least_times(0),
         InnerDecoderMock::duration
             .each_call(matching!())
-            .returns(Some(Duration::from_secs(220)))
+            .returns(Some(Duration::from_secs(MOCK_DURATION_SECS)))
             .at_least_times(0),
     ));
     let mock = if verify_in_drop {

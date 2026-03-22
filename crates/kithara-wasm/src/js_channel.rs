@@ -92,6 +92,7 @@ pub(crate) fn reply_promise(request_id: u32) -> Result<Promise, JsValue> {
 
     Ok(promise)
 }
+/// Maximum number of events in the event log ring buffer.
 const MAX_EVENTS: u32 = 1024;
 
 /// Init event log receiver on the main thread.

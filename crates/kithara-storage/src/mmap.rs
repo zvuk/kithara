@@ -33,6 +33,9 @@ use crate::{
 /// Default initial size for new mmap files (64 KB).
 const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
 
+/// Growth factor when the mmap file needs to be resized.
+const MMAP_GROWTH_FACTOR: u64 = 2;
+
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone)]
 pub struct MmapOptions {
@@ -200,7 +203,7 @@ impl DriverIo for MmapDriver {
         let mmap = match &*mmap_guard {
             MmapState::Active(m) => {
                 if end > m.len() {
-                    let new_size = end.max(m.len() * 2);
+                    let new_size = end.max(m.len() * MMAP_GROWTH_FACTOR);
                     m.resize(new_size)?;
                 }
                 m

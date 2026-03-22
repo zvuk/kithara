@@ -24,6 +24,8 @@ use crate::{
 const CONTROL_POLL_MS: u64 = 100;
 const SEEK_STEP_SECONDS_F64: f64 = 5.0;
 const VOLUME_STEP: f32 = 0.05;
+const MAX_DIGIT_TRACKS: usize = 9;
+const PERCENT_SCALE: f32 = 100.0;
 
 type RunnerResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -142,8 +144,8 @@ fn run_ui_loop(
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
         "controls: 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
-        track_count.min(9),
-        VOLUME_STEP * 100.0
+        track_count.min(MAX_DIGIT_TRACKS),
+        VOLUME_STEP * PERCENT_SCALE
     ))?;
     ui.log_line("auto-advances to next track with crossfade near end of each track")?;
     ui.draw()?;
@@ -187,7 +189,7 @@ fn run_ui_loop(
                             PlayerEvent::VolumeChanged { volume } => {
                                 ui.dashboard.set_volume(volume);
                                 ui.dashboard
-                                    .set_note(format!("volume {:.0}%", volume * 100.0));
+                                    .set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
                             }
                             _ => {}
                         }
@@ -353,7 +355,7 @@ fn apply_volume(player: &PlayerImpl, delta: f32, dashboard: &mut Dashboard) {
     let volume = (player.volume() + delta).clamp(0.0, 1.0);
     player.set_volume(volume);
     dashboard.set_volume(volume);
-    dashboard.set_note(format!("volume {:.0}%", volume * 100.0));
+    dashboard.set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
 }
 
 fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {

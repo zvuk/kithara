@@ -13,6 +13,9 @@ use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
+/// Capacity of the resource event bus.
+const RESOURCE_EVENT_BUS_CAPACITY: usize = 64;
+
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
 /// Provides a unified interface for reading decoded PCM audio
@@ -73,7 +76,7 @@ impl Resource {
     /// Use this for custom sources.
     #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        let bus = EventBus::new(64);
+        let bus = EventBus::new(RESOURCE_EVENT_BUS_CAPACITY);
 
         // Forward AudioEvents from the generic PcmReader into the unified EventBus.
         let forward_bus = bus.clone();
@@ -109,7 +112,7 @@ impl Resource {
             .stream
             .bus
             .clone()
-            .unwrap_or_else(|| EventBus::new(64));
+            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
@@ -134,7 +137,7 @@ impl Resource {
             .stream
             .bus
             .clone()
-            .unwrap_or_else(|| EventBus::new(64));
+            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 

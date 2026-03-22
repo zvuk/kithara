@@ -94,11 +94,12 @@ impl RetryPolicy {
 
     #[must_use]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        const BACKOFF_BASE: u32 = 2;
+
         if attempt == 0 {
             return Duration::ZERO;
         }
-
-        let exponential_delay = self.base_delay * 2_u32.pow(attempt.saturating_sub(1));
+        let exponential_delay = self.base_delay * BACKOFF_BASE.pow(attempt.saturating_sub(1));
         min(exponential_delay, self.max_delay)
     }
 }

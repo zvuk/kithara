@@ -36,6 +36,9 @@ use super::{
 };
 use crate::pipeline::track_fsm::TrackStep;
 
+/// Threshold for warning about slow `step_track` calls.
+const STEP_WARN_THRESHOLD: Duration = Duration::from_millis(10);
+
 // Public types
 
 /// Command sent from [`AudioWorkerHandle`] to the shared worker thread.
@@ -229,7 +232,7 @@ impl TrackSlot {
         let step_start = Instant::now();
         let step_result = self.source.step_track();
         let step_elapsed = step_start.elapsed();
-        if step_elapsed > Duration::from_millis(10) {
+        if step_elapsed > STEP_WARN_THRESHOLD {
             tracing::warn!(
                 track_id = self.track_id,
                 elapsed_ms = step_elapsed.as_millis(),
@@ -1149,18 +1152,25 @@ fn cpu_time_ms() -> u64 {
 /// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
 #[cfg(test)]
 fn parse_cputime(s: &str) -> u64 {
+    const HMS_PARTS: usize = 3;
+    const MS_PARTS: usize = 2;
+    const SECS_PER_HOUR: u64 = 3600;
+    const SECS_PER_MIN: u64 = 60;
+    const MS_PER_SEC: u64 = 1000;
+    const SEC_IDX: usize = 2;
+
     let parts: Vec<&str> = s.split(':').collect();
     match parts.len() {
-        3 => {
+        HMS_PARTS => {
             let h: u64 = parts[0].trim().parse().unwrap_or(0);
             let m: u64 = parts[1].trim().parse().unwrap_or(0);
-            let sec: u64 = parts[2].trim().parse().unwrap_or(0);
-            (h * 3600 + m * 60 + sec) * 1000
+            let sec: u64 = parts[SEC_IDX].trim().parse().unwrap_or(0);
+            (h * SECS_PER_HOUR + m * SECS_PER_MIN + sec) * MS_PER_SEC
         }
-        2 => {
+        MS_PARTS => {
             let m: u64 = parts[0].trim().parse().unwrap_or(0);
             let sec: u64 = parts[1].trim().parse().unwrap_or(0);
-            (m * 60 + sec) * 1000
+            (m * SECS_PER_MIN + sec) * MS_PER_SEC
         }
         _ => 0,
     }

@@ -29,6 +29,9 @@ use crate::{
     resource::{ResourceExt, ResourceStatus, WaitOutcome, range_covered_by},
 };
 
+/// Condvar wait spin timeout in milliseconds.
+const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
+
 /// Backend-specific storage operations.
 ///
 /// Drivers handle raw byte I/O and storage lifecycle transitions.
@@ -374,7 +377,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
             hang_tick!();
             yield_now();
-            let deadline = Instant::now() + PlatformDuration::from_millis(50);
+            let deadline = Instant::now() + PlatformDuration::from_millis(WAIT_SPIN_TIMEOUT_MS);
             let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }

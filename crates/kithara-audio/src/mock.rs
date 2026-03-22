@@ -13,6 +13,9 @@ use kithara_platform::{time::Duration, tokio::sync::broadcast};
 use crate::traits::PcmReader;
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};
 
+/// Capacity of the mock event broadcast channel.
+const MOCK_EVENT_CHANNEL_CAPACITY: usize = 64;
+
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
 /// Produces a constant sample value (0.5), tracks seek position and EOF,
@@ -31,7 +34,7 @@ impl TestPcmReader {
     #[must_use]
     pub fn new(spec: PcmSpec, duration_secs: f64) -> Self {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
-        let (events_tx, _) = broadcast::channel(64);
+        let (events_tx, _) = broadcast::channel(MOCK_EVENT_CHANNEL_CAPACITY);
         Self {
             spec,
             metadata: TrackMetadata {

@@ -27,6 +27,9 @@ use crate::{
     playlist::PlaylistState,
 };
 
+/// AES-128 key length in bytes.
+const AES_KEY_LEN: usize = 16;
+
 // Types
 
 /// Segment type: initialization segment or media segment with index.
@@ -466,15 +469,15 @@ impl<N: Net> FetchManager<N> {
         let key_url = crate::keys::KeyManager::resolve_key_url(key_info, segment_url)?;
         let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
 
-        if raw_key.len() != 16 {
+        if raw_key.len() != AES_KEY_LEN {
             return Err(HlsError::KeyProcessing(format!(
                 "invalid AES-128 key length: {}",
                 raw_key.len()
             )));
         }
 
-        let mut key_bytes = [0u8; 16];
-        key_bytes.copy_from_slice(&raw_key[..16]);
+        let mut key_bytes = [0u8; AES_KEY_LEN];
+        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
 
         debug!(
             url = %segment_url,

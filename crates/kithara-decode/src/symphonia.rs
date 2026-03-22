@@ -61,6 +61,9 @@ use crate::{
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 
+/// Default audio channel count (stereo).
+const DEFAULT_CHANNEL_COUNT: u16 = 2;
+
 /// Configuration for Symphonia-based decoders.
 #[derive(Default)]
 pub(crate) struct SymphoniaConfig {
@@ -375,7 +378,7 @@ impl SymphoniaInner {
         let channels = codec_params
             .channels
             .as_ref()
-            .map_or(2, |c| c.count() as u16);
+            .map_or(DEFAULT_CHANNEL_COUNT, |c| c.count() as u16);
         let spec = PcmSpec {
             channels,
             sample_rate,

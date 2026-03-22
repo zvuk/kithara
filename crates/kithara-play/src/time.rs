@@ -39,9 +39,12 @@ impl MediaTime {
         }
     }
 
+    /// Default timescale for Duration-based construction.
+    const DURATION_TIMESCALE: i32 = 600;
+
     #[must_use]
     pub fn with_duration(duration: Duration) -> Self {
-        Self::with_seconds(duration.as_secs_f64(), 600)
+        Self::with_seconds(duration.as_secs_f64(), Self::DURATION_TIMESCALE)
     }
 
     #[must_use]

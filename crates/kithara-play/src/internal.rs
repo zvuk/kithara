@@ -33,6 +33,12 @@ pub mod offline {
         shared_player_state::SharedPlayerState,
     };
 
+    /// Offline audio block size in frames.
+    const OFFLINE_BLOCK_FRAMES: u32 = 512;
+
+    /// Capacity of the player command ring buffer.
+    const CMD_RINGBUF_CAPACITY: usize = 64;
+
     /// A self-contained offline player for testing crossfade and mixing.
     ///
     /// Wraps [`FirewheelCtx<OfflineBackend>`] with a player node. Call
@@ -60,13 +66,13 @@ pub mod offline {
 
             let stream_config = OfflineConfig {
                 sample_rate,
-                block_frames: 512,
+                block_frames: OFFLINE_BLOCK_FRAMES,
             };
             ctx.start_stream(stream_config)
                 .expect("start offline stream");
 
             let shared_state = Arc::new(SharedPlayerState::new());
-            let (cmd_tx, cmd_rx) = HeapRb::new(64).split();
+            let (cmd_tx, cmd_rx) = HeapRb::new(CMD_RINGBUF_CAPACITY).split();
 
             let player_node = PlayerNode::with_channel(
                 cmd_rx,

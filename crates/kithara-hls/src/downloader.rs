@@ -29,6 +29,15 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
+/// Maximum number of plans to log at debug level.
+const MAX_LOG_PLANS: usize = 4;
+
+/// Minimum throughput recording duration in milliseconds.
+const MIN_THROUGHPUT_RECORD_MS: u128 = 10;
+
+/// Maximum initial segment index for verbose logging.
+const VERBOSE_SEGMENT_LIMIT: usize = 8;
+
 fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
     fetch_epoch != current_epoch
 }
@@ -1276,7 +1285,7 @@ impl HlsDownloader {
             need_init = false;
         }
 
-        if !plans.is_empty() && plans.len() <= 4 {
+        if !plans.is_empty() && plans.len() <= MAX_LOG_PLANS {
             let first = plans.first().map_or(0, |plan| plan.segment_index);
             let last = plans.last().map_or(0, |plan| plan.segment_index);
             debug!(
@@ -1358,7 +1367,7 @@ impl HlsDownloader {
         duration: Duration,
         content_duration: Option<Duration>,
     ) {
-        if duration.as_millis() < 10 {
+        if duration.as_millis() < MIN_THROUGHPUT_RECORD_MS {
             return;
         }
 
@@ -1482,7 +1491,7 @@ impl Downloader for HlsDownloader {
             self.advance_current_segment_index(fetch.segment_index + 1);
         }
 
-        if fetch.segment_index <= 8 {
+        if fetch.segment_index <= VERBOSE_SEGMENT_LIMIT {
             debug!(
                 variant = fetch.variant,
                 segment_index = fetch.segment_index,

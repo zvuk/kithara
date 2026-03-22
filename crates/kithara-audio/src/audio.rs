@@ -51,7 +51,14 @@ use crate::{
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
+/// Backoff duration between receive attempts.
 const RECV_BACKOFF: Duration = Duration::from_micros(100);
+
+/// Minimum playback rate to avoid division by zero.
+const MIN_PLAYBACK_RATE: f64 = 0.01;
+
+/// Probe buffer size in bytes for initial stream detection.
+const PROBE_BUFFER_SIZE: usize = 1024;
 
 enum ChunkOutcome {
     Continue,
@@ -319,7 +326,7 @@ impl<S> Audio<S> {
     /// At rate > 1.0, position advances faster (fewer effective samples per second).
     /// At rate < 1.0, position advances slower.
     pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(0.01);
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(MIN_PLAYBACK_RATE);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -623,7 +630,7 @@ where
         debug!("Audio::new — spawning probe task...");
         let stream = spawn_blocking(move || {
             let mut stream = stream;
-            let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
+            let mut probe_buf = byte_pool.get_with(|b| b.resize(PROBE_BUFFER_SIZE, 0));
             let _ = stream.read(&mut probe_buf);
             stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
             Ok::<_, DecodeError>(stream)

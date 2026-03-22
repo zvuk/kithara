@@ -27,6 +27,12 @@ macro_rules! clog {
 const CROSSFADE_SECONDS: f32 = 5.0;
 const EQ_BANDS: usize = 10;
 
+/// Default initial volume.
+const DEFAULT_VOLUME: f32 = 0.5;
+
+/// Milliseconds per second.
+const MS_PER_SECOND: f64 = 1000.0;
+
 struct Player {
     volume: AtomicU32,
     crossfade_secs: AtomicU32,
@@ -99,7 +105,7 @@ impl Player {
     }
 
     fn reset_cached_state(&self) {
-        Self::store_f32(&self.volume, 0.5);
+        Self::store_f32(&self.volume, DEFAULT_VOLUME);
         Self::store_f32(&self.crossfade_secs, CROSSFADE_SECONDS);
         for gain in &self.eq_gains {
             Self::store_f32(gain, 0.0);
@@ -205,12 +211,12 @@ impl Player {
 
     #[export]
     fn get_position_ms(&self) -> f64 {
-        wasm_support::bridge_position_secs() * 1000.0
+        wasm_support::bridge_position_secs() * MS_PER_SECOND
     }
 
     #[export]
     fn get_duration_ms(&self) -> f64 {
-        wasm_support::bridge_duration_secs() * 1000.0
+        wasm_support::bridge_duration_secs() * MS_PER_SECOND
     }
 
     #[export]

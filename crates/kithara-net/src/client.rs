@@ -10,6 +10,9 @@ use crate::{
     types::{Headers, NetOptions, RangeSpec},
 };
 
+/// HTTP 206 Partial Content status code.
+const HTTP_PARTIAL_CONTENT: u16 = 206;
+
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &reqwest::Response) -> Headers {
     let mut headers = Headers::new();
@@ -155,7 +158,7 @@ impl Net for HttpClient {
         let resp = req.send().await.map_err(NetError::from)?;
         let status = resp.status();
 
-        if !(status.is_success() || status.as_u16() == 206) {
+        if !(status.is_success() || status.as_u16() == HTTP_PARTIAL_CONTENT) {
             let body = resp.text().await.unwrap_or_default();
             return Err(NetError::HttpError {
                 url,
@@ -190,7 +193,7 @@ impl Net for HttpClient {
 
         let status = resp.status();
 
-        if !status.is_success() && status.as_u16() != 206 {
+        if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
             let body = resp.text().await.unwrap_or_default();
             return Err(NetError::HttpError {
                 url,
