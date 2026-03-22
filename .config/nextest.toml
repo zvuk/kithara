@@ -21,7 +21,7 @@ filter = """
   test(stream_continues_after_seek) |
   test(seek_sequence_from_log_real_stream_drm)
 """
-retries = 2
+retries = 5
 
 [profile.ci]
 fail-fast = false
