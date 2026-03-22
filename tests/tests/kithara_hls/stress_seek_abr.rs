@@ -17,7 +17,7 @@ use kithara::{
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
-    tokio::task::spawn_blocking,
+    tokio::task::{spawn, spawn_blocking},
 };
 use kithara_test_utils::{TestTempDir, serve_assets, temp_dir, tracing_setup};
 use tracing::info;
@@ -64,7 +64,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     // Track ABR switches in background
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
-    kithara_platform::tokio::task::spawn(async move {
+    spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             let ev_str = format!("{:?}", ev);
             if ev_str.contains("VariantApplied") {

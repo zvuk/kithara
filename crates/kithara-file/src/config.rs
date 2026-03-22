@@ -5,6 +5,7 @@ use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
+use kithara_platform::tokio as platform_tokio;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -73,7 +74,7 @@ pub struct FileConfig {
     /// falls back to a dedicated thread.
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
-    pub runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    pub runtime: Option<platform_tokio::runtime::Handle>,
     /// Storage configuration.
     pub store: StoreOptions,
 }

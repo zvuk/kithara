@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use js_sys::Promise;
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::wasm_support;
 use kithara_wasm_macros::wasm_export;
@@ -25,6 +26,12 @@ macro_rules! clog {
 
 const CROSSFADE_SECONDS: f32 = 5.0;
 const EQ_BANDS: usize = 10;
+
+/// Default initial volume.
+const DEFAULT_VOLUME: f32 = 0.5;
+
+/// Milliseconds per second.
+const MS_PER_SECOND: f64 = 1000.0;
 
 struct Player {
     volume: AtomicU32,
@@ -98,7 +105,7 @@ impl Player {
     }
 
     fn reset_cached_state(&self) {
-        Self::store_f32(&self.volume, 0.5);
+        Self::store_f32(&self.volume, DEFAULT_VOLUME);
         Self::store_f32(&self.crossfade_secs, CROSSFADE_SECONDS);
         for gain in &self.eq_gains {
             Self::store_f32(gain, 0.0);
@@ -204,12 +211,12 @@ impl Player {
 
     #[export]
     fn get_position_ms(&self) -> f64 {
-        wasm_support::bridge_position_secs() * 1000.0
+        wasm_support::bridge_position_secs() * MS_PER_SECOND
     }
 
     #[export]
     fn get_duration_ms(&self) -> f64 {
-        wasm_support::bridge_duration_secs() * 1000.0
+        wasm_support::bridge_duration_secs() * MS_PER_SECOND
     }
 
     #[export]
@@ -264,9 +271,9 @@ impl Player {
 /// Returns a `Promise` that resolves after worker spawn.
 #[allow(unreachable_pub)]
 #[wasm_bindgen]
-pub fn player_new() -> js_sys::Promise {
+pub fn player_new() -> Promise {
     if let Err(err) = player().ensure_worker_started() {
-        return js_sys::Promise::reject(&err);
+        return Promise::reject(&err);
     }
-    js_sys::Promise::resolve(&JsValue::UNDEFINED)
+    Promise::resolve(&JsValue::UNDEFINED)
 }

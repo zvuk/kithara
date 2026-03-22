@@ -5,6 +5,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 
+use reqwest::Client;
+
 use crate::fixture_protocol::{
     AbrSessionConfig, AudioFixturesSessionConfig, FileSessionConfig, FixedHlsSessionConfig,
     HlsSessionConfig, HttpTestSessionConfig, SessionResponse,
@@ -37,7 +39,7 @@ async fn parse_response(resp: reqwest::Response) -> SessionResponse {
 pub async fn create_fixed_hls_session() -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(&FixedHlsSessionConfig).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/hls-fixed"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -53,7 +55,7 @@ pub async fn create_fixed_hls_session() -> SessionResponse {
 pub async fn create_hls_session(config: &HlsSessionConfig) -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(config).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/hls"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -69,7 +71,7 @@ pub async fn create_hls_session(config: &HlsSessionConfig) -> SessionResponse {
 pub async fn create_abr_session(config: &AbrSessionConfig) -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(config).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/abr"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -85,7 +87,7 @@ pub async fn create_abr_session(config: &AbrSessionConfig) -> SessionResponse {
 pub async fn create_audio_fixtures_session() -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(&AudioFixturesSessionConfig).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/audio-fixtures"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -101,7 +103,7 @@ pub async fn create_audio_fixtures_session() -> SessionResponse {
 pub async fn create_http_test_session(config: &HttpTestSessionConfig) -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(config).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/http-test"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -117,7 +119,7 @@ pub async fn create_http_test_session(config: &HttpTestSessionConfig) -> Session
 pub async fn create_file_session(config: &FileSessionConfig) -> SessionResponse {
     let base = fixture_server_url();
     let body = serde_json::to_string(config).unwrap();
-    let resp = reqwest::Client::new()
+    let resp = Client::new()
         .post(format!("{base}/session/file"))
         .header("Content-Type", "application/json")
         .body(body)
@@ -132,7 +134,7 @@ pub async fn create_file_session(config: &FileSessionConfig) -> SessionResponse 
 /// Delete a session (best-effort, errors are ignored).
 pub async fn delete_session(session_id: &str) {
     let base = fixture_server_url();
-    let _ = reqwest::Client::new()
+    let _ = Client::new()
         .delete(format!("{base}/session/{session_id}"))
         .send()
         .await;

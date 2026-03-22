@@ -9,10 +9,16 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara::play::{PlayerEvent, PlayerImpl};
-use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio::sync::broadcast};
+use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{observer::PlayerObserver, player::QueueEntry, types::FfiPlayerEvent};
+
+/// Polling interval for time/duration updates (~10 Hz).
+const TIME_POLL_INTERVAL_MS: u64 = 100;
+
+/// Threshold for suppressing redundant time/duration updates (seconds).
+const TIME_UPDATE_THRESHOLD: f64 = 0.01;
 
 /// Forwards player events to an observer on background tasks.
 pub(crate) struct EventBridge {
@@ -54,7 +60,7 @@ impl EventBridge {
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             loop {
-                kithara_platform::tokio::select! {
+                tokio::select! {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
@@ -78,7 +84,7 @@ impl EventBridge {
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         spawn(move || {
-            let interval = Duration::from_millis(100);
+            let interval = Duration::from_millis(TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
 
@@ -94,7 +100,10 @@ impl EventBridge {
                 drop(inner);
 
                 match time {
-                    Some(t) if last_time.is_none_or(|prev| (prev - t).abs() > 0.01) => {
+                    Some(t)
+                        if last_time
+                            .is_none_or(|prev| (prev - t).abs() > TIME_UPDATE_THRESHOLD) =>
+                    {
                         observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
                         last_time = Some(t);
                     }
@@ -105,7 +114,10 @@ impl EventBridge {
                 }
 
                 match duration {
-                    Some(d) if last_duration.is_none_or(|prev| (prev - d).abs() > 0.01) => {
+                    Some(d)
+                        if last_duration
+                            .is_none_or(|prev| (prev - d).abs() > TIME_UPDATE_THRESHOLD) =>
+                    {
                         observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
                         last_duration = Some(d);
                     }

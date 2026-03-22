@@ -7,7 +7,7 @@ use axum::{
     Router,
     body::Body,
     extract::Request,
-    http::{StatusCode, header},
+    http::{Method, StatusCode, header},
     response::Response,
     routing::get,
 };
@@ -16,15 +16,20 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{Hls, HlsConfig},
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{
+        PlayerConfig, PlayerImpl, Resource, ResourceConfig, internal::offline::resource_from_reader,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{
+    thread,
     time::{Duration, Instant, sleep},
     tokio,
 };
 use kithara_test_utils::{TestHttpServer, TestTempDir, create_saw_wav, temp_dir};
+use tokio::time::timeout;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,7 +44,7 @@ const HLS_CHANNELS: f64 = 2.0;
     reason = "axum handler signature requires owned Request"
 )]
 fn serve_mp3_with_range(req: Request) -> Response {
-    if req.method() == axum::http::Method::HEAD {
+    if req.method() == Method::HEAD {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
@@ -269,7 +274,7 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        tokio::time::timeout(READ_TIMEOUT, resource.preload())
+        timeout(READ_TIMEOUT, resource.preload())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"));
         let read = resource.read(&mut buf);
@@ -738,22 +743,22 @@ async fn stress_offline_crossfade_no_gaps() {
     // Local MP3 path (simulates disk-cached file, like production).
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    // --- Helper: create MP3 resource (NO preload — match production timing) ---
+    // Helper: create MP3 resource (NO preload — match production timing)
     let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
         let p = local_mp3.clone();
         async move {
-            let file_cfg = kithara_file::FileConfig::new(kithara_file::FileSrc::Local(p));
-            let audio_cfg = AudioConfig::<kithara_file::File>::new(file_cfg)
+            let file_cfg = FileConfig::new(FileSrc::Local(p));
+            let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
                 .with_hint("mp3")
                 .with_worker(w);
-            let audio = Audio::<Stream<kithara_file::File>>::new(audio_cfg)
+            let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
                 .expect("create local MP3 audio");
-            kithara::play::internal::offline::resource_from_reader(audio)
+            resource_from_reader(audio)
         }
     };
 
-    // --- Helper: create and preload an HLS resource ---
+    // Helper: create and preload an HLS resource
     let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
         let u = hls_url.clone();
         async move {
@@ -763,15 +768,15 @@ async fn stress_offline_crossfade_no_gaps() {
                 .with_media_info(wav_info)
                 .with_worker(w);
             let audio = Audio::<Stream<Hls>>::new(acfg).await.expect("HLS audio");
-            let mut r = kithara::play::internal::offline::resource_from_reader(audio);
-            tokio::time::timeout(READ_TIMEOUT, r.preload())
+            let mut r = resource_from_reader(audio);
+            timeout(READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload");
             r
         }
     };
 
-    // --- Helper: render N blocks, collect stats ---
+    // Helper: render N blocks, collect stats
     struct PhaseStats {
         label: String,
         blocks: u32,
@@ -821,7 +826,7 @@ async fn stress_offline_crossfade_no_gaps() {
             // Simulate real audio callback period (~11.6ms between blocks).
             // Without this, the tight loop outpaces the worker, creating
             // artificial silence that wouldn't happen in production.
-            kithara_platform::thread::sleep(block_budget.saturating_sub(d));
+            thread::sleep(block_budget.saturating_sub(d));
         }
         if cur_silence > max_silence {
             max_silence = cur_silence;
@@ -835,7 +840,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // ===== Scenario 1: MP3 → HLS =====
+    // Scenario 1: MP3 to HLS
     let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_phase(&mut player, 40, "MP3 solo");
@@ -845,25 +850,25 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_phase(&mut player, 80, "MP3→HLS fade");
 
-    // ===== Scenario 2: HLS → MP3 =====
+    // Scenario 2: HLS to MP3
     let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(50)).await;
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_phase(&mut player, 80, "HLS→MP3 fade");
 
-    // ===== Scenario 3: MP3 → MP3 =====
+    // Scenario 3: MP3 to MP3
     let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(50)).await;
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_phase(&mut player, 80, "MP3→MP3 fade");
 
-    // ===== Report =====
+    // Report
     eprintln!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
     for s in [&s1a, &s1b, &s2, &s3] {
         eprintln!("  {s}");
     }
 
-    // ===== Scenario 4: repeated HLS→MP3 (intermittent glitch) =====
+    // Scenario 4: repeated HLS to MP3 (intermittent glitch)
     // User reports: "чаще всего при переключении с hls на mp3,
     // это длится около 2х секунд". Run multiple iterations to catch it.
     eprintln!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
@@ -901,7 +906,7 @@ async fn stress_offline_crossfade_no_gaps() {
          max_render={worst_render:?}"
     );
 
-    // ===== Assertions =====
+    // Assertions
     let all = [&s1b, &s2, &s3];
     for s in &all {
         assert!(

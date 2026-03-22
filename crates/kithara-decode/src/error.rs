@@ -1,10 +1,12 @@
 //! Error types for audio decoding.
 
-use std::{error::Error as StdError, io};
+use std::{error::Error as StdError, io, io::ErrorKind};
 
 use kithara_stream::{AudioCodec, ContainerFormat, VariantChangeError};
-use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::errors;
 use thiserror::Error;
+
+type SymphoniaError = errors::Error;
 
 /// Errors that can occur during audio decoding.
 ///
@@ -44,7 +46,7 @@ pub enum DecodeError {
 }
 
 fn is_seek_pending_io(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::Interrupted || err.to_string() == "seek pending"
+    err.kind() == ErrorKind::Interrupted || err.to_string() == "seek pending"
 }
 
 fn is_variant_change_io(err: &io::Error) -> bool {
@@ -116,7 +118,7 @@ impl DecodeError {
 
 impl From<io::Error> for DecodeError {
     fn from(err: io::Error) -> Self {
-        if err.kind() == io::ErrorKind::Interrupted {
+        if err.kind() == ErrorKind::Interrupted {
             Self::Interrupted
         } else {
             Self::Io(err)
@@ -129,7 +131,7 @@ pub type DecodeResult<T> = Result<T, DecodeError>;
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::io::{self, Error as IoError};
 
     use kithara_test_utils::kithara;
 
@@ -154,14 +156,14 @@ mod tests {
 
     #[kithara::test]
     fn test_decode_error_from_io() {
-        let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
+        let io_err = IoError::new(ErrorKind::NotFound, "file not found");
         let decode_err: DecodeError = io_err.into();
         assert!(matches!(decode_err, DecodeError::Io(_)));
     }
 
     #[kithara::test]
     fn test_decode_error_backend_wraps_any_error() {
-        let inner = io::Error::other("symphonia error");
+        let inner = IoError::other("symphonia error");
         let err = DecodeError::Backend(Box::new(inner));
         assert!(err.to_string().contains("Decoder error"));
     }
@@ -174,33 +176,33 @@ mod tests {
 
     #[kithara::test]
     fn test_io_interrupted_becomes_decode_interrupted() {
-        let io_err = io::Error::new(io::ErrorKind::Interrupted, "seek pending");
+        let io_err = IoError::new(ErrorKind::Interrupted, "seek pending");
         let decode_err: DecodeError = io_err.into();
         assert!(matches!(decode_err, DecodeError::Interrupted));
     }
 
     #[kithara::test]
     fn test_io_other_stays_io_variant() {
-        let io_err = io::Error::new(io::ErrorKind::NotFound, "missing");
+        let io_err = IoError::new(ErrorKind::NotFound, "missing");
         let decode_err: DecodeError = io_err.into();
         assert!(matches!(decode_err, DecodeError::Io(_)));
     }
 
     #[kithara::test]
     fn test_backend_seek_pending_counts_as_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(io::Error::other("seek pending")));
+        let decode_err = DecodeError::Backend(Box::new(IoError::other("seek pending")));
         assert!(decode_err.is_interrupted());
     }
 
     #[kithara::test]
     fn test_backend_other_io_is_not_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(io::Error::other("other backend error")));
+        let decode_err = DecodeError::Backend(Box::new(IoError::other("other backend error")));
         assert!(!decode_err.is_interrupted());
     }
 
     #[kithara::test]
     fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(SymphoniaError::IoError(io::Error::other(
+        let decode_err = DecodeError::Backend(Box::new(SymphoniaError::IoError(IoError::other(
             "seek pending",
         ))));
         assert!(decode_err.is_interrupted());
@@ -208,7 +210,7 @@ mod tests {
 
     #[kithara::test]
     fn test_io_variant_change_is_detected() {
-        let decode_err = DecodeError::Io(io::Error::other(VariantChangeError));
+        let decode_err = DecodeError::Io(IoError::other(VariantChangeError));
         assert!(decode_err.is_variant_change());
         assert!(!decode_err.is_interrupted());
     }

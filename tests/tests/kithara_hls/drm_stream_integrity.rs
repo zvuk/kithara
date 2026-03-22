@@ -7,7 +7,7 @@
 //! Parametrized: `{hls, drm} × {ephemeral, disk} × {manual(0), manual(3), auto(0)}`.
 
 use std::{
-    io::{Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
 };
 
@@ -52,7 +52,7 @@ fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration)
         match stream.read(&mut buf[filled..]) {
             Ok(0) => thread::sleep(Duration::from_millis(5)),
             Ok(n) => filled += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => {
                 if e.to_string().contains("variant change") {
                     stream.clear_variant_fence();
@@ -212,7 +212,7 @@ async fn drm_stream_byte_integrity(
                     }
                 }
                 Ok(n) => total_read += n as u64,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => {
                     if e.to_string().contains("variant change") {
                         stream.clear_variant_fence();

@@ -3,6 +3,8 @@
 //! Called by `kithara-wasm` to set up and drive the session host on the
 //! main thread while the player engine runs in a Web Worker.
 
+use kithara_platform::thread::assert_main_thread;
+
 use crate::impls::session_engine;
 
 /// Ensure the main-thread session client exists in `Local` mode.
@@ -10,7 +12,7 @@ use crate::impls::session_engine;
 /// Must be called on the main thread **before** [`init_worker_session`]
 /// so that the main thread gets a `Local` session and Workers get `Remote`.
 pub fn ensure_main_session() {
-    kithara_platform::thread::assert_main_thread("ensure_main_session");
+    assert_main_thread("ensure_main_session");
     session_engine::session_client();
 }
 
@@ -19,7 +21,7 @@ pub fn ensure_main_session() {
 /// Must be called **once** on the main thread **before** any Worker
 /// calls [`PlayerImpl::new`](crate::PlayerImpl::new).
 pub fn init_worker_session() {
-    kithara_platform::thread::assert_main_thread("init_worker_session");
+    assert_main_thread("init_worker_session");
     session_engine::init_worker_channel();
 }
 
@@ -31,7 +33,7 @@ pub fn init_worker_session() {
 /// `firewheel-web-audio` registers auto-resume listeners so that the
 /// very first user click resumes the context.
 pub fn warm_up_audio() {
-    kithara_platform::thread::assert_main_thread("warm_up_audio");
+    assert_main_thread("warm_up_audio");
     session_engine::warm_up_audio();
 }
 
@@ -39,7 +41,7 @@ pub fn warm_up_audio() {
 ///
 /// Call this on the main thread from `requestAnimationFrame`.
 pub fn tick_and_poll() {
-    kithara_platform::thread::assert_main_thread("tick_and_poll");
+    assert_main_thread("tick_and_poll");
     session_engine::tick_and_poll_remote();
 }
 

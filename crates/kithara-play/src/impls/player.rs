@@ -13,7 +13,10 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, tokio::sync::broadcast};
+use kithara_platform::{
+    Mutex,
+    tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
+};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
 use tracing::{debug, warn};
@@ -24,13 +27,20 @@ use super::{
     player_resource::PlayerResource,
     player_track::TrackTransition,
 };
+#[rustfmt::skip]
+use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::PlayerEvent,
-    impls::resource::Resource,
-    traits::engine::Engine,
+    impls::{player_notification::PlayerNotification, resource::Resource},
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
+
+/// Capacity of the player event broadcast channel.
+const PLAYER_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Minimum playback rate to prevent stalling.
+const MIN_PLAYBACK_RATE: f32 = 0.01;
 
 /// Configuration for the player.
 #[derive(Clone, Debug, Derivative, Setters)]
@@ -103,7 +113,7 @@ impl PlayerImpl {
         };
         let engine = EngineImpl::new(engine_config);
 
-        let (events_tx, _) = broadcast::channel(64);
+        let (events_tx, _) = broadcast::channel(PLAYER_EVENT_CHANNEL_CAPACITY);
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
@@ -137,7 +147,7 @@ impl PlayerImpl {
     /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
     /// the app's runtime instead of creating per-stream runtimes.
     #[must_use]
-    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.engine.runtime()
     }
 
@@ -211,7 +221,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate().max(0.01);
+        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
@@ -255,7 +265,7 @@ impl PlayerImpl {
     /// Updates the local rate and propagates to the audio pipeline resampler
     /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        let clamped = rate.max(0.01);
+        let clamped = rate.max(MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
         self.playback_rate_shared.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
@@ -464,8 +474,6 @@ impl PlayerImpl {
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// when a track finishes via EOF.
     pub fn process_notifications(&self) {
-        use crate::impls::player_notification::PlayerNotification;
-
         let Some(slot_id) = *self.current_slot.lock_sync() else {
             return;
         };

@@ -36,6 +36,7 @@ mod tests {
         time::Duration,
     };
 
+    use kithara_platform::thread::{park_timeout, sleep, spawn};
     use kithara_test_utils::kithara;
 
     use super::ThreadWake;
@@ -49,13 +50,13 @@ mod tests {
             let worker_wake = Arc::clone(&wake);
             let worker_done = Arc::clone(&done);
 
-            let join = kithara_platform::thread::spawn(move || {
+            let join = spawn(move || {
                 worker_wake.register_current();
-                kithara_platform::thread::park_timeout(Duration::from_secs(1));
+                park_timeout(Duration::from_secs(1));
                 worker_done.store(true, Ordering::Release);
             });
 
-            kithara_platform::thread::sleep(Duration::from_millis(10));
+            sleep(Duration::from_millis(10));
             wake.wake();
             join.join().expect("wake test thread");
             assert!(done.load(Ordering::Acquire));

@@ -3,15 +3,29 @@
 import Foundation
 import PackageDescription
 
+// Updated automatically by CI on release.
+let version = "0.1.0"
+let checksum = "9f1245e473fa803608b292a5abe6ab8c5edd217297c162b8b3def1dd6b44699e"
+
+// KITHARA_LOCAL_DEV       — use locally built xcframework (for development).
+// KITHARA_BINARY_BASE_URL — override binary download host (for GitLab mirror).
+//
+// GitHub (default): https://github.com/zvuk/kithara/releases/download
+// GitLab:           https://gitlab.zvq.me/api/v4/projects/<id>/packages/generic/kithara
 let useLocalBinary = ProcessInfo.processInfo.environment["KITHARA_LOCAL_DEV"] != nil
 
-let binaryTarget: Target = useLocalBinary
-    ? .binaryTarget(name: "KitharaFFIInternal", path: "KitharaFFIInternal.xcframework")
-    : .binaryTarget(
+let binaryTarget: Target
+if useLocalBinary {
+    binaryTarget = .binaryTarget(name: "KitharaFFIInternal", path: "KitharaFFIInternal.xcframework")
+} else {
+    let defaultBaseURL = "https://github.com/zvuk/kithara/releases/download"
+    let baseURL = ProcessInfo.processInfo.environment["KITHARA_BINARY_BASE_URL"] ?? defaultBaseURL
+    binaryTarget = .binaryTarget(
         name: "KitharaFFIInternal",
-        url: "https://github.com/zvuk/kithara/releases/download/v0.1.0/KitharaFFIInternal.xcframework.zip",
-        checksum: "9f1245e473fa803608b292a5abe6ab8c5edd217297c162b8b3def1dd6b44699e"
-      )
+        url: "\(baseURL)/v\(version)/KitharaFFIInternal.xcframework.zip",
+        checksum: checksum
+    )
+}
 
 let package = Package(
     name: "Kithara",

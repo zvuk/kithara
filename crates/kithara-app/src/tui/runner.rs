@@ -8,19 +8,24 @@ use kithara::{
     play::{Engine, EngineEvent, PlayerEvent},
     prelude::{PlayerImpl, Resource, ResourceConfig},
 };
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{
+    sync::broadcast::{Receiver, error::RecvError},
+    task::{JoinHandle, spawn_blocking},
+};
 
 use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
     controls::{AppController, PlayerControls},
     crossfade::{CrossfadeClock, ProgressLog},
     events::{UiMsg, format_seconds, is_progress_event, source_note},
-    theme::tui::TuiPalette,
+    theme::tui,
 };
 
 const CONTROL_POLL_MS: u64 = 100;
 const SEEK_STEP_SECONDS_F64: f64 = 5.0;
 const VOLUME_STEP: f32 = 0.05;
+const MAX_DIGIT_TRACKS: usize = 9;
+const PERCENT_SCALE: f32 = 100.0;
 
 type RunnerResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -38,7 +43,7 @@ pub(super) async fn run_tui(
     controller: &mut AppController,
     urls: Vec<String>,
     track_names: Vec<String>,
-    palette: TuiPalette,
+    palette: tui::TuiPalette,
 ) -> RunnerResult {
     let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -85,7 +90,7 @@ pub(super) async fn run_tui(
     let player_for_ui = player.clone();
     let ui_tx_for_loop = ui_tx.clone();
     let urls_for_loop = urls.clone();
-    let mut ui_handle = tokio::task::spawn_blocking(move || {
+    let mut ui_handle = spawn_blocking(move || {
         run_ui_loop(
             &player_for_ui,
             &urls_for_loop,
@@ -132,15 +137,15 @@ fn run_ui_loop(
     ui_tx: &mpsc::Sender<UiMsg>,
     ui_rx: &mpsc::Receiver<UiMsg>,
     stop_rx: &mpsc::Receiver<()>,
-    palette: TuiPalette,
+    palette: tui::TuiPalette,
 ) -> RunnerResult {
     let track_count = track_names.len();
     let dashboard = Dashboard::new(track_names, palette);
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
         "controls: 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
-        track_count.min(9),
-        VOLUME_STEP * 100.0
+        track_count.min(MAX_DIGIT_TRACKS),
+        VOLUME_STEP * PERCENT_SCALE
     ))?;
     ui.log_line("auto-advances to next track with crossfade near end of each track")?;
     ui.draw()?;
@@ -184,7 +189,7 @@ fn run_ui_loop(
                             PlayerEvent::VolumeChanged { volume } => {
                                 ui.dashboard.set_volume(volume);
                                 ui.dashboard
-                                    .set_note(format!("volume {:.0}%", volume * 100.0));
+                                    .set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
                             }
                             _ => {}
                         }
@@ -350,7 +355,7 @@ fn apply_volume(player: &PlayerImpl, delta: f32, dashboard: &mut Dashboard) {
     let volume = (player.volume() + delta).clamp(0.0, 1.0);
     player.set_volume(volume);
     dashboard.set_volume(volume);
-    dashboard.set_note(format!("volume {:.0}%", volume * 100.0));
+    dashboard.set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
 }
 
 fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
@@ -438,10 +443,7 @@ fn switch_track(
     Ok(())
 }
 
-fn forward_player_events(
-    mut rx: tokio::sync::broadcast::Receiver<PlayerEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+fn forward_player_events(mut rx: Receiver<PlayerEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -464,10 +466,7 @@ fn forward_player_events(
     })
 }
 
-fn forward_engine_events(
-    mut rx: tokio::sync::broadcast::Receiver<EngineEvent>,
-    tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+fn forward_engine_events(mut rx: Receiver<EngineEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -491,10 +490,10 @@ fn forward_engine_events(
 }
 
 fn forward_source_events(
-    mut rx: tokio::sync::broadcast::Receiver<kithara::prelude::Event>,
+    mut rx: Receiver<kithara::prelude::Event>,
     source: String,
     tx: mpsc::Sender<UiMsg>,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {

@@ -12,7 +12,7 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::effects::eq::{EqBandConfig, FilterKind, compute_coefficients};
+use kithara_audio::{EqBandConfig, FilterKind, compute_coefficients};
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 
@@ -29,6 +29,18 @@ const SMOOTH_TIME_MS: f32 = 10.0;
 
 /// Number of samples between coefficient recalculations during smoothing.
 const SMOOTH_BLOCK_SIZE: usize = 32;
+
+/// Minimum stereo channel count for processing.
+const MIN_STEREO: usize = 2;
+
+/// Convergence threshold for gain smoothing (dB).
+const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.01;
+
+/// Factor to convert milliseconds to seconds.
+const MS_TO_SECONDS: f32 = 1000.0;
+
+/// Filter kind ordinal for high-shelf filter.
+const FILTER_KIND_HIGH_SHELF: u8 = 2;
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -125,7 +137,7 @@ impl MasterEqProcessor {
         reason = "sample rate and block size are small integers"
     )]
     fn calc_smooth_coeff(sample_rate: NonZeroU32) -> f32 {
-        let tau = SMOOTH_TIME_MS / 1000.0;
+        let tau = SMOOTH_TIME_MS / MS_TO_SECONDS;
         let effective_rate = sample_rate.get() as f32 / SMOOTH_BLOCK_SIZE as f32;
         1.0 - (-1.0 / (tau * effective_rate)).exp()
     }
@@ -152,7 +164,7 @@ impl MasterEqProcessor {
         let current = self.current_gains[idx];
         let diff = target - current;
 
-        if diff.abs() < 0.01 {
+        if diff.abs() < SMOOTH_CONVERGENCE_THRESHOLD {
             if (current - target).abs() > f32::EPSILON {
                 self.current_gains[idx] = target;
                 let eq_band = to_eq_band_config(&self.params.bands[idx]);
@@ -182,7 +194,7 @@ fn to_eq_band_config(band: &MasterEqBand) -> EqBandConfig {
         gain_db: band.gain_db,
         kind: match band.kind {
             0 => FilterKind::LowShelf,
-            2 => FilterKind::HighShelf,
+            FILTER_KIND_HIGH_SHELF => FilterKind::HighShelf,
             _ => FilterKind::Peaking,
         },
     }
@@ -200,11 +212,11 @@ impl AudioNodeProcessor for MasterEqProcessor {
             self.params.apply(patch);
         }
 
-        if buffers.inputs.len() < 2 || buffers.outputs.len() < 2 {
+        if buffers.inputs.len() < MIN_STEREO || buffers.outputs.len() < MIN_STEREO {
             return ProcessStatus::Bypass;
         }
 
-        if !self.params.enabled || info.in_silence_mask.all_channels_silent(2) {
+        if !self.params.enabled || info.in_silence_mask.all_channels_silent(MIN_STEREO) {
             buffers.outputs[0].copy_from_slice(buffers.inputs[0]);
             buffers.outputs[1].copy_from_slice(buffers.inputs[1]);
             return ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask));

@@ -4,12 +4,21 @@ stages:
   - quality
   - release
 
+.setup:
+  before_script:
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+
+.setup-alsa:
+  before_script:
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+
 default:
   image: rust:1.88
   tags:
     - cce-feature
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
 
 cache: &cargo-cache
   key:
@@ -37,9 +46,8 @@ lint:
     QUALITY_MIN_BENCH_TARGETS: "1"
     QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/ast-grep" || cargo install ast-grep --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - rustup component add clippy
     - rustup toolchain install nightly --component rustfmt
   script:
@@ -56,16 +64,16 @@ lint:
 deny:
   stage: lint
   before_script:
+    - !reference [.setup, before_script]
     - test -f "$CARGO_HOME/bin/cargo-deny" || cargo install cargo-deny --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just deny
 
 machete:
   stage: lint
   before_script:
+    - !reference [.setup, before_script]
     - test -f "$CARGO_HOME/bin/cargo-machete" || cargo install cargo-machete --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just machete
   allow_failure: true
@@ -73,7 +81,7 @@ machete:
 arch:
   stage: lint
   before_script:
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup, before_script]
   script:
     - just arch
 
@@ -84,9 +92,8 @@ test:
   needs: [lint]
   timeout: 20 minutes
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/cargo-nextest" || cargo install cargo-nextest --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just test
 
@@ -95,7 +102,7 @@ msrv:
   needs: [lint]
   image: rust:1.88
   before_script:
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup, before_script]
   script:
     - just check
 
@@ -103,8 +110,8 @@ wasm:
   stage: test
   needs: [lint]
   before_script:
+    - !reference [.setup, before_script]
     - rustup target add wasm32-unknown-unknown
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just wasm-check
 
@@ -112,6 +119,7 @@ wasm-size:
   stage: test
   needs: [lint]
   before_script:
+    - !reference [.setup, before_script]
     - rustup toolchain install nightly --component rust-src
     - rustup target add wasm32-unknown-unknown --toolchain nightly
     - test -f "$CARGO_HOME/bin/wasm-slim" || cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
@@ -129,9 +137,8 @@ hack:
   needs: [lint]
   timeout: 30 minutes
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just hack
   allow_failure: true
@@ -140,9 +147,8 @@ semver:
   stage: test
   needs: [lint]
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/cargo-semver-checks" || cargo install cargo-semver-checks --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just semver
   allow_failure: true
@@ -159,8 +165,7 @@ coverage:
   variables:
     COVERAGE_MIN: "80"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/cargo-llvm-cov" || cargo install cargo-llvm-cov --locked
     - rustup component add llvm-tools-preview
   script:
@@ -176,8 +181,7 @@ perf:
   stage: quality
   needs: [test]
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup-alsa, before_script]
   script:
     - just perf-test
   artifacts:
@@ -195,8 +199,7 @@ bench-baseline:
   stage: quality
   needs: [test]
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup-alsa, before_script]
   cache:
     key: criterion-main-baseline
     paths:
@@ -225,8 +228,7 @@ bench:
   stage: quality
   needs: [test]
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - !reference [.setup-alsa, before_script]
     - test -f "$CARGO_HOME/bin/critcmp" || cargo install critcmp --locked
   cache:
     key: criterion-main-baseline
@@ -261,13 +263,58 @@ release-apple:
     - macos
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v/'
-      when: manual
   before_script:
+    - !reference [.setup, before_script]
     - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
     - just release-apple
+    - cp /tmp/KitharaFFIInternal.xcframework.zip .
+    - |
+      CHECKSUM=$(swift package compute-checksum KitharaFFIInternal.xcframework.zip)
+      PACKAGE_BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kithara"
+      PACKAGE_URL="${PACKAGE_BASE_URL}/${CI_COMMIT_TAG}/KitharaFFIInternal.xcframework.zip"
+      echo "CHECKSUM=$CHECKSUM" >> release.env
+      echo "PACKAGE_URL=$PACKAGE_URL" >> release.env
+      echo "PACKAGE_BASE_URL=$PACKAGE_BASE_URL" >> release.env
+      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+           --upload-file KitharaFFIInternal.xcframework.zip \
+           "$PACKAGE_URL"
   artifacts:
     paths:
-      - /tmp/KitharaFFIInternal.xcframework.zip
+      - KitharaFFIInternal.xcframework.zip
+    reports:
+      dotenv: release.env
     expire_in: 90 days
+
+release-apple-publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: release-apple
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  script:
+    - echo "Creating release $CI_COMMIT_TAG (checksum $CHECKSUM)"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: $CI_COMMIT_TAG
+    description: |
+      ## XCFramework checksum
+      ```
+      $CHECKSUM
+      ```
+
+      ## Swift Package Manager
+      ```swift
+      .package(url: "https://gitlab.zvq.me/disrupt/kithara", from: "<version>")
+      ```
+      For private registry, set `KITHARA_BINARY_BASE_URL`:
+      ```bash
+      KITHARA_BINARY_BASE_URL="$PACKAGE_BASE_URL" swift package resolve
+      ```
+    assets:
+      links:
+        - name: KitharaFFIInternal.xcframework.zip
+          url: $PACKAGE_URL
+          link_type: package

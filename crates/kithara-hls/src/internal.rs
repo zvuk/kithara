@@ -6,12 +6,16 @@ use std::{
 };
 
 pub use kithara_abr::{AbrMode, AbrOptions};
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::tokio::sync::broadcast;
+use kithara_storage::ResourceExt;
 use tokio_util::sync::CancellationToken;
+
+/// Capacity of the HLS event bus.
+const EVENT_BUS_CAPACITY: usize = 16;
 
 use crate::source::build_pair;
 pub use crate::{
@@ -65,7 +69,7 @@ pub fn make_test_source_with_fetch(
         fetch,
         segments,
         playlist_state,
-        bus: EventBus::new(16),
+        bus: EventBus::new(EVENT_BUS_CAPACITY),
         variant_fence: None,
         _backend: None,
     }
@@ -84,9 +88,6 @@ pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchMan
 )]
 #[expect(clippy::missing_panics_doc, reason = "test-only helper")]
 pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
-    use kithara_assets::ResourceKey;
-    use kithara_storage::ResourceExt;
-
     let backend = source.fetch.backend();
     let media_key = ResourceKey::from_url(&data.media_url);
     let res = backend

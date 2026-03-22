@@ -25,7 +25,7 @@
 //! ```
 
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, ErrorKind, Read, Seek, SeekFrom},
     marker::PhantomData,
     panic::{self, AssertUnwindSafe},
     sync::{
@@ -44,12 +44,15 @@ use symphonia::{
             audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
         },
         errors::Error as SymphoniaError,
-        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType, probe::Hint},
+        io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
         units::{Time, Timestamp},
     },
-    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
+    default::{
+        formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
+        get_codecs, get_probe,
+    },
 };
 
 use crate::{
@@ -57,6 +60,9 @@ use crate::{
     traits::{Aac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
+
+/// Default audio channel count (stereo).
+const DEFAULT_CHANNEL_COUNT: u16 = 2;
 
 /// Configuration for Symphonia-based decoders.
 #[derive(Default)]
@@ -277,7 +283,7 @@ impl SymphoniaInner {
         let meta_opts = MetadataOptions::default();
 
         tracing::debug!(hint = ?config.hint, seek_enabled, "Probing format");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = get_probe()
             .probe(&probe_hint, mss, format_opts, meta_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
@@ -372,7 +378,7 @@ impl SymphoniaInner {
         let channels = codec_params
             .channels
             .as_ref()
-            .map_or(2, |c| c.count() as u16);
+            .map_or(DEFAULT_CHANNEL_COUNT, |c| c.count() as u16);
         let spec = PcmSpec {
             channels,
             sample_rate,
@@ -382,7 +388,7 @@ impl SymphoniaInner {
         let decoder_opts = AudioDecoderOptions {
             verify: config.verify,
         };
-        let decoder = symphonia::default::get_codecs()
+        let decoder = get_codecs()
             .make_audio_decoder(&codec_params, &decoder_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
@@ -414,7 +420,7 @@ impl SymphoniaInner {
     }
 
     /// Calculate duration from track metadata.
-    fn calculate_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
+    fn calculate_duration(track: &Track) -> Option<Duration> {
         let num_frames = track.num_frames?;
         let time_base = track.time_base?;
         let time = time_base.calc_time(Timestamp::new(num_frames as i64))?;
@@ -452,7 +458,7 @@ impl SymphoniaInner {
                     self.decoder.reset();
                     continue;
                 }
-                Err(SymphoniaError::IoError(ref e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(SymphoniaError::IoError(ref e)) if e.kind() == ErrorKind::UnexpectedEof => {
                     tracing::debug!("Treating UnexpectedEof as EOF");
                     return Ok(None);
                 }
@@ -746,7 +752,7 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
     }
 }
 
-impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeekAdapter<R> {
+impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
     fn is_seekable(&self) -> bool {
         self.seek_enabled.load(Ordering::Acquire)
     }
@@ -762,6 +768,7 @@ mod tests {
     use std::io::Cursor;
 
     use kithara_test_utils::{create_test_wav, kithara};
+    use symphonia::core::io::MediaSource;
 
     use super::*;
     use crate::traits::AudioDecoder;
@@ -908,8 +915,6 @@ mod tests {
 
     #[kithara::test]
     fn test_read_seek_adapter_byte_len() {
-        use symphonia::core::io::MediaSource;
-
         let data = vec![0u8; 5000];
         let cursor = Cursor::new(data);
         let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
@@ -925,8 +930,6 @@ mod tests {
 
     #[kithara::test]
     fn test_read_seek_adapter_dynamic_update() {
-        use symphonia::core::io::MediaSource;
-
         let data = vec![0u8; 1000];
         let cursor = Cursor::new(data);
         let adapter = ReadSeekAdapter::new_seek_disabled(cursor);

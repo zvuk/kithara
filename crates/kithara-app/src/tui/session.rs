@@ -48,9 +48,14 @@ impl UiSession {
     /// # Errors
     /// Returns an error if terminal raw mode or viewport setup fails.
     pub fn new(dashboard: Dashboard) -> TuiResult<Self> {
+        const BOTTOM_MARGIN: u16 = 2;
+        const MIN_VIEWPORT_HEIGHT: u16 = 6;
+
         let raw = RawModeGuard::new()?;
         let (_, terminal_height) = size()?;
-        let max_height = terminal_height.saturating_sub(2).max(6);
+        let max_height = terminal_height
+            .saturating_sub(BOTTOM_MARGIN)
+            .max(MIN_VIEWPORT_HEIGHT);
         let viewport_height = dashboard.height().min(max_height);
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::with_options(

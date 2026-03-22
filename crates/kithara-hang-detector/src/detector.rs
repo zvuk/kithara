@@ -1,5 +1,7 @@
 #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 use std::env;
+#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use web_time::Instant;
@@ -115,7 +117,6 @@ fn fallback_timeout() -> Duration {
 #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 #[must_use]
 fn env_timeout() -> Option<Duration> {
-    use std::sync::OnceLock;
     static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
     *CACHED.get_or_init(|| {
         let value = env::var(ENV_TIMEOUT_SECS).ok()?;

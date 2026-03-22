@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thirtyfour::{
@@ -1409,9 +1410,7 @@ fn repo_root() -> PathBuf {
 }
 
 async fn http_ok(url: &str) -> bool {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build();
+    let client = Client::builder().timeout(Duration::from_secs(2)).build();
 
     let Ok(client) = client else {
         return false;
@@ -1437,9 +1436,7 @@ async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
 }
 
 async fn page_ready_once(url: &str) -> bool {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build();
+    let client = Client::builder().timeout(Duration::from_secs(2)).build();
 
     let Ok(client) = client else {
         return false;

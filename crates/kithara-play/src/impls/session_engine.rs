@@ -1,19 +1,25 @@
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::num::NonZeroU32;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use std::sync::LazyLock;
 #[cfg(target_arch = "wasm32")]
-use std::{num::NonZeroU32, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::OnceLock, time::Duration};
 
-use firewheel::{
-    FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
-};
+#[rustfmt::skip]
+use firewheel::nodes::volume_pan::VolumePanNode;
+use firewheel::{FirewheelConfig, Volume, channel_config::ChannelCount, diff::Memo, node::NodeID};
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
-use kithara_platform::{Mutex, sync::mpsc};
+use kithara_platform::{
+    Mutex,
+    sync::mpsc,
+    thread::{sleep as thread_sleep, spawn_named},
+};
 #[cfg(not(target_arch = "wasm32"))]
 use ringbuf::{
     HeapCons,
@@ -30,6 +36,24 @@ use crate::{
     error::PlayError,
     types::{SessionDuckingMode, SlotId},
 };
+
+/// Default sample rate hint for the audio session.
+const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+
+/// Capacity of the session command ring buffer.
+const SESSION_CMD_RINGBUF_CAPACITY: usize = 64;
+
+/// Sleep duration between command loop iterations (microseconds).
+const CMD_LOOP_SLEEP_US: u64 = 100;
+
+/// Gain applied during soft ducking.
+const DUCKING_GAIN_SOFT: f32 = 0.4;
+
+/// Gain applied during hard ducking.
+const DUCKING_GAIN_HARD: f32 = 0.2;
+
+/// Capacity of the player command ring buffer within a slot.
+const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
 pub(crate) type PlayerId = u64;
 
@@ -99,7 +123,7 @@ impl SessionState {
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
-            sample_rate_hint: 44_100,
+            sample_rate_hint: DEFAULT_SAMPLE_RATE,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
@@ -189,7 +213,7 @@ impl SessionClient {
                 Ok(()) => return Ok(()),
                 Err(returned) => {
                     pending = returned;
-                    kithara_platform::thread::sleep(Duration::from_micros(100));
+                    thread_sleep(Duration::from_micros(CMD_LOOP_SLEEP_US));
                 }
             }
         }
@@ -377,7 +401,7 @@ fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
             let _ = reply_tx.send_sync(reply);
             continue;
         }
-        kithara_platform::thread::sleep(Duration::from_micros(100));
+        thread_sleep(Duration::from_micros(CMD_LOOP_SLEEP_US));
     }
 }
 
@@ -387,8 +411,8 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
         static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
         SESSION_CLIENT
             .get_or_init(|| {
-                let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(64).split();
-                let _ = kithara_platform::thread::spawn_named("kithara-engine", move || {
+                let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
+                let _ = spawn_named("kithara-engine", move || {
                     engine_thread(cmd_rx);
                 });
                 Arc::new(SessionClient {
@@ -566,8 +590,8 @@ pub(crate) fn warm_up_audio() {
 fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {
         SessionDuckingMode::Off => 1.0,
-        SessionDuckingMode::Soft => 0.4,
-        SessionDuckingMode::Hard => 0.2,
+        SessionDuckingMode::Soft => DUCKING_GAIN_SOFT,
+        SessionDuckingMode::Hard => DUCKING_GAIN_HARD,
     }
 }
 
@@ -686,7 +710,7 @@ fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
 fn ensure_ctx(state: &mut SessionState, sample_rate: u32) -> Result<(), String> {
     if state.ctx.is_none() {
         let config = FirewheelConfig {
-            num_graph_outputs: firewheel::channel_config::ChannelCount::STEREO,
+            num_graph_outputs: ChannelCount::STEREO,
             ..FirewheelConfig::default()
         };
         let mut ctx = RuntimeCtx::new(config);
@@ -869,7 +893,7 @@ fn allocate_slot(state: &mut SessionState, player_id: PlayerId) -> Result<Reply,
     let slot_id = SlotId(state.players[idx].next_slot_id);
     state.players[idx].next_slot_id += 1;
 
-    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
+    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(PLAYER_CMD_RINGBUF_CAPACITY).split();
     let shared_state = Arc::new(SharedPlayerState::new());
     let shared_eq = state.players[idx].shared_eq.clone();
 

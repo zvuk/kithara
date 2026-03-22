@@ -39,9 +39,7 @@ fn settle() {
     std::thread::sleep(Duration::from_millis(1500));
 }
 
-// ---------------------------------------------------------------------------
 // AudioWorkerHandle — exactly 1 thread
-// ---------------------------------------------------------------------------
 
 #[kithara::test]
 fn thread_budget_audio_worker_is_one_thread() {
@@ -59,12 +57,10 @@ fn thread_budget_audio_worker_is_one_thread() {
     worker.shutdown();
 }
 
-// ---------------------------------------------------------------------------
 // Single HLS pipeline: target = 1 thread (shared worker only)
 //
 // Downloader must run as an async task on the caller's runtime,
 // not spawn a dedicated OS thread + tokio runtime.
-// ---------------------------------------------------------------------------
 
 #[kithara::test(
     tokio,
@@ -107,11 +103,9 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     cancel.cancel();
 }
 
-// ---------------------------------------------------------------------------
 // 3 tracks with shared worker: target = 0 extra threads
 //
 // 1 shared worker serves all tracks. Downloaders are async tasks.
-// ---------------------------------------------------------------------------
 
 #[kithara::test(
     tokio,
@@ -200,9 +194,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     drop(audios);
 }
 
-// ---------------------------------------------------------------------------
 // Process ceiling — no leaked kithara threads when idle
-// ---------------------------------------------------------------------------
 
 #[kithara::test]
 fn thread_budget_process_ceiling() {

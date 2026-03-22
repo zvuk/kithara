@@ -3,7 +3,7 @@
 //! Provides `TestServer` with routes for master/media playlists and segments.
 //! On native: in-process axum server. On WASM: delegates to external fixture server.
 
-// ── Native implementation ──────────────────────────────────────────
+// Native implementation
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -12,7 +12,7 @@ mod native {
         sync::{Arc, Mutex as StdMutex},
     };
 
-    use axum::{Router, routing::get};
+    use axum::{Router, middleware, routing::get};
     use kithara_test_utils::TestHttpServer;
     use url::Url;
 
@@ -78,7 +78,7 @@ mod native {
                 .route("/key.bin", get(key_endpoint))
                 .route("/aes/key.bin", get(|| async { aes128_key_bytes() }))
                 .route("/aes/seg0.bin", get(|| async { aes128_ciphertext() }))
-                .layer(axum::middleware::from_fn(
+                .layer(middleware::from_fn(
                     move |req: axum::extract::Request, next: axum::middleware::Next| {
                         let counts = request_counts_clone.clone();
                         async move {
@@ -126,7 +126,7 @@ mod native {
     }
 }
 
-// ── WASM implementation ────────────────────────────────────────────
+// WASM implementation
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -181,7 +181,7 @@ pub(crate) async fn test_server() -> TestServer {
     TestServer::new().await
 }
 
-// ── Shared content generators (used by native server + tests) ──────
+// Shared content generators (used by native server + tests)
 
 /// Master playlist with standard bitrates
 #[cfg(not(target_arch = "wasm32"))]

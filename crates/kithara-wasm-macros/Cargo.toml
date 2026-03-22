@@ -13,6 +13,8 @@ proc-macro = true
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [lints]

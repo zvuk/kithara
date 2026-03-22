@@ -8,7 +8,10 @@
 
 use std::time::Duration;
 
-use kithara_platform::sync::{Condvar, Mutex};
+use kithara_platform::{
+    sync::{Condvar, Mutex},
+    time::Instant,
+};
 
 /// Level-triggered wake for the shared worker thread.
 ///
@@ -40,7 +43,7 @@ impl WorkerWake {
     /// Clears the flag on successful wake.
     #[kithara_hang_detector::hang_watchdog]
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
-        let deadline = kithara_platform::time::Instant::now() + timeout;
+        let deadline = Instant::now() + timeout;
         let mut guard = self.woken.lock_sync();
         loop {
             if *guard {
@@ -67,8 +70,9 @@ impl WorkerWake {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
+    use kithara_platform::thread::{sleep, spawn};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -83,7 +87,7 @@ mod tests {
     #[kithara::test]
     fn wait_without_wake_times_out() {
         let w = WorkerWake::new();
-        let start = kithara_platform::time::Instant::now();
+        let start = Instant::now();
         let woken = w.wait_timeout(Duration::from_millis(10));
         assert!(!woken);
         assert!(start.elapsed() >= Duration::from_millis(5));
@@ -101,10 +105,10 @@ mod tests {
 
     #[kithara::test]
     fn wake_from_another_thread() {
-        let w = std::sync::Arc::new(WorkerWake::new());
-        let w2 = std::sync::Arc::clone(&w);
-        kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+        let w = Arc::new(WorkerWake::new());
+        let w2 = Arc::clone(&w);
+        spawn(move || {
+            sleep(Duration::from_millis(5));
             w2.wake();
         });
         assert!(w.wait_timeout(Duration::from_secs(5)));

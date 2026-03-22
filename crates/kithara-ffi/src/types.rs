@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
+use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -29,16 +30,23 @@ pub enum FfiError {
 
 pub type FfiResult<T> = Result<T, FfiError>;
 
+const ERROR_CODE_INTERNAL: i32 = 0;
+const ERROR_CODE_NOT_READY: i32 = 1;
+const ERROR_CODE_ITEM_FAILED: i32 = 2;
+const ERROR_CODE_SEEK_FAILED: i32 = 3;
+const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
+const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
+
 impl FfiError {
     #[must_use]
     pub fn observer_code(&self) -> i32 {
         match self {
-            Self::Internal { .. } => 0,
-            Self::NotReady => 1,
-            Self::ItemFailed { .. } => 2,
-            Self::SeekFailed { .. } => 3,
-            Self::EngineNotRunning => 4,
-            Self::InvalidArgument { .. } => 5,
+            Self::Internal { .. } => ERROR_CODE_INTERNAL,
+            Self::NotReady => ERROR_CODE_NOT_READY,
+            Self::ItemFailed { .. } => ERROR_CODE_ITEM_FAILED,
+            Self::SeekFailed { .. } => ERROR_CODE_SEEK_FAILED,
+            Self::EngineNotRunning => ERROR_CODE_ENGINE_NOT_RUNNING,
+            Self::InvalidArgument { .. } => ERROR_CODE_INVALID_ARGUMENT,
         }
     }
 }
@@ -98,14 +106,14 @@ pub fn duration_to_seconds(d: Duration) -> f64 {
 /// # Errors
 ///
 /// Returns [`FfiError::InvalidArgument`] for empty or malformed URLs.
-pub fn parse_url(s: &str) -> FfiResult<url::Url> {
+pub fn parse_url(s: &str) -> FfiResult<Url> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err(FfiError::InvalidArgument {
             reason: "empty URL".to_string(),
         });
     }
-    url::Url::parse(trimmed).map_err(|e| FfiError::InvalidArgument {
+    Url::parse(trimmed).map_err(|e| FfiError::InvalidArgument {
         reason: format!("invalid URL: {e}"),
     })
 }

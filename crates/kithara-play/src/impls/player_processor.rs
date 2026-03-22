@@ -39,6 +39,15 @@ use crate::traits::dj::crossfade::CrossfadeCurve;
 /// Maximum number of concurrent tracks per player node.
 const MAX_TRACKS: usize = 4;
 
+/// Number of scratch buffers for stereo processing.
+const SCRATCH_BUF_COUNT: usize = 4;
+
+/// Minimum stereo channel count for output processing.
+const MIN_STEREO: usize = 2;
+
+/// Minimum position (seconds) before seeking is allowed on fade-in.
+const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+
 /// Commands sent from the main thread to the processor.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -77,7 +86,7 @@ pub(crate) struct PlayerNodeProcessor {
     cmd_rx: HeapCons<PlayerCmd>,
     crossfade: CrossfadeSettings,
     sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; 4],
+    scratch_bufs: [PcmBuf; SCRATCH_BUF_COUNT],
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     tracks_transitions: VecDeque<TrackTransition>,
@@ -232,7 +241,7 @@ impl PlayerNodeProcessor {
                         // Seeking to 0 on a freshly loaded track triggers
                         // set_seek_epoch → clear() which wipes the segment index
                         // and races with in-flight ABR downloads (WASM HLS bug).
-                        if track.position() > 0.5 {
+                        if track.position() > FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
                         track.fade_in();
@@ -270,14 +279,7 @@ impl PlayerNodeProcessor {
                 .min_by_key(|(_, idx)| {
                     self.tracks
                         .get_by_index(**idx)
-                        .map_or(0, |t| match t.state() {
-                            TrackState::Finished => 0,
-                            TrackState::FadingOut => 1,
-                            TrackState::Preloading => 2,
-                            TrackState::Paused => 3,
-                            TrackState::FadingIn => 4,
-                            TrackState::Playing => 5,
-                        })
+                        .map_or(0, |t| eviction_priority(t.state()))
                 })
                 .map(|(key, idx)| {
                     let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
@@ -378,7 +380,7 @@ impl PlayerNodeProcessor {
     fn render_audio(&mut self, buffers: &mut ProcBuffers, frames: usize, is_playing: bool) -> bool {
         let mut playback_started = false;
 
-        if buffers.outputs.len() < 2 {
+        if buffers.outputs.len() < MIN_STEREO {
             return false;
         }
 
@@ -397,7 +399,7 @@ impl PlayerNodeProcessor {
         }
 
         // Split into read_bufs and mix_bufs
-        let (left, right) = self.scratch_bufs.split_at_mut(2);
+        let (left, right) = self.scratch_bufs.split_at_mut(MIN_STEREO);
         let (read_buf0, read_buf1) = left.split_at_mut(1);
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
@@ -430,6 +432,27 @@ impl PlayerNodeProcessor {
         }
 
         playback_started
+    }
+}
+
+/// Eviction priority: preloading tracks are evicted before active ones.
+const EVICT_PRELOADING: u8 = 2;
+/// Eviction priority: paused tracks are evicted after preloading.
+const EVICT_PAUSED: u8 = 3;
+/// Eviction priority: fading-in tracks are kept longer.
+const EVICT_FADING_IN: u8 = 4;
+/// Eviction priority: playing tracks are evicted last.
+const EVICT_PLAYING: u8 = 5;
+
+/// Returns eviction priority for a track state (lower = evicted first).
+fn eviction_priority(state: TrackState) -> u8 {
+    match state {
+        TrackState::Finished => 0,
+        TrackState::FadingOut => 1,
+        TrackState::Preloading => EVICT_PRELOADING,
+        TrackState::Paused => EVICT_PAUSED,
+        TrackState::FadingIn => EVICT_FADING_IN,
+        TrackState::Playing => EVICT_PLAYING,
     }
 }
 
@@ -490,7 +513,7 @@ mod tests {
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
-    use kithara_audio::{DecodeResult, PcmReader};
+    use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration, tokio::sync::broadcast};
@@ -773,11 +796,6 @@ mod tests {
     }
 
     fn create_mock_player_resource(src: &str) -> Arc<PlatformMutex<PlayerResource>> {
-        use kithara_audio::mock::TestPcmReader;
-        use kithara_decode::PcmSpec;
-
-        use crate::impls::resource::Resource;
-
         let spec = PcmSpec {
             channels: 2,
             sample_rate: 44100,

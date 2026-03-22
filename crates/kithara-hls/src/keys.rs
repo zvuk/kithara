@@ -8,6 +8,12 @@ use url::Url;
 
 use crate::{HlsError, HlsResult, KeyContext, config::KeyProcessor, fetch::DefaultFetchManager};
 
+/// AES-128 key / IV length in bytes.
+const AES_KEY_LEN: usize = 16;
+
+/// Start offset for sequence number in the 16-byte IV.
+const IV_SEQUENCE_OFFSET: usize = 8;
+
 #[derive(Debug, Error)]
 pub enum KeyError {
     #[error("Network error: {0}")]
@@ -68,7 +74,7 @@ impl KeyManager {
     ///
     /// # Errors
     /// Returns an error when key fetch fails or custom key processing fails.
-    pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
+    pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
         if let Some(ref params) = self.key_query_params {
             let mut pairs = fetch_url.query_pairs_mut();
@@ -100,7 +106,7 @@ impl KeyManager {
         last.to_string()
     }
 
-    fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
+    fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
         let context = KeyContext { iv, url };
 
         if let Some(processor) = &self.key_processor {
@@ -128,12 +134,15 @@ impl KeyManager {
         }
     }
 
-    pub(crate) fn derive_iv(key_info: &crate::parsing::KeyInfo, sequence: u64) -> [u8; 16] {
+    pub(crate) fn derive_iv(
+        key_info: &crate::parsing::KeyInfo,
+        sequence: u64,
+    ) -> [u8; AES_KEY_LEN] {
         if let Some(iv) = key_info.iv {
             return iv;
         }
-        let mut iv = [0u8; 16];
-        iv[8..].copy_from_slice(&sequence.to_be_bytes());
+        let mut iv = [0u8; AES_KEY_LEN];
+        iv[IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
         iv
     }
 }

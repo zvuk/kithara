@@ -7,6 +7,7 @@ name = "kithara-workspace-hack"
 version = "0.1.0"
 edition = "2021"
 description = "workspace-hack package, managed by hakari"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # The parts of the file between the BEGIN HAKARI SECTION and END HAKARI SECTION comments
@@ -16,6 +17,8 @@ publish = false
 [dependencies]
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 byteorder = { version = "1" }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
@@ -36,6 +39,7 @@ nu-ansi-term = { version = "0.50" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-rational = { version = "0.4", features = ["num-bigint-std"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
+once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
@@ -57,6 +61,8 @@ wasm-bindgen-futures = { version = "0.4" }
 [build-dependencies]
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 byteorder = { version = "1" }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
@@ -77,6 +83,7 @@ nu-ansi-term = { version = "0.50" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-rational = { version = "0.4", features = ["num-bigint-std"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
+once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
 proc-macro2 = { version = "1" }
@@ -99,8 +106,6 @@ wasm-bindgen-futures = { version = "0.4" }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
 futures-io = { version = "0.3" }
@@ -109,6 +114,7 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
+libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -129,8 +135,6 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "DedicatedWo
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
 futures-io = { version = "0.3" }
@@ -140,6 +144,7 @@ hotpath-macros = { version = "0.14", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
+libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -158,8 +163,6 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "DedicatedWo
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
@@ -168,6 +171,7 @@ half = { version = "2", features = ["num-traits"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
+libc = { version = "0.2" }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -184,8 +188,6 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "DedicatedWo
 
 [target.x86_64-apple-darwin.build-dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
@@ -195,6 +197,7 @@ hotpath-macros = { version = "0.14", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
+libc = { version = "0.2" }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -211,8 +214,6 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "DedicatedWo
 
 [target.aarch64-apple-darwin.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
@@ -238,8 +239,6 @@ web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "DedicatedWo
 
 [target.aarch64-apple-darwin.build-dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }

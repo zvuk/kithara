@@ -21,7 +21,7 @@ use kithara::{
 use kithara_platform::time::sleep;
 use kithara_platform::{time::Instant, tokio};
 use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -266,7 +266,7 @@ async fn live_real_drm_playback_smoke(_live_hls_stream_tracing_setup: (), temp_d
     });
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
-    let mut audio = tokio::time::timeout(
+    let mut audio = timeout(
         browser_timeout(10, 15),
         Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config)),
     )
@@ -279,7 +279,7 @@ async fn live_real_drm_playback_smoke(_live_hls_stream_tracing_setup: (), temp_d
 
     let mut chunks_read = 0usize;
     while chunks_read < 8 {
-        let Some(_chunk) = tokio::time::timeout(
+        let Some(_chunk) = timeout(
             browser_timeout(10, 15),
             next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "drm_playback_smoke"),
         )
@@ -336,7 +336,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = tokio::task::spawn(async move {
+    let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
@@ -485,7 +485,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = tokio::task::spawn(async move {
+    let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
@@ -605,7 +605,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = tokio::task::spawn(async move {
+    let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
@@ -812,7 +812,7 @@ async fn live_stress_real_stream_seek_read_cache(
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
-    let events_task = tokio::task::spawn(async move {
+    let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,

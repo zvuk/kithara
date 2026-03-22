@@ -7,6 +7,7 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::Headers;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_stream::{ReadOutcome, SourcePhase, StreamError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
@@ -132,15 +133,14 @@ impl kithara_stream::Source for FileSource {
         range: Range<u64>,
         timeout: Duration,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
-        use kithara_stream::StreamError;
         let _ = timeout;
 
         // Fast-path via shared FSM: check for seek, EOF, or already-ready data
         // before touching downloader state or blocking on the resource.
         match self.phase_at(range.clone()) {
-            kithara_stream::SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
-            kithara_stream::SourcePhase::Eof => return Ok(WaitOutcome::Eof),
-            kithara_stream::SourcePhase::Ready => return Ok(WaitOutcome::Ready),
+            SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
+            SourcePhase::Eof => return Ok(WaitOutcome::Eof),
+            SourcePhase::Ready => return Ok(WaitOutcome::Ready),
             _ => {}
         }
 
@@ -180,14 +180,13 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
-    fn phase(&self) -> kithara_stream::SourcePhase {
+    fn phase(&self) -> SourcePhase {
         let timeline = self.coord.timeline();
         let pos = timeline.byte_position();
         self.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase {
-        use kithara_stream::SourcePhase;
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let timeline = self.coord.timeline();
         let past_eof = self
             .coord
@@ -211,9 +210,7 @@ impl kithara_stream::Source for FileSource {
         &mut self,
         offset: u64,
         buf: &mut [u8],
-    ) -> kithara_stream::StreamResult<kithara_stream::ReadOutcome, SourceError> {
-        use kithara_stream::{ReadOutcome, StreamError};
-
+    ) -> kithara_stream::StreamResult<ReadOutcome, SourceError> {
         let n = self
             .res
             .read_at(offset, buf)
@@ -248,6 +245,7 @@ mod tests {
     use std::sync::Arc;
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
+    use kithara_events::Event;
     use kithara_platform::time::{Duration, sleep, timeout};
     use kithara_stream::{ReadOutcome, Source, Timeline};
     use kithara_test_utils::kithara;
@@ -411,7 +409,7 @@ mod tests {
 
         let event = events.try_recv().expect("expected file event");
         match event {
-            kithara_events::Event::File(FileEvent::ByteProgress { position, total }) => {
+            Event::File(FileEvent::ByteProgress { position, total }) => {
                 assert_eq!(position, 3);
                 assert_eq!(total, Some(6));
             }
@@ -444,7 +442,7 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -461,10 +459,7 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Range 50..60 is NOT present — seeking wins.
-        assert_eq!(
-            source.phase_at(50..60),
-            kithara_stream::SourcePhase::Seeking,
-        );
+        assert_eq!(source.phase_at(50..60), SourcePhase::Seeking,);
     }
 
     #[kithara::test]
@@ -481,7 +476,7 @@ mod tests {
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
         // Data IS present — Ready wins over Seeking (allows drain).
-        assert_eq!(source.phase_at(0..5), kithara_stream::SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), SourcePhase::Ready,);
     }
 
     #[kithara::test]
@@ -493,7 +488,7 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        assert_eq!(source.phase_at(100..110), kithara_stream::SourcePhase::Eof,);
+        assert_eq!(source.phase_at(100..110), SourcePhase::Eof,);
     }
 
     // Parameterless phase() tests
@@ -507,7 +502,7 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Ready);
+        assert_eq!(Source::phase(&source), SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -520,7 +515,7 @@ mod tests {
         coord.timeline().set_byte_position(32);
         let source = make_source(res, coord, bus);
 
-        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Waiting);
+        assert_eq!(Source::phase(&source), SourcePhase::Waiting);
     }
 
     #[kithara::test]
@@ -534,7 +529,7 @@ mod tests {
         coord.timeline().set_byte_position(data.len() as u64);
         let source = make_source(res, coord, bus);
 
-        assert_eq!(Source::phase(&source), kithara_stream::SourcePhase::Eof);
+        assert_eq!(Source::phase(&source), SourcePhase::Eof);
     }
 
     #[kithara::test]

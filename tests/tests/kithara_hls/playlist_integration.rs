@@ -1,8 +1,12 @@
 #![forbid(unsafe_code)]
 
-use kithara::{hls::HlsResult, internal::VariantId};
+use kithara::{
+    hls::{HlsError, HlsResult},
+    internal::VariantId,
+};
 use kithara_integration_tests::hls_fixture::*;
 use kithara_platform::time::Duration;
+use url::Url;
 
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
     if cfg!(target_arch = "wasm32") {
@@ -159,8 +163,8 @@ async fn fetch_manager_error_handling_invalid_url(
     let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
 
     // Try to fetch from invalid URL
-    let invalid_url = url::Url::parse("http://127.0.0.1:9/master.m3u8")
-        .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
+    let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
+        .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
     let result = fetch_manager.master_playlist(&invalid_url).await;
     assert!(result.is_err(), "invalid URL should fail, got Ok");

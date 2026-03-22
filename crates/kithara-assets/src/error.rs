@@ -35,6 +35,7 @@ pub type AssetsResult<T> = Result<T, AssetsError>;
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use postcard::Error as PostcardError;
 
     use super::*;
 
@@ -49,13 +50,13 @@ mod tests {
 
     #[kithara::test]
     fn test_serialization_error_display() {
-        let err = AssetsError::Serialization(postcard::Error::DeserializeUnexpectedEnd);
+        let err = AssetsError::Serialization(PostcardError::DeserializeUnexpectedEnd);
         assert!(err.to_string().starts_with("serialization error:"));
     }
 
     #[kithara::test]
     fn test_serialization_error_from() {
-        let postcard_err = postcard::Error::DeserializeUnexpectedEnd;
+        let postcard_err = PostcardError::DeserializeUnexpectedEnd;
         let err: AssetsError = postcard_err.into();
         assert!(matches!(err, AssetsError::Serialization(_)));
     }

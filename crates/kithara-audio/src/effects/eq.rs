@@ -26,17 +26,50 @@ const SMOOTH_TIME_MS: f32 = 10.0;
 /// Number of samples between coefficient recalculations during smoothing.
 const SMOOTH_BLOCK_SIZE: usize = 32;
 
+/// Q scaling factor for log-spaced band generation.
+const Q_SCALE_FACTOR: f32 = 1.4;
+
+/// Reference band count for Q scaling normalization.
+const Q_REFERENCE_BANDS: f32 = 10.0;
+
+/// Base-10 exponent base for log-spaced frequency calculation.
+const LOG_FREQ_BASE: f32 = 10.0;
+
+/// Minimum gain threshold (dB) below which the filter is treated as passthrough.
+const GAIN_PASSTHROUGH_THRESHOLD: f32 = 0.01;
+
+/// Maximum EQ band gain in dB.
+const MAX_GAIN_DB: f32 = 6.0;
+
+/// Minimum EQ band gain in dB.
+const MIN_GAIN_DB: f32 = -24.0;
+
+/// Convergence threshold for gain smoothing (dB).
+const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.001;
+
+/// Lowest frequency for log-spaced EQ bands (Hz).
+const BAND_MIN_FREQ: f32 = 30.0;
+
+/// Highest frequency for log-spaced EQ bands (Hz).
+const BAND_MAX_FREQ: f32 = 18000.0;
+
+/// Milliseconds per second for time constant conversion.
+const MS_PER_SEC: f32 = 1000.0;
+
+/// Minimum channel count for stereo processing.
+const STEREO_CHANNELS: usize = 2;
+
 /// The type of biquad filter used for an EQ band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum FilterKind {
     /// Low-shelf filter: boosts/cuts frequencies below the center frequency.
-    LowShelf = 0,
+    LowShelf,
     /// Peaking EQ filter: boosts/cuts frequencies around the center frequency.
     #[default]
-    Peaking = 1,
+    Peaking,
     /// High-shelf filter: boosts/cuts frequencies above the center frequency.
-    HighShelf = 2,
+    HighShelf,
 }
 
 /// Configuration for a single parametric EQ band.
@@ -67,26 +100,23 @@ pub struct EqBandConfig {
     reason = "band count and index are small integers"
 )]
 pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
-    const MIN_FREQ: f32 = 30.0;
-    const MAX_FREQ: f32 = 18000.0;
-
     if count == 0 {
         return Vec::new();
     }
 
-    let q_factor = 1.4 * (count as f32 / 10.0).sqrt();
+    let q_factor = Q_SCALE_FACTOR * (count as f32 / Q_REFERENCE_BANDS).sqrt();
 
     if count == 1 {
         return vec![EqBandConfig {
-            frequency: (MIN_FREQ * MAX_FREQ).sqrt(),
+            frequency: (BAND_MIN_FREQ * BAND_MAX_FREQ).sqrt(),
             q_factor,
             gain_db: 0.0,
             kind: FilterKind::Peaking,
         }];
     }
 
-    let log_min = MIN_FREQ.log10();
-    let log_max = MAX_FREQ.log10();
+    let log_min = BAND_MIN_FREQ.log10();
+    let log_max = BAND_MAX_FREQ.log10();
     let log_step = (log_max - log_min) / (count - 1) as f32;
     let last = count - 1;
 
@@ -100,7 +130,7 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
                 FilterKind::Peaking
             };
             EqBandConfig {
-                frequency: 10.0f32.powf(log_min + i as f32 * log_step),
+                frequency: LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
                 q_factor,
                 gain_db: 0.0,
                 kind,
@@ -116,7 +146,7 @@ pub fn compute_coefficients(
     gain_db: f32,
     sample_rate: biquad::Hertz<f32>,
 ) -> Coefficients<f32> {
-    if gain_db.abs() < 0.01 {
+    if gain_db.abs() < GAIN_PASSTHROUGH_THRESHOLD {
         return PASSTHROUGH;
     }
     let filter_type = match band.kind {
@@ -187,7 +217,7 @@ impl EqEffect {
     /// The gain change is smoothed over ~10ms to avoid clicks.
     pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
         if let Some(state) = self.states.get_mut(band_index) {
-            state.target_gain_db = gain_db.clamp(-24.0, 6.0);
+            state.target_gain_db = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
         }
     }
 
@@ -215,7 +245,7 @@ impl EqEffect {
     fn is_smoothing(&self) -> bool {
         self.states
             .iter()
-            .any(|s| (s.target_gain_db - s.current_gain_db).abs() > 0.001)
+            .any(|s| (s.target_gain_db - s.current_gain_db).abs() > SMOOTH_CONVERGENCE_THRESHOLD)
     }
 
     /// Compute the one-pole smoother coefficient for the given sample rate.
@@ -224,7 +254,7 @@ impl EqEffect {
         reason = "SMOOTH_BLOCK_SIZE is a small constant"
     )]
     fn compute_smooth_coeff(sample_rate: f32) -> f32 {
-        let tau = SMOOTH_TIME_MS / 1000.0;
+        let tau = SMOOTH_TIME_MS / MS_PER_SEC;
         // Scale by block size since we apply smoothing per-block, not per-sample
         let effective_rate = sample_rate / SMOOTH_BLOCK_SIZE as f32;
         1.0 - (-1.0 / (tau * effective_rate)).exp()
@@ -258,7 +288,7 @@ impl EqEffect {
             let state = &mut self.states[i];
             let diff = state.target_gain_db - state.current_gain_db;
 
-            if diff.abs() < 0.001 {
+            if diff.abs() < SMOOTH_CONVERGENCE_THRESHOLD {
                 // Close enough — snap to target
                 if diff.abs() > f32::EPSILON {
                     state.current_gain_db = state.target_gain_db;
@@ -308,7 +338,7 @@ impl AudioEffect for EqEffect {
                 frame[0] = sample_l;
 
                 // Right channel (if stereo or more)
-                if channels >= 2 {
+                if channels >= STEREO_CHANNELS {
                     let mut sample_r = frame[1];
                     for f in &mut self.filters_r[..n_bands] {
                         sample_r = f.run(sample_r);
@@ -507,7 +537,7 @@ mod tests {
         assert!(eq.flush().is_none());
     }
 
-    // --- FilterKind tests ---
+    // FilterKind tests
 
     #[kithara::test]
     fn filter_kind_default_is_peaking() {
@@ -610,7 +640,7 @@ mod tests {
         );
     }
 
-    // --- Smooth transition tests ---
+    // Smooth transition tests
 
     #[kithara::test]
     fn eq_gain_change_starts_smoothing() {
@@ -699,7 +729,7 @@ mod tests {
         );
     }
 
-    // --- Helpers ---
+    // Helpers
 
     /// Process enough audio for the smoother to converge.
     fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {

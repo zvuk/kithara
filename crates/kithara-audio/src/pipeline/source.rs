@@ -15,9 +15,20 @@ use std::{
 use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
-use kithara_platform::Mutex;
-use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Timeline};
+use kithara_platform::{Mutex, thread::yield_now};
+use kithara_stream::{
+    Fetch, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
+};
 use tracing::{debug, trace, warn};
+
+/// Nanoseconds per second for frame/duration conversion.
+const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+/// Decode progress logging interval in chunks.
+const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
+
+/// Default read-ahead size in bytes when segment range is unknown.
+const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
 
 use crate::{
     pipeline::track_fsm::{
@@ -59,9 +70,9 @@ impl<T: StreamType> SharedStream<T> {
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.
-            fn phase(&self) -> kithara_stream::SourcePhase;
+            fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
-            fn phase_at(&self, range: Range<u64>) -> kithara_stream::SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             /// Signal that the given byte range will be needed soon.
             fn demand_range(&self, range: Range<u64>);
             /// Wake blocked `wait_range()` calls and downstream waiters.
@@ -743,7 +754,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return Duration::ZERO;
         }
         let nanos = (frames as u128)
-            .saturating_mul(1_000_000_000)
+            .saturating_mul(NANOS_PER_SEC)
             .saturating_div(u128::from(spec.sample_rate));
         #[expect(
             clippy::cast_possible_truncation,
@@ -761,7 +772,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let frames = duration
             .as_nanos()
             .saturating_mul(u128::from(spec.sample_rate))
-            .saturating_div(1_000_000_000);
+            .saturating_div(NANOS_PER_SEC);
         frames.min(usize::MAX as u128) as usize
     }
 
@@ -912,7 +923,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn decode_next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             hang_tick!();
-            kithara_platform::thread::yield_now();
+            yield_now();
 
             // Exit immediately when a seek is pending so the worker
             // loop can call apply_pending_seek().  This guard is
@@ -945,7 +956,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
                     self.track_chunk(&chunk);
 
-                    if self.chunks_decoded.is_multiple_of(100) {
+                    if self
+                        .chunks_decoded
+                        .is_multiple_of(DECODE_PROGRESS_LOG_INTERVAL)
+                    {
                         trace!(
                             chunks = self.chunks_decoded,
                             samples = self.total_samples,
@@ -980,15 +994,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Private helpers (renamed from old AudioWorkerSource methods)
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn boundary_end(&self, start: u64) -> u64 {
         self.shared_stream.len().map_or_else(
-            || start.saturating_add(32 * 1024),
-            |len| start.saturating_add(32 * 1024).min(len),
+            || start.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+            |len| start.saturating_add(DEFAULT_READ_AHEAD_BYTES).min(len),
         )
     }
 
@@ -997,7 +1009,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(start..end)
     }
 
-    fn source_phase_for_boundary(&self, start: u64) -> kithara_stream::SourcePhase {
+    fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
         let end = self.boundary_end(start);
         self.shared_stream.phase_at(start..end)
     }
@@ -1005,9 +1017,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
         matches!(
             self.shared_stream.phase_at(range),
-            kithara_stream::SourcePhase::Ready
-                | kithara_stream::SourcePhase::Eof
-                | kithara_stream::SourcePhase::Seeking
+            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
     }
 
@@ -1019,7 +1029,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             .shared_stream
             .current_segment_range()
             .filter(|seg| seg.start <= pos && pos < seg.end)
-            .map_or_else(|| pos.saturating_add(32 * 1024), |seg| seg.end);
+            .map_or_else(
+                || pos.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+                |seg| seg.end,
+            );
         let check_end = self
             .shared_stream
             .len()
@@ -1034,7 +1047,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn source_phase_for_wait_context(&self, context: &WaitContext) -> kithara_stream::SourcePhase {
+    fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
                 SeekMode::Anchor(anchor) => self.source_phase_for_boundary(anchor.byte_offset),
@@ -1177,14 +1190,10 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FSM step methods
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         if !self.source_is_ready() {
             let phase = self.shared_stream.phase();
             trace!(
@@ -1255,11 +1264,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return TrackStep::Blocked(reason);
             }
             match phase {
-                kithara_stream::SourcePhase::Cancelled => {
+                SourcePhase::Cancelled => {
                     self.state = TrackState::Failed(TrackFailure::SourceCancelled);
                     return TrackStep::Failed;
                 }
-                kithara_stream::SourcePhase::Stopped => {
+                SourcePhase::Stopped => {
                     self.state = TrackState::Failed(TrackFailure::SourceStopped);
                     return TrackStep::Failed;
                 }
@@ -1287,8 +1296,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn step_waiting_for_source(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         let Some((phase, stored_reason)) = (match &self.state {
             TrackState::WaitingForSource { context, reason } => {
                 Some((self.source_phase_for_wait_context(context), *reason))
@@ -1367,8 +1374,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn step_recreating_decoder(&mut self) -> TrackStep<PcmChunk> {
-        use kithara_stream::SourcePhase;
-
         let recreate = match &self.state {
             TrackState::RecreatingDecoder(recreate) => recreate.clone(),
             _ => return TrackStep::StateChanged,
@@ -1527,9 +1532,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AudioWorkerSource trait implementation
-// ---------------------------------------------------------------------------
 
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;

@@ -25,7 +25,23 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run(profile: crate::BuildProfile) -> Result<()> {
+#[derive(Clone, Copy, Debug, clap::Subcommand)]
+pub(crate) enum AppleCommand {
+    /// Build `XCFramework` for Apple platforms.
+    Build {
+        /// Build profile.
+        #[arg(long, default_value_t = crate::BuildProfile::Release)]
+        profile: crate::BuildProfile,
+    },
+}
+
+pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
+    match cmd {
+        AppleCommand::Build { profile } => run_build(profile),
+    }
+}
+
+fn run_build(profile: crate::BuildProfile) -> Result<()> {
     // 1. Check cargo-swift is installed.
     match Command::new("cargo")
         .args(["swift", "--help"])

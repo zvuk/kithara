@@ -5,10 +5,12 @@
 use std::io;
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
+use kithara_platform::tokio::sync::mpsc::channel;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
 use kithara_test_utils::kithara;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 /// Run a writer to completion, returning total bytes written.
@@ -60,7 +62,7 @@ async fn writer_with_offset_writes_expected_offsets(
     let dir = tempfile::tempdir().unwrap();
     let res = open_resource(&dir, "offset_write.bin", 4096);
     let source_chunks = chunks.clone();
-    let source = futures::stream::iter(
+    let source = stream::iter(
         source_chunks
             .into_iter()
             .map(|chunk| Ok::<Bytes, io::Error>(Bytes::from(chunk))),
@@ -104,16 +106,14 @@ async fn writer_with_offset_zero_is_same_as_new() {
 
     // Writer::new
     let res_new = open_resource(&dir, "via_new.bin", 512);
-    let source_new =
-        futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
+    let source_new = stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
     let cancel_new = CancellationToken::new();
     let writer_new: Writer<io::Error> = Writer::new(source_new, res_new.clone(), cancel_new);
     let total_new = run_writer(writer_new).await.unwrap();
 
     // Writer::with_offset(0)
     let res_offset = open_resource(&dir, "via_offset.bin", 512);
-    let source_offset =
-        futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
+    let source_offset = stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(payload.clone()))]);
     let cancel_offset = CancellationToken::new();
     let writer_offset: Writer<io::Error> =
         Writer::with_offset(source_offset, res_offset.clone(), cancel_offset, 0);
@@ -144,7 +144,7 @@ async fn writer_with_offset_overflow_returns_error() {
     // The write_at(u64::MAX - 5, &[..10]) may or may not succeed in storage,
     // but the offset arithmetic: (u64::MAX - 5).checked_add(10) = None => OffsetOverflow.
     let start_offset: u64 = u64::MAX - 5;
-    let source = futures::stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(vec![0u8; 10]))]);
+    let source = stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(vec![0u8; 10]))]);
 
     let cancel = CancellationToken::new();
     let mut writer: Writer<io::Error> =
@@ -194,8 +194,8 @@ async fn writer_with_offset_cancellation() {
     let start_offset: u64 = 500;
 
     // Use a channel-based stream so we can control when chunks arrive.
-    let (tx, rx) = kithara_platform::tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(4);
-    let source = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let (tx, rx) = channel::<Result<Bytes, io::Error>>(4);
+    let source = ReceiverStream::new(rx);
 
     let cancel = CancellationToken::new();
     let mut writer: Writer<io::Error> =

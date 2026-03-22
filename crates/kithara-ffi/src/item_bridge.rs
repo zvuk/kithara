@@ -3,13 +3,25 @@
 use std::sync::Arc;
 
 use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::tokio::sync::broadcast;
+use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     observer::ItemObserver,
     types::{FfiError, FfiItemEvent, FfiItemStatus},
 };
+
+/// Threshold for suppressing redundant duration/buffered updates (seconds).
+const UPDATE_THRESHOLD: f64 = 0.01;
+
+/// Milliseconds per second.
+const MS_PER_SECOND: f64 = 1000.0;
+
+/// 2^32 for splitting u64 into two u32 halves for lossless f64 conversion.
+const U32_MAX_PLUS_ONE: f64 = 4_294_967_296.0;
+
+/// Bit shift width for extracting the high 32 bits of a u64.
+const U64_HIGH_SHIFT: u32 = 32;
 
 /// Forwards resource events to an item observer on background tasks.
 pub(crate) struct ItemEventBridge {
@@ -43,7 +55,7 @@ impl ItemEventBridge {
         crate::FFI_RUNTIME.spawn(async move {
             let mut last_buffered = None;
             loop {
-                kithara_platform::tokio::select! {
+                tokio::select! {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
@@ -69,14 +81,14 @@ impl ItemEventBridge {
         last_buffered: &mut Option<f64>,
     ) {
         if let Some(duration) = Self::duration_from_event(event)
-            && duration_seconds.is_none_or(|current| (current - duration).abs() > 0.01)
+            && duration_seconds.is_none_or(|current| (current - duration).abs() > UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
         if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
-            && last_buffered.is_none_or(|current| (current - buffered).abs() > 0.01)
+            && last_buffered.is_none_or(|current| (current - buffered).abs() > UPDATE_THRESHOLD)
         {
             *last_buffered = Some(buffered);
             observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
@@ -97,7 +109,7 @@ impl ItemEventBridge {
             Event::Audio(AudioEvent::PlaybackProgress {
                 total_ms: Some(total_ms),
                 ..
-            }) => Some(Self::u64_to_f64(*total_ms)? / 1000.0),
+            }) => Some(Self::u64_to_f64(*total_ms)? / MS_PER_SECOND),
             _ => None,
         }
     }
@@ -128,9 +140,9 @@ impl ItemEventBridge {
     }
 
     fn u64_to_f64(value: u64) -> Option<f64> {
-        let hi = u32::try_from(value >> 32).ok()?;
+        let hi = u32::try_from(value >> U64_HIGH_SHIFT).ok()?;
         let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
-        Some(f64::from(hi) * 4_294_967_296.0 + f64::from(lo))
+        Some(f64::from(hi) * U32_MAX_PLUS_ONE + f64::from(lo))
     }
 
     fn error_from_event(event: &Event) -> Option<FfiError> {

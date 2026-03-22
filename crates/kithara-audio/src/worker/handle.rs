@@ -16,6 +16,8 @@ use std::{
 use kithara_decode::PcmChunk;
 use kithara_platform::{
     sync::mpsc::{self, TryRecvError},
+    thread::{spawn_named, yield_now},
+    time::Instant,
     tokio::sync::Notify,
 };
 use kithara_stream::Fetch;
@@ -32,10 +34,12 @@ use super::{
     types::{ServiceClass, StepResult, TrackId, TrackIdGen},
     wake::WorkerWake,
 };
+use crate::pipeline::track_fsm::TrackStep;
 
-// ---------------------------------------------------------------------------
+/// Threshold for warning about slow `step_track` calls.
+const STEP_WARN_THRESHOLD: Duration = Duration::from_millis(10);
+
 // Public types
-// ---------------------------------------------------------------------------
 
 /// Command sent from [`AudioWorkerHandle`] to the shared worker thread.
 pub(crate) enum WorkerCmd {
@@ -88,7 +92,7 @@ impl AudioWorkerHandle {
         let cancel_clone = cancel.clone();
 
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        kithara_platform::thread::spawn_named(format!("kithara-audio-worker-{id}"), move || {
+        spawn_named(format!("kithara-audio-worker-{id}"), move || {
             run_shared_worker_loop(&cmd_rx, &wake_clone, &cancel_clone);
         });
 
@@ -147,9 +151,7 @@ impl Default for AudioWorkerHandle {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Internal: TrackSlot
-// ---------------------------------------------------------------------------
 
 /// Per-track state inside the worker thread.
 struct TrackSlot {
@@ -200,8 +202,6 @@ impl TrackSlot {
 
     /// One cooperative step: drain commands, step FSM, push at most one chunk.
     fn step(&mut self) -> StepResult {
-        use crate::pipeline::track_fsm::TrackStep;
-
         if self.cancel.is_cancelled() || self.terminal {
             return StepResult::NoProgress;
         }
@@ -229,10 +229,10 @@ impl TrackSlot {
         }
 
         // Step the track FSM.
-        let step_start = kithara_platform::time::Instant::now();
+        let step_start = Instant::now();
         let step_result = self.source.step_track();
         let step_elapsed = step_start.elapsed();
-        if step_elapsed > Duration::from_millis(10) {
+        if step_elapsed > STEP_WARN_THRESHOLD {
             tracing::warn!(
                 track_id = self.track_id,
                 elapsed_ms = step_elapsed.as_millis(),
@@ -321,9 +321,7 @@ impl TrackSlot {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Worker loop
-// ---------------------------------------------------------------------------
 
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
@@ -385,7 +383,7 @@ fn run_shared_worker_loop(
         match outcome {
             PassOutcome::Produced => {
                 hang_reset!();
-                kithara_platform::thread::yield_now();
+                yield_now();
             }
             PassOutcome::Waiting => {
                 wake.wait_timeout(IDLE_TIMEOUT);
@@ -508,16 +506,22 @@ fn drain_worker_commands(
     false
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use kithara_decode::PcmChunk;
-    use kithara_platform::tokio::sync::Notify;
+    use kithara_platform::{
+        thread::sleep as thread_sleep, time::timeout as platform_timeout, tokio::sync::Notify,
+    };
     use kithara_stream::{Fetch, Timeline};
     use kithara_test_utils::kithara;
     use ringbuf::{HeapRb, traits::Split};
@@ -529,7 +533,7 @@ mod tests {
         worker::{AudioCommand, AudioWorkerSource, types::ServiceClass},
     };
 
-    // -- Mock source ----------------------------------------------------------
+    // Mock source
 
     struct MockSource {
         timeline: Timeline,
@@ -597,7 +601,7 @@ mod tests {
         }
     }
 
-    // -- Helpers --------------------------------------------------------------
+    // Helpers
 
     fn make_registration(
         source: MockSource,
@@ -664,26 +668,26 @@ mod tests {
         count: usize,
         timeout: Duration,
     ) -> usize {
-        let start = kithara_platform::time::Instant::now();
+        let start = Instant::now();
         let mut received = 0;
         while received < count && start.elapsed() < timeout {
             if rx.try_pop().is_some() {
                 received += 1;
             } else {
-                kithara_platform::thread::sleep(Duration::from_millis(1));
+                thread_sleep(Duration::from_millis(1));
             }
         }
         received
     }
 
-    // -- Tests ----------------------------------------------------------------
+    // Tests
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
         let handle = AudioWorkerHandle::new();
-        kithara_platform::thread::sleep(Duration::from_millis(10));
+        thread_sleep(Duration::from_millis(10));
         handle.shutdown();
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
         // If we get here without panic, the worker started and stopped cleanly.
     }
 
@@ -732,7 +736,7 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
         let _id_b = handle.register_track(reg_b);
 
-        kithara_platform::thread::sleep(Duration::from_millis(100));
+        thread_sleep(Duration::from_millis(100));
 
         let a = wait_for_chunks(&mut rx_a, 1, Duration::from_millis(100));
         let b = wait_for_chunks(&mut rx_b, 1, Duration::from_millis(50));
@@ -752,13 +756,13 @@ mod tests {
         let _id = handle.register_track(reg);
 
         // Give worker time to fill and re-fill.
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
 
         // Pop one, give worker time to push pending.
         let first = rx.try_pop();
         assert!(first.is_some(), "should have at least one chunk");
 
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
 
         let second = rx.try_pop();
         assert!(second.is_some(), "pending_fetch should have been retried");
@@ -806,7 +810,7 @@ mod tests {
         handle.wake();
 
         // The seek should be handled (seek pending cleared after apply).
-        kithara_platform::thread::sleep(Duration::from_millis(100));
+        thread_sleep(Duration::from_millis(100));
 
         // After seek completes, more chunks should arrive.
         let after_seek = wait_for_chunks(&mut rx, 1, Duration::from_secs(5));
@@ -827,7 +831,7 @@ mod tests {
         // We use a tokio runtime to await the notify.
         // Give worker time to produce 3+ chunks.
         // The preload_notify fires internally; we verify it doesn't deadlock.
-        kithara_platform::thread::sleep(Duration::from_millis(200));
+        thread_sleep(Duration::from_millis(200));
 
         handle.shutdown();
     }
@@ -840,14 +844,14 @@ mod tests {
         let timeline = reg.source.timeline().clone();
         let _id = handle.register_track(reg);
 
-        kithara_platform::time::timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_notify.notified())
             .await
             .expect("initial preload notify must fire");
 
         let _ = timeline.initiate_seek(Duration::from_secs(1));
         handle.wake();
 
-        kithara_platform::time::timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_notify.notified())
             .await
             .expect("seek must re-arm preload notify");
 
@@ -866,13 +870,13 @@ mod tests {
         assert!(got >= 2);
 
         handle.unregister_track(id);
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
 
         // Drain remaining.
         while rx.try_pop().is_some() {}
 
         // No more chunks should arrive.
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
         assert!(rx.try_pop().is_none(), "no chunks after unregister");
 
         handle.shutdown();
@@ -891,7 +895,7 @@ mod tests {
         let id_b = handle.register_track(reg_b);
 
         // Let both tracks start decoding (both default to Audible from registration).
-        kithara_platform::thread::sleep(Duration::from_millis(30));
+        thread_sleep(Duration::from_millis(30));
 
         // Drain both to make room.
         while rx_a.try_pop().is_some() {}
@@ -902,7 +906,7 @@ mod tests {
         handle.set_service_class(id_b, ServiceClass::Audible);
 
         // Wait a bit for scheduling to take effect.
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
 
         // B (Audible) should have at least as many chunks as A (Idle).
         let got_a = {
@@ -927,7 +931,7 @@ mod tests {
         handle.shutdown();
     }
 
-    // -- Starvation tests ---------------------------------------------------
+    // Starvation tests
 
     /// A slow/blocked track must not starve a producing track.
     ///
@@ -941,8 +945,6 @@ mod tests {
     /// rate sufficient for glitch-free playback.
     #[kithara::test]
     fn shared_worker_blocking_track_does_not_starve_producing_track() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         struct BlockingSource {
             timeline: Timeline,
             blocking: Arc<AtomicBool>,
@@ -955,7 +957,7 @@ mod tests {
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 if self.blocking.load(Ordering::Relaxed) {
                     // Simulate sync blocking (like wait_range timeout at 10ms).
-                    kithara_platform::thread::sleep(Duration::from_millis(10));
+                    thread_sleep(Duration::from_millis(10));
                     TrackStep::Blocked(WaitingReason::Waiting)
                 } else {
                     TrackStep::Blocked(WaitingReason::Waiting)
@@ -986,7 +988,7 @@ mod tests {
         let _id_b = handle.register_track(reg_b);
 
         // Give worker 500ms to produce chunks for track A despite track B blocking.
-        kithara_platform::thread::sleep(Duration::from_millis(500));
+        thread_sleep(Duration::from_millis(500));
 
         let mut got_a = 0;
         while rx_a.try_pop().is_some() {
@@ -1020,8 +1022,6 @@ mod tests {
     /// still receive enough chunks for glitch-free playback.
     #[kithara::test]
     fn shared_worker_sync_blocking_step_starves_other_tracks() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         struct SlowDecodeSource {
             timeline: Timeline,
             block_ms: u64,
@@ -1034,7 +1034,7 @@ mod tests {
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 // Simulate: source_is_ready() returns true, then
                 // decode_next_chunk() blocks on wait_range() for data.
-                kithara_platform::thread::sleep(Duration::from_millis(self.block_ms));
+                thread_sleep(Duration::from_millis(self.block_ms));
                 TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
             }
 
@@ -1068,22 +1068,22 @@ mod tests {
         //
         // We poll every 5ms and measure the longest gap between chunks.
         let mut max_gap = Duration::ZERO;
-        let mut last_chunk_time = kithara_platform::time::Instant::now();
+        let mut last_chunk_time = Instant::now();
         let mut total_chunks = 0u32;
-        let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(1);
 
-        while kithara_platform::time::Instant::now() < deadline {
+        while Instant::now() < deadline {
             if rx_a.try_pop().is_some() {
                 let gap = last_chunk_time.elapsed();
                 if total_chunks > 0 && gap > max_gap {
                     max_gap = gap;
                 }
-                last_chunk_time = kithara_platform::time::Instant::now();
+                last_chunk_time = Instant::now();
                 total_chunks += 1;
             }
             // Drain track B to prevent backpressure.
             while rx_b.try_pop().is_some() {}
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+            thread_sleep(Duration::from_millis(5));
         }
 
         // For glitch-free playback, the max gap between chunks must be
@@ -1116,12 +1116,12 @@ mod tests {
         let _id = handle.register_track(reg);
 
         // Let it fill the ringbuf.
-        kithara_platform::thread::sleep(Duration::from_millis(50));
+        thread_sleep(Duration::from_millis(50));
 
         // Now ringbuf is full. Nobody is consuming. Worker should be sleeping.
         // Measure process CPU time over 500ms of wall time.
         let cpu_before = cpu_time_ms();
-        kithara_platform::thread::sleep(Duration::from_millis(500));
+        thread_sleep(Duration::from_millis(500));
         let cpu_after = cpu_time_ms();
 
         let cpu_used_ms = cpu_after.saturating_sub(cpu_before);
@@ -1152,18 +1152,25 @@ fn cpu_time_ms() -> u64 {
 /// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
 #[cfg(test)]
 fn parse_cputime(s: &str) -> u64 {
+    const HMS_PARTS: usize = 3;
+    const MS_PARTS: usize = 2;
+    const SECS_PER_HOUR: u64 = 3600;
+    const SECS_PER_MIN: u64 = 60;
+    const MS_PER_SEC: u64 = 1000;
+    const SEC_IDX: usize = 2;
+
     let parts: Vec<&str> = s.split(':').collect();
     match parts.len() {
-        3 => {
+        HMS_PARTS => {
             let h: u64 = parts[0].trim().parse().unwrap_or(0);
             let m: u64 = parts[1].trim().parse().unwrap_or(0);
-            let sec: u64 = parts[2].trim().parse().unwrap_or(0);
-            (h * 3600 + m * 60 + sec) * 1000
+            let sec: u64 = parts[SEC_IDX].trim().parse().unwrap_or(0);
+            (h * SECS_PER_HOUR + m * SECS_PER_MIN + sec) * MS_PER_SEC
         }
-        2 => {
+        MS_PARTS => {
             let m: u64 = parts[0].trim().parse().unwrap_or(0);
             let sec: u64 = parts[1].trim().parse().unwrap_or(0);
-            (m * 60 + sec) * 1000
+            (m * SECS_PER_MIN + sec) * MS_PER_SEC
         }
         _ => 0,
     }

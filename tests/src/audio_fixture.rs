@@ -38,7 +38,7 @@ impl EmbeddedAudio {
     }
 }
 
-// --- Native-only: AudioTestServer (axum) ---
+// Native-only: AudioTestServer (axum)
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -52,6 +52,7 @@ mod native {
         body::Body,
         extract::Request,
         http::{Response, StatusCode, header},
+        middleware,
         routing::get,
     };
     use bytes::Bytes;
@@ -75,8 +76,8 @@ mod native {
             let app = Router::new()
                 .route("/silence.wav", get(wav_endpoint))
                 .route("/test.mp3", get(mp3_endpoint))
-                .layer(axum::middleware::from_fn(
-                    move |req: axum::http::Request<Body>, next: axum::middleware::Next| {
+                .layer(middleware::from_fn(
+                    move |req: Request, next: middleware::Next| {
                         let counts = request_counts_clone.clone();
                         async move {
                             let path = req.uri().path().to_string();

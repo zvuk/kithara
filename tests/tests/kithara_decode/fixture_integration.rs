@@ -5,6 +5,7 @@
 
 use kithara_integration_tests::audio_fixture::{AudioTestServer, EmbeddedAudio};
 use kithara_platform::time::Duration;
+use reqwest::Client;
 
 #[kithara::test(
     tokio,
@@ -40,7 +41,7 @@ async fn test_audio_test_server_serves_format(
     #[case] desc: &str,
 ) {
     let server = AudioTestServer::new().await;
-    let client = reqwest::Client::new();
+    let client = Client::new();
 
     let url = match format {
         "wav" => server.wav_url(),

@@ -17,15 +17,13 @@
 
 //! Shared test utilities for the kithara workspace.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::env;
-
 pub mod asset_server;
 pub mod fixture_client;
 pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
+mod log_filter;
 pub mod memory_source;
 pub mod rng;
 pub mod server_url;
@@ -43,20 +41,7 @@ pub use asset_server::{AssetServer, serve_assets};
 pub use fixtures::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use http_server::TestHttpServer;
+pub use log_filter::rust_log_filter;
 pub use rng::*;
 pub use server_url::join_server_url;
 pub use wav::{create_saw_wav, create_test_wav};
-
-/// Get a `tracing` filter string for tests with wasm-safe fallback.
-#[inline]
-#[must_use]
-pub fn rust_log_filter(default: &str) -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        env::var("RUST_LOG").unwrap_or_else(|_| default.to_string())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        default.to_string()
-    }
-}

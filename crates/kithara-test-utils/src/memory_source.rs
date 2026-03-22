@@ -1,7 +1,8 @@
 //! In-memory Source implementation for testing.
 
-use std::{io, ops::Range};
+use std::{io, io::Error as IoError, ops::Range};
 
+use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -149,7 +150,7 @@ impl StreamType for MemStream {
     type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| io::Error::other("no source"))
+        config.source.ok_or_else(|| IoError::other("no source"))
     }
 }
 
@@ -172,7 +173,7 @@ impl StreamType for UnknownLenStream {
     type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| io::Error::other("no source"))
+        config.source.ok_or_else(|| IoError::other("no source"))
     }
 }
 
@@ -187,7 +188,7 @@ pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     let config = MemStreamConfig {
         source: Some(source),
     };
-    futures::executor::block_on(Stream::new(config)).unwrap()
+    block_on(Stream::new(config)).unwrap()
 }
 
 /// Create a `Stream` from a `MemorySource` with unknown length.
@@ -196,5 +197,5 @@ pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),
     };
-    futures::executor::block_on(Stream::new(config)).unwrap()
+    block_on(Stream::new(config)).unwrap()
 }

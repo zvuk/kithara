@@ -6,7 +6,8 @@
 //! Currently a placeholder — actual FFI implementation pending.
 
 use std::{
-    fmt, io,
+    fmt,
+    io::{self, Error as IoError, ErrorKind},
     marker::PhantomData,
     sync::{
         Arc,
@@ -63,8 +64,8 @@ impl<C: CodecType> AudioDecoder for Android<C> {
         Self: Sized,
     {
         // TODO: Implement actual MediaCodec initialization
-        Err(DecodeError::Backend(Box::new(io::Error::new(
-            io::ErrorKind::Unsupported,
+        Err(DecodeError::Backend(Box::new(IoError::new(
+            ErrorKind::Unsupported,
             "Android MediaCodec decoder not yet implemented",
         ))))
     }

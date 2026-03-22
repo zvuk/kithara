@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 pub mod engine {
-    pub use crate::{
-        EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
-        traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
-    };
+    #[rustfmt::skip]
+    pub use crate::traits::dj::crossfade::CrossfadeConfig;
+    #[rustfmt::skip]
+    pub use crate::traits::engine::Engine;
+    pub use crate::{EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId};
 
     #[must_use]
     pub fn slot_id(value: u64) -> SlotId {
@@ -16,9 +17,12 @@ pub mod engine {
 pub mod offline {
     use std::sync::{Arc, atomic::Ordering};
 
-    use firewheel::{FirewheelConfig, FirewheelCtx};
+    use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
     use kithara_platform::Mutex;
-    use ringbuf::{HeapRb, traits::Split};
+    use ringbuf::{
+        HeapRb,
+        traits::{Producer, Split},
+    };
 
     use crate::impls::{
         offline_backend::{OfflineBackend, OfflineConfig},
@@ -28,6 +32,12 @@ pub mod offline {
         player_track::TrackTransition,
         shared_player_state::SharedPlayerState,
     };
+
+    /// Offline audio block size in frames.
+    const OFFLINE_BLOCK_FRAMES: u32 = 512;
+
+    /// Capacity of the player command ring buffer.
+    const CMD_RINGBUF_CAPACITY: usize = 64;
 
     /// A self-contained offline player for testing crossfade and mixing.
     ///
@@ -49,20 +59,20 @@ pub mod offline {
         #[must_use]
         pub fn new(sample_rate: u32) -> Self {
             let fw_config = FirewheelConfig {
-                num_graph_outputs: firewheel::channel_config::ChannelCount::STEREO,
+                num_graph_outputs: ChannelCount::STEREO,
                 ..FirewheelConfig::default()
             };
             let mut ctx = FirewheelCtx::<OfflineBackend>::new(fw_config);
 
             let stream_config = OfflineConfig {
                 sample_rate,
-                block_frames: 512,
+                block_frames: OFFLINE_BLOCK_FRAMES,
             };
             ctx.start_stream(stream_config)
                 .expect("start offline stream");
 
             let shared_state = Arc::new(SharedPlayerState::new());
-            let (cmd_tx, cmd_rx) = HeapRb::new(64).split();
+            let (cmd_tx, cmd_rx) = HeapRb::new(CMD_RINGBUF_CAPACITY).split();
 
             let player_node = PlayerNode::with_channel(
                 cmd_rx,
@@ -101,8 +111,6 @@ pub mod offline {
         ///
         /// Panics if the command channel is full.
         pub fn load_and_fadein(&mut self, resource: crate::Resource, src: &str) {
-            use ringbuf::traits::Producer;
-
             let src: Arc<str> = Arc::from(src);
             let pr = PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
             self.cmd_tx
@@ -135,7 +143,6 @@ pub mod offline {
         ///
         /// Panics if the command channel is full.
         pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
-            use ringbuf::traits::Producer;
             self.shared_state
                 .seek_epoch
                 .store(seek_epoch, Ordering::SeqCst);

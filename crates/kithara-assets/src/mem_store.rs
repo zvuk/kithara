@@ -2,14 +2,17 @@
 
 //! In-memory asset store backend.
 
-use std::{io, path::Path};
+use std::{
+    io::{Error as IoError, ErrorKind},
+    path::Path,
+};
 
 use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
-    base::Assets,
+    base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
 };
@@ -50,8 +53,7 @@ impl Assets for MemAssetStore {
     type Context = ();
     type IndexRes = MemResource;
 
-    fn capabilities(&self) -> crate::base::Capabilities {
-        use crate::base::Capabilities;
+    fn capabilities(&self) -> Capabilities {
         Capabilities::CACHE | Capabilities::PROCESSING
     }
 
@@ -74,7 +76,7 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
-        Err(io::Error::new(io::ErrorKind::NotFound, "resource missing").into())
+        Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
     }
 
     fn acquire_resource_with_ctx(
@@ -168,7 +170,6 @@ mod tests {
 
     #[kithara::test]
     fn mem_store_capabilities() {
-        use crate::base::Capabilities;
         let store = make_mem_store();
         let caps = store.capabilities();
         assert!(caps.contains(Capabilities::CACHE));

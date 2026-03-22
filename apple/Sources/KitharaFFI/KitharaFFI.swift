@@ -1032,7 +1032,7 @@ open func setStoreOptions(store: StoreOptions)  {try! rustCall() {
     )
 }
 }
-
+    
 open func url() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_url(

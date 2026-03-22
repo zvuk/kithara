@@ -21,6 +21,7 @@ use kithara::{
 use kithara_platform::time::{Duration, sleep};
 use kithara_test_utils::{cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::EnvFilter;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -64,7 +65,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
     let dir = temp_dir.path().to_path_buf();

@@ -69,7 +69,10 @@ mod server {
         Router,
         body::Body,
         extract::{DefaultBodyLimit, Path, State},
-        http::{HeaderMap, Response, StatusCode, header},
+        http::{
+            HeaderMap, Method, Response, StatusCode,
+            header::{self, HeaderName, HeaderValue},
+        },
         routing::{delete, get, post},
     };
     use kithara_platform::time::sleep;
@@ -80,8 +83,9 @@ mod server {
     };
     use tokio::{net::TcpListener, sync::RwLock};
     use tower_http::{cors::CorsLayer, services::ServeDir, set_header::SetResponseHeaderLayer};
+    use uuid::Uuid;
 
-    // ── Session Types ──────────────────────────────────────────────
+    // Session Types
 
     enum SessionKind {
         FixedHls(FixedHlsData),
@@ -138,7 +142,7 @@ mod server {
 
     type Sessions = Arc<RwLock<HashMap<String, Session>>>;
 
-    // ── App State ──────────────────────────────────────────────────
+    // App State
 
     #[derive(Clone)]
     struct AppState {
@@ -155,7 +159,7 @@ mod server {
         segment_durations_secs: Vec<f64>,
     }
 
-    // ── Static fixture generation (backwards compat) ───────────────
+    // Static fixture generation (backwards compat)
 
     const SAMPLE_RATE: u32 = 44100;
     const CHANNELS: u16 = 2;
@@ -228,7 +232,7 @@ mod server {
         pl
     }
 
-    // ── HLS data generation ────────────────────────────────────────
+    // HLS data generation
 
     fn generate_hls_data(config: &HlsSessionConfig) -> HlsData {
         let mut segments = Vec::with_capacity(config.variant_count);
@@ -290,7 +294,7 @@ mod server {
         }
     }
 
-    // ── Fixed HLS helpers ──────────────────────────────────────────
+    // Fixed HLS helpers
 
     fn fixed_test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
         generate_segment(variant, segment, 200_000)
@@ -414,7 +418,7 @@ seg/v{}_2.bin
         cipher.to_vec()
     }
 
-    // ── HLS playlist generation ────────────────────────────────────
+    // HLS playlist generation
 
     fn hls_master_playlist(config: &HlsSessionConfig) -> String {
         let mut pl = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
@@ -458,7 +462,7 @@ seg/v{}_2.bin
         pl
     }
 
-    // ── ABR helpers ────────────────────────────────────────────────
+    // ABR helpers
 
     fn abr_media_playlist(variant: usize, has_init: bool) -> String {
         let mut s = String::new();
@@ -503,7 +507,7 @@ seg/v{}_2.bin
         data
     }
 
-    // ── AES-128 encryption ─────────────────────────────────────────
+    // AES-128 encryption
 
     fn encrypt_aes128_cbc(data: &[u8], key: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         use aes::Aes128;
@@ -539,7 +543,7 @@ seg/v{}_2.bin
         )
     }
 
-    // ── Range request support ──────────────────────────────────────
+    // Range request support
 
     fn parse_range_header(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
         let value = headers.get(header::RANGE)?.to_str().ok()?.trim();
@@ -618,7 +622,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Route Handlers ─────────────────────────────────────────────
+    // Route Handlers
 
     async fn health() -> &'static str {
         "ok"
@@ -627,7 +631,7 @@ seg/v{}_2.bin
     async fn create_fixed_hls_session(
         State(state): State<AppState>,
     ) -> axum::Json<SessionResponse> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::FixedHls(FixedHlsData),
@@ -652,7 +656,7 @@ seg/v{}_2.bin
         let init_len = data.inits.first().map_or(0, |i| i.len() as u64);
         let total_bytes =
             init_len + config.segments_per_variant as u64 * config.segment_size as u64;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::Hls(Box::new(data)),
@@ -673,7 +677,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: AbrSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::Abr(AbrData { config }),
@@ -691,7 +695,7 @@ seg/v{}_2.bin
     async fn create_audio_fixtures_session(
         State(state): State<AppState>,
     ) -> axum::Json<SessionResponse> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::AudioFixtures(AudioFixturesData {
@@ -715,7 +719,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: FileSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let session = Session {
             kind: SessionKind::File(Box::new(FileData {
@@ -739,7 +743,7 @@ seg/v{}_2.bin
     ) -> Result<axum::Json<SessionResponse>, StatusCode> {
         let config: HttpTestSessionConfig =
             serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
         let route_counts = config
             .routes
@@ -773,7 +777,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Session-based route handlers ───────────────────────────────
+    // Session-based route handlers
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_master(
@@ -893,7 +897,7 @@ seg/v{}_2.bin
     async fn session_segment_head(
         State(state): State<AppState>,
         Path((id, _filename)): Path<(String, String)>,
-    ) -> Result<(StatusCode, [(header::HeaderName, String); 1]), StatusCode> {
+    ) -> Result<(StatusCode, [(HeaderName, String); 1]), StatusCode> {
         let sessions = state.sessions.read().await;
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         let size = match &session.kind {
@@ -1046,7 +1050,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Audio fixtures route handler ─────────────────────────────────
+    // Audio fixtures route handler
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_audio_file(
@@ -1071,7 +1075,7 @@ seg/v{}_2.bin
             .unwrap())
     }
 
-    // ── File download route handlers ─────────────────────────────────
+    // File download route handlers
 
     #[expect(clippy::significant_drop_tightening)]
     async fn session_file_get(
@@ -1145,13 +1149,13 @@ seg/v{}_2.bin
             .unwrap())
     }
 
-    // ── HTTP test route handler ─────────────────────────────────────
+    // HTTP test route handler
 
     async fn session_http_test(
         State(state): State<AppState>,
         Path((id, path)): Path<(String, String)>,
         headers: HeaderMap,
-        method: axum::http::Method,
+        method: Method,
     ) -> Result<Response<Body>, StatusCode> {
         let sessions = state.sessions.read().await;
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
@@ -1201,7 +1205,7 @@ seg/v{}_2.bin
             return Ok(build_range_response(
                 &body_data,
                 &headers,
-                method != axum::http::Method::HEAD,
+                method != Method::HEAD,
             ));
         }
 
@@ -1210,7 +1214,7 @@ seg/v{}_2.bin
         for (key, value) in &route.headers {
             builder = builder.header(key.as_str(), value.as_str());
         }
-        if method == axum::http::Method::HEAD {
+        if method == Method::HEAD {
             builder = builder.header(header::CONTENT_LENGTH, body_data.len().to_string());
             Ok(builder.body(Body::empty()).unwrap())
         } else {
@@ -1218,7 +1222,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Static route handlers (backwards compat) ───────────────────
+    // Static route handlers (backwards compat)
 
     async fn static_master_uniform() -> &'static str {
         "#EXTM3U\n\
@@ -1305,7 +1309,7 @@ seg/v{}_2.bin
         fixture.wav_data[start..end].to_vec()
     }
 
-    // ── Parsing helpers ────────────────────────────────────────────
+    // Parsing helpers
 
     fn parse_variant_from_playlist(filename: &str) -> Option<usize> {
         let name = filename.strip_suffix(".m3u8")?;
@@ -1349,7 +1353,7 @@ seg/v{}_2.bin
             .ok()
     }
 
-    // ── Session cleanup ────────────────────────────────────────────
+    // Session cleanup
 
     async fn cleanup_expired_sessions(sessions: Sessions) {
         loop {
@@ -1362,7 +1366,7 @@ seg/v{}_2.bin
         }
     }
 
-    // ── Server entry point ─────────────────────────────────────────
+    // Server entry point
 
     pub(crate) async fn run(port: u16) {
         let uniform_sizes = vec![UNIFORM_SEGMENT_SIZE; STATIC_SEGMENT_COUNT];
@@ -1439,8 +1443,8 @@ seg/v{}_2.bin
             .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
             .layer(CorsLayer::permissive())
             .layer(SetResponseHeaderLayer::overriding(
-                header::HeaderName::from_static("cross-origin-resource-policy"),
-                header::HeaderValue::from_static("cross-origin"),
+                HeaderName::from_static("cross-origin-resource-policy"),
+                HeaderValue::from_static("cross-origin"),
             ));
 
         let addr = format!("127.0.0.1:{port}");

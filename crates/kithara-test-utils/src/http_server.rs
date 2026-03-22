@@ -3,13 +3,13 @@
 use std::{io, time::Duration};
 
 use axum::Router;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::oneshot, time::sleep as tokio_sleep};
 use url::Url;
 
 /// Lightweight HTTP test server wrapper.
 pub struct TestHttpServer {
     base_url: Url,
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 impl TestHttpServer {
@@ -42,13 +42,13 @@ impl TestHttpServer {
                 Err(error) => panic!("bind test HTTP listener: {error}"),
             }
 
-            tokio::time::sleep(Duration::from_millis(BIND_RETRY_DELAY_MS)).await;
+            tokio_sleep(Duration::from_millis(BIND_RETRY_DELAY_MS)).await;
         };
         let addr = listener
             .local_addr()
             .expect("read test listener local addr");
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = axum::serve(listener, router).with_graceful_shutdown(async {
             shutdown_rx.await.ok();
         });
@@ -57,7 +57,7 @@ impl TestHttpServer {
             server.await.expect("run test HTTP server");
         });
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio_sleep(Duration::from_millis(100)).await;
 
         Self {
             base_url: Url::parse(&format!("http://{}", addr)).expect("parse base URL"),

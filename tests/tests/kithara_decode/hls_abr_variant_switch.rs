@@ -27,7 +27,7 @@ use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{Level, info};
 
 /// Test that ABR variant switch does not cause byte reading glitches.
 ///
@@ -54,7 +54,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     // Initialize tracing for debug output
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(Level::DEBUG)
         .with_env_filter(kithara_test_utils::rust_log_filter(
             "kithara_decode=debug,kithara_hls=debug",
         ))
@@ -208,7 +208,7 @@ async fn test_basic_multi_segment_reading(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(Level::INFO)
         .try_init();
 
     let server = AbrTestServer::new(
@@ -282,7 +282,7 @@ async fn test_abr_variant_switch_with_seek_backward(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(Level::DEBUG)
         .try_init();
 
     let server = AbrTestServer::new(

@@ -5,7 +5,10 @@
 use aes::Aes128;
 use cbc::{
     Decryptor,
-    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
+    cipher::{
+        BlockDecryptMut, KeyIvInit,
+        block_padding::{NoPadding, Pkcs7},
+    },
 };
 use tracing::trace;
 
@@ -82,7 +85,6 @@ pub fn aes128_cbc_process_chunk(
         Ok(written)
     } else {
         // Intermediate chunk: decrypt without unpadding (block-by-block, same size)
-        use cbc::cipher::block_padding::NoPadding;
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
             .decrypt_padded_mut::<NoPadding>(&mut output[..input.len()])

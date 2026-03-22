@@ -30,20 +30,26 @@ pub struct ThroughputEstimator {
     slow_ewma: Ewma,
 }
 
-impl ThroughputEstimator {
-    const FAST_HALF_LIFE_SECS: f64 = 2.0;
-    const SLOW_HALF_LIFE_SECS: f64 = 10.0;
-    const MIN_CHUNK_BYTES: u64 = 16_000;
-    const MIN_DURATION_MS: f64 = 0.5;
+const FAST_HALF_LIFE_SECS: f64 = 2.0;
+const SLOW_HALF_LIFE_SECS: f64 = 10.0;
+const MIN_CHUNK_BYTES: u64 = 16_000;
+const MIN_DURATION_MS: f64 = 0.5;
+/// Milliseconds per second, for throughput unit conversion.
+const MS_PER_SEC: f64 = 1000.0;
+/// Bits-per-byte scaled to millisecond durations (8 bits * 1000 ms/s).
+const BITS_PER_BYTE_MS: f64 = 8000.0;
+/// Initial throughput estimate for cache hits (100 Mbps).
+const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
 
+impl ThroughputEstimator {
     #[must_use]
     pub fn new(_cfg: &AbrOptions) -> Self {
         Self {
             buffered_content_secs: 0.0,
             bytes_sampled: 0,
-            fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
+            fast_ewma: Ewma::new(FAST_HALF_LIFE_SECS),
             initial_bps: 0.0,
-            slow_ewma: Ewma::new(Self::SLOW_HALF_LIFE_SECS),
+            slow_ewma: Ewma::new(SLOW_HALF_LIFE_SECS),
         }
     }
 
@@ -75,18 +81,18 @@ impl ThroughputEstimator {
         // to allow ABR to switch to higher variants immediately.
         if matches!(sample.source, ThroughputSampleSource::Cache) {
             // 100 Mbps — effectively unlimited for audio streaming
-            self.initial_bps = 100_000_000.0;
+            self.initial_bps = CACHE_INITIAL_BPS;
             return;
         }
 
-        if sample.bytes < Self::MIN_CHUNK_BYTES {
+        if sample.bytes < MIN_CHUNK_BYTES {
             return;
         }
 
-        let dur_ms = (sample.duration.as_secs_f64() * 1000.0).max(Self::MIN_DURATION_MS);
+        let dur_ms = (sample.duration.as_secs_f64() * MS_PER_SEC).max(MIN_DURATION_MS);
         #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible
-        let bps = (sample.bytes as f64) * 8000.0 / dur_ms;
-        let weight_secs = dur_ms / 1000.0;
+        let bps = (sample.bytes as f64) * BITS_PER_BYTE_MS / dur_ms;
+        let weight_secs = dur_ms / MS_PER_SEC;
 
         self.fast_ewma.add_sample(weight_secs, bps);
         self.slow_ewma.add_sample(weight_secs, bps);
@@ -129,9 +135,18 @@ struct Ewma {
 }
 
 impl Ewma {
+    /// Half-life decay base: ln(0.5) gives exponential half-life.
+    const HALF_LIFE_BASE: f64 = 0.5;
+    /// Minimum half-life to avoid division by zero.
+    const MIN_HALF_LIFE_SECS: f64 = 0.001;
+    /// Floor to prevent division by zero in bias correction.
+    const MIN_ZERO_FACTOR: f64 = 1e-6;
+
     fn new(half_life_secs: f64) -> Self {
         Self {
-            alpha: f64::exp(0.5_f64.ln() / half_life_secs.max(0.001)),
+            alpha: f64::exp(
+                Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS),
+            ),
             last_estimate: 0.0,
             total_weight: 0.0,
         }
@@ -149,7 +164,7 @@ impl Ewma {
             0.0
         } else {
             let zero_factor = 1.0 - self.alpha.powf(self.total_weight);
-            self.last_estimate / zero_factor.max(1e-6)
+            self.last_estimate / zero_factor.max(Self::MIN_ZERO_FACTOR)
         }
     }
 }

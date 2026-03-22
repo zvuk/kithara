@@ -9,10 +9,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
-use kithara_platform::time::sleep;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::sleep, tokio::task::spawn};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
+#[cfg(not(target_arch = "wasm32"))]
+use rodio::Decoder;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -82,7 +84,7 @@ async fn test_basic_hls_playback(
     info!("HLS source opened successfully");
 
     // Start event monitor in background
-    let _events_handle = kithara_platform::tokio::task::spawn(async move {
+    let _events_handle = spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
             event_count += 1;
@@ -96,7 +98,7 @@ async fn test_basic_hls_playback(
     info!("Creating rodio decoder...");
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let decoder_result = spawn_blocking(move || rodio::Decoder::new(stream)).await;
+        let decoder_result = spawn_blocking(move || Decoder::new(stream)).await;
 
         match decoder_result {
             Ok(_decoder) => {
@@ -149,7 +151,7 @@ async fn test_hls_session_creation(
     let _stream = Stream::<Hls>::new(config).await?;
 
     // Spawn a task to consume events (prevent channel from filling up)
-    kithara_platform::tokio::task::spawn(async move {
+    spawn(async move {
         while events_rx.recv().await.is_ok() {
             // Just consume events
         }

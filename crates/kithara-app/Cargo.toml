@@ -2,6 +2,7 @@
 name = "kithara-app"
 version = "0.1.0"
 edition.workspace = true
+license = "MIT OR Apache-2.0"
 publish = false
 
 [lints]
@@ -14,7 +15,6 @@ gui = ["dep:iced"]
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
@@ -26,6 +26,9 @@ crossterm = { workspace = true, optional = true }
 
 # GUI-only
 iced = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [[bin]]
 name = "kithara"

@@ -10,12 +10,12 @@
 use std::{
     error::Error as StdError,
     future::Future,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
+use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration};
 use kithara_storage::WaitOutcome;
 
 use crate::{
@@ -165,7 +165,7 @@ impl<T: StreamType> Stream<T> {
     ) -> Result<Option<SourceSeekAnchor>, io::Error> {
         self.source
             .seek_time_anchor(position)
-            .map_err(|e| io::Error::other(e.to_string()))
+            .map_err(|e| IoError::other(e.to_string()))
     }
 }
 
@@ -204,14 +204,14 @@ impl<T: StreamType> Read for Stream<T> {
                     if msg.contains("budget exceeded") {
                         // Seek in progress — surface to the audio worker.
                         if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
-                            return Err(io::Error::other("seek pending"));
+                            return Err(IoError::other("seek pending"));
                         }
                         // No seek — data simply isn't ready yet, spin.
                         hang_tick!();
-                        kithara_platform::thread::yield_now();
+                        yield_now();
                         continue;
                     }
-                    return Err(io::Error::other(msg));
+                    return Err(IoError::other(msg));
                 }
             };
             match wait_outcome {
@@ -222,7 +222,7 @@ impl<T: StreamType> Read for Stream<T> {
                         // Some sources use Interrupted as a recoverable
                         // "retry wait_range" signal when seek is not active.
                         hang_tick!();
-                        kithara_platform::thread::yield_now();
+                        yield_now();
                         continue;
                     }
                     // Use `Other` instead of `Interrupted` because Symphonia
@@ -230,12 +230,12 @@ impl<T: StreamType> Read for Stream<T> {
                     // convention).  `Other` propagates through the decoder and
                     // becomes `DecodeError::Io`, which `handle_decode_error`
                     // can recover from by exiting to the worker loop.
-                    return Err(io::Error::other("seek pending"));
+                    return Err(IoError::other("seek pending"));
                 }
             }
 
             if timeline.seek_epoch() != read_epoch {
-                return Err(io::Error::other("seek pending"));
+                return Err(IoError::other("seek pending"));
             }
 
             // Read data directly from source.
@@ -244,23 +244,23 @@ impl<T: StreamType> Read for Stream<T> {
             match self
                 .source
                 .read_at(pos, buf)
-                .map_err(|e| io::Error::other(e.to_string()))?
+                .map_err(|e| IoError::other(e.to_string()))?
             {
                 ReadOutcome::Data(n) => {
                     if timeline.seek_epoch() != read_epoch {
-                        return Err(io::Error::other("seek pending"));
+                        return Err(IoError::other("seek pending"));
                     }
                     hang_reset!();
                     timeline.set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
                 ReadOutcome::VariantChange => {
-                    return Err(io::Error::other(VariantChangeError));
+                    return Err(IoError::other(VariantChangeError));
                 }
                 ReadOutcome::Retry => {
                     // Resource evicted — go back to wait_range.
                     hang_tick!();
-                    kithara_platform::thread::yield_now();
+                    yield_now();
                     continue;
                 }
             }
@@ -278,8 +278,8 @@ impl<T: StreamType> Seek for Stream<T> {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
+                    return Err(IoError::new(
+                        ErrorKind::Unsupported,
                         "seek from end requires known length",
                     ));
                 };
@@ -288,8 +288,8 @@ impl<T: StreamType> Seek for Stream<T> {
         };
 
         if new_pos < 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
                 "negative seek position",
             ));
         }
@@ -301,8 +301,8 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
                 format!(
                     "seek past EOF: new_pos={new_pos} len={len} current_pos={current} seek_from={pos:?}",
                 ),
@@ -445,7 +445,7 @@ mod tests {
         type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
-            Err(io::Error::other("not used in unit tests"))
+            Err(IoError::other("not used in unit tests"))
         }
     }
 
@@ -462,7 +462,7 @@ mod tests {
         type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
-            Err(io::Error::other("not used in unit tests"))
+            Err(IoError::other("not used in unit tests"))
         }
     }
 
@@ -549,7 +549,7 @@ mod tests {
             .expect_err("flushing read must return error");
         // Uses `Other` (not `Interrupted`) so that Symphonia propagates
         // the error instead of silently retrying.
-        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.kind(), ErrorKind::Other);
     }
 
     #[kithara::test]
@@ -569,7 +569,7 @@ mod tests {
             .read(&mut buf)
             .expect_err("seek epoch change must abort stale read");
 
-        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.kind(), ErrorKind::Other);
         assert_eq!(stream.source.read_calls, 0);
         assert_eq!(stream.position(), 0);
     }

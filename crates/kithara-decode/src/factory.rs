@@ -34,7 +34,7 @@ use crate::{
     symphonia::{
         Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
     },
-    traits::{Alac, AudioDecoder, InnerDecoder},
+    traits::{Alac, AudioDecoder, CodecType, InnerDecoder},
 };
 
 /// Selector for choosing how to detect/specify the codec.
@@ -322,8 +322,6 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        use crate::traits::CodecType;
-
         /// PCM codec marker for WAV files.
         struct Pcm;
         impl CodecType for Pcm {
@@ -484,7 +482,6 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
     {
         // Dummy codec marker — actual codec is determined by Symphonia's probe.
-        use crate::traits::CodecType;
         struct ProbeAny;
         impl CodecType for ProbeAny {
             const CODEC: AudioCodec = AudioCodec::Pcm;

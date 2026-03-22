@@ -15,7 +15,11 @@ use std::{
 };
 
 use derivative::Derivative;
-use kithara_platform::{Condvar, Mutex};
+use kithara_platform::{
+    Condvar, Mutex,
+    thread::yield_now,
+    time::{Duration as PlatformDuration, Instant},
+};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -24,6 +28,9 @@ use crate::{
     StorageError, StorageResult,
     resource::{ResourceExt, ResourceStatus, WaitOutcome, range_covered_by},
 };
+
+/// Condvar wait spin timeout in milliseconds.
+const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 
 /// Backend-specific storage operations.
 ///
@@ -369,9 +376,8 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             );
 
             hang_tick!();
-            kithara_platform::thread::yield_now();
-            let deadline = kithara_platform::time::Instant::now()
-                + kithara_platform::time::Duration::from_millis(50);
+            yield_now();
+            let deadline = Instant::now() + PlatformDuration::from_millis(WAIT_SPIN_TIMEOUT_MS);
             let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }

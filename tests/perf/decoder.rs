@@ -6,6 +6,7 @@
 
 use std::io::Cursor;
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::decode::{DecoderConfig, DecoderFactory, InnerDecoder};
 use kithara_platform::time::Instant;
 use kithara_test_utils::create_test_wav;
@@ -51,7 +52,7 @@ enum PerfScenario {
 #[case("decoder_throughput", PerfScenario::Throughput)]
 #[ignore]
 fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
-    let _guard = hotpath::FunctionsGuardBuilder::new(label).build();
+    let _guard = FunctionsGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::DecodeLoop => {
             let mut decoder = create_wav_decoder(44100);

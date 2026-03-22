@@ -17,7 +17,6 @@ derive_setters = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
@@ -33,7 +32,6 @@ portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 default = []
@@ -55,6 +53,7 @@ disable-hang-detector = [
 ]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

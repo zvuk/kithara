@@ -11,7 +11,15 @@ use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
-use crate::{error::PlayError, impls::resource::Resource};
+use crate::error::PlayError;
+#[rustfmt::skip]
+use crate::impls::resource::Resource;
+
+/// Number of stereo output channels.
+const STEREO_CHANNELS: usize = 2;
+
+/// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
+const BUFFER_DURATION_DIVISOR: usize = 5;
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
@@ -21,7 +29,7 @@ use crate::{error::PlayError, impls::resource::Resource};
 /// potentially-blocking decoder on every callback.
 pub(crate) struct PlayerResource {
     resource: Resource,
-    channel_buffers: [PcmBuf; 2],
+    channel_buffers: [PcmBuf; STEREO_CHANNELS],
     write_len: usize,
     write_pos: usize,
     src: Arc<str>,
@@ -35,7 +43,8 @@ impl PlayerResource {
     pub(crate) fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
-        let buffer_len = (spec.sample_rate as usize / 5) * channels.max(2);
+        let buffer_len =
+            (spec.sample_rate as usize / BUFFER_DURATION_DIVISOR) * channels.max(STEREO_CHANNELS);
 
         let channel_buffers = [
             pool.get_with(|b: &mut Vec<f32>| {
@@ -97,7 +106,7 @@ impl PlayerResource {
             let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
             let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; 2] = [left, right];
+            let mut planar: [&mut [f32]; STEREO_CHANNELS] = [left, right];
 
             let n = self.resource.read_planar(&mut planar);
             if n == 0 {
@@ -115,7 +124,7 @@ impl PlayerResource {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
 
-            if output.len() >= 2 {
+            if output.len() >= STEREO_CHANNELS {
                 output[0][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]

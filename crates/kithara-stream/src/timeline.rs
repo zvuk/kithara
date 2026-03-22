@@ -113,6 +113,8 @@ impl Timeline {
         sample_rate: u32,
         channels: u16,
     ) {
+        const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
         if sample_rate == 0 || channels == 0 || interleaved_samples == 0 {
             return;
         }
@@ -121,8 +123,7 @@ impl Timeline {
         if frames == 0 {
             return;
         }
-
-        let delta_nanos = (u128::from(frames) * 1_000_000_000u128) / u128::from(sample_rate);
+        let delta_nanos = (u128::from(frames) * NANOS_PER_SECOND) / u128::from(sample_rate);
         let delta = u64::try_from(delta_nanos).unwrap_or(u64::MAX);
         loop {
             let current = self.committed_position_ns.load(Ordering::Acquire);

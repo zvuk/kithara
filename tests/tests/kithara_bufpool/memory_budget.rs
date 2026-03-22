@@ -1,7 +1,7 @@
 use kithara_bufpool::{BudgetExhausted, internal::*};
 use kithara_test_utils::kithara;
 
-// ── Tier 1: Pool-native memory budget tests ─────────────────────────────
+// Tier 1: Pool-native memory budget tests
 
 #[kithara::test]
 fn test_byte_budget_enforced() {

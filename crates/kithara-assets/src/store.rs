@@ -431,7 +431,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{base::Assets, key::ResourceKey};
+    use crate::{
+        base::{Assets, Capabilities},
+        key::ResourceKey,
+    };
 
     fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
         if let Some(msg) = err.downcast_ref::<String>() {
@@ -594,7 +597,6 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_capabilities_lack_evict_and_lease() {
-        use crate::base::Capabilities;
         let store = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .build_ephemeral();
@@ -608,7 +610,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_all_capabilities() {
-        use crate::base::Capabilities;
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
@@ -620,7 +621,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_local_mode_only_processing() {
-        use crate::base::Capabilities;
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())

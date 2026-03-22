@@ -13,7 +13,7 @@ use kithara_assets::{
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamContext, StreamType, Timeline};
+use kithara_stream::{Backend, StreamContext, StreamType, Timeline};
 
 use crate::{
     HlsStreamContext,
@@ -176,7 +176,7 @@ impl StreamType for Hls {
 
         // Spawn downloader on a dedicated thread.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.
-        let backend = kithara_stream::Backend::new(downloader, &cancel, config.runtime.clone());
+        let backend = Backend::new(downloader, &cancel, config.runtime.clone());
         source.set_backend(backend);
 
         Ok(source)

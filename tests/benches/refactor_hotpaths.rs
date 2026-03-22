@@ -33,6 +33,7 @@ use kithara::{
 use kithara_audio::internal::{ResamplerParams, ResamplerProcessor};
 use kithara_platform::tokio::runtime::{Builder, Runtime};
 use kithara_test_utils::TestHttpServer;
+use tempfile::TempDir;
 use url::Url;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../assets/test.mp3");
@@ -260,8 +261,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
     group.bench_function("new_and_read", |b| {
         b.iter_batched(
             || {
-                let temp_dir =
-                    tempfile::TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+                let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
                 let file_path = temp_dir.path().join("bench.mp3");
                 fs::write(&file_path, TEST_MP3_BYTES)
                     .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
@@ -309,7 +309,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.bench_function("new_seek_read_cycle", |b| {
         let _ = &server_guard;
         b.iter_batched(
-            || tempfile::TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}")),
+            || TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}")),
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {

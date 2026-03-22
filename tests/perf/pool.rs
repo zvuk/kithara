@@ -6,6 +6,7 @@
 
 use std::{mem, sync::Arc, thread};
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::bufpool::{PcmPool, pcm_pool};
 use kithara_platform::time::Instant;
 
@@ -63,7 +64,7 @@ enum PerfScenario {
 #[case("pool_scalability", PerfScenario::Scalability)]
 #[ignore]
 fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
-    let _guard = hotpath::FunctionsGuardBuilder::new(label).build();
+    let _guard = FunctionsGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::SingleThreadGetPut => {
             let pool = pcm_pool();
@@ -116,7 +117,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             for &num_threads in &thread_counts {
                 let scenario_label =
                     Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
-                let _guard = hotpath::FunctionsGuardBuilder::new(scenario_label).build();
+                let _guard = FunctionsGuardBuilder::new(scenario_label).build();
                 let pool = Arc::new(pcm_pool().clone());
                 let start = Instant::now();
 

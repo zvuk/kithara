@@ -35,7 +35,7 @@ machete:
 
 # Validate workspace architecture.
 arch:
-    cargo xtask arch
+    cargo xtask quality arch
 
 # Generate and open API docs.
 doc:
@@ -215,6 +215,12 @@ memory-check:
     @echo ""
     @echo "All memory checks passed."
 
+# --- publish ---
+
+# Publish all public crates to crates.io in dependency order.
+publish *ARGS:
+    cargo xtask publish {{ARGS}}
+
 # --- wasm ---
 
 # Check that key crates compile for wasm32 target.
@@ -237,7 +243,7 @@ wasm-test:
 
 # Build wasm demo app.
 wasm-build:
-    bash crates/kithara-wasm/build-wasm.sh
+    cargo xtask wasm build
 
 wasm-size-check:
     @toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"; \
@@ -257,23 +263,23 @@ wasm-size-check:
 
 # Build Android JNI libraries and Kotlin bindings.
 android *ARGS:
-    cargo xtask android {{ARGS}}
+    cargo xtask android build {{ARGS}}
 
 # Build release AAR (includes JNI libs and Kotlin bindings).
 android-aar:
-    cargo xtask android --profile release
+    cargo xtask android build --profile release
     cd android && ./gradlew :lib:assembleRelease -Pkithara.release=true -x generateKitharaFfi
     @echo "==> AAR: android/lib/build/outputs/aar/lib-release.aar"
 # --- apple ---
 
 # Build XCFramework for Apple platforms.
 xcframework *ARGS:
-    cargo xtask xcframework {{ARGS}}
+    cargo xtask apple build {{ARGS}}
 
 # Build XCFramework (debug) and run the Swift demo app.
 apple-demo:
     just xcframework --profile debug
-    cd apple && swift run KitharaDemo
+    cd apple && KITHARA_LOCAL_DEV=1 swift run KitharaDemo
 
 # Build XCFramework, zip, and compute checksum for SPM distribution.
 release-apple:

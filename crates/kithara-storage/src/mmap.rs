@@ -13,7 +13,8 @@
 //!   for full synchronization.
 
 use std::{
-    fmt, fs,
+    fmt,
+    fs::{self, OpenOptions},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -21,6 +22,7 @@ use std::{
 use crossbeam_queue::SegQueue;
 use kithara_platform::Mutex;
 use mmap_io::MemoryMappedFile;
+use rangemap::RangeSet;
 
 use crate::{
     StorageError, StorageResult,
@@ -30,6 +32,9 @@ use crate::{
 
 /// Default initial size for new mmap files (64 KB).
 const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
+
+/// Growth factor when the mmap file needs to be resized.
+const MMAP_GROWTH_FACTOR: u64 = 2;
 
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone)]
@@ -107,7 +112,7 @@ impl Driver for MmapDriver {
                 len = mmap.len();
                 MmapState::Committed(mmap)
             };
-            let mut available = rangemap::RangeSet::new();
+            let mut available = RangeSet::new();
             available.insert(0..len);
             let init = DriverState {
                 available,
@@ -119,7 +124,7 @@ impl Driver for MmapDriver {
             (
                 MmapState::Empty,
                 DriverState {
-                    available: rangemap::RangeSet::new(),
+                    available: RangeSet::new(),
                     committed: true,
                     final_len: Some(0),
                 },
@@ -198,7 +203,7 @@ impl DriverIo for MmapDriver {
         let mmap = match &*mmap_guard {
             MmapState::Active(m) => {
                 if end > m.len() {
-                    let new_size = end.max(m.len() * 2);
+                    let new_size = end.max(m.len() * MMAP_GROWTH_FACTOR);
                     m.resize(new_size)?;
                 }
                 m
@@ -248,7 +253,7 @@ impl DriverIo for MmapDriver {
                     // so this branch is skipped.
                     let file_len = fs::metadata(&self.path).map_or(0, |m| m.len());
                     if file_len > len {
-                        let f = fs::OpenOptions::new()
+                        let f = OpenOptions::new()
                             .write(true)
                             .open(&self.path)
                             .map_err(|e| StorageError::Failed(format!("truncate open: {e}")))?;

@@ -11,6 +11,7 @@ use std::{
 
 use axum::{
     Router,
+    body::Body,
     extract::{Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -129,7 +130,7 @@ async fn slow_body_endpoint() -> impl IntoResponse {
 
     Response::builder()
         .status(StatusCode::OK)
-        .body(axum::body::Body::from_stream(stream))
+        .body(Body::from_stream(stream))
         .unwrap()
 }
 
@@ -199,7 +200,7 @@ async fn key_endpoint(
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")
-        .body(axum::body::Body::from(Bytes::from(key_bytes)))
+        .body(Body::from(Bytes::from(key_bytes)))
         .unwrap())
 }
 
@@ -241,7 +242,7 @@ async fn key_with_auth_endpoint(
                             "Content-Range",
                             format!("bytes {}-{}/{}", start, end, key_bytes.len()),
                         )
-                        .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
+                        .body(Body::from(Bytes::copy_from_slice(slice)))
                         .unwrap());
                 }
 
@@ -250,7 +251,7 @@ async fn key_with_auth_endpoint(
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/octet-stream")
-                    .body(axum::body::Body::from(Bytes::from(key_bytes)))
+                    .body(Body::from(Bytes::from(key_bytes)))
                     .unwrap())
             }
         }
@@ -278,7 +279,7 @@ async fn key_with_params_endpoint(
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/octet-stream")
-            .body(axum::body::Body::from(Bytes::from(key_bytes)))
+            .body(Body::from(Bytes::from(key_bytes)))
             .unwrap())
     } else {
         Err(StatusCode::BAD_REQUEST)

@@ -2,19 +2,25 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Error as IoError, ErrorKind},
     path::{Path, PathBuf},
 };
 
-use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageResource};
+use kithara_storage::{
+    MmapOptions, MmapResource, OpenMode, Resource, StorageError, StorageResource,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
-    base::Assets,
+    base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
 };
+
+/// Initial mmap file size for index resources (4 KB).
+const INDEX_INITIAL_SIZE: u64 = 4096;
 
 /// Concrete on-disk [`Assets`] implementation for a single asset.
 ///
@@ -87,7 +93,7 @@ impl DiskAssetStore {
             self.cancel.clone(),
             MmapOptions {
                 path,
-                initial_len: Some(4096),
+                initial_len: Some(INDEX_INITIAL_SIZE),
                 mode: OpenMode::ReadWrite,
             },
         )?)
@@ -99,8 +105,7 @@ impl Assets for DiskAssetStore {
     type Context = ();
     type IndexRes = MmapResource;
 
-    fn capabilities(&self) -> crate::base::Capabilities {
-        use crate::base::Capabilities;
+    fn capabilities(&self) -> Capabilities {
         if self.asset_root.is_empty() {
             // Local-file mode: absolute keys only, no decorators.
             Capabilities::PROCESSING
@@ -124,7 +129,7 @@ impl Assets for DiskAssetStore {
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
         if !path.exists() {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "resource missing").into());
+            return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
         let mmap = self.open_storage_resource(path, OpenMode::ReadOnly)?;
         Ok(StorageResource::Mmap(mmap))
@@ -161,16 +166,14 @@ impl Assets for DiskAssetStore {
             Ok(metadata) => Ok(AssetResourceState::Committed {
                 final_len: Some(metadata.len()),
             }),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Ok(AssetResourceState::Missing)
-            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(AssetResourceState::Missing),
             Err(error) => Err(error.into()),
         }
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
         if self.cancel.is_cancelled() {
-            return Err(kithara_storage::StorageError::Cancelled.into());
+            return Err(StorageError::Cancelled.into());
         }
         delete_asset_dir(&self.root_dir, &self.asset_root).map_err(Into::into)
     }
@@ -179,7 +182,7 @@ impl Assets for DiskAssetStore {
         let path = self.resource_path(key)?;
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
     }
@@ -188,11 +191,11 @@ impl Assets for DiskAssetStore {
 /// Delete an asset directory by `asset_root` directly via filesystem.
 pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> io::Result<()> {
     let safe = sanitize_rel(asset_root)
-        .map_err(|()| io::Error::new(io::ErrorKind::InvalidInput, "invalid asset_root"))?;
+        .map_err(|()| IoError::new(ErrorKind::InvalidInput, "invalid asset_root"))?;
     let path = root_dir.join(safe);
     match fs::remove_dir_all(&path) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
 }

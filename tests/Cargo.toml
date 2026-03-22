@@ -24,8 +24,6 @@ kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-wasm = { workspace = true, features = ["internal"] }
-
 # Async runtime
 tokio-util = { workspace = true }
 
@@ -38,7 +36,6 @@ url = { workspace = true }
 rodio = { workspace = true }
 
 # Testing framework
-serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 # Logging

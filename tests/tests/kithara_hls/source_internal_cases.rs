@@ -1,6 +1,9 @@
 use std::{
     ops::{Deref, Range},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
@@ -18,7 +21,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant, sleep, timeout},
-    tokio::task::spawn_blocking,
+    tokio::task::{spawn, spawn_blocking},
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
@@ -76,7 +79,7 @@ impl SharedSegments {
         num_variants: usize,
         num_segments: usize,
     ) -> Self {
-        let abr_variant_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let abr_variant_index = Arc::new(AtomicUsize::new(0));
         let coord = Arc::new(HlsCoord::new(
             cancel,
             timeline.clone(),
@@ -2166,7 +2169,7 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
     // satisfies `range_ready` for offset range covering segment 1.
     let bg_shared = Arc::clone(&shared);
     let bg_cancel = cancel.clone();
-    let bg = kithara_platform::tokio::task::spawn(async move {
+    let bg = spawn(async move {
         for i in 0..14u64 {
             if bg_cancel.is_cancelled() {
                 break;

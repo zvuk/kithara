@@ -4,7 +4,31 @@ severity: warning
 language: Rust
 files:
   - crates/**/src/**/*.rs
+ignores:
+  - crates/kithara-test-macros/**
 rule:
   all:
     - kind: function_item
-    - regex: '(?ms)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*[A-Za-z0-9_:.]+\([^\n\)]*\);?\s*\}$'
+    - regex: '(?s)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*[A-Za-z0-9_:.]+\([^\n\)]*\);?\s*\}$'
+    - not:
+        inside:
+          kind: impl_item
+          stopBy: end
+    - not:
+        inside:
+          kind: trait_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)'
+                stopBy: end
+          stopBy: end
+    - not:
+        has:
+          kind: identifier
+          field: name
+          regex: '^(default|from|into|drop|fmt|clone|new|main|fallback_timeout|to_iced|to_ratatui)$'

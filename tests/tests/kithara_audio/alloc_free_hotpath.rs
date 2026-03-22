@@ -12,7 +12,7 @@ use kithara_test_utils::kithara;
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
 
-// ── Tier 3: Zero-allocation audio hot path tests ────────────────────────
+// Tier 3: Zero-allocation audio hot path tests
 // These tests verify that pool get/put and PCM chunk access cause no heap
 // allocations after warmup. Requires debug_assertions (cargo test default).
 // Run with --test-threads=1 to avoid interference.

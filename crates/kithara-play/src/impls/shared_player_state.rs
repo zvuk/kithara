@@ -16,6 +16,9 @@ use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 
 use super::player_notification::PlayerNotification;
 
+/// Capacity of the notification ring buffer.
+const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
+
 /// Shared state that bridges the main thread and the audio processor.
 ///
 /// Position and duration are updated by the processor every render cycle.
@@ -49,7 +52,7 @@ impl SharedPlayerState {
     /// The notification channel is bounded to 32 to avoid dropping
     /// notifications during high activity while keeping memory bounded.
     pub(crate) fn new() -> Self {
-        let (tx, rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let (tx, rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_RINGBUF_CAPACITY).split();
         Self {
             playing: AtomicBool::new(false),
             seek_epoch: AtomicU64::new(0),
@@ -77,6 +80,8 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -112,8 +117,6 @@ mod tests {
 
     #[kithara::test]
     fn shared_state_notification_channel_works() {
-        use std::sync::Arc;
-
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx

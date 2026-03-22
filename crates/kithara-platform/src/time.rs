@@ -4,31 +4,36 @@
 //! On wasm32: `Instant` uses [`web_time`], `sleep` uses `setTimeout`,
 //! and `timeout` races the future against a `setTimeout`-based deadline.
 
+#[cfg(target_arch = "wasm32")]
+use std::pin::pin;
 pub use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
+use futures::future::{self as future_util, Either};
+#[cfg(target_arch = "wasm32")]
+use js_sys::{Function, Promise, Reflect, global};
 #[cfg(not(target_arch = "wasm32"))]
-pub use tokio_with_wasm::alias::time::sleep;
+use tokio_alias::time as tokio_time;
+#[cfg(not(target_arch = "wasm32"))]
+pub use tokio_time::sleep;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio_with_wasm::alias as tokio_alias;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast, JsValue};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::JsFuture;
 pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]
 pub async fn sleep(duration: Duration) {
-    use wasm_bindgen::JsCast;
-
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
-    let promise = js_sys::Promise::new(&mut |resolve, _| {
-        let set_timeout: js_sys::Function = js_sys::Reflect::get(
-            &js_sys::global(),
-            &wasm_bindgen::JsValue::from_str("setTimeout"),
-        )
-        .expect("setTimeout must exist")
-        .unchecked_into();
-        let _ = set_timeout.call2(
-            &wasm_bindgen::JsValue::UNDEFINED,
-            &resolve,
-            &wasm_bindgen::JsValue::from(ms),
-        );
+    let promise = Promise::new(&mut |resolve, _| {
+        let set_timeout: Function = Reflect::get(&global(), &JsValue::from_str("setTimeout"))
+            .expect("setTimeout must exist")
+            .unchecked_into();
+        let _ = set_timeout.call2(&JsValue::UNDEFINED, &resolve, &JsValue::from(ms));
     });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    let _ = JsFuture::from(promise).await;
 }
 
 /// Error returned when an async operation exceeds its deadline.
@@ -56,7 +61,7 @@ pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, Time
 where
     F: Future,
 {
-    tokio_with_wasm::alias::time::timeout(duration, future)
+    tokio_time::timeout(duration, future)
         .await
         .map_err(|_| TimeoutError)
 }
@@ -66,14 +71,10 @@ pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, Time
 where
     F: Future,
 {
-    use std::pin::pin;
-
-    use futures::future::{self, Either};
-
     let deadline = pin!(sleep(duration));
     let work = pin!(future);
 
-    match future::select(work, deadline).await {
+    match future_util::select(work, deadline).await {
         Either::Left((output, _)) => Ok(output),
         Either::Right(((), _)) => Err(TimeoutError),
     }

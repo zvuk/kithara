@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::abr::{
     AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
@@ -58,7 +59,7 @@ enum PerfScenario {
 #[case("abr_estimator_loop", PerfScenario::EstimatorHotLoop)]
 #[ignore]
 fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
-    let _guard = hotpath::FunctionsGuardBuilder::new(label).build();
+    let _guard = FunctionsGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::DecisionMaking => {
             let bitrates = vec![500_000, 1_000_000, 2_000_000, 5_000_000];

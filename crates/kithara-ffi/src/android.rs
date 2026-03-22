@@ -8,6 +8,7 @@ use jni::{
     objects::{GlobalRef, JClass, JObject},
     sys::jint,
 };
+use rustls_platform_verifier::android as rustls_android;
 use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
@@ -41,20 +42,24 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         }
     }
 
-    if let Err(err) = rustls_platform_verifier::android::init_with_env(&mut env, context) {
+    if let Err(err) = rustls_android::init_with_env(&mut env, context) {
         let message = format!("failed to initialize rustls platform verifier: {err}");
         error!(message = %message);
         let _ = env.throw_new("java/lang/IllegalStateException", &message);
     }
 }
 
+const LOG_LEVEL_INFO: jint = 2;
+const LOG_LEVEL_WARN: jint = 3;
+const LOG_LEVEL_ERROR: jint = 4;
+
 fn level_filter(ordinal: jint) -> LevelFilter {
     match ordinal {
         0 => LevelFilter::TRACE,
         1 => LevelFilter::DEBUG,
-        2 => LevelFilter::INFO,
-        3 => LevelFilter::WARN,
-        4 => LevelFilter::ERROR,
+        LOG_LEVEL_INFO => LevelFilter::INFO,
+        LOG_LEVEL_WARN => LevelFilter::WARN,
+        LOG_LEVEL_ERROR => LevelFilter::ERROR,
         _ => LevelFilter::OFF,
     }
 }

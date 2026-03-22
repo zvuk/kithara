@@ -7,16 +7,8 @@
 
 pub use tokio_with_wasm::alias::*;
 
+pub mod runtime;
 pub mod task;
+mod thread_pool;
 
-/// Ensure the platform task pool is initialized before browser-side tests run.
-///
-/// On wasm32 this eagerly touches the blocking task backend once so browser
-/// tests do not pay lazy worker-pool setup in the measured path.
-#[inline]
-pub async fn ensure_thread_pool() {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = task::spawn_blocking(|| {}).await;
-    }
-}
+pub use thread_pool::ensure_thread_pool;

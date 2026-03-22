@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 #[cfg(target_arch = "wasm32")]
-use tracing_subscriber::{layer, util};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+#[cfg(target_arch = "wasm32")]
+use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
 
 use crate::kithara;
 
@@ -113,11 +115,10 @@ pub fn init_tracing(filter: EnvFilter) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        let mut config = tracing_wasm::WASMLayerConfigBuilder::new();
+        let mut config = WASMLayerConfigBuilder::new();
         config.set_report_logs_in_timings(false);
-        let subscriber = layer::SubscriberExt::with(tracing_subscriber::registry(), filter);
-        let subscriber =
-            layer::SubscriberExt::with(subscriber, tracing_wasm::WASMLayer::new(config.build()));
-        let _ = util::SubscriberInitExt::try_init(subscriber);
+        let subscriber = tracing_subscriber::registry().with(filter);
+        let subscriber = subscriber.with(WASMLayer::new(config.build()));
+        let _ = subscriber.try_init();
     }
 }

@@ -18,8 +18,10 @@ targets = []
 ignore = [
   # paste is unmaintained but only a transitive dev-dep (unimock -> higher-kinded-types -> paste)
   "RUSTSEC-2024-0436",
-  # bincode is unmaintained; we use it in kithara-assets for index serialization, no security impact
-  "RUSTSEC-2025-0141",
+  # atomic-polyfill is unmaintained; transitive dep via heapless -> postcard -> kithara-assets
+  "RUSTSEC-2023-0089",
+  # derivative is unmaintained; used in kithara-abr, migration to derive_more is a separate task
+  "RUSTSEC-2024-0388",
 ]
 
 [licenses]
@@ -37,6 +39,9 @@ allow = [
   "Unicode-DFS-2016",
   "CC0-1.0",
   "CDLA-Permissive-2.0",
+  "BSD-1-Clause",
+  "BSL-1.0",
+  "NCSA",
 ]
 # In cargo-deny v2, any license NOT in the allow list is implicitly denied.
 # Copyleft licenses (GPL, AGPL, LGPL) are rejected automatically.
@@ -62,4 +67,6 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
   # symphonia dev branch until 0.6 is released on crates.io
   "https://github.com/pdeljanov/Symphonia.git",
+  # patched firewheel-web-audio fork
+  "https://github.com/gerasim13/firewheel-web-audio",
 ]

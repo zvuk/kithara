@@ -2,9 +2,15 @@
 
 use std::sync::Arc;
 
-use kithara::{hls::HlsResult, internal::KeyManager};
+use bytes::Bytes;
+use kithara::{
+    drm::{DecryptContext, aes128_cbc_process_chunk},
+    hls::{HlsError, HlsResult},
+    internal::KeyManager,
+};
 use kithara_integration_tests::hls_fixture::*;
 use kithara_platform::time::Duration;
+use url::Url;
 
 // Test Cases
 
@@ -43,19 +49,19 @@ async fn key_processor_applied(
 ) -> HlsResult<()> {
     let server = test_server.await;
 
-    let processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
+    let processor = Arc::new(|key: Bytes, _context: kithara::hls::KeyContext| {
         // Simple processor that just adds a prefix
         let mut processed = Vec::new();
         processed.extend_from_slice(b"processed:");
         processed.extend_from_slice(&key);
-        Ok(bytes::Bytes::from(processed))
+        Ok(Bytes::from(processed))
     });
 
     let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
-    let key: bytes::Bytes = key_manager.get_raw_key(&key_url, None).await?;
+    let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
     assert!(key.starts_with(b"processed:"));
 
     Ok(())
@@ -75,16 +81,16 @@ async fn key_manager_with_different_processors(
     let server = test_server.await;
 
     // Test with uppercase processor
-    let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
+    let uppercase_processor = Arc::new(|key: Bytes, _context: kithara::hls::KeyContext| {
         let upper = key.to_ascii_uppercase();
-        Ok(bytes::Bytes::from(upper))
+        Ok(Bytes::from(upper))
     });
 
     let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
-    let key: bytes::Bytes = key_manager.get_raw_key(&key_url, None).await?;
+    let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
     assert!(key.is_ascii());
 
     Ok(())
@@ -104,11 +110,10 @@ async fn key_manager_error_handling(
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     // Try to get key from invalid URL
-    let invalid_url =
-        url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
-            .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
+    let invalid_url = Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
+        .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
-    let result: HlsResult<bytes::Bytes> = key_manager.get_raw_key(&invalid_url, None).await;
+    let result: HlsResult<Bytes> = key_manager.get_raw_key(&invalid_url, None).await;
     assert!(result.is_err(), "invalid URL should fail, got Ok");
 
     Ok(())
@@ -131,7 +136,7 @@ async fn key_manager_caching_behavior(
     let key_url = server.url("/key.bin")?;
 
     // First fetch
-    let key1: bytes::Bytes = key_manager.get_raw_key(&key_url, None).await?;
+    let key1: Bytes = key_manager.get_raw_key(&key_url, None).await?;
 
     // Second fetch should potentially use cache
     let key2 = key_manager.get_raw_key(&key_url, None).await?;
@@ -155,7 +160,7 @@ async fn key_manager_with_context(
 ) -> HlsResult<()> {
     let server = test_server.await;
 
-    let processor = Arc::new(|key: bytes::Bytes, context: kithara::hls::KeyContext| {
+    let processor = Arc::new(|key: Bytes, context: kithara::hls::KeyContext| {
         // Use context to modify key
         let mut processed = Vec::new();
         processed.extend_from_slice(b"ctx:");
@@ -164,7 +169,7 @@ async fn key_manager_with_context(
             processed.extend_from_slice(b":");
         }
         processed.extend_from_slice(&key);
-        Ok(bytes::Bytes::from(processed))
+        Ok(Bytes::from(processed))
     });
 
     let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
@@ -178,7 +183,7 @@ async fn key_manager_with_context(
     // Test with IV
     let mut iv = [0u8; 16];
     iv[..7].copy_from_slice(b"test-iv");
-    let key2: bytes::Bytes = key_manager.get_raw_key(&key_url, Some(iv)).await?;
+    let key2: Bytes = key_manager.get_raw_key(&key_url, Some(iv)).await?;
     assert!(key2.starts_with(b"ctx:"));
 
     Ok(())
@@ -211,10 +216,10 @@ async fn aes128_key_decrypts_ciphertext(
 
     // Decrypt ciphertext through kithara-drm (the production decrypt path)
     let cipher = net.get_bytes(cipher_url, None).await?;
-    let mut ctx = kithara::drm::DecryptContext::new(key, iv);
+    let mut ctx = DecryptContext::new(key, iv);
     let mut output = vec![0u8; cipher.len()];
-    let written = kithara::drm::aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
-        .map_err(kithara::hls::HlsError::KeyProcessing)?;
+    let written = aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
+        .map_err(HlsError::KeyProcessing)?;
 
     assert!(output[..written].starts_with(aes128_plaintext_segment().as_slice()));
 

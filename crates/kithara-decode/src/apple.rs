@@ -20,7 +20,7 @@ use std::{
     collections::VecDeque,
     ffi::c_void,
     fmt,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     marker::PhantomData,
     mem, ptr, slice,
     sync::{
@@ -88,6 +88,26 @@ const kAudioFileStreamProperty_DataOffset: AudioFileStreamPropertyID = 0x646f666
 
 // AudioFileStream Parse Flags
 const kAudioFileStreamParseFlag_Discontinuity: UInt32 = 1;
+
+// PCM output format constants
+
+/// Bytes per f32 sample.
+const BYTES_PER_F32_SAMPLE: u32 = 4;
+/// Bits per f32 sample.
+const BITS_PER_F32_SAMPLE: u32 = 32;
+
+/// Initial read buffer size for parsing (32 KB).
+const PARSE_READ_BUFFER_SIZE: usize = 32768;
+/// Maximum bytes to parse before giving up on format detection (1 MB).
+const MAX_PARSE_BYTES: usize = 1024 * 1024;
+
+/// Default PCM buffer size in frames.
+const DEFAULT_BUFFER_FRAMES: usize = 1024;
+/// Minimum packet count before attempting decode.
+const MIN_PACKETS_FOR_DECODE: usize = 4;
+
+/// Default seek duration assumption (5 minutes) when total duration is unknown.
+const DEFAULT_SEEK_DURATION_SECS: f64 = 300.0;
 
 // AudioStreamPacketDescription
 #[repr(C)]
@@ -473,8 +493,8 @@ impl AppleInner {
         if status != noErr {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioFileStreamOpen failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioFileStreamOpen failed: {}", err_str),
             ))));
         }
@@ -482,7 +502,7 @@ impl AppleInner {
         debug!("Apple decoder: AudioFileStream opened");
 
         // Read initial data to get format info
-        let mut read_buffer = vec![0u8; 32768]; // 32KB chunks
+        let mut read_buffer = vec![0u8; PARSE_READ_BUFFER_SIZE];
         let mut total_parsed = 0usize;
 
         // Parse until we have format info or hit EOF
@@ -518,8 +538,8 @@ impl AppleInner {
                 }
                 let err_str = os_status_to_string(status);
                 warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
-                return Err(DecodeError::Backend(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
+                return Err(DecodeError::Backend(Box::new(IoError::new(
+                    ErrorKind::InvalidData,
                     format!("AudioFileStreamParseBytes failed: {}", err_str),
                 ))));
             }
@@ -548,7 +568,7 @@ impl AppleInner {
             }
 
             // Safety limit
-            if total_parsed > 1024 * 1024 {
+            if total_parsed > MAX_PARSE_BYTES {
                 unsafe {
                     AudioFileStreamClose(stream_parser);
                 }
@@ -573,11 +593,11 @@ impl AppleInner {
             mSampleRate: format.mSampleRate,
             mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
-            mBytesPerPacket: 4 * channels as u32,
+            mBytesPerPacket: BYTES_PER_F32_SAMPLE * channels as u32,
             mFramesPerPacket: 1,
-            mBytesPerFrame: 4 * channels as u32,
+            mBytesPerFrame: BYTES_PER_F32_SAMPLE * channels as u32,
             mChannelsPerFrame: channels as u32,
-            mBitsPerChannel: 32,
+            mBitsPerChannel: BITS_PER_F32_SAMPLE,
             mReserved: 0,
         };
 
@@ -591,8 +611,8 @@ impl AppleInner {
             }
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioConverterNew failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioConverterNew failed: {}", err_str),
             ))));
         }
@@ -663,8 +683,7 @@ impl AppleInner {
             .clone()
             .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
 
-        // Allocate PCM buffer (1024 frames * channels)
-        let buffer_frames = 1024;
+        let buffer_frames = DEFAULT_BUFFER_FRAMES;
         let pcm_buffer = vec![0.0f32; buffer_frames * channels as usize];
 
         let converter_input = Box::new(ConverterInputState::new());
@@ -708,7 +727,8 @@ impl AppleInner {
         self.assert_thread_affinity();
         loop {
             // Ensure we have packets to decode
-            while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
+            while self.parser_state.packet_buffer.len() < MIN_PACKETS_FOR_DECODE && !self.source_eof
+            {
                 self.feed_parser()?;
             }
 
@@ -737,9 +757,9 @@ impl AppleInner {
                 .parser_state
                 .format
                 .map(|f| f.mFramesPerPacket as usize)
-                .unwrap_or(1024);
+                .unwrap_or(DEFAULT_BUFFER_FRAMES);
 
-            let output_frames = frames_per_packet.max(1024);
+            let output_frames = frames_per_packet.max(DEFAULT_BUFFER_FRAMES);
             if self.pcm_buffer.len() < output_frames * channels {
                 self.pcm_buffer.resize(output_frames * channels, 0.0);
             }
@@ -748,7 +768,7 @@ impl AppleInner {
                 mNumberBuffers: 1,
                 mBuffers: [AudioBuffer {
                     mNumberChannels: self.spec.channels as u32,
-                    mDataByteSize: (self.pcm_buffer.len() * 4) as u32,
+                    mDataByteSize: (self.pcm_buffer.len() * BYTES_PER_F32_SAMPLE as usize) as u32,
                     mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
                 }],
             };
@@ -781,7 +801,7 @@ impl AppleInner {
                     err = %err_str,
                     "Apple decoder: AudioConverterFillComplexBuffer failed"
                 );
-                return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+                return Err(DecodeError::Backend(Box::new(IoError::other(format!(
                     "AudioConverterFillComplexBuffer failed: {}",
                     err_str
                 )))));
@@ -858,8 +878,8 @@ impl AppleInner {
         if status != noErr && status != kAudioFileStreamError_NotOptimized {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, bytes = n, "Apple decoder: parse failed");
-            return Err(DecodeError::Backend(Box::new(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(DecodeError::Backend(Box::new(IoError::new(
+                ErrorKind::InvalidData,
                 format!("AudioFileStreamParseBytes failed: {}", err_str),
             ))));
         }
@@ -955,7 +975,7 @@ impl AppleInner {
         let total_duration = self.estimate_total_duration();
         if total_duration.as_secs_f64() <= 0.0 {
             // Can't estimate, use linear interpolation
-            let ratio = pos.as_secs_f64() / 300.0; // Assume 5 min default
+            let ratio = pos.as_secs_f64() / DEFAULT_SEEK_DURATION_SECS;
             let offset = (audio_data_size as f64 * ratio.min(1.0)) as u64;
             return self.data_offset + offset;
         }
@@ -1202,7 +1222,7 @@ extern "C" fn converter_input_callback(
             unsafe {
                 *io_num_packets = 0;
             }
-            return 0x21646174u32 as i32; // '!dat' - no data now
+            return kAudioConverterErr_NoDataNow;
         }
     };
 

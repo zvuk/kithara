@@ -1,7 +1,7 @@
 //! Audio pipeline struct and public API.
 
 use std::{
-    io::{self, Read, Seek, SeekFrom},
+    io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,
     num::NonZeroU32,
     sync::{
@@ -12,11 +12,16 @@ use std::{
 };
 
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
-    tokio,
-    tokio::sync::{Notify, broadcast},
+    thread::park_timeout,
+    tokio::{
+        sync::{Notify, broadcast},
+        task::spawn_blocking,
+    },
 };
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
@@ -46,7 +51,14 @@ use crate::{
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
+/// Backoff duration between receive attempts.
 const RECV_BACKOFF: Duration = Duration::from_micros(100);
+
+/// Minimum playback rate to avoid division by zero.
+const MIN_PLAYBACK_RATE: f64 = 0.01;
+
+/// Probe buffer size in bytes for initial stream detection.
+const PROBE_BUFFER_SIZE: usize = 1024;
 
 enum ChunkOutcome {
     Continue,
@@ -314,7 +326,7 @@ impl<S> Audio<S> {
     /// At rate > 1.0, position advances faster (fewer effective samples per second).
     /// At rate < 1.0, position advances slower.
     pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(0.01);
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(MIN_PLAYBACK_RATE);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -521,15 +533,15 @@ impl<S> Audio<S> {
     fn wait_for_fetch() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            kithara_platform::thread::park_timeout(RECV_BACKOFF);
+            park_timeout(RECV_BACKOFF);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
-            if kithara_platform::thread::is_worker_thread() {
-                kithara_platform::thread::park_timeout(RECV_BACKOFF);
+            if is_worker_thread() {
+                park_timeout(RECV_BACKOFF);
             } else {
-                kithara_platform::thread::sleep(RECV_BACKOFF);
+                thread_sleep(RECV_BACKOFF);
             }
         }
     }
@@ -612,19 +624,19 @@ where
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
-            .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
+            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
         debug!("Audio::new — Stream created");
 
         debug!("Audio::new — spawning probe task...");
-        let stream = tokio::task::spawn_blocking(move || {
+        let stream = spawn_blocking(move || {
             let mut stream = stream;
-            let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
+            let mut probe_buf = byte_pool.get_with(|b| b.resize(PROBE_BUFFER_SIZE, 0));
             let _ = stream.read(&mut probe_buf);
             stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
             Ok::<_, DecodeError>(stream)
         })
         .await
-        .map_err(|e| DecodeError::Io(io::Error::other(format!("probe task panicked: {e}"))))??;
+        .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
         Ok(stream)
     }
@@ -649,15 +661,11 @@ where
         };
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
-        let decoder = tokio::task::spawn_blocking(move || {
+        let decoder = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
-                kithara_decode::DecoderFactory::create_from_media_info(
-                    shared_stream,
-                    info,
-                    decoder_config,
-                )
+                DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
             } else {
-                kithara_decode::DecoderFactory::create_with_probe(
+                DecoderFactory::create_with_probe(
                     shared_stream,
                     hint_for_decoder.as_deref(),
                     decoder_config,
@@ -665,7 +673,7 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}"))))??;
+        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
         debug!("Audio::new — decoder created");
         Ok(decoder)
     }
@@ -714,7 +722,7 @@ where
                 epoch: current_epoch,
                 ..Default::default()
             };
-            match kithara_decode::DecoderFactory::create_for_recreate(
+            match DecoderFactory::create_for_recreate(
                 || OffsetReader::new(stream.clone(), base_offset),
                 info,
                 config,
@@ -1038,6 +1046,7 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
+    use ringbuf::traits::Producer;
 
     use super::*;
 
@@ -1153,7 +1162,7 @@ mod tests {
         )
     }
 
-    // ---- ConsumerPhase transition tests ----
+    // ConsumerPhase transition tests
 
     #[kithara::test]
     fn consumer_phase_starts_buffering() {
@@ -1163,7 +1172,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_transitions_to_playing_on_first_chunk() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
         let chunk = make_chunk(&[0.1, 0.2]);
         let fetch = Fetch::new(chunk, false, 0);
@@ -1175,8 +1183,6 @@ mod tests {
 
     #[kithara::test]
     fn read_preserves_partial_chunk_tail_across_calls() {
-        use ringbuf::traits::Producer;
-
         let (mut audio, mut tx) = audio_with_channel();
         let spec = PcmSpec {
             channels: 2,
@@ -1221,7 +1227,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_seek_pending_to_playing_on_chunk() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
 
         // Seek sets SeekPending
@@ -1239,7 +1244,6 @@ mod tests {
 
     #[kithara::test]
     fn consumer_phase_eof_terminates() {
-        use ringbuf::traits::Producer;
         let (mut audio, mut tx) = audio_with_channel();
 
         let fetch = Fetch::new(PcmChunk::default(), true, 0);

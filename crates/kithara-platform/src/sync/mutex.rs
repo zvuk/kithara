@@ -6,13 +6,16 @@
 use std::ops::{Deref, DerefMut};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct Mutex<T>(parking_lot::Mutex<T>);
+use parking_lot::Mutex as ParkingLotMutex;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Mutex<T>(ParkingLotMutex<T>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<T> Mutex<T> {
     #[inline]
     pub fn new(value: T) -> Self {
-        Self(parking_lot::Mutex::new(value))
+        Self(ParkingLotMutex::new(value))
     }
 
     #[inline]
@@ -60,13 +63,16 @@ impl<T> DerefMut for MutexGuard<'_, T> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub struct Mutex<T>(wasm_safe_thread::Mutex<T>);
+use wasm_safe_thread::Mutex as WasmMutex;
+
+#[cfg(target_arch = "wasm32")]
+pub struct Mutex<T>(WasmMutex<T>);
 
 #[cfg(target_arch = "wasm32")]
 impl<T> Mutex<T> {
     #[inline]
     pub fn new(value: T) -> Self {
-        Self(wasm_safe_thread::Mutex::new(value))
+        Self(WasmMutex::new(value))
     }
 
     #[inline]

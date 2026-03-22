@@ -5,9 +5,16 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
-use kithara_platform::{tokio, tokio::sync::broadcast};
+use kithara_platform::tokio::{
+    sync::broadcast::{self, error::RecvError},
+    task::spawn as task_spawn,
+};
+use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
+
+/// Capacity of the resource event bus.
+const RESOURCE_EVENT_BUS_CAPACITY: usize = 64;
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -69,17 +76,17 @@ impl Resource {
     /// Use this for custom sources.
     #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        let bus = EventBus::new(64);
+        let bus = EventBus::new(RESOURCE_EVENT_BUS_CAPACITY);
 
         // Forward AudioEvents from the generic PcmReader into the unified EventBus.
         let forward_bus = bus.clone();
         let mut decode_rx = reader.decode_events();
-        tokio::task::spawn(async move {
+        task_spawn(async move {
             loop {
                 match decode_rx.recv().await {
                     Ok(event) => forward_bus.publish(event),
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
                 }
             }
         });
@@ -100,14 +107,12 @@ impl Resource {
         mut config: AudioConfig<kithara_file::File>,
         src: Arc<str>,
     ) -> DecodeResult<Self> {
-        use kithara_stream::Stream;
-
         // Extract existing bus from stream config, or create a new one.
         let bus = config
             .stream
             .bus
             .clone()
-            .unwrap_or_else(|| EventBus::new(64));
+            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
@@ -127,14 +132,12 @@ impl Resource {
         mut config: AudioConfig<kithara_hls::Hls>,
         src: Arc<str>,
     ) -> DecodeResult<Self> {
-        use kithara_stream::Stream;
-
         // Extract existing bus from stream config, or create a new one.
         let bus = config
             .stream
             .bus
             .clone()
-            .unwrap_or_else(|| EventBus::new(64));
+            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
@@ -263,7 +266,7 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_events::{AudioEvent, Event};
-    use kithara_platform::{time::Duration, tokio::sync::broadcast};
+    use kithara_platform::{time, time::Duration, tokio::sync::broadcast};
     use kithara_test_utils::kithara;
 
     use super::Resource;
@@ -367,8 +370,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
-        use kithara_platform::time;
-
         let (resource, sender) = make_resource_with_sender();
         let mut rx = resource.subscribe();
 

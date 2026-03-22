@@ -1,3 +1,5 @@
+use tracing_log::LogTracer;
+use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 // Set up panic hook and tracing. Called automatically during WASM module
@@ -18,11 +20,11 @@ pub fn setup() {
         return;
     }
 
-    let _ = tracing_log::LogTracer::init();
+    let _ = LogTracer::init();
     // Disable `report_logs_in_timings` — the subscriber is shared via
     // shared memory with the AudioWorklet, where `performance.mark()`
     // is not available and would crash the audio thread.
-    let config = tracing_wasm::WASMLayerConfigBuilder::new()
+    let config = WASMLayerConfigBuilder::new()
         .set_report_logs_in_timings(false)
         .build();
     tracing_wasm::set_as_global_default_with_config(config);

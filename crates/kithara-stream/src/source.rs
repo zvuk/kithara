@@ -320,8 +320,6 @@ mod tests {
 
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
-        use kithara_storage::WaitOutcome;
-
         #[derive(Default)]
         struct ReadySource {
             coord: TestCoord,

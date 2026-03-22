@@ -217,6 +217,7 @@ mod tests {
     }
 
     use futures::stream;
+    use tokio::time::timeout;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -534,7 +535,7 @@ mod tests {
         sleep(Duration::from_millis(50)).await;
         cancel.cancel();
 
-        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+        let result = timeout(Duration::from_millis(200), handle)
             .await
             .expect("task should complete within 200ms")
             .expect("task should not panic");

@@ -4,13 +4,17 @@ use std::str;
 
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
-    tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
+    tags::VariantStream as HlsVariantStreamTag,
+    types::{DecryptionKey as HlsDecryptionKey, EncryptionMethod as HlsEncryptionMethod},
 };
 use kithara_abr::VariantInfo;
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;
+
+/// AES initialization vector length in bytes.
+const IV_LEN: usize = 16;
 
 /// Identifies a variant within a parsed master playlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -48,7 +52,7 @@ pub struct KeyInfo {
     /// The URI of the encryption key. Can be relative to the playlist.
     pub uri: Option<String>,
     /// The initialization vector (IV), if specified.
-    pub iv: Option<[u8; 16]>,
+    pub iv: Option<[u8; IV_LEN]>,
     /// The key format, e.g., "identity".
     pub key_format: Option<String>,
     /// The key format version(s).
@@ -208,10 +212,10 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<MediaPlaylist> {
-    fn map_encryption_method(m: hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
+    fn map_encryption_method(m: HlsEncryptionMethod) -> EncryptionMethod {
         match m {
-            hls_m3u8::types::EncryptionMethod::Aes128 => EncryptionMethod::Aes128,
-            hls_m3u8::types::EncryptionMethod::SampleAes => EncryptionMethod::SampleAes,
+            HlsEncryptionMethod::Aes128 => EncryptionMethod::Aes128,
+            HlsEncryptionMethod::SampleAes => EncryptionMethod::SampleAes,
             other => EncryptionMethod::Other(other.to_string()),
         }
     }

@@ -2,26 +2,33 @@ name: Release Apple
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.2.0, without v prefix)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
 
 jobs:
   release-apple:
     name: Build & Release XCFramework
     runs-on: macos-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Rust cache
+      - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -32,26 +39,40 @@ jobs:
       - name: Install cargo-swift
         run: cargo install cargo-swift --locked
 
-      - name: Build XCFramework and compute checksum
-        id: checksum
+      - name: Build XCFramework
+        run: just release-apple
+
+      - name: Compute checksum and update Package.swift
+        id: release
         run: |
-          just release-apple | tee /tmp/release-apple.log
-          CHECKSUM=$(tail -1 /tmp/release-apple.log)
+          CHECKSUM=$(swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip)
           echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
-          echo "### XCFramework Checksum" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "$CHECKSUM" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "Update Package.swift checksum to: $CHECKSUM"
+
+          sed -i '' 's/^let version = ".*"/let version = "'"$RELEASE_VERSION"'"/' apple/Package.swift
+          sed -i '' 's/^let checksum = ".*"/let checksum = "'"$CHECKSUM"'"/' apple/Package.swift
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apple/Package.swift
+          git commit -m "release: v${RELEASE_VERSION}"
+          git tag "v${RELEASE_VERSION}"
+          git push origin HEAD --tags
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: "v${{ inputs.version }}"
+          name: "v${{ inputs.version }}"
           files: /tmp/KitharaFFIInternal.xcframework.zip
           body: |
-            ## XCFramework Checksum
+            ## XCFramework checksum
             ```
-            ${{ steps.checksum.outputs.checksum }}
+            ${{ steps.release.outputs.checksum }}
             ```
-            Update `Package.swift` with this checksum after release.
+
+            ## Swift Package Manager
+            ```swift
+            .package(url: "https://github.com/zvuk/kithara", from: "${{ inputs.version }}")
+            ```

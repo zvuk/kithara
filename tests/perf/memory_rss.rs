@@ -14,20 +14,21 @@
 
 use std::time::Duration;
 
+use hotpath::FunctionsGuardBuilder;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
 use memory_stats::memory_stats;
 use tracing::info;
 
 const MB: usize = 1024 * 1024;
 
-// ── Test 1: RSS budget ───────────────────────────────────────────────────
+// Test 1: RSS budget
 
 const BUDGET_RUNS: usize = 3;
 const BUDGET_PLAYBACK_SECS: u64 = 10;
@@ -43,7 +44,7 @@ const RSS_BUDGET_MB: usize = 30;
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
-    let _guard = hotpath::FunctionsGuardBuilder::new("rss_budget").build();
+    let _guard = FunctionsGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(BUDGET_RUNS);
 
     for run in 0..BUDGET_RUNS {
@@ -68,7 +69,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let samples = spawn_blocking(move || {
             let mut buf = vec![0f32; 4096];
             let mut rss_samples = Vec::new();
-            let start = kithara_platform::time::Instant::now();
+            let start = Instant::now();
             let mut last_sample = start;
 
             while start.elapsed() < Duration::from_secs(BUDGET_PLAYBACK_SECS) {
@@ -81,7 +82,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                     if let Some(stats) = memory_stats() {
                         rss_samples.push(stats.physical_mem);
                     }
-                    last_sample = kithara_platform::time::Instant::now();
+                    last_sample = Instant::now();
                 }
             }
             rss_samples
@@ -123,7 +124,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     );
 }
 
-// ── Test 2: No RSS leak ──────────────────────────────────────────────────
+// Test 2: No RSS leak
 
 const LEAK_PLAYBACK_SECS: u64 = 15;
 const LEAK_WARMUP_SECS: u64 = 5;
@@ -138,7 +139,7 @@ const LEAK_TOLERANCE_MB: usize = 5;
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
-    let _guard = hotpath::FunctionsGuardBuilder::new("rss_leak").build();
+    let _guard = FunctionsGuardBuilder::new("rss_leak").build();
     let server = serve_assets().await;
     let url = server.url("/hls/master.m3u8");
 
@@ -155,7 +156,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        let start = kithara_platform::time::Instant::now();
+        let start = Instant::now();
         let mut warmup_rss = None;
         let mut final_rss = 0usize;
 

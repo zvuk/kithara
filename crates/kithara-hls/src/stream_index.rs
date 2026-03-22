@@ -217,7 +217,7 @@ impl StreamIndex {
         }
     }
 
-    // --- Layout variant ---
+    // Layout variant
 
     /// Which variant's byte layout is active for the decoder.
     #[must_use]
@@ -250,7 +250,7 @@ impl StreamIndex {
         self.variants.len()
     }
 
-    // --- Mutations: expected sizes ---
+    // Mutations: expected sizes
 
     /// Set expected total sizes per segment (from `size_map` HEAD estimates).
     ///
@@ -264,7 +264,7 @@ impl StreamIndex {
         self.rebuild_variant_byte_map(variant, 0);
     }
 
-    // --- Mutations: segment data ---
+    // Mutations: segment data
 
     /// Commit a downloaded segment.
     ///
@@ -318,7 +318,7 @@ impl StreamIndex {
         }
     }
 
-    // --- Reads ---
+    // Reads
 
     /// Find the committed segment containing the given byte offset.
     ///
@@ -564,7 +564,7 @@ impl StreamIndex {
         removed
     }
 
-    // --- Internal ---
+    // Internal
 
     /// Compute the byte offset where `target_segment` starts in a variant's byte space.
     ///
@@ -675,7 +675,7 @@ mod tests {
         }
     }
 
-    // === SegmentData ===
+    // SegmentData
 
     #[kithara::test]
     fn segment_data_total_len() {
@@ -690,7 +690,7 @@ mod tests {
         assert!(data.init_url.is_none());
     }
 
-    // === VariantSegments ===
+    // VariantSegments
 
     #[kithara::test]
     fn variant_segments_insert_and_get() {
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(data.total_len(), 500);
     }
 
-    // === StreamIndex: construction ===
+    // StreamIndex: construction
 
     #[kithara::test]
     fn stream_index_new_defaults_to_variant_zero() {
@@ -748,7 +748,7 @@ mod tests {
         assert_eq!(idx.num_variants(), 4);
     }
 
-    // === StreamIndex: set_layout_variant ===
+    // StreamIndex: set_layout_variant
 
     #[kithara::test]
     fn set_layout_variant_switches_active_map() {
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(idx.max_end_offset(), 100);
     }
 
-    // === StreamIndex: commit + byte_map ===
+    // StreamIndex: commit + byte_map
 
     #[kithara::test]
     fn commit_single_variant_builds_byte_map() {
@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(seg1.byte_offset, 590);
     }
 
-    // === StreamIndex: find_at_offset ===
+    // StreamIndex: find_at_offset
 
     #[kithara::test]
     fn find_at_offset_returns_correct_segment() {
@@ -870,7 +870,7 @@ mod tests {
         assert_eq!(seg.byte_offset, 0);
     }
 
-    // === StreamIndex: is_range_loaded ===
+    // StreamIndex: is_range_loaded
 
     #[kithara::test]
     fn is_range_loaded_contiguous() {
@@ -883,7 +883,7 @@ mod tests {
         assert!(!idx.is_range_loaded(&(0..300)));
     }
 
-    // === StreamIndex: on_segment_invalidated ===
+    // StreamIndex: on_segment_invalidated
 
     #[kithara::test]
     fn on_segment_invalidated_removes_from_byte_map() {
@@ -995,7 +995,7 @@ mod tests {
         assert_eq!(seg.byte_offset, 200);
     }
 
-    // === StreamIndex: variant preservation ===
+    // StreamIndex: variant preservation
 
     #[kithara::test]
     fn variant_data_preserved_across_layout_switch() {
@@ -1024,7 +1024,7 @@ mod tests {
         assert_eq!(idx.find_at_offset(100).expect("v0").segment_index, 1);
     }
 
-    // === LayoutIndex ===
+    // LayoutIndex
 
     #[kithara::test]
     fn layout_index_item_at_offset() {
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(idx.item_range((1, 0)), Some(0..500));
     }
 
-    // === StreamIndex: sparse commit (gap between committed segments) ===
+    // StreamIndex: sparse commit (gap between committed segments)
 
     #[kithara::test]
     fn find_at_offset_with_gap_preserves_layout_offsets() {

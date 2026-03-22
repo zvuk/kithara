@@ -5,9 +5,15 @@
 //! * **WASM** — `wasm_safe_thread` (Web Workers).
 
 pub use std::time::Duration;
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_safe_thread::Builder as WasmThreadBuilder;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub type Thread = std::thread::Thread;
@@ -127,13 +133,12 @@ where
 ///
 /// Incremented on spawn, decremented when the thread function returns.
 /// Used by thread-budget tests to count only kithara-owned threads.
-static ACTIVE_NAMED_THREADS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+static ACTIVE_NAMED_THREADS: AtomicUsize = AtomicUsize::new(0);
 
 /// Returns the number of currently active threads spawned via [`spawn_named`].
 #[must_use]
 pub fn active_named_thread_count() -> usize {
-    ACTIVE_NAMED_THREADS.load(std::sync::atomic::Ordering::Acquire)
+    ACTIVE_NAMED_THREADS.load(Ordering::Acquire)
 }
 
 /// Spawn a new named thread.
@@ -150,12 +155,12 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    ACTIVE_NAMED_THREADS.fetch_add(1, std::sync::atomic::Ordering::Release);
+    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
             let result = f();
-            ACTIVE_NAMED_THREADS.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
             result
         })
         .expect("failed to spawn named thread")
@@ -173,10 +178,10 @@ where
     T: Send + 'static,
 {
     let _name = name.into();
-    ACTIVE_NAMED_THREADS.fetch_add(1, std::sync::atomic::Ordering::Release);
+    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     spawn(move || {
         let result = f();
-        ACTIVE_NAMED_THREADS.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
     })
 }
@@ -192,7 +197,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    wasm_safe_thread::Builder::new()
+    WasmThreadBuilder::new()
         .shim_name(SHIM_NAME.to_owned())
         .spawn(move || {
             // Each WASM Worker has its own module instance with separate globals.
@@ -250,9 +255,8 @@ pub fn park_timeout(duration: Duration) {
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
-    use std::hash::{Hash, Hasher};
     let id = current().id();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     id.hash(&mut hasher);
     hasher.finish()
 }
@@ -261,9 +265,8 @@ pub fn current_thread_id() -> u64 {
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
-    use std::hash::{Hash, Hasher};
     let id = current().id();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     id.hash(&mut hasher);
     hasher.finish()
 }

@@ -8,17 +8,26 @@ use std::{
 };
 
 use derive_setters::Setters;
+#[cfg(feature = "hls")]
+use kithara_abr::AbrOptions;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
+#[cfg(feature = "file")]
+use kithara_file::{FileConfig, FileSrc};
+#[cfg(feature = "hls")]
+use kithara_hls::{HlsConfig, KeyOptions};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::{Headers, NetOptions};
+use kithara_platform::tokio::runtime;
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+type RuntimeHandle = runtime::Handle;
 
 /// Source of an audio resource: either a URL or a local file path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,7 +88,7 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
-    pub abr: kithara_abr::AbrOptions,
+    pub abr: AbrOptions,
     /// Unified event bus for streaming, decode, and audio events.
     ///
     /// When set, the bus is propagated to the underlying stream and audio
@@ -102,7 +111,7 @@ pub struct ResourceConfig {
     pub host_sample_rate: Option<NonZeroU32>,
     /// Encryption key handling configuration.
     #[cfg(feature = "hls")]
-    pub keys: kithara_hls::KeyOptions,
+    pub keys: KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
@@ -155,7 +164,7 @@ pub struct ResourceConfig {
     ///
     /// When set, downloader threads reuse this runtime instead of creating
     /// their own. When `None`, auto-detected from current context.
-    pub runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    pub runtime: Option<RuntimeHandle>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     ///
     /// When set, all resources sharing the same worker decode on a single
@@ -206,7 +215,7 @@ impl ResourceConfig {
 
         Ok(Self {
             #[cfg(feature = "hls")]
-            abr: kithara_abr::AbrOptions::default(),
+            abr: AbrOptions::default(),
             bus: None,
             byte_pool: None,
             cancel: None,
@@ -217,7 +226,7 @@ impl ResourceConfig {
             hls_base_url: None,
             host_sample_rate: None,
             #[cfg(feature = "hls")]
-            keys: kithara_hls::KeyOptions::default(),
+            keys: KeyOptions::default(),
             look_ahead_bytes: None,
             name: None,
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -263,18 +272,18 @@ impl ResourceConfig {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
                 let h = url.path().rsplit('.').next().map(str::to_lowercase);
-                (kithara_file::FileSrc::Remote(url), h)
+                (FileSrc::Remote(url), h)
             }
             ResourceSrc::Path(path) => {
                 let h = path
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(str::to_lowercase);
-                (kithara_file::FileSrc::Local(path), h)
+                (FileSrc::Local(path), h)
             }
         };
 
-        let mut file_config = kithara_file::FileConfig::new(file_src)
+        let mut file_config = FileConfig::new(file_src)
             .with_store(self.store)
             .with_net(self.net);
 
@@ -351,7 +360,7 @@ impl ResourceConfig {
             abr.max_bandwidth_bps = Some(cap);
         }
 
-        let mut hls_config = kithara_hls::HlsConfig::new(url)
+        let mut hls_config = HlsConfig::new(url)
             .with_store(self.store)
             .with_net(self.net)
             .with_abr(abr)

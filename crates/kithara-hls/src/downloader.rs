@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use futures::future::join_all;
 use kithara_abr::{
     AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource,
@@ -15,6 +16,7 @@ use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::{BoxFuture, time::Instant, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{DownloadCursor, Downloader, DownloaderIo, PlanOutcome};
+use tokio::task::yield_now as task_yield_now;
 use tracing::{debug, trace};
 use url::Url;
 
@@ -26,6 +28,15 @@ use crate::{
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
     stream_index::{SegmentData, StreamIndex},
 };
+
+/// Maximum number of plans to log at debug level.
+const MAX_LOG_PLANS: usize = 4;
+
+/// Minimum throughput recording duration in milliseconds.
+const MIN_THROUGHPUT_RECORD_MS: u128 = 10;
+
+/// Maximum initial segment index for verbose logging.
+const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
 fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
     fetch_epoch != current_epoch
@@ -465,7 +476,7 @@ impl HlsDownloader {
             .iter()
             .map(|url| fetch.get_content_length(url))
             .collect();
-        let media_lengths = futures::future::join_all(media_futs).await;
+        let media_lengths = join_all(media_futs).await;
 
         let mut offsets = Vec::with_capacity(num_segments);
         let mut segment_sizes = Vec::with_capacity(num_segments);
@@ -802,7 +813,7 @@ impl HlsDownloader {
 
     async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
         if self.coord.timeline().is_flushing() {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             return None;
         }
 
@@ -1036,7 +1047,7 @@ impl HlsDownloader {
 
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
         if self.coord.timeline().is_flushing() {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             return PlanOutcome::Idle;
         }
 
@@ -1274,7 +1285,7 @@ impl HlsDownloader {
             need_init = false;
         }
 
-        if !plans.is_empty() && plans.len() <= 4 {
+        if !plans.is_empty() && plans.len() <= MAX_LOG_PLANS {
             let first = plans.first().map_or(0, |plan| plan.segment_index);
             let last = plans.last().map_or(0, |plan| plan.segment_index);
             debug!(
@@ -1356,7 +1367,7 @@ impl HlsDownloader {
         duration: Duration,
         content_duration: Option<Duration>,
     ) {
-        if duration.as_millis() < 10 {
+        if duration.as_millis() < MIN_THROUGHPUT_RECORD_MS {
             return;
         }
 
@@ -1480,7 +1491,7 @@ impl Downloader for HlsDownloader {
             self.advance_current_segment_index(fetch.segment_index + 1);
         }
 
-        if fetch.segment_index <= 8 {
+        if fetch.segment_index <= VERBOSE_SEGMENT_LIMIT {
             debug!(
                 variant = fetch.variant,
                 segment_index = fetch.segment_index,
@@ -1564,7 +1575,7 @@ mod tests {
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_platform::time::Instant;
+    use kithara_platform::{Mutex, time::Instant};
     use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
     use kithara_stream::{AudioCodec, Downloader, PlanOutcome, Timeline};
     use kithara_test_utils::kithara;
@@ -1908,7 +1919,7 @@ mod tests {
             AssetResourceState::Active
         );
 
-        let segments = kithara_platform::Mutex::new(StreamIndex::new(1, 1));
+        let segments = Mutex::new(StreamIndex::new(1, 1));
         let coord = crate::coord::HlsCoord::new(
             CancellationToken::new(),
             Timeline::new(),
@@ -3765,7 +3776,6 @@ mod tests {
 
         downloader.cursor.reset_fill(2);
 
-        use crate::coord::SegmentRequest;
         downloader.coord.requeue_segment_request(SegmentRequest {
             segment_index: 1,
             variant: 1,

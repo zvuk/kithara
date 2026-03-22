@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use axum::{Router, extract::Request, response::Response, routing::get};
+use axum::{Router, body::Body, extract::Request, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
@@ -48,7 +48,7 @@ fn serve_with_range(data: &'static [u8], req: Request) -> Response {
                             format!("bytes {}-{}/{}", start, end, data.len()),
                         )
                         .header("Content-Length", slice.len().to_string())
-                        .body(axum::body::Body::from(Bytes::from_static(slice)))
+                        .body(Body::from(Bytes::from_static(slice)))
                         .unwrap();
                 }
             }
@@ -59,7 +59,7 @@ fn serve_with_range(data: &'static [u8], req: Request) -> Response {
     Response::builder()
         .status(200)
         .header("Content-Length", data.len().to_string())
-        .body(axum::body::Body::from(Bytes::from_static(data)))
+        .body(Body::from(Bytes::from_static(data)))
         .unwrap()
 }
 

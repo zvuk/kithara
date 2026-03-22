@@ -21,11 +21,14 @@ use crate::{
     HlsError, HlsResult,
     ids::{SegmentIndex, VariantIndex},
     parsing::{
-        MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream, parse_master_playlist,
-        parse_media_playlist,
+        EncryptionMethod, MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream,
+        parse_master_playlist, parse_media_playlist,
     },
     playlist::PlaylistState,
 };
+
+/// AES-128 key length in bytes.
+const AES_KEY_LEN: usize = 16;
 
 // Types
 
@@ -444,8 +447,6 @@ impl<N: Net> FetchManager<N> {
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {
-        use crate::parsing::EncryptionMethod;
-
         let Some(seg_key) = key else {
             return Ok(None);
         };
@@ -468,15 +469,15 @@ impl<N: Net> FetchManager<N> {
         let key_url = crate::keys::KeyManager::resolve_key_url(key_info, segment_url)?;
         let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
 
-        if raw_key.len() != 16 {
+        if raw_key.len() != AES_KEY_LEN {
             return Err(HlsError::KeyProcessing(format!(
                 "invalid AES-128 key length: {}",
                 raw_key.len()
             )));
         }
 
-        let mut key_bytes = [0u8; 16];
-        key_bytes.copy_from_slice(&raw_key[..16]);
+        let mut key_bytes = [0u8; AES_KEY_LEN];
+        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
 
         debug!(
             url = %segment_url,
@@ -815,6 +816,7 @@ mod tests {
     use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
+    use tokio::{task::yield_now as task_yield_now, time::sleep as tokio_sleep};
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};
     use url::Url;
@@ -950,7 +952,7 @@ mod tests {
     ) -> Result<ByteStream, NetError> {
         SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
         let stream = stream::once(async move {
-            tokio::task::yield_now().await;
+            task_yield_now().await;
             Ok(Bytes::from(format!("payload:{url}")))
         });
         Ok(ByteStream::without_headers(Box::pin(stream)))
@@ -963,7 +965,7 @@ mod tests {
     ) -> Result<ByteStream, NetError> {
         SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
         let stream = stream::once(async move {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            tokio_sleep(Duration::from_millis(25)).await;
             Ok(Bytes::from(format!("payload:{url}")))
         });
         Ok(ByteStream::without_headers(Box::pin(stream)))

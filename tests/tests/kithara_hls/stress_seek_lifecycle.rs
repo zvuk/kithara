@@ -26,7 +26,7 @@ use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig}
 use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{Level, info, warn};
 
 use crate::common::test_defaults::SawWav;
 
@@ -167,7 +167,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(Level::DEBUG)
         .with_env_filter(kithara_test_utils::rust_log_filter(
             "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
         ))
@@ -259,7 +259,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
-        // ── Phase 1: Warmup until ABR switch ─────────────────────────
+        // Phase 1: Warmup until ABR switch
         info!("Phase 1: warmup — reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
@@ -293,7 +293,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
             warn!("ABR switch not detected during warmup — continuing anyway");
         }
 
-        // ── Phase 2: 2000 rapid random seeks ─────────────────────────
+        // Phase 2: 2000 rapid random seeks
         info!("Phase 2: {STRESS_SEEK_ITERATIONS} rapid random seeks");
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;

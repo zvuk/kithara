@@ -307,17 +307,19 @@ impl Downloader for FileDownloader {
                 DownloadCursor::Stream { from: _ } => PlanOutcome::Step,
                 DownloadCursor::Fill { floor: _, next: _ } => {
                     // Collect up to 4 gaps, each up to 2MB.
+                    /// Maximum size of a single gap fill request (2 MB).
+                    const GAP_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
+                    /// Maximum number of gaps to fill in one plan cycle.
+                    const GAP_BATCH_SIZE: usize = 4;
                     let mut plans = Vec::new();
-                    let gap_chunk_size: u64 = 2 * 1024 * 1024;
-                    let gap_batch_size: usize = 4;
                     let total = self.coord.total_bytes().unwrap_or(0);
 
                     let mut gap_cursor: u64 = 0;
-                    for _ in 0..gap_batch_size {
+                    for _ in 0..GAP_BATCH_SIZE {
                         let Some(gap) = self.res.next_gap(gap_cursor, total) else {
                             break;
                         };
-                        let clamped_end = (gap.start + gap_chunk_size).min(gap.end);
+                        let clamped_end = (gap.start + GAP_CHUNK_SIZE).min(gap.end);
                         plans.push(FilePlan {
                             range: gap.start..clamped_end,
                         });
@@ -514,6 +516,7 @@ impl Downloader for FileDownloader {
 mod tests {
     use std::sync::Arc;
 
+    use futures::stream as futures_stream;
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_storage::ResourceStatus;
@@ -563,7 +566,7 @@ mod tests {
         res.write_at(0, &[0u8; 1000]).unwrap();
 
         // Pending stream simulates a stalled sequential download.
-        let stream = futures::stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
+        let stream = futures_stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
         let writer = Writer::new(stream, res.clone(), cancel.clone());
 
         let mut dl = FileDownloader {

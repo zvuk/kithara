@@ -5,6 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use gloo_timers::future::TimeoutFuture;
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
@@ -229,14 +230,14 @@ async fn read_with_yield_limit(
         if audio.is_eof() {
             return 0;
         }
-        gloo_timers::future::TimeoutFuture::new(YIELD_MS).await;
+        TimeoutFuture::new(YIELD_MS).await;
     }
     0
 }
 
 /// Yield to event loop so async I/O and Web Workers can progress.
 async fn yield_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
+    TimeoutFuture::new(ms).await;
 }
 
 // ── Saw-tooth verification helpers ──

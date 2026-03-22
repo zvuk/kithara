@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use iced::{Subscription, Task, Theme};
+use iced::{Subscription, Task, Theme, time as iced_time};
 use kithara::{
     play::Engine,
     prelude::{PlayerImpl, Resource, ResourceConfig},
@@ -12,13 +12,13 @@ use super::{
     message::{Message, Tab},
     theme,
 };
-use crate::{playlist::Playlist, theme::gui::GuiPalette};
+use crate::{playlist::Playlist, theme::gui};
 
 /// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) player: Arc<PlayerImpl>,
     pub(crate) playlist: Arc<Playlist>,
-    pub(crate) palette: GuiPalette,
+    pub(crate) palette: gui::GuiPalette,
 
     // Playback state (synced from player on each tick).
     pub(crate) playing: bool,
@@ -53,7 +53,7 @@ impl Kithara {
         player: Arc<PlayerImpl>,
         tracks: Vec<String>,
         autoplay: bool,
-        palette: GuiPalette,
+        palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
         let playlist = Arc::new(Playlist::new(tracks));
         let volume = player.volume();
@@ -104,7 +104,8 @@ impl Kithara {
     /// 100 ms tick subscription for player state sync.
     #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+        const TICK_INTERVAL_MS: u64 = 100;
+        iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
     }
 
     /// Asynchronously load a track by playlist index.

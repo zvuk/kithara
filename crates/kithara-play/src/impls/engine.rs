@@ -5,6 +5,8 @@
 //! PlayerNode[slotN] -> VolPanNode[slotN] -> PlayerEqNode -> PlayerVolPanNode -> SessionDucking -> GraphOut
 //! ```
 
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -14,8 +16,15 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, tokio::sync::broadcast};
+use kithara_platform::{
+    Mutex,
+    tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
+};
 use portable_atomic::AtomicF32;
+#[cfg(test)]
+use ringbuf::HeapRb;
+#[cfg(test)]
+use ringbuf::traits::Split;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
 
@@ -26,12 +35,23 @@ use super::{
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
+#[rustfmt::skip]
+use crate::traits::dj::crossfade::CrossfadeConfig;
+#[rustfmt::skip]
+use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::EngineEvent,
-    traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
     types::{SessionDuckingMode, SlotId},
 };
+
+/// Capacity of the engine event broadcast channel.
+const ENGINE_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Capacity of the player command ring buffer for slot communication.
+/// Ringbuf capacity for slot commands in tests.
+#[cfg(test)]
+const SLOT_CMD_RINGBUF_CAPACITY: usize = 32;
 
 /// Configuration for the audio engine.
 #[derive(Clone, Debug, Derivative, Setters)]
@@ -98,7 +118,7 @@ pub struct EngineImpl {
     ///
     /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
-    runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    runtime: Option<RuntimeHandle>,
 }
 
 impl EngineImpl {
@@ -108,7 +128,7 @@ impl EngineImpl {
     /// to begin audio processing.
     #[must_use]
     pub fn new(config: EngineConfig) -> Self {
-        let (events_tx, _) = broadcast::channel(64);
+        let (events_tx, _) = broadcast::channel(ENGINE_EVENT_CHANNEL_CAPACITY);
         let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool
@@ -127,7 +147,7 @@ impl EngineImpl {
             session,
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::new(),
-            runtime: kithara_platform::tokio::runtime::Handle::try_current().ok(),
+            runtime: RuntimeHandle::try_current().ok(),
         }
     }
 
@@ -209,7 +229,7 @@ impl EngineImpl {
     /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
     /// the app's runtime instead of spawning per-stream runtimes.
     #[must_use]
-    pub fn runtime(&self) -> Option<&kithara_platform::tokio::runtime::Handle> {
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.runtime.as_ref()
     }
 
@@ -427,9 +447,7 @@ impl EngineImpl {
     /// Inject a test slot handle without starting the audio session.
     #[cfg(test)]
     pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {
-        use ringbuf::{HeapRb, traits::Split};
-
-        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
+        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(SLOT_CMD_RINGBUF_CAPACITY).split();
         self.active_slots.lock_sync().push(slot_id);
         self.slot_registry.lock_sync().insert(
             slot_id,
@@ -444,7 +462,6 @@ impl EngineImpl {
 
 #[cfg(test)]
 pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
-    use std::sync::OnceLock;
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }

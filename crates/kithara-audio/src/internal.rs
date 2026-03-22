@@ -57,7 +57,14 @@ pub mod source {
     use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
-    use crate::{pipeline::track_fsm, traits::AudioEffect, worker::AudioWorkerSource};
+    use crate::{
+        pipeline::track_fsm::{
+            RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
+            TrackState, WaitContext,
+        },
+        traits::AudioEffect,
+        worker::AudioWorkerSource,
+    };
 
     pub struct SharedStream<T: StreamType>(crate::pipeline::source::SharedStream<T>);
 
@@ -172,7 +179,7 @@ pub mod source {
         source.0.state.phase_tag()
     }
 
-    // ---- Test compatibility helpers ----
+    // Test compatibility helpers
     // These wrap step_track() to provide the old fetch_next/apply_pending_seek
     // calling patterns used by integration tests.
 
@@ -218,7 +225,7 @@ pub mod source {
         }
     }
 
-    // ---- Test-only state accessors (overlay fields still present) ----
+    // Test-only state accessors (overlay fields still present)
 
     pub fn set_base_offset<T: StreamType>(source: &mut StreamAudioSource<T>, base_offset: u64) {
         source.0.session.base_offset = base_offset;
@@ -238,9 +245,9 @@ pub mod source {
         recover_attempts: u8,
         skip: Option<Duration>,
     ) {
-        source.0.state = track_fsm::TrackState::AwaitingResume(track_fsm::ResumeState {
+        source.0.state = TrackState::AwaitingResume(ResumeState {
             recover_attempts,
-            seek: track_fsm::SeekContext { epoch, target },
+            seek: SeekContext { epoch, target },
             skip,
             anchor_offset: None,
         });
@@ -253,13 +260,13 @@ pub mod source {
         media_info: MediaInfo,
         offset: u64,
     ) {
-        source.0.state = track_fsm::TrackState::RecreatingDecoder(track_fsm::RecreateState {
+        source.0.state = TrackState::RecreatingDecoder(RecreateState {
             attempt: 0,
-            cause: track_fsm::RecreateCause::VariantSwitch,
+            cause: RecreateCause::VariantSwitch,
             media_info,
-            next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+            next: RecreateNext::Seek(SeekRequest {
                 attempt: 0,
-                seek: track_fsm::SeekContext { epoch, target },
+                seek: SeekContext { epoch, target },
             }),
             offset,
         });
@@ -273,14 +280,14 @@ pub mod source {
         offset: u64,
         reason: WaitingReason,
     ) {
-        source.0.state = track_fsm::TrackState::WaitingForSource {
-            context: track_fsm::WaitContext::Recreation(track_fsm::RecreateState {
+        source.0.state = TrackState::WaitingForSource {
+            context: WaitContext::Recreation(RecreateState {
                 attempt: 0,
-                cause: track_fsm::RecreateCause::VariantSwitch,
+                cause: RecreateCause::VariantSwitch,
                 media_info,
-                next: track_fsm::RecreateNext::Seek(track_fsm::SeekRequest {
+                next: RecreateNext::Seek(SeekRequest {
                     attempt: 0,
-                    seek: track_fsm::SeekContext { epoch, target },
+                    seek: SeekContext { epoch, target },
                 }),
                 offset,
             }),

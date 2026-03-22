@@ -47,6 +47,8 @@ pub fn source_note(source: &str, event: &Event) -> Option<String> {
     }
 }
 
+const SECONDS_PER_MINUTE: u64 = 60;
+
 #[must_use]
 pub fn format_seconds(seconds: f64) -> String {
     let whole = if seconds.is_finite() && seconds > 0.0 {
@@ -54,7 +56,7 @@ pub fn format_seconds(seconds: f64) -> String {
     } else {
         0
     };
-    let minutes = whole / 60;
-    let secs = whole % 60;
+    let minutes = whole / SECONDS_PER_MINUTE;
+    let secs = whole % SECONDS_PER_MINUTE;
     format!("{minutes:02}:{secs:02}")
 }
