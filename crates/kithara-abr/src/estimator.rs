@@ -30,26 +30,24 @@ pub struct ThroughputEstimator {
     slow_ewma: Ewma,
 }
 
-const FAST_HALF_LIFE_SECS: f64 = 2.0;
-const SLOW_HALF_LIFE_SECS: f64 = 10.0;
-const MIN_CHUNK_BYTES: u64 = 16_000;
-const MIN_DURATION_MS: f64 = 0.5;
-/// Milliseconds per second, for throughput unit conversion.
-const MS_PER_SEC: f64 = 1000.0;
-/// Bits-per-byte scaled to millisecond durations (8 bits * 1000 ms/s).
-const BITS_PER_BYTE_MS: f64 = 8000.0;
-/// Initial throughput estimate for cache hits (100 Mbps).
-const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
-
 impl ThroughputEstimator {
+    const FAST_HALF_LIFE_SECS: f64 = 2.0;
+    const SLOW_HALF_LIFE_SECS: f64 = 10.0;
+    const MIN_CHUNK_BYTES: u64 = 16_000;
+    const MIN_DURATION_MS: f64 = 0.5;
+    const MS_PER_SEC: f64 = 1000.0;
+    const BITS_PER_BYTE_MS: f64 = 8000.0;
+    /// Initial throughput estimate for cache hits (100 Mbps).
+    const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
+
     #[must_use]
     pub fn new(_cfg: &AbrOptions) -> Self {
         Self {
             buffered_content_secs: 0.0,
             bytes_sampled: 0,
-            fast_ewma: Ewma::new(FAST_HALF_LIFE_SECS),
+            fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
             initial_bps: 0.0,
-            slow_ewma: Ewma::new(SLOW_HALF_LIFE_SECS),
+            slow_ewma: Ewma::new(Self::SLOW_HALF_LIFE_SECS),
         }
     }
 
@@ -81,18 +79,18 @@ impl ThroughputEstimator {
         // to allow ABR to switch to higher variants immediately.
         if matches!(sample.source, ThroughputSampleSource::Cache) {
             // 100 Mbps — effectively unlimited for audio streaming
-            self.initial_bps = CACHE_INITIAL_BPS;
+            self.initial_bps = Self::CACHE_INITIAL_BPS;
             return;
         }
 
-        if sample.bytes < MIN_CHUNK_BYTES {
+        if sample.bytes < Self::MIN_CHUNK_BYTES {
             return;
         }
 
-        let dur_ms = (sample.duration.as_secs_f64() * MS_PER_SEC).max(MIN_DURATION_MS);
+        let dur_ms = (sample.duration.as_secs_f64() * Self::MS_PER_SEC).max(Self::MIN_DURATION_MS);
         #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible
-        let bps = (sample.bytes as f64) * BITS_PER_BYTE_MS / dur_ms;
-        let weight_secs = dur_ms / MS_PER_SEC;
+        let bps = (sample.bytes as f64) * Self::BITS_PER_BYTE_MS / dur_ms;
+        let weight_secs = dur_ms / Self::MS_PER_SEC;
 
         self.fast_ewma.add_sample(weight_secs, bps);
         self.slow_ewma.add_sample(weight_secs, bps);
