@@ -215,6 +215,12 @@ memory-check:
     @echo ""
     @echo "All memory checks passed."
 
+# --- publish ---
+
+# Publish all public crates to crates.io in dependency order.
+publish *ARGS:
+    cargo xtask publish {{ARGS}}
+
 # --- wasm ---
 
 # Check that key crates compile for wasm32 target.

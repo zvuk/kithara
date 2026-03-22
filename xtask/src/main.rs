@@ -6,12 +6,14 @@ mod android;
 mod apple;
 mod arch;
 mod perf_compare;
+mod publish;
 mod quality;
 mod util;
 mod wasm;
 
 use android::AndroidCommand;
 use apple::AppleCommand;
+use publish::PublishArgs;
 use quality::QualityCommand;
 use wasm::WasmCommand;
 
@@ -69,6 +71,8 @@ enum Command {
         #[command(subcommand)]
         command: WasmCommand,
     },
+    /// Publish all public crates to crates.io in dependency order.
+    Publish(PublishArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -84,5 +88,6 @@ fn main() -> anyhow::Result<()> {
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),
         Command::Wasm { command } => wasm::run(command),
+        Command::Publish(ref args) => publish::run(args),
     }
 }
