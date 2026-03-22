@@ -4,7 +4,7 @@ use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::tokio;
 
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
@@ -163,7 +163,7 @@ mod hls_timeline {
         };
 
         // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
-        let result = spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let mut decoder =
                 DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config).unwrap();
 

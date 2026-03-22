@@ -37,6 +37,7 @@ rodio = { workspace = true }
 
 # Testing framework
 tempfile = { workspace = true }
+serial_test = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

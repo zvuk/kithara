@@ -4063,6 +4063,7 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "thirtyfour",
  "tokio",
