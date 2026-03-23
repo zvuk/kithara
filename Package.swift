@@ -4,8 +4,8 @@ import Foundation
 import PackageDescription
 
 // Updated automatically by CI on release.
-let version = "0.1.0"
-let checksum = "9f1245e473fa803608b292a5abe6ab8c5edd217297c162b8b3def1dd6b44699e"
+let version = "0.0.1"
+let checksum = "b93ef2fc533685aa8fba33a575a0c56328f2cd7fadb25a7aaff5cf880999fccb"
 
 // KITHARA_LOCAL_DEV       — use locally built xcframework (for development).
 // KITHARA_BINARY_BASE_URL — override binary download host (for GitLab mirror).
@@ -16,7 +16,7 @@ let useLocalBinary = ProcessInfo.processInfo.environment["KITHARA_LOCAL_DEV"] !=
 
 let binaryTarget: Target
 if useLocalBinary {
-    binaryTarget = .binaryTarget(name: "KitharaFFIInternal", path: "KitharaFFIInternal.xcframework")
+    binaryTarget = .binaryTarget(name: "KitharaFFIInternal", path: "apple/KitharaFFIInternal.xcframework")
 } else {
     let defaultBaseURL = "https://github.com/zvuk/kithara/releases/download"
     let baseURL = ProcessInfo.processInfo.environment["KITHARA_BINARY_BASE_URL"] ?? defaultBaseURL
@@ -44,7 +44,7 @@ let package = Package(
             dependencies: [
                 .target(name: "KitharaFFIInternal"),
             ],
-            path: "Sources/KitharaFFI",
+            path: "apple/Sources/KitharaFFI",
             linkerSettings: [
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreAudio"),
@@ -57,20 +57,13 @@ let package = Package(
         .target(
             name: "Kithara",
             dependencies: ["KitharaFFI"],
-            path: "Sources/Kithara"
-        ),
-
-        // Demo app (macOS only, for quick testing).
-        .executableTarget(
-            name: "KitharaDemo",
-            dependencies: ["Kithara"],
-            path: "Examples/KitharaDemo/Sources"
+            path: "apple/Sources/Kithara"
         ),
 
         .testTarget(
             name: "KitharaTests",
             dependencies: ["Kithara"],
-            path: "Tests/KitharaTests"
+            path: "apple/Tests/KitharaTests"
         ),
     ]
 )
