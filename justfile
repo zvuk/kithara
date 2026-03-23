@@ -288,6 +288,21 @@ apple-demo:
     just xcframework --profile debug
     cd apple && KITHARA_LOCAL_DEV=1 swift run KitharaDemo
 
+# Generate Xcode project for KitharaDemo and open it.
+apple-xcode:
+    just xcframework --profile debug
+    cd apple/Examples/KitharaDemo && KITHARA_LOCAL_DEV=1 xcodegen generate
+    open apple/Examples/KitharaDemo/KitharaDemo.xcodeproj
+
+# Build KitharaDemo for iOS Simulator.
+apple-ios-build scheme="KitharaDemo" destination="generic/platform=iOS Simulator":
+    just xcframework --profile debug
+    cd apple/Examples/KitharaDemo && KITHARA_LOCAL_DEV=1 xcodegen generate
+    KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+        -scheme {{scheme}} \
+        -destination '{{destination}}' \
+        build
+
 # Build XCFramework, zip, and compute checksum for SPM distribution.
 release-apple:
     just xcframework
