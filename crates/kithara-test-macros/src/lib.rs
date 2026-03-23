@@ -314,13 +314,14 @@ fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
 }
 
 fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
-    match &args.tracing_filter {
-        Some(filter) => quote! {
+    if let Some(filter) = &args.tracing_filter {
+        quote! {
             ::kithara_test_utils::setup_tracing_with_filter(#filter);
-        },
-        None => quote! {
+        }
+    } else {
+        quote! {
             ::kithara_test_utils::setup_tracing();
-        },
+        }
     }
 }
 

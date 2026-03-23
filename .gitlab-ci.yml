@@ -9,10 +9,9 @@ variables:
   CARGO_HOME: $CI_PROJECT_DIR/.cargo
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  KITHARA_REGISTRY: registry.zvq.me/disrupt/kithara
-  CI_IMAGE: $KITHARA_REGISTRY/ci:latest
-  CI_IMAGE_ANDROID: $KITHARA_REGISTRY/ci-android:latest
-  CI_IMAGE_CROSS: $KITHARA_REGISTRY/ci-cross:latest
+  CI_IMAGE: $CI_REGISTRY_IMAGE/ci:latest
+  CI_IMAGE_ANDROID: $CI_REGISTRY_IMAGE/ci-android:latest
+  CI_IMAGE_CROSS: $CI_REGISTRY_IMAGE/ci-cross:latest
 
 default:
   image: $CI_IMAGE
@@ -78,7 +77,7 @@ docker-ci:
     - docker:dind
   cache: []
   script:
-    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker build -t $CI_IMAGE -f docker/ci.Dockerfile .
     - docker push $CI_IMAGE
 
@@ -92,8 +91,8 @@ docker-ci-android:
   needs: [docker-ci]
   cache: []
   script:
-    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker build --build-arg CI_REGISTRY_IMAGE=$KITHARA_REGISTRY -t $CI_IMAGE_ANDROID -f docker/ci-android.Dockerfile .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE -t $CI_IMAGE_ANDROID -f docker/ci-android.Dockerfile .
     - docker push $CI_IMAGE_ANDROID
 
 docker-ci-cross:
@@ -106,8 +105,8 @@ docker-ci-cross:
   needs: [docker-ci]
   cache: []
   script:
-    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker build --build-arg CI_REGISTRY_IMAGE=$KITHARA_REGISTRY -t $CI_IMAGE_CROSS -f docker/ci-cross.Dockerfile .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE -t $CI_IMAGE_CROSS -f docker/ci-cross.Dockerfile .
     - docker push $CI_IMAGE_CROSS
 
 # --- build stage ---
