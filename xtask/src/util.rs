@@ -61,21 +61,19 @@ pub(crate) fn check_rust_target(target: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// Read file, apply all `(needle, replacement)` pairs, write back.
-#[expect(dead_code)] // used by wasm module (added in subsequent commit)
-pub(crate) fn patch_file(path: &Path, replacements: &[(&str, &str)]) -> Result<()> {
-    let mut content =
-        fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    for (needle, replacement) in replacements {
-        content = content.replace(needle, replacement);
-    }
-    fs::write(path, content).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn patch_file(path: &Path, replacements: &[(&str, &str)]) -> Result<()> {
+        let mut content =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        for (needle, replacement) in replacements {
+            content = content.replace(needle, replacement);
+        }
+        fs::write(path, content).with_context(|| format!("write {}", path.display()))?;
+        Ok(())
+    }
 
     #[test]
     fn patch_file_applies_replacements() {

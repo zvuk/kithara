@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn publish_order_excludes_non_publishable() {
         let order = resolve_publish_order().unwrap();
-        let names: HashSet<_> = order.iter().map(|s| s.as_str()).collect();
+        let names: HashSet<_> = order.iter().map(String::as_str).collect();
         assert!(!names.contains("kithara-workspace-hack"));
         assert!(!names.contains("kithara-app"));
         assert!(!names.contains("xtask"));

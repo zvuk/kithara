@@ -10,6 +10,9 @@ autotests = false
 [lints]
 workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["serial_test"]
+
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "test-utils", "internal"] }

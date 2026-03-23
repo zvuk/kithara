@@ -11,6 +11,9 @@ description = "Proc-macro crate: #[hang_watchdog] attribute for loop progress de
 [lib]
 proc-macro = true
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }

@@ -46,13 +46,13 @@ impl SourceType {
                 return Ok(Self::RemoteFile(url.clone()));
 
                 #[cfg(not(feature = "file"))]
-                Err(DecodeError::DecodeError(
+                Err(DecodeError::InvalidData(
                     "no suitable feature enabled for this URL (enable `file` or `hls`)".to_string(),
                 ))
             }
 
             #[cfg(not(feature = "file"))]
-            ResourceSrc::Path(_) => Err(DecodeError::DecodeError(
+            ResourceSrc::Path(_) => Err(DecodeError::InvalidData(
                 "local file support requires the `file` feature".to_string(),
             )),
         }

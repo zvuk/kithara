@@ -14,10 +14,15 @@ workspace = true
 [features]
 disable-hang-detector = []
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
 [dependencies]
 web-time = { workspace = true }
 tracing = { workspace = true }
 kithara-hang-detector-macros = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]

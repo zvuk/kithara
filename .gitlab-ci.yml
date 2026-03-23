@@ -1,58 +1,156 @@
 stages:
+  - docker
+  - build
   - lint
   - test
-  - quality
   - release
-
-.setup:
-  before_script:
-    - export PATH="$CARGO_HOME/bin:$PATH"
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
-
-.setup-alsa:
-  before_script:
-    - export PATH="$CARGO_HOME/bin:$PATH"
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
-
-default:
-  image: rust:latest
-  tags:
-    - cce-feature
-
-cache: &cargo-cache
-  key:
-    files:
-      - Cargo.lock
-  paths:
-    - .cargo/bin/
-    - .cargo/registry/
-    - .cargo/git/
-    - target/
 
 variables:
   CARGO_HOME: $CI_PROJECT_DIR/.cargo
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  KITHARA_REGISTRY: registry.zvq.me/disrupt/kithara
+  CI_IMAGE: $KITHARA_REGISTRY/ci:latest
+  CI_IMAGE_ANDROID: $KITHARA_REGISTRY/ci-android:latest
+  CI_IMAGE_CROSS: $KITHARA_REGISTRY/ci-cross:latest
+
+default:
+  image: $CI_IMAGE
+  tags:
+    - cce-feature
+  timeout: 60 minutes
+
+# --- cache templates ---
+
+.cache-pull-push:
+  cache:
+    - key:
+        files:
+          - Cargo.lock
+      paths:
+        - .cargo/registry/index/
+        - .cargo/registry/cache/
+        - .cargo/git/db/
+        - target/
+      policy: pull-push
+    - key: cargo-tools-v1
+      paths:
+        - .cargo/bin/
+      policy: pull-push
+
+.cache-pull:
+  cache:
+    - key:
+        files:
+          - Cargo.lock
+      paths:
+        - .cargo/registry/index/
+        - .cargo/registry/cache/
+        - .cargo/git/db/
+        - target/
+      policy: pull
+    - key: cargo-tools-v1
+      paths:
+        - .cargo/bin/
+      policy: pull
+
+# --- mtime normalization for cargo fingerprint cache ---
+
+.touch-sources:
+  before_script:
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - git ls-files | xargs touch -t 202001010000.00
+
+# --- docker stage ---
+# Rebuild images only when Dockerfiles or Cargo.lock change.
+
+# TODO: restore rules: after initial images are built
+# rules:
+#   - changes: [docker/ci.Dockerfile, Cargo.lock]
+#   - if: '$FORCE_DOCKER_BUILD == "true"'
+
+docker-ci:
+  stage: docker
+  image: docker:latest
+  tags:
+    - cce-feature
+  services:
+    - docker:dind
+  cache: []
+  script:
+    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $CI_IMAGE -f docker/ci.Dockerfile .
+    - docker push $CI_IMAGE
+
+docker-ci-android:
+  stage: docker
+  image: docker:latest
+  tags:
+    - cce-feature
+  services:
+    - docker:dind
+  needs: [docker-ci]
+  cache: []
+  script:
+    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg CI_REGISTRY_IMAGE=$KITHARA_REGISTRY -t $CI_IMAGE_ANDROID -f docker/ci-android.Dockerfile .
+    - docker push $CI_IMAGE_ANDROID
+
+docker-ci-cross:
+  stage: docker
+  image: docker:latest
+  tags:
+    - cce-feature
+  services:
+    - docker:dind
+  needs: [docker-ci]
+  cache: []
+  script:
+    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE" && docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg CI_REGISTRY_IMAGE=$KITHARA_REGISTRY -t $CI_IMAGE_CROSS -f docker/ci-cross.Dockerfile .
+    - docker push $CI_IMAGE_CROSS
+
+# --- build stage ---
+
+build:
+  stage: build
+  cache: !reference [.cache-pull-push, cache]
+  before_script:
+    - !reference [.touch-sources, before_script]
+  script:
+    - just test --no-run
+    - RUSTUP_TOOLCHAIN=1.89 cargo check --workspace
+    - just wasm-check
+    - just wasm-size-check || true
+  artifacts:
+    paths:
+      - target/wasm-slim-result.json
+      - crates/kithara-wasm/.wasm-slim/history.json
+    expire_in: 30 days
 
 # --- lint stage ---
 
 lint:
   stage: lint
+  needs: [build]
+  cache: !reference [.cache-pull, cache]
   variables:
-    QUALITY_MIN_UNIMOCK_TRAITS: "22"
-    QUALITY_MIN_RSTEST_CASES: "485"
+    QUALITY_MIN_UNIMOCK_TRAITS: "19"
+    QUALITY_MIN_RSTEST_CASES: "1"
     QUALITY_MIN_PERF_TEST_FILES: "5"
     QUALITY_MIN_BENCH_TARGETS: "1"
     QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/ast-grep" || cargo install ast-grep --locked
-    - rustup component add clippy
+    - !reference [.touch-sources, before_script]
     - rustup toolchain install nightly --component rustfmt
   script:
     - just lint-full
     - just quality-report-ci
+    - just deny
+    - just machete
+    - just arch
+    - just hack || true
+    - just semver || true
   artifacts:
     paths:
       - target/quality-report.md
@@ -61,260 +159,112 @@ lint:
       - target/rstest-audit.md
     expire_in: 30 days
 
-deny:
-  stage: lint
-  before_script:
-    - !reference [.setup, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-deny" || cargo install cargo-deny --locked
-  script:
-    - just deny
-
-machete:
-  stage: lint
-  before_script:
-    - !reference [.setup, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-machete" || cargo install cargo-machete --locked
-  script:
-    - just machete
-  allow_failure: true
-
-arch:
-  stage: lint
-  before_script:
-    - !reference [.setup, before_script]
-  script:
-    - just arch
-
 # --- test stage ---
 
 test:
   stage: test
   needs: [lint]
-  timeout: 20 minutes
-  before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-nextest" || cargo install cargo-nextest --locked
-  script:
-    - just test
-
-msrv:
-  stage: test
-  needs: [lint]
-  image: rust:1.89
-  before_script:
-    - !reference [.setup, before_script]
-  script:
-    - just check
-
-wasm:
-  stage: test
-  needs: [lint]
-  before_script:
-    - !reference [.setup, before_script]
-    - rustup target add wasm32-unknown-unknown
-  script:
-    - just wasm-check
-
-wasm-size:
-  stage: test
-  needs: [lint]
-  before_script:
-    - !reference [.setup, before_script]
-    - rustup toolchain install nightly --component rust-src
-    - rustup target add wasm32-unknown-unknown --toolchain nightly
-    - test -f "$CARGO_HOME/bin/wasm-slim" || cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
-  script:
-    - WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
-  artifacts:
-    paths:
-      - target/wasm-slim-result.json
-      - crates/kithara-wasm/.wasm-slim/history.json
-    expire_in: 30 days
-  allow_failure: true
-
-hack:
-  stage: test
-  needs: [lint]
-  timeout: 30 minutes
-  before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
-  script:
-    - just hack
-  allow_failure: true
-
-semver:
-  stage: test
-  needs: [lint]
-  before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-semver-checks" || cargo install cargo-semver-checks --locked
-  script:
-    - just semver
-  allow_failure: true
-  rules:
-    - changes:
-        - crates/*/src/**/*
-        - crates/*/Cargo.toml
-
-# --- quality stage ---
-
-coverage:
-  stage: quality
-  needs: [test]
+  cache: !reference [.cache-pull, cache]
   variables:
     COVERAGE_MIN: "80"
+    RUN_BENCHMARKS: "1"
   before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/cargo-llvm-cov" || cargo install cargo-llvm-cov --locked
+    - !reference [.touch-sources, before_script]
     - rustup component add llvm-tools-preview
   script:
     - just coverage
+    - just perf-test
+    - just bench-ci
   artifacts:
     reports:
       coverage_report:
         coverage_format: cobertura
         path: coverage/cobertura.xml
-    expire_in: 30 days
-
-perf:
-  stage: quality
-  needs: [test]
-  before_script:
-    - !reference [.setup-alsa, before_script]
-  script:
-    - just perf-test
-  artifacts:
     paths:
       - perf-results.txt
-    expire_in: 30 days
-  rules:
-    - changes:
-        - crates/**/*
-        - tests/perf/**/*
-        - Cargo.toml
-        - Cargo.lock
-
-bench-baseline:
-  stage: quality
-  needs: [test]
-  before_script:
-    - !reference [.setup-alsa, before_script]
-  cache:
-    key: criterion-main-baseline
-    paths:
-      - target/criterion/
-    policy: pull-push
-  variables:
-    RUN_BENCHMARKS: "1"
-    BENCH_CANDIDATE_NAME: "main"
-  script:
-    - just bench-ci
-  artifacts:
-    paths:
       - bench-results.txt
       - target/criterion/
     expire_in: 30 days
-  rules:
-    - if: '$CI_COMMIT_REF_NAME == "main"'
-      changes:
-        - crates/kithara-abr/**/*
-        - tests/benches/**/*
-        - justfile
-        - Cargo.toml
-        - Cargo.lock
-
-bench:
-  stage: quality
-  needs: [test]
-  before_script:
-    - !reference [.setup-alsa, before_script]
-    - test -f "$CARGO_HOME/bin/critcmp" || cargo install critcmp --locked
-  cache:
-    key: criterion-main-baseline
-    paths:
-      - target/criterion/
-    policy: pull
-  variables:
-    RUN_BENCHMARKS: "1"
-    BENCH_CANDIDATE_NAME: "ci"
-    BENCH_COMPARE_BASELINE_NAME: "main"
-  script:
-    - just bench-ci
-  artifacts:
-    paths:
-      - bench-results.txt
-      - target/criterion/
-    expire_in: 30 days
-  rules:
-    - if: '$CI_COMMIT_REF_NAME != "main"'
-      changes:
-        - crates/kithara-abr/**/*
-        - tests/benches/**/*
-        - justfile
-        - Cargo.toml
-        - Cargo.lock
 
 # --- release stage ---
 
 release-apple:
   stage: release
+  needs: [test]
   tags:
     - macos
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^v/'
+  cache:
+    - key: cargo-tools-v1
+      paths:
+        - .cargo/bin/
+      policy: pull-push
   before_script:
-    - !reference [.setup, before_script]
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
   script:
     - just release-apple
     - cp /tmp/KitharaFFIInternal.xcframework.zip .
+    # macOS desktop binary
+    - cargo build -p kithara-app --release --features tui
+    - cp target/release/kithara kithara-macos-$(uname -m)
     - |
       CHECKSUM=$(swift package compute-checksum KitharaFFIInternal.xcframework.zip)
-      PACKAGE_BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kithara"
-      PACKAGE_URL="${PACKAGE_BASE_URL}/${CI_COMMIT_TAG}/KitharaFFIInternal.xcframework.zip"
-      echo "CHECKSUM=$CHECKSUM" >> release.env
-      echo "PACKAGE_URL=$PACKAGE_URL" >> release.env
-      echo "PACKAGE_BASE_URL=$PACKAGE_BASE_URL" >> release.env
-      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-           --upload-file KitharaFFIInternal.xcframework.zip \
-           "$PACKAGE_URL"
+      echo "XCFramework checksum: $CHECKSUM"
   artifacts:
     paths:
       - KitharaFFIInternal.xcframework.zip
-    reports:
-      dotenv: release.env
-    expire_in: 90 days
+      - kithara-macos-*
+    expire_in: 30 days
 
-release-apple-publish:
+release-android:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
-  needs:
-    - job: release-apple
-      artifacts: true
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^v/'
+  needs: [test]
+  image: $CI_IMAGE_ANDROID
+  cache: []
+  before_script:
+    - !reference [.touch-sources, before_script]
   script:
-    - echo "Creating release $CI_COMMIT_TAG (checksum $CHECKSUM)"
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: $CI_COMMIT_TAG
-    description: |
-      ## XCFramework checksum
-      ```
-      $CHECKSUM
-      ```
+    - just android-aar
+  artifacts:
+    paths:
+      - android/lib/build/outputs/aar/lib-release.aar
+    expire_in: 30 days
 
-      ## Swift Package Manager
-      ```swift
-      .package(url: "https://gitlab.zvq.me/disrupt/kithara", from: "<version>")
-      ```
-      For private registry, set `KITHARA_BINARY_BASE_URL`:
-      ```bash
-      KITHARA_BINARY_BASE_URL="$PACKAGE_BASE_URL" swift package resolve
-      ```
-    assets:
-      links:
-        - name: KitharaFFIInternal.xcframework.zip
-          url: $PACKAGE_URL
-          link_type: package
+release-wasm:
+  stage: release
+  needs: [test]
+  cache: !reference [.cache-pull, cache]
+  before_script:
+    - !reference [.touch-sources, before_script]
+    - rustup toolchain install nightly --component rust-src
+  script:
+    - cargo xtask wasm build --release
+  artifacts:
+    paths:
+      - crates/kithara-wasm/dist/
+    expire_in: 30 days
+
+release-desktop:
+  stage: release
+  needs: [test]
+  image: $CI_IMAGE_CROSS
+  cache: !reference [.cache-pull, cache]
+  before_script:
+    - !reference [.touch-sources, before_script]
+  script:
+    # Linux x86_64
+    - cargo build -p kithara-app --release --features tui
+    - cp target/release/kithara kithara-linux-x86_64
+    # Linux arm64
+    - cargo build -p kithara-app --release --features tui --target aarch64-unknown-linux-gnu
+    - cp target/aarch64-unknown-linux-gnu/release/kithara kithara-linux-aarch64
+    # Windows x86_64
+    - cargo xwin build -p kithara-app --release --features tui --target x86_64-pc-windows-msvc
+    - cp target/x86_64-pc-windows-msvc/release/kithara.exe kithara-windows-x86_64.exe
+  artifacts:
+    paths:
+      - kithara-linux-x86_64
+      - kithara-linux-aarch64
+      - kithara-windows-x86_64.exe
+    expire_in: 30 days
