@@ -51,6 +51,7 @@ Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 - If a new dependency is unavoidable, justify it in the task, plan, or PR description and add it to `[workspace.dependencies]` first.
 
 ## Code Style
+- Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 
 ### Imports and qualified paths
 

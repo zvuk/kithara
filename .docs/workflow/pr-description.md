@@ -7,7 +7,7 @@ reopening the issue, agent handoff, or chat history.
 
 Include:
 
-- `Summary`: what changed and why;
+- `Summary`: a prose summary in plain language that explains what changed, why it changed, and what it means for the reviewer;
 - `Behavior / scope`: the main contract change and affected area;
 - `Validation`: exact commands run locally, or an explicit note that validation was not run;
 - `Surface impact`: whether public API, platform/runtime surfaces, or perf-sensitive paths changed;
@@ -19,8 +19,7 @@ Use this shape:
 
 ```md
 ## Summary
-- what changed
-- why it changed
+Plain-language prose covering what changed, why it changed, and what it means.
 
 ## Behavior / scope
 - contract or behavior: ...
