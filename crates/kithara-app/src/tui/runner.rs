@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::mpsc::{self, TryRecvError},
     time::Duration,
 };
@@ -58,6 +59,7 @@ pub(super) async fn run_tui(
     ];
 
     // Load tracks.
+    let mut failed_tracks = HashSet::new();
     for (i, url) in urls.iter().enumerate() {
         let mut res_config = match ResourceConfig::new(url) {
             Ok(c) => c,
@@ -81,6 +83,7 @@ pub(super) async fn run_tui(
             Err(err) => {
                 tracing::warn!(?err, url, "failed to load resource, skipping");
                 let _ = ui_tx.send(UiMsg::Note(format!("skip #{}: {err}", i + 1)));
+                failed_tracks.insert(i);
             }
         }
     }
@@ -101,6 +104,7 @@ pub(super) async fn run_tui(
             player: &ctx_player,
             urls: &ctx_urls,
             drm_domains: &ctx_drm_domains,
+            failed_tracks,
             ui_tx: &ctx_ui_tx,
         };
         run_ui_loop(&ctx, track_names, &ui_rx, &stop_rx, palette)
@@ -138,6 +142,7 @@ struct UiLoopContext<'a> {
     player: &'a PlayerImpl,
     urls: &'a [String],
     drm_domains: &'a [String],
+    failed_tracks: HashSet<usize>,
     ui_tx: &'a mpsc::Sender<UiMsg>,
 }
 
@@ -150,7 +155,10 @@ fn run_ui_loop(
 ) -> RunnerResult {
     let player = ctx.player;
     let track_count = track_names.len();
-    let dashboard = Dashboard::new(track_names, palette);
+    let mut dashboard = Dashboard::new(track_names, palette);
+    for &idx in &ctx.failed_tracks {
+        dashboard.mark_failed(idx);
+    }
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
         "controls: 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",

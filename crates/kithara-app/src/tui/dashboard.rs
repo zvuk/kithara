@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use ratatui::{
     Frame,
@@ -37,6 +37,7 @@ pub struct Dashboard {
     colors: TuiPalette,
     crossfade_progress: Option<f32>,
     current_index: usize,
+    failed_tracks: HashSet<usize>,
     item_count: usize,
     last_note: Option<String>,
     playing: bool,
@@ -53,6 +54,7 @@ impl Dashboard {
             colors: palette,
             crossfade_progress: None,
             current_index: 0,
+            failed_tracks: HashSet::new(),
             item_count: 0,
             last_note: None,
             playing: false,
@@ -95,6 +97,10 @@ impl Dashboard {
             total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
     }
 
+    pub fn mark_failed(&mut self, index: usize) {
+        self.failed_tracks.insert(index);
+    }
+
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
     }
@@ -116,10 +122,13 @@ impl Dashboard {
         let c = &self.colors;
         for (i, track) in self.tracks.iter().enumerate() {
             let is_active = i == self.current_index;
+            let is_failed = self.failed_tracks.contains(&i);
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
             let text = format!(" {marker} {number}  {track}");
-            let style = if is_active {
+            let style = if is_failed {
+                Style::default().fg(c.danger).bg(c.bg)
+            } else if is_active {
                 Style::default().fg(c.accent).bg(c.bg_panel)
             } else {
                 Style::default().fg(c.muted).bg(c.bg)

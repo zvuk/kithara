@@ -429,8 +429,21 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for index in 0..state.playlist.len() {
         let is_current = state.current_track_index == Some(index);
-        let text_color = if is_current { p.accent } else { p.text };
-        let index_color = if is_current { p.accent } else { p.muted };
+        let is_failed = state.failed_tracks.contains(&index);
+        let text_color = if is_failed {
+            p.danger
+        } else if is_current {
+            p.accent
+        } else {
+            p.text
+        };
+        let index_color = if is_failed {
+            p.danger
+        } else if is_current {
+            p.accent
+        } else {
+            p.muted
+        };
         let track_name = truncate_name(&state.playlist.track_name(index), PLAYLIST_MAX_NAME_CHARS);
 
         let item = button(

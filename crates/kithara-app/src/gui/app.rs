@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use iced::{Subscription, Task, Theme, time as iced_time};
 use kithara::{
@@ -39,6 +39,7 @@ pub(crate) struct Kithara {
 
     // Track info.
     pub(crate) current_track_index: Option<usize>,
+    pub(crate) failed_tracks: HashSet<usize>,
     pub(crate) track_name: String,
 
     // UI state.
@@ -76,6 +77,7 @@ impl Kithara {
             eq_bands: vec![0.0; eq_band_count],
             crossfade,
             current_track_index: None,
+            failed_tracks: HashSet::new(),
             track_name: String::new(),
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
@@ -142,7 +144,7 @@ impl Kithara {
                     .map_err(|e| format!("{e}"))?;
                 Ok(())
             },
-            Message::TrackLoaded,
+            move |result| Message::TrackLoaded(index, result),
         )
     }
 }

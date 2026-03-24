@@ -99,9 +99,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::TrackLoaded(result) => {
+        Message::TrackLoaded(index, result) => {
             if let Err(ref e) = result {
                 error!("track load failed: {e}");
+                state.failed_tracks.insert(index);
             }
             Task::none()
         }

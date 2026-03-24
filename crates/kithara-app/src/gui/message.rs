@@ -23,8 +23,8 @@ pub(crate) enum Message {
     SelectTrack(usize),
     /// Switch the active tab.
     TabSelected(Tab),
-    /// A track finished loading asynchronously.
-    TrackLoaded(Result<(), String>),
+    /// A track finished loading asynchronously (index, result).
+    TrackLoaded(usize, Result<(), String>),
     /// Periodic tick from the subscription (100 ms).
     Tick,
     /// Toggle shuffle mode.
