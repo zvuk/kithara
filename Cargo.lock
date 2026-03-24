@@ -3781,6 +3781,7 @@ dependencies = [
  "obfstr",
  "rand 0.10.0",
  "ratatui",
+ "thunderdome",
  "tokio",
  "tracing",
  "tracing-subscriber",

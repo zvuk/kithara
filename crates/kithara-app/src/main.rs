@@ -89,7 +89,7 @@ fn main() -> AppResult {
             .with_crossfade_duration(config.crossfade_seconds)
             .with_eq_layout(generate_log_spaced_bands(config.eq_band_count)),
     ));
-    let playlist = Arc::new(Playlist::new(config.tracks.clone()));
+    let playlist = Arc::new(Playlist::new(config.tracks.clone(), &config.drm_domains));
     let mut controller = AppController::new(Arc::clone(&player), playlist, config.eq_band_count);
 
     match mode {

@@ -100,9 +100,13 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::TrackLoaded(index, result) => {
+            // Status already updated by TrackLoadParams::load_and_apply().
             if let Err(ref e) = result {
                 error!("track load failed: {e}");
-                state.failed_tracks.insert(index);
+            }
+            // Auto-select first loaded track if none is playing.
+            if result.is_ok() && state.current_track_index == Some(index) && !state.playing {
+                state.playing = true;
             }
             Task::none()
         }

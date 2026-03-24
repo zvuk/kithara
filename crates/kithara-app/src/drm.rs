@@ -49,17 +49,6 @@ pub(crate) fn make_key_options() -> KeyOptions {
         .with_key_processor(Arc::new(move |key: Bytes, _ctx| Ok(cipher.decrypt(&key))))
 }
 
-/// Returns `true` if the URL's domain matches any of the configured DRM domains.
-pub(crate) fn needs_key_cipher(url: &str, drm_domains: &[String]) -> bool {
-    url::Url::parse(url)
-        .ok()
-        .and_then(|u| {
-            u.host_str()
-                .map(|h| drm_domains.iter().any(|d| h.ends_with(d.as_str())))
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,26 +56,5 @@ mod tests {
     #[test]
     fn drm_key_returns_expected_default() {
         assert_eq!(drm_key(), "kithara");
-    }
-
-    #[test]
-    fn needs_key_cipher_matches_domain() {
-        let domains = vec!["zvq.me".to_string()];
-        assert!(needs_key_cipher(
-            "https://slicer-stage-k8s.zvq.me/drm/track/123/master.m3u8",
-            &domains
-        ));
-        assert!(needs_key_cipher(
-            "https://cdn-edge.zvq.me/track/streamhq?id=123",
-            &domains
-        ));
-        assert!(!needs_key_cipher(
-            "https://stream.silvercomet.top/drm/master.m3u8",
-            &domains
-        ));
-        assert!(!needs_key_cipher(
-            "https://example.com/hls/master.m3u8",
-            &domains
-        ));
     }
 }

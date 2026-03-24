@@ -22,7 +22,7 @@ use super::{
     icons::Icon,
     message::{Message, Tab},
 };
-use crate::theme::gui::GuiPalette;
+use crate::{playlist::TrackStatus, theme::gui::GuiPalette};
 
 // Layout
 const OUTER_PADDING: f32 = 18.0;
@@ -429,7 +429,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for index in 0..state.playlist.len() {
         let is_current = state.current_track_index == Some(index);
-        let is_failed = state.failed_tracks.contains(&index);
+        let is_failed = state.playlist.track_status(index) == TrackStatus::Failed;
         let text_color = if is_failed {
             p.danger
         } else if is_current {

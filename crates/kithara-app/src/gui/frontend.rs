@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use iced::Size;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
@@ -32,17 +34,13 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
-    drm_domains: Vec<String>,
     palette: gui::GuiPalette,
-    tracks: Vec<String>,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
-            drm_domains: config.drm_domains.clone(),
             palette: config.palette.into(),
-            tracks: config.tracks.clone(),
         })
     }
 
@@ -53,19 +51,18 @@ impl Frontend for GuiFrontend {
 
     fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError> {
         let player = controller.player().clone();
-        let tracks = self.tracks.clone();
+        let load_params = controller.load_params();
+        let playlist = Arc::clone(load_params.playlist());
         let palette = self.palette;
-        let drm_domains = self.drm_domains.clone();
 
         // iced owns the tokio runtime — this must NOT be called from within block_on().
         iced::application(
             move || {
                 Kithara::new(
                     player.clone(),
-                    tracks.clone(),
-                    true,
+                    Arc::clone(&playlist),
+                    load_params.clone(),
                     palette,
-                    drm_domains.clone(),
                 )
             },
             update::update,

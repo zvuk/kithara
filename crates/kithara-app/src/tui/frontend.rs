@@ -3,25 +3,17 @@ use crate::{
     config::AppConfig,
     controls::AppController,
     frontend::{Frontend, FrontendError},
-    playlist::Playlist,
 };
 
 /// TUI frontend using ratatui.
 pub struct TuiFrontend {
     config: AppConfig,
-    track_names: Vec<String>,
 }
 
 impl Frontend for TuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
-        let playlist = Playlist::new(config.tracks.clone());
-        let track_names: Vec<String> = (0..playlist.len())
-            .map(|i| playlist.track_name(i))
-            .collect();
-
         Ok(Self {
             config: config.clone(),
-            track_names,
         })
     }
 
@@ -39,9 +31,7 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        let track_names = self.track_names.clone();
-
-        rt.block_on(runner::run_tui(controller, &self.config, track_names))
+        rt.block_on(runner::run_tui(controller, &self.config))
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {

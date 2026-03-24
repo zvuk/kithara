@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use kithara::prelude::PlayerImpl;
-use tracing::error;
+use kithara::prelude::{PlayerImpl, Resource, ResourceConfig};
+use tracing::{error, info};
 
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, TrackStatus};
 
 /// Player control contract for UI frontends.
 ///
@@ -84,6 +84,100 @@ impl AppController {
     #[must_use]
     pub fn player(&self) -> &Arc<PlayerImpl> {
         &self.player
+    }
+
+    /// Create a `TrackLoadParams` for async track loading.
+    #[must_use]
+    pub fn load_params(&self) -> TrackLoadParams {
+        TrackLoadParams {
+            player: Arc::clone(&self.player),
+            playlist: Arc::clone(&self.playlist),
+        }
+    }
+}
+
+/// Shared, cloneable context for loading tracks asynchronously.
+///
+/// This is THE ONLY place that builds DRM config, creates resources,
+/// and handles autoplay. Frontends must not duplicate this logic.
+#[derive(Clone)]
+pub struct TrackLoadParams {
+    player: Arc<PlayerImpl>,
+    playlist: Arc<Playlist>,
+}
+
+impl TrackLoadParams {
+    /// Access the underlying player.
+    #[must_use]
+    pub fn player(&self) -> &Arc<PlayerImpl> {
+        &self.player
+    }
+
+    /// Access the shared playlist.
+    #[must_use]
+    pub fn playlist(&self) -> &Arc<Playlist> {
+        &self.playlist
+    }
+
+    /// Build a `ResourceConfig` for the track at `index`.
+    ///
+    /// This is THE ONLY place that applies DRM key options.
+    ///
+    /// # Errors
+    /// Returns an error if the index is out of range or the URL is invalid.
+    pub fn build_config(&self, index: usize) -> Result<ResourceConfig, AppControllerError> {
+        let track = self
+            .playlist
+            .track(index)
+            .ok_or_else(|| format!("track index {index} out of range"))?;
+
+        let mut config = ResourceConfig::new(&track.url)
+            .map_err(|e| -> AppControllerError { format!("{e}").into() })?;
+
+        if track.needs_drm {
+            config = config.with_keys(crate::drm::make_key_options());
+        }
+
+        self.player.prepare_config(&mut config);
+        Ok(config)
+    }
+
+    /// Load a resource for the track at `index`.
+    ///
+    /// # Errors
+    /// Returns an error if configuration or resource creation fails.
+    pub async fn load_resource(&self, index: usize) -> Result<Resource, AppControllerError> {
+        let config = self.build_config(index)?;
+        let resource = Resource::new(config)
+            .await
+            .map_err(|e| -> AppControllerError { format!("{e}").into() })?;
+        Ok(resource)
+    }
+
+    /// Load, insert into player, update status, and autoplay if appropriate.
+    ///
+    /// Returns `true` if loading succeeded.
+    pub async fn load_and_apply(&self, index: usize) -> bool {
+        match self.load_resource(index).await {
+            Ok(resource) => {
+                self.player.replace_item(index, resource);
+                self.playlist.set_status(index, TrackStatus::Loaded);
+
+                // Autoplay: start the first loaded track (by playlist order)
+                // if nothing is playing yet.
+                if !self.player.is_playing() && self.playlist.first_loaded_index() == Some(index) {
+                    let _ = self.player.select_item(index, true);
+                }
+
+                info!(index, "track loaded");
+                true
+            }
+            Err(err) => {
+                self.playlist.set_status(index, TrackStatus::Failed);
+                error!(index, %err, "track load failed");
+                false
+            }
+        }
     }
 }
 
