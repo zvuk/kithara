@@ -1,6 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use kithara::prelude::{PlayerImpl, Resource, ResourceConfig};
+use kithara::{
+    events::{Event, FileEvent, HlsEvent},
+    prelude::{EventBus, PlayerImpl, Resource, ResourceConfig},
+};
 use tracing::{error, info};
 
 use crate::playlist::{Playlist, TrackStatus};
@@ -96,6 +99,8 @@ impl AppController {
     }
 }
 
+const EVENT_BUS_CAPACITY: usize = 32;
+
 /// Shared, cloneable context for loading tracks asynchronously.
 ///
 /// This is THE ONLY place that builds DRM config, creates resources,
@@ -122,6 +127,7 @@ impl TrackLoadParams {
     /// Build a `ResourceConfig` for the track at `index`.
     ///
     /// This is THE ONLY place that applies DRM key options.
+    /// Creates an `EventBus` so callers can subscribe before `Resource::new()`.
     ///
     /// # Errors
     /// Returns an error if the index is out of range or the URL is invalid.
@@ -139,6 +145,11 @@ impl TrackLoadParams {
         }
 
         self.player.prepare_config(&mut config);
+
+        // Attach an event bus so File/HLS can wire the on_slow callback
+        // and we can subscribe before Resource::new().
+        config = config.with_events(EventBus::new(EVENT_BUS_CAPACITY));
+
         Ok(config)
     }
 
@@ -158,7 +169,36 @@ impl TrackLoadParams {
     ///
     /// Returns `true` if loading succeeded.
     pub async fn load_and_apply(&self, index: usize) -> bool {
-        match self.load_resource(index).await {
+        let config = match self.build_config(index) {
+            Ok(c) => c,
+            Err(err) => {
+                self.playlist.set_status(index, TrackStatus::Failed);
+                error!(index, %err, "track config failed");
+                return false;
+            }
+        };
+
+        // Subscribe to the bus BEFORE Resource::new() so we catch LoadSlow events.
+        let bus = config.bus.clone();
+        let events_rx = bus.as_ref().map(EventBus::subscribe);
+        let playlist = Arc::clone(&self.playlist);
+        let slow_listener = tokio::spawn(async move {
+            let Some(mut rx) = events_rx else { return };
+            while let Ok(event) = rx.recv().await {
+                if matches!(
+                    event,
+                    Event::File(FileEvent::LoadSlow) | Event::Hls(HlsEvent::LoadSlow)
+                ) {
+                    playlist.set_status(index, TrackStatus::Slow);
+                    break;
+                }
+            }
+        });
+
+        let result = Resource::new(config).await;
+        slow_listener.abort();
+
+        match result {
             Ok(resource) => {
                 self.player.replace_item(index, resource);
                 self.playlist.set_status(index, TrackStatus::Loaded);

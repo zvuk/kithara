@@ -103,7 +103,14 @@ impl File {
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
         let asset_root = asset_root_for_url(&url, config.name.as_deref());
-        let net_client = HttpClient::new(config.net.clone());
+        let net_client = HttpClient::new({
+            let mut opts = config.net.clone();
+            if let Some(ref bus) = config.bus {
+                let bus = bus.clone();
+                opts.on_slow = Some(Arc::new(move || bus.publish(FileEvent::LoadSlow)));
+            }
+            opts
+        });
 
         #[cfg(not(target_arch = "wasm32"))]
         let byte_stream = net_client

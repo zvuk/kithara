@@ -429,9 +429,16 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for index in 0..state.playlist.len() {
         let is_current = state.current_track_index == Some(index);
-        let is_failed = state.playlist.track_status(index) == TrackStatus::Failed;
+        let status = state.playlist.track_status(index);
+        let is_failed = status == TrackStatus::Failed;
+        let is_slow = status == TrackStatus::Slow;
+        let blink_on = u64::from(state.blink_counter / 5).is_multiple_of(2);
         let text_color = if is_failed {
             p.danger
+        } else if is_slow && is_current {
+            if blink_on { p.warning } else { p.muted }
+        } else if is_slow {
+            p.warning
         } else if is_current {
             p.accent
         } else {
@@ -439,6 +446,10 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         };
         let index_color = if is_failed {
             p.danger
+        } else if is_slow && is_current {
+            if blink_on { p.warning } else { p.muted }
+        } else if is_slow {
+            p.warning
         } else if is_current {
             p.accent
         } else {

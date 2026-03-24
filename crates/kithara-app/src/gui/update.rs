@@ -113,6 +113,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 
         Message::Tick => {
             let _ = state.player.tick();
+            state.blink_counter = state.blink_counter.wrapping_add(1);
 
             // Sync playback state.
             state.playing = state.player.is_playing();

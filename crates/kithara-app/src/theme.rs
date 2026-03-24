@@ -141,6 +141,7 @@ pub(crate) mod tui {
         pub danger: Color,
         pub muted: Color,
         pub text: Color,
+        pub warning: Color,
     }
 
     impl From<Palette> for TuiPalette {
@@ -152,6 +153,7 @@ pub(crate) mod tui {
                 danger: to_ratatui(p.danger),
                 muted: to_ratatui(p.muted),
                 text: to_ratatui(p.text),
+                warning: to_ratatui(p.warning),
             }
         }
     }

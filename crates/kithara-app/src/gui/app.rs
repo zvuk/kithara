@@ -46,6 +46,7 @@ pub(crate) struct Kithara {
     pub(crate) active_tab: Tab,
     pub(crate) shuffle_enabled: bool,
     pub(crate) repeat_enabled: bool,
+    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {
@@ -81,6 +82,7 @@ impl Kithara {
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
             repeat_enabled: false,
+            blink_counter: 0,
         };
 
         // Start event logging inside iced's tokio runtime.

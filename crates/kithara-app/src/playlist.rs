@@ -10,31 +10,23 @@ use thunderdome::{Arena, Index};
 
 const MAX_HISTORY_SIZE: usize = 100;
 
-const STATUS_PENDING: u8 = 0;
-const STATUS_LOADED: u8 = 1;
-const STATUS_FAILED: u8 = 2;
-
 /// Track status in the loading lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum TrackStatus {
-    Pending,
-    Loaded,
-    Failed,
+    Pending = 0,
+    Loaded = 1,
+    /// Soft timeout fired — still loading but taking longer than expected.
+    Slow = 2,
+    Failed = 3,
 }
 
 impl TrackStatus {
-    fn to_u8(self) -> u8 {
-        match self {
-            Self::Pending => STATUS_PENDING,
-            Self::Loaded => STATUS_LOADED,
-            Self::Failed => STATUS_FAILED,
-        }
-    }
-
     fn from_u8(val: u8) -> Self {
         match val {
-            STATUS_LOADED => Self::Loaded,
-            STATUS_FAILED => Self::Failed,
+            1 => Self::Loaded,
+            2 => Self::Slow,
+            3 => Self::Failed,
             _ => Self::Pending,
         }
     }
@@ -79,7 +71,7 @@ impl Playlist {
                 needs_drm,
             });
             order.push(index);
-            statuses.push(AtomicU8::new(STATUS_PENDING));
+            statuses.push(AtomicU8::new(TrackStatus::Pending as u8));
         }
         Self {
             tracks,
@@ -138,7 +130,7 @@ impl Playlist {
     /// Update the loading status of a track (lock-free atomic write).
     pub fn set_status(&self, index: usize, status: TrackStatus) {
         if let Some(atomic) = self.statuses.get(index) {
-            atomic.store(status.to_u8(), Ordering::Relaxed);
+            atomic.store(status as u8, Ordering::Relaxed);
         }
     }
 
@@ -146,7 +138,7 @@ impl Playlist {
     #[must_use]
     pub fn first_loaded_index(&self) -> Option<usize> {
         self.statuses.iter().enumerate().find_map(|(i, a)| {
-            if a.load(Ordering::Relaxed) == STATUS_LOADED {
+            if a.load(Ordering::Relaxed) == TrackStatus::Loaded as u8 {
                 Some(i)
             } else {
                 None

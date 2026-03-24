@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
+use kithara_platform::tokio;
 use reqwest::Client;
 use url::Url;
 
@@ -24,7 +25,7 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
     headers
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HttpClient {
     inner: Client,
     options: NetOptions,
@@ -82,14 +83,38 @@ impl HttpClient {
     }
 
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).
-    ///
-    /// Extracts response headers and wraps the body in a `ByteStream` so
-    /// that callers can inspect metadata (e.g. `Content-Length`) without a
-    /// separate HEAD request.
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
         crate::ByteStream::new(headers, Box::pin(stream))
+    }
+
+    /// Send with soft timeout notification.
+    ///
+    /// Hard timeout must be applied via `req.timeout()` on the request builder
+    /// before calling this. If soft timeout fires first, calls `on_slow`
+    /// callback and continues waiting for the hard timeout.
+    async fn send_with_soft(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, NetError> {
+        let send = req.send();
+        tokio::pin!(send);
+        tokio::select! {
+            result = &mut send => result.map_err(NetError::from),
+            () = tokio::time::sleep(self.options.soft_timeout) => {
+                if let Some(ref cb) = self.options.on_slow { cb(); }
+                send.await.map_err(NetError::from)
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for HttpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpClient")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
     }
 }
 
@@ -102,7 +127,7 @@ impl Net for HttpClient {
         let req = Self::apply_headers(req, headers);
         let req = req.timeout(self.options.request_timeout);
 
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_with_soft(req).await?;
         let status = resp.status();
 
         if !status.is_success() {
@@ -125,9 +150,9 @@ impl Net for HttpClient {
     ) -> Result<crate::ByteStream, NetError> {
         let req = self.inner.get(url.clone());
         let req = Self::apply_headers(req, headers);
-        // No timeout for streaming - downloads can take arbitrary time
+        let req = req.timeout(self.options.request_timeout);
 
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_with_soft(req).await?;
         let status = resp.status();
 
         if !status.is_success() {
@@ -154,8 +179,9 @@ impl Net for HttpClient {
             .get(url.clone())
             .header("Range", range.to_header_value());
         req = Self::apply_headers(req, headers);
+        let req = req.timeout(self.options.request_timeout);
 
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_with_soft(req).await?;
         let status = resp.status();
 
         if !(status.is_success() || status.as_u16() == HTTP_PARTIAL_CONTENT) {
@@ -179,8 +205,8 @@ impl Net for HttpClient {
         let resp = {
             let mut req = self.inner.get(url.clone()).header("Range", "bytes=0-0");
             req = Self::apply_headers(req, headers);
-            req = req.timeout(self.options.request_timeout);
-            req.send().await.map_err(NetError::from)?
+            let req = req.timeout(self.options.request_timeout);
+            self.send_with_soft(req).await?
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -188,7 +214,7 @@ impl Net for HttpClient {
             let req = self.inner.head(url.clone());
             let req = Self::apply_headers(req, headers);
             let req = req.timeout(self.options.request_timeout);
-            req.send().await.map_err(NetError::from)?
+            self.send_with_soft(req).await?
         };
 
         let status = resp.status();

@@ -36,10 +36,14 @@ const SECONDS_PER_MINUTE: u64 = 60;
 ///
 /// Renders playlist, progress bar, volume, and status information
 /// using ratatui inline viewport.
+/// Frames between blink toggles (~500ms at 100ms poll).
+const BLINK_DIVISOR: u64 = 5;
+
 pub struct Dashboard {
     colors: TuiPalette,
     crossfade_progress: Option<f32>,
     current_index: usize,
+    frame_count: u64,
     item_count: usize,
     last_note: Option<String>,
     playing: bool,
@@ -56,6 +60,7 @@ impl Dashboard {
             colors: palette,
             crossfade_progress: None,
             current_index: 0,
+            frame_count: 0,
             item_count: 0,
             last_note: None,
             playing: false,
@@ -102,7 +107,8 @@ impl Dashboard {
         self.volume = volume.clamp(0.0, 1.0);
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame) {
+        self.frame_count = self.frame_count.wrapping_add(1);
         let area = frame.area();
         frame.render_widget(Clear, area);
 
@@ -120,12 +126,20 @@ impl Dashboard {
         for i in 0..self.playlist.len() {
             let track_name = self.playlist.track_name(i);
             let is_active = i == self.current_index;
-            let is_failed = self.playlist.track_status(i) == TrackStatus::Failed;
+            let status = self.playlist.track_status(i);
+            let is_failed = status == TrackStatus::Failed;
+            let is_slow = status == TrackStatus::Slow;
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
             let text = format!(" {marker} {number}  {track_name}");
             let style = if is_failed {
                 Style::default().fg(c.danger).bg(c.bg)
+            } else if is_slow && is_active {
+                let blink_on = (self.frame_count / BLINK_DIVISOR).is_multiple_of(2);
+                let fg = if blink_on { c.warning } else { c.muted };
+                Style::default().fg(fg).bg(c.bg_panel)
+            } else if is_slow {
+                Style::default().fg(c.warning).bg(c.bg)
             } else if is_active {
                 Style::default().fg(c.accent).bg(c.bg_panel)
             } else {
