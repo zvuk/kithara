@@ -42,6 +42,8 @@ pub struct AudioPlayerItem {
     pub(crate) worker: Mutex<Option<kithara::audio::AudioWorkerHandle>>,
     /// Shared runtime — set by `AudioPlayer` when item is inserted.
     pub(crate) runtime: Mutex<Option<tokio_runtime::Handle>>,
+    /// Key options for DRM — set by `AudioPlayer` when item is inserted.
+    pub(crate) key_options: Mutex<Option<kithara::hls::KeyOptions>>,
 }
 
 /// Internal configuration built from item properties before loading.
@@ -70,6 +72,7 @@ impl AudioPlayerItem {
             load_notify: Notify::new(),
             worker: Mutex::new(None),
             runtime: Mutex::new(None),
+            key_options: Mutex::new(None),
         })
     }
 
@@ -226,6 +229,9 @@ impl AudioPlayerItem {
         }
         if let Some(ref rt) = *self.runtime.lock_sync() {
             config.runtime = Some(rt.clone());
+        }
+        if let Some(ref keys) = *self.key_options.lock_sync() {
+            config = config.with_keys(keys.clone());
         }
 
         Ok(ResourceLoadConfig { config })

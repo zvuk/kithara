@@ -19,6 +19,7 @@ pub(crate) struct Kithara {
     pub(crate) player: Arc<PlayerImpl>,
     pub(crate) playlist: Arc<Playlist>,
     pub(crate) palette: gui::GuiPalette,
+    pub(crate) drm_domains: Vec<String>,
 
     // Playback state (synced from player on each tick).
     pub(crate) playing: bool,
@@ -54,6 +55,7 @@ impl Kithara {
         tracks: Vec<String>,
         autoplay: bool,
         palette: gui::GuiPalette,
+        drm_domains: Vec<String>,
     ) -> (Self, Task<Message>) {
         let playlist = Arc::new(Playlist::new(tracks));
         let volume = player.volume();
@@ -64,6 +66,7 @@ impl Kithara {
             player,
             playlist,
             palette,
+            drm_domains,
             playing: false,
             position: 0.0,
             duration: 0.0,
@@ -117,10 +120,14 @@ impl Kithara {
         let path = path.to_string();
         let player = Arc::clone(&self.player);
         let autoplay = self.playing || self.autoplay;
+        let drm_domains = self.drm_domains.clone();
 
         Task::perform(
             async move {
                 let mut config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
+                if crate::drm::needs_key_cipher(&path, &drm_domains) {
+                    config = config.with_keys(crate::drm::make_key_options());
+                }
                 player.prepare_config(&mut config);
                 let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
 

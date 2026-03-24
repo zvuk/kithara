@@ -27,6 +27,15 @@ pub trait SeekCallback: Send + Sync {
     fn on_complete(&self, finished: bool);
 }
 
+/// Callback for processing (decrypting) HLS encryption keys.
+///
+/// Called for each key fetched from the server. The implementation should
+/// return the decrypted key bytes.
+#[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
+pub trait FfiKeyProcessor: Send + Sync {
+    fn process_key(&self, key: Vec<u8>) -> Vec<u8>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

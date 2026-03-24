@@ -170,7 +170,7 @@ impl DecoderFactory {
         Self::create_symphonia_decoder(source, codec, symphonia_config)
     }
 
-    /// Create an Apple AudioToolbox decoder.
+    /// Create an Apple `AudioToolbox` decoder.
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
     fn create_apple_decoder<R>(
         source: R,

@@ -41,10 +41,12 @@ enum ControlOutcome {
 /// Returns an error if the TUI event loop fails.
 pub(super) async fn run_tui(
     controller: &mut AppController,
-    urls: Vec<String>,
+    config: &crate::config::AppConfig,
     track_names: Vec<String>,
-    palette: tui::TuiPalette,
 ) -> RunnerResult {
+    let urls = &config.tracks;
+    let drm_domains = &config.drm_domains;
+    let palette: tui::TuiPalette = config.palette.into();
     let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
@@ -57,15 +59,18 @@ pub(super) async fn run_tui(
 
     // Load tracks.
     for (i, url) in urls.iter().enumerate() {
-        let mut config = match ResourceConfig::new(url) {
+        let mut res_config = match ResourceConfig::new(url) {
             Ok(c) => c,
             Err(err) => {
                 tracing::warn!(?err, url, "invalid URL, skipping");
                 continue;
             }
         };
-        player.prepare_config(&mut config);
-        match Resource::new(config).await {
+        if crate::drm::needs_key_cipher(url, drm_domains) {
+            res_config = res_config.with_keys(crate::drm::make_key_options());
+        }
+        player.prepare_config(&mut res_config);
+        match Resource::new(res_config).await {
             Ok(resource) => {
                 let source_events = resource.subscribe();
                 player.insert(resource, None);
@@ -87,19 +92,18 @@ pub(super) async fn run_tui(
     controller.play();
 
     // Run blocking UI loop in a separate thread.
-    let player_for_ui = player.clone();
-    let ui_tx_for_loop = ui_tx.clone();
-    let urls_for_loop = urls.clone();
+    let ctx_player = player.clone();
+    let ctx_urls = urls.clone();
+    let ctx_drm_domains = config.drm_domains.clone();
+    let ctx_ui_tx = ui_tx.clone();
     let mut ui_handle = spawn_blocking(move || {
-        run_ui_loop(
-            &player_for_ui,
-            &urls_for_loop,
-            track_names,
-            &ui_tx_for_loop,
-            &ui_rx,
-            &stop_rx,
-            palette,
-        )
+        let ctx = UiLoopContext {
+            player: &ctx_player,
+            urls: &ctx_urls,
+            drm_domains: &ctx_drm_domains,
+            ui_tx: &ctx_ui_tx,
+        };
+        run_ui_loop(&ctx, track_names, &ui_rx, &stop_rx, palette)
     });
 
     let ui_finished = tokio::select! {
@@ -130,15 +134,21 @@ pub(super) async fn run_tui(
     Ok(())
 }
 
+struct UiLoopContext<'a> {
+    player: &'a PlayerImpl,
+    urls: &'a [String],
+    drm_domains: &'a [String],
+    ui_tx: &'a mpsc::Sender<UiMsg>,
+}
+
 fn run_ui_loop(
-    player: &PlayerImpl,
-    urls: &[String],
+    ctx: &UiLoopContext<'_>,
     track_names: Vec<String>,
-    ui_tx: &mpsc::Sender<UiMsg>,
     ui_rx: &mpsc::Receiver<UiMsg>,
     stop_rx: &mpsc::Receiver<()>,
     palette: tui::TuiPalette,
 ) -> RunnerResult {
+    let player = ctx.player;
     let track_count = track_names.len();
     let dashboard = Dashboard::new(track_names, palette);
     let mut ui = UiSession::new(dashboard)?;
@@ -251,10 +261,8 @@ fn run_ui_loop(
                 auto_advanced_index = Some(current);
                 let next = current + 1;
                 switch_track(
-                    player,
+                    ctx,
                     next,
-                    urls,
-                    ui_tx,
                     &mut ui,
                     &mut crossfade_clock,
                     &mut auto_advanced_index,
@@ -275,10 +283,8 @@ fn run_ui_loop(
                         ControlOutcome::SwitchTrack(index) => {
                             if index < player.item_count() {
                                 switch_track(
-                                    player,
+                                    ctx,
                                     index,
-                                    urls,
-                                    ui_tx,
                                     &mut ui,
                                     &mut crossfade_clock,
                                     &mut auto_advanced_index,
@@ -380,26 +386,27 @@ fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
 }
 
 fn switch_track(
-    player: &PlayerImpl,
+    ctx: &UiLoopContext<'_>,
     index: usize,
-    urls: &[String],
-    ui_tx: &mpsc::Sender<UiMsg>,
     ui: &mut UiSession,
     crossfade_clock: &mut Option<CrossfadeClock>,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
     let handle = tokio::runtime::Handle::current();
-    let url = &urls[index];
+    let url = &ctx.urls[index];
     let resource = handle.block_on(async {
         let mut config = ResourceConfig::new(url)?;
-        player.prepare_config(&mut config);
+        if crate::drm::needs_key_cipher(url, ctx.drm_domains) {
+            config = config.with_keys(crate::drm::make_key_options());
+        }
+        ctx.player.prepare_config(&mut config);
         Resource::new(config).await
     })?;
     let events = resource.subscribe();
-    player.replace_item(index, resource);
+    ctx.player.replace_item(index, resource);
 
     let label = format!("src{}", index + 1);
-    let tx = ui_tx.clone();
+    let tx = ctx.ui_tx.clone();
     handle.spawn(async move {
         let mut rx = events;
         loop {
@@ -421,15 +428,15 @@ fn switch_track(
         }
     });
 
-    match player.select_item(index, true) {
+    match ctx.player.select_item(index, true) {
         Ok(()) => {
-            *crossfade_clock = Some(CrossfadeClock::new(player.crossfade_duration()));
+            *crossfade_clock = Some(CrossfadeClock::new(ctx.player.crossfade_duration()));
             ui.dashboard.set_crossfade_progress(Some(0.0));
             *auto_advanced_index = None;
             let note = format!(
                 "crossfade to #{} ({:.1}s)",
                 index + 1,
-                player.crossfade_duration()
+                ctx.player.crossfade_duration()
             );
             ui.dashboard.set_note(&note);
             ui.log_line(&note)?;

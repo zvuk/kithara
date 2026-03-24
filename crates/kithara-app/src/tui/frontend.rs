@@ -4,14 +4,12 @@ use crate::{
     controls::AppController,
     frontend::{Frontend, FrontendError},
     playlist::Playlist,
-    theme::tui,
 };
 
 /// TUI frontend using ratatui.
 pub struct TuiFrontend {
-    palette: tui::TuiPalette,
+    config: AppConfig,
     track_names: Vec<String>,
-    urls: Vec<String>,
 }
 
 impl Frontend for TuiFrontend {
@@ -22,9 +20,8 @@ impl Frontend for TuiFrontend {
             .collect();
 
         Ok(Self {
-            palette: config.palette.into(),
+            config: config.clone(),
             track_names,
-            urls: config.tracks.clone(),
         })
     }
 
@@ -42,11 +39,9 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        let urls = self.urls.clone();
         let track_names = self.track_names.clone();
-        let palette = self.palette;
 
-        rt.block_on(runner::run_tui(controller, urls, track_names, palette))
+        rt.block_on(runner::run_tui(controller, &self.config, track_names))
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {

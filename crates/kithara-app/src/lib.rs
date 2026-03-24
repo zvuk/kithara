@@ -5,6 +5,7 @@ compile_error!("Enable at least one frontend feature: `tui` or `gui`");
 pub mod config;
 pub mod controls;
 pub mod crossfade;
+pub(crate) mod drm;
 pub mod events;
 pub mod frontend;
 pub mod playlist;

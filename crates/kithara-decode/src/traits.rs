@@ -33,7 +33,13 @@ impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 /// to runtime [`AudioCodec`] values.
 pub(crate) trait CodecType: Send + 'static {
     /// The codec this type represents.
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+        )),
+        expect(dead_code, reason = "used by apple backend and tests")
+    )]
     const CODEC: AudioCodec;
 }
 

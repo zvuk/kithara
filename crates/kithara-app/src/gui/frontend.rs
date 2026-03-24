@@ -32,6 +32,7 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
+    drm_domains: Vec<String>,
     palette: gui::GuiPalette,
     tracks: Vec<String>,
 }
@@ -39,6 +40,7 @@ pub struct GuiFrontend {
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
+            drm_domains: config.drm_domains.clone(),
             palette: config.palette.into(),
             tracks: config.tracks.clone(),
         })
@@ -53,10 +55,19 @@ impl Frontend for GuiFrontend {
         let player = controller.player().clone();
         let tracks = self.tracks.clone();
         let palette = self.palette;
+        let drm_domains = self.drm_domains.clone();
 
         // iced owns the tokio runtime — this must NOT be called from within block_on().
         iced::application(
-            move || Kithara::new(player.clone(), tracks.clone(), true, palette),
+            move || {
+                Kithara::new(
+                    player.clone(),
+                    tracks.clone(),
+                    true,
+                    palette,
+                    drm_domains.clone(),
+                )
+            },
             update::update,
             view::view,
         )

@@ -18,6 +18,7 @@ ignored = ["kithara-workspace-hack"]
 
 [dependencies]
 aes = { workspace = true }
+bytes = { workspace = true }
 cbc = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

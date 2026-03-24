@@ -20,9 +20,11 @@ required-features = ["backend-uniffi"]
 workspace = true
 
 [dependencies]
-kithara = { workspace = true }
+kithara = { workspace = true, features = ["file", "hls"] }
+kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
+bytes = { workspace = true }
 
 tokio-util = { workspace = true }
 thiserror = { workspace = true }

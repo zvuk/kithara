@@ -1,9 +1,12 @@
 use crate::theme::Palette;
 
 /// Application configuration passed to frontends.
+#[derive(Clone)]
 pub struct AppConfig {
     /// Audio file URLs or paths to play.
     pub tracks: Vec<String>,
+    /// Domains that require DRM key cipher processing.
+    pub drm_domains: Vec<String>,
     /// Crossfade duration in seconds.
     pub crossfade_seconds: f32,
     /// Number of EQ bands for the UI.
@@ -20,25 +23,33 @@ impl AppConfig {
     /// Default number of EQ bands.
     pub const DEFAULT_EQ_BANDS: usize = 3;
 
-    pub const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
-    pub const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
-    pub const DRM_URL_DEFAULT: &str = "https://stream.silvercomet.top/drm/master.m3u8";
+    pub const DEFAULT_TRACKS: &[&str] = &[
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        "https://stream.silvercomet.top/drm/master.m3u8",
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        "https://slicer-stage-k8s.zvq.me/hls/track/105861205_1/master.m3u8",
+        "https://slicer-stage-k8s.zvq.me/drm/track/105861205_1/master.m3u8",
+        "https://slicer-stage-k8s.zvq.me/hls/track/93010217_1/master.m3u8",
+        "https://slicer-stage-k8s.zvq.me/drm/track/93010217_1/master.m3u8",
+    ];
 
     /// Create config with default tracks if none provided.
     #[must_use]
     pub fn with_defaults(tracks: Vec<String>) -> Self {
         let tracks = if tracks.is_empty() {
-            vec![
-                Self::FILE_URL_DEFAULT.to_string(),
-                Self::HLS_URL_DEFAULT.to_string(),
-                Self::DRM_URL_DEFAULT.to_string(),
-            ]
+            Self::DEFAULT_TRACKS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
         } else {
             tracks
         };
 
         Self {
             tracks,
+            drm_domains: vec!["zvq.me".to_string()],
             crossfade_seconds: Self::DEFAULT_CROSSFADE_SECONDS,
             eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),
