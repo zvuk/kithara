@@ -16,6 +16,9 @@ gui = ["dep:iced"]
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+kithara = { workspace = true, features = ["apple"] }
 bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }

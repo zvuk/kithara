@@ -537,6 +537,8 @@ impl AppleInner {
                 clippy::cast_possible_truncation,
                 reason = "read buffer is 32 KB, fits in u32"
             )]
+            // SAFETY: `stream_parser` is a valid handle created by `AudioFileStreamOpen`.
+            // `read_buffer` is a valid slice with `n` bytes read from the source.
             let status = unsafe {
                 AudioFileStreamParseBytes(
                     stream_parser,
@@ -655,6 +657,7 @@ impl AppleInner {
                 clippy::cast_possible_truncation,
                 reason = "magic cookie size fits in u32"
             )]
+            // SAFETY: `converter` is a valid handle. `cookie` is a valid byte slice.
             let status = unsafe {
                 AudioConverterSetProperty(
                     converter,
@@ -922,6 +925,7 @@ impl AppleInner {
             clippy::cast_possible_truncation,
             reason = "read buffer is 32 KB, fits in u32"
         )]
+        // SAFETY: `stream_parser` is a valid handle. `read_buffer` contains `n` bytes.
         let status = unsafe {
             AudioFileStreamParseBytes(
                 self.stream_parser,
@@ -1355,6 +1359,8 @@ extern "C" fn converter_input_callback(
         clippy::cast_possible_truncation,
         reason = "packet data length fits in u32"
     )]
+    // SAFETY: `io_data` is a valid pointer provided by `AudioConverter` callback.
+    // `held_packet_data` was set to `Some` two lines above.
     unsafe {
         #[expect(
             clippy::unwrap_used,
