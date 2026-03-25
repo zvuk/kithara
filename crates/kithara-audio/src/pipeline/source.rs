@@ -632,6 +632,29 @@ impl<T: StreamType> StreamAudioSource<T> {
             "seek anchor path: starting exact decoder seek"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
+            // Decoder internal state may be corrupted (e.g. Symphonia's moof
+            // table has stale byte offsets). Recover by recreating the decoder
+            // at the anchor offset — fresh state resolves the corruption.
+            warn!(
+                ?err,
+                epoch,
+                ?position,
+                "seek anchor path: decoder seek failed, recreating decoder"
+            );
+            let info = self
+                .shared_stream
+                .media_info()
+                .or_else(|| self.session.media_info.clone());
+            if let Some(info) = info {
+                self.start_recreating_decoder(
+                    RecreateCause::VariantSwitch,
+                    info,
+                    RecreateNext::Seek(request),
+                    anchor.byte_offset,
+                    request.attempt,
+                );
+                return false;
+            }
             self.fail_seek(request, err, "seek anchor path: exact decoder seek failed");
             return false;
         }
