@@ -37,6 +37,36 @@ use crate::{
     traits::{Alac, AudioDecoder, CodecType, InnerDecoder},
 };
 
+/// Capability description for a platform-specific hardware decoder backend.
+///
+/// Each backend (Apple `AudioToolbox`, Android `MediaCodec`, etc.) implements
+/// this trait so the factory can query codec/container support uniformly.
+pub(crate) trait HardwareBackend {
+    /// Whether this backend can decode `codec`.
+    fn supports_codec(codec: AudioCodec) -> bool;
+
+    /// Whether this backend can reliably seek within `container`.
+    ///
+    /// Frame-based formats (MP3, ADTS-AAC, raw FLAC) have self-delimiting
+    /// sync patterns that allow byte-level seeking.  Structured containers
+    /// (fMP4, MPEG-TS) need atom-boundary awareness the backend may lack.
+    fn can_seek_container(container: ContainerFormat) -> bool;
+
+    /// Infer the most likely container for `codec` when metadata doesn't
+    /// supply one (e.g. codec known from file extension only).
+    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat>;
+
+    /// Create a decoder for the given codec/container pair.
+    fn create<R>(
+        source: R,
+        config: &DecoderConfig,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static;
+}
+
 /// Selector for choosing how to detect/specify the codec.
 #[derive(Debug, Clone)]
 #[cfg_attr(not(test), expect(dead_code))]
@@ -139,14 +169,13 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        // Use hardware decoder if preferred and codec is supported.
-        // Derive container from codec when not explicitly provided.
+        // Try hardware decoder when preferred.  Each backend declares its own
+        // codec + container capabilities via `HardwareBackend`.
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        if config.prefer_hardware && Self::apple_supports_codec(codec) {
-            let apple_container = container.or_else(|| Self::default_container_for_codec(codec));
-            if apple_container.is_some() {
-                return Self::create_apple_decoder(source, &config, codec, apple_container);
-            }
+        if config.prefer_hardware
+            && let Some(resolved) = Self::hardware_accepts::<AppleBackend>(codec, container)
+        {
+            return AppleBackend::create(source, &config, codec, Some(resolved));
         }
 
         // Build Symphonia config from DecoderConfig
@@ -169,76 +198,23 @@ impl DecoderFactory {
         Self::create_symphonia_decoder(source, codec, symphonia_config)
     }
 
-    /// Create an Apple `AudioToolbox` decoder.
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn create_apple_decoder<R>(
-        source: R,
-        config: &DecoderConfig,
+    /// Check whether a hardware backend accepts this codec/container pair.
+    ///
+    /// Returns the resolved container (possibly inferred from codec) when the
+    /// backend can handle it.  Returns `None` when the backend should be
+    /// skipped — the caller keeps `source` and falls through to Symphonia.
+    fn hardware_accepts<B: HardwareBackend>(
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let apple_config = AppleConfig {
-            byte_len_handle: config.byte_len_handle.clone(),
-            container,
-            pcm_pool: config.pcm_pool.clone(),
-        };
-
-        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
-
-        match codec {
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                let decoder = AppleAac::create(source, apple_config)?;
-                Ok(Box::new(decoder))
-            }
-            AudioCodec::Mp3 => {
-                let decoder = AppleMp3::create(source, apple_config)?;
-                Ok(Box::new(decoder))
-            }
-            AudioCodec::Flac => {
-                let decoder = AppleFlac::create(source, apple_config)?;
-                Ok(Box::new(decoder))
-            }
-            AudioCodec::Alac => {
-                let decoder = AppleAlac::create(source, apple_config)?;
-                Ok(Box::new(decoder))
-            }
-            _ => Err(DecodeError::UnsupportedCodec(codec)),
+    ) -> Option<ContainerFormat> {
+        if !B::supports_codec(codec) {
+            return None;
         }
-    }
-
-    /// Check if the Apple hardware decoder supports this codec.
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn apple_supports_codec(codec: AudioCodec) -> bool {
-        matches!(
-            codec,
-            AudioCodec::AacLc
-                | AudioCodec::AacHe
-                | AudioCodec::AacHeV2
-                | AudioCodec::Mp3
-                | AudioCodec::Flac
-                | AudioCodec::Alac
-        )
-    }
-
-    /// Derive container format from codec when not provided by metadata.
-    ///
-    /// Apple `AudioToolbox` requires an explicit `AudioFileTypeID`.
-    /// When the caller only has a codec (e.g. from extension hint),
-    /// we infer the most common container for that codec.
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
-        match codec {
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                Some(ContainerFormat::Adts)
-            }
-            AudioCodec::Mp3 => Some(ContainerFormat::MpegAudio),
-            AudioCodec::Flac => Some(ContainerFormat::Flac),
-            AudioCodec::Alac => Some(ContainerFormat::Fmp4),
-            _ => None,
+        let resolved = container.or_else(|| B::default_container_for_codec(codec))?;
+        if !B::can_seek_container(resolved) {
+            return None;
         }
+        Some(resolved)
     }
 
     /// Probe codec from hints.
@@ -535,6 +511,78 @@ impl DecoderFactory {
         let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
         let decoder = Symphonia::<ProbeAny>::create(source, symphonia_config)?;
         Ok(Box::new(decoder))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Apple AudioToolbox backend
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+struct AppleBackend;
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+impl HardwareBackend for AppleBackend {
+    fn supports_codec(codec: AudioCodec) -> bool {
+        matches!(
+            codec,
+            AudioCodec::AacLc
+                | AudioCodec::AacHe
+                | AudioCodec::AacHeV2
+                | AudioCodec::Mp3
+                | AudioCodec::Flac
+                | AudioCodec::Alac
+        )
+    }
+
+    fn can_seek_container(container: ContainerFormat) -> bool {
+        // Frame-based formats have self-delimiting sync patterns.
+        // Structured containers (fMP4, MPEG-TS, CAF) require
+        // atom-boundary awareness that AudioFileStream lacks.
+        matches!(
+            container,
+            ContainerFormat::MpegAudio | ContainerFormat::Adts | ContainerFormat::Flac
+        )
+    }
+
+    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                Some(ContainerFormat::Adts)
+            }
+            AudioCodec::Mp3 => Some(ContainerFormat::MpegAudio),
+            AudioCodec::Flac => Some(ContainerFormat::Flac),
+            AudioCodec::Alac => Some(ContainerFormat::Fmp4),
+            _ => None,
+        }
+    }
+
+    fn create<R>(
+        source: R,
+        config: &DecoderConfig,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let apple_config = AppleConfig {
+            byte_len_handle: config.byte_len_handle.clone(),
+            container,
+            pcm_pool: config.pcm_pool.clone(),
+        };
+
+        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
+
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                Ok(Box::new(AppleAac::create(source, apple_config)?))
+            }
+            AudioCodec::Mp3 => Ok(Box::new(AppleMp3::create(source, apple_config)?)),
+            AudioCodec::Flac => Ok(Box::new(AppleFlac::create(source, apple_config)?)),
+            AudioCodec::Alac => Ok(Box::new(AppleAlac::create(source, apple_config)?)),
+            _ => Err(DecodeError::UnsupportedCodec(codec)),
+        }
     }
 }
 

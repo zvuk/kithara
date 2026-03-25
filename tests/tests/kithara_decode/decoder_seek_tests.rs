@@ -165,12 +165,20 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir: TestTempDir) {
+#[case::sw(false)]
+#[case::hw(true)]
+async fn decoder_file_seek_multiple(
+    #[future] server: AudioTestServer,
+    temp_dir: TestTempDir,
+    #[case] prefer_hardware: bool,
+) {
     let server = server.await;
     let url = server.mp3_url();
 
     let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let config = AudioConfig::<File>::new(file_config)
+        .with_hint("mp3")
+        .with_prefer_hardware(prefer_hardware);
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     next_chunk(&mut decoder, "initial read").await;

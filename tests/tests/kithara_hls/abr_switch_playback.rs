@@ -85,14 +85,19 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::drm_abr_auto("/drm/master.m3u8", true)]
-#[case::hls_abr_auto("/hls/master.m3u8", true)]
-#[case::drm_manual_v0("/drm/master.m3u8", false)]
-#[case::hls_manual_v0("/hls/master.m3u8", false)]
+#[case::drm_abr_auto_sw("/drm/master.m3u8", true, false)]
+#[case::drm_abr_auto_hw("/drm/master.m3u8", true, true)]
+#[case::hls_abr_auto_sw("/hls/master.m3u8", true, false)]
+#[case::hls_abr_auto_hw("/hls/master.m3u8", true, true)]
+#[case::drm_manual_v0_sw("/drm/master.m3u8", false, false)]
+#[case::drm_manual_v0_hw("/drm/master.m3u8", false, true)]
+#[case::hls_manual_v0_sw("/hls/master.m3u8", false, false)]
+#[case::hls_manual_v0_hw("/hls/master.m3u8", false, true)]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] abr_auto: bool,
+    #[case] prefer_hardware: bool,
 ) {
     let server = serve_assets().await;
     let url = server.url(path);
@@ -111,7 +116,7 @@ async fn stream_continues_after_seek(
             ..Default::default()
         });
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");

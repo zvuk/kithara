@@ -426,6 +426,9 @@ struct AppleInner {
     data_offset: u64,
     /// Codec-reported priming info (encoder delay).
     prime_info: Option<AudioConverterPrimeInfo>,
+    /// Cached duration estimate computed before the first seek (while
+    /// `frames_decoded` and `source_byte_pos` are still consistent).
+    cached_duration: Option<Duration>,
     /// PCM buffer pool (resolved from config or global).
     pool: PcmPool,
     /// Owner thread for FFI decoder state (set on first decoder operation in debug builds).
@@ -740,6 +743,14 @@ impl AppleInner {
         // Get data offset from parser state
         let data_offset = parser_state.data_offset.cast_unsigned();
 
+        let cached_duration = Self::initial_duration_estimate(
+            &parser_state,
+            total_parsed as u64,
+            data_offset,
+            source_len,
+            sample_rate,
+        );
+
         Ok(Self {
             stream_parser,
             converter,
@@ -760,6 +771,7 @@ impl AppleInner {
             source_byte_pos: total_parsed as u64,
             data_offset,
             prime_info,
+            cached_duration,
             pool,
             owner_thread: Cell::new(None),
         })
@@ -1093,8 +1105,64 @@ impl AppleInner {
         }
     }
 
-    /// Estimate total duration from decoded frames and bytes processed.
+    /// Compute a duration estimate from the probing phase, where
+    /// `packets_parsed × frames_per_packet / bytes_parsed` gives an
+    /// accurate bitrate ratio.  Returns `None` when there is not enough
+    /// data (e.g. streaming source with unknown length).
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for duration estimation"
+    )]
+    fn initial_duration_estimate(
+        parser_state: &StreamParserState,
+        total_parsed: u64,
+        data_offset: u64,
+        source_len: Option<u64>,
+        sample_rate: u32,
+    ) -> Option<Duration> {
+        let source_len = source_len?;
+        let format = parser_state.format?;
+        let frames_per_packet = u64::from(format.mFramesPerPacket);
+        if frames_per_packet == 0 || total_parsed <= data_offset {
+            return None;
+        }
+
+        let packets_parsed = parser_state.packet_buffer.len() as u64;
+        if packets_parsed == 0 {
+            return None;
+        }
+
+        let frames_parsed = packets_parsed * frames_per_packet;
+        let bytes_of_audio = total_parsed - data_offset;
+        let frames_per_byte = frames_parsed as f64 / bytes_of_audio as f64;
+
+        let audio_data_size = source_len.saturating_sub(data_offset);
+        let total_frames = audio_data_size as f64 * frames_per_byte;
+        let duration_secs = total_frames / f64::from(sample_rate);
+
+        if duration_secs > 0.0 {
+            Some(Duration::from_secs_f64(duration_secs))
+        } else {
+            None
+        }
+    }
+
+    /// Return the best available duration estimate.
+    ///
+    /// Prefers the cached value (computed before any seek corrupts the
+    /// `frames_decoded / source_byte_pos` ratio).  Falls back to a
+    /// live computation when no cache is available yet.
     fn estimate_total_duration(&self) -> Duration {
+        self.cached_duration
+            .unwrap_or_else(|| self.compute_duration_from_ratio())
+    }
+
+    /// Compute duration from the current `frames_decoded / bytes_processed` ratio.
+    ///
+    /// Only reliable before the first seek — afterwards `frames_decoded`
+    /// and `source_byte_pos` become inconsistent (seek sets `frames_decoded`
+    /// to the target frame but `source_byte_pos` to the estimated byte offset).
+    fn compute_duration_from_ratio(&self) -> Duration {
         if self.frames_decoded == 0 || self.source_byte_pos <= self.data_offset {
             return Duration::ZERO;
         }

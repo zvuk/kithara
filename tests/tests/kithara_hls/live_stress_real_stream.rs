@@ -272,11 +272,14 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
         "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
-#[case::hls("/hls/master.m3u8", "HLS")]
-#[case::drm("/drm/master.m3u8", "DRM")]
+#[case::hls_sw("/hls/master.m3u8", "HLS", false)]
+#[case::hls_hw("/hls/master.m3u8", "HLS", true)]
+#[case::drm_sw("/drm/master.m3u8", "DRM", false)]
+#[case::drm_hw("/drm/master.m3u8", "DRM", true)]
 async fn live_ephemeral_revisit_sequence_regression(
     #[case] path: &str,
     #[case] label: &str,
+    #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
 ) {
     let server = serve_assets().await;
@@ -294,7 +297,8 @@ async fn live_ephemeral_revisit_sequence_regression(
         ..AbrOptions::default()
     });
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
     audio.preload();
@@ -1104,11 +1108,14 @@ async fn live_ephemeral_small_cache_playback(
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls("/hls/master.m3u8", "HLS")]
-#[case::drm("/drm/master.m3u8", "DRM")]
+#[case::hls_sw("/hls/master.m3u8", "HLS", false)]
+#[case::hls_hw("/hls/master.m3u8", "HLS", true)]
+#[case::drm_sw("/drm/master.m3u8", "DRM", false)]
+#[case::drm_hw("/drm/master.m3u8", "DRM", true)]
 async fn live_ephemeral_small_cache_seek_stress(
     #[case] path: &str,
     #[case] label: &str,
+    #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
 ) {
     #[cfg(target_arch = "wasm32")]
@@ -1128,7 +1135,8 @@ async fn live_ephemeral_small_cache_seek_stress(
         ..AbrOptions::default()
     });
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
     audio.preload();
