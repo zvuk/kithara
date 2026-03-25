@@ -112,6 +112,7 @@ async fn stream_continues_after_seek(
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_abr(AbrOptions {
+            min_throughput_record_ms: 0,
             mode: abr_mode,
             ..Default::default()
         });
@@ -249,6 +250,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_abr(AbrOptions {
+            min_throughput_record_ms: 0,
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         });

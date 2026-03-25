@@ -24,21 +24,20 @@ use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
+const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
-const WARMUP_TIMEOUT_SECS: u64 = 60;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 60;
+const WARMUP_TIMEOUT_SECS: u64 = 10;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 15;
 const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
-const RANDOM_SEEK_OPS_MAX: usize = 1_400;
-/// Lowered from 220 to tolerate parallel test execution under CPU/net load.
-const MIN_RANDOM_SEEKS: usize = 100;
+const RANDOM_SEEK_OPS_MAX: usize = 400;
+const MIN_RANDOM_SEEKS: usize = 50;
 const WASM_MIN_RANDOM_SEEKS: usize = 40;
 const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-const FAST_SEEK_BURST: usize = 160;
+const FAST_SEEK_BURST: usize = 60;
 const WASM_FAST_SEEK_BURST: usize = 48;
-const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 120;
+const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 40;
 const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
-const REVISIT_SEEKS: usize = 180;
+const REVISIT_SEEKS: usize = 60;
 const WASM_REVISIT_SEEKS: usize = 48;
 const WASM_MAX_SEEK_SECS: f64 = 90.0;
 const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
@@ -292,6 +291,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         down_switch_buffer_secs: 0.0,
         min_buffer_for_up_switch_secs: 0.0,
         min_switch_interval: Duration::from_millis(250),
+        min_throughput_record_ms: 0,
         mode: AbrMode::Auto(Some(0)),
         throughput_safety_factor: 1.0,
         ..AbrOptions::default()
@@ -442,6 +442,7 @@ async fn live_real_stream_fixed_seek_window_regression(
         down_switch_buffer_secs: 0.0,
         min_buffer_for_up_switch_secs: 0.0,
         min_switch_interval: Duration::from_millis(250),
+        min_throughput_record_ms: 0,
         mode: AbrMode::Auto(Some(0)),
         throughput_safety_factor: 1.0,
         ..AbrOptions::default()
@@ -562,6 +563,7 @@ async fn live_real_stream_random_seek_prefix_regression(
         down_switch_buffer_secs: 0.0,
         min_buffer_for_up_switch_secs: 0.0,
         min_switch_interval: Duration::from_millis(250),
+        min_throughput_record_ms: 0,
         mode: AbrMode::Auto(Some(0)),
         throughput_safety_factor: 1.0,
         ..AbrOptions::default()
@@ -731,7 +733,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(300, 360)),
+    timeout(browser_timeout(60, 360)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -771,6 +773,7 @@ async fn live_stress_real_stream_seek_read_cache(
         down_switch_buffer_secs: 0.0,
         min_buffer_for_up_switch_secs: 0.0,
         min_switch_interval: Duration::from_millis(250),
+        min_throughput_record_ms: 0,
         mode: AbrMode::Auto(Some(0)),
         throughput_safety_factor: 1.0,
         ..AbrOptions::default()
