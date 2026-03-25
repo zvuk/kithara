@@ -64,6 +64,7 @@ impl<T: StreamType> SharedStream<T> {
             fn current_segment_range(&self) -> Option<Range<u64>>;
             fn format_change_segment_range(&self) -> Option<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
+            pub(crate) fn commit_variant_layout(&self);
             pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
@@ -283,7 +284,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Applying format change: old decoder finished, seeking to new segment start"
         );
 
-        // Clear variant fence so the new decoder can read the new variant.
+        // Switch layout and clear variant fence so the new decoder reads
+        // from the correct variant's byte map.
+        self.shared_stream.commit_variant_layout();
         self.shared_stream.clear_variant_fence();
 
         if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
@@ -1432,14 +1435,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             self.apply_format_change(&recreate.media_info, recreate.offset)
         } else {
-            // For variant switches during seek: ensure layout_variant is
-            // updated BEFORE decoder creation so stream.len() returns the
-            // new variant's total (not the old one's). Without this, byte_len
-            // reflects the old variant and Symphonia computes corrupted seek
-            // deltas (e.g. 3.2 GB instead of 22 MB).
-            if recreate.cause == RecreateCause::VariantSwitch {
-                let _ = self.shared_stream.format_change_segment_range();
-            }
+            // Switch layout to the target variant BEFORE decoder creation so
+            // stream.len() returns the new variant's total and the new decoder
+            // reads from the correct byte map. This is safe because the old
+            // decoder is no longer reading at this point.
+            self.shared_stream.commit_variant_layout();
             self.shared_stream.clear_variant_fence();
             if let Err(err) = self.shared_stream.seek(SeekFrom::Start(recreate.offset)) {
                 warn!(

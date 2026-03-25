@@ -1139,20 +1139,14 @@ impl Source for HlsSource {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
 
-        // ABR variant switch: update layout_variant so the recreated decoder
-        // reads from the new variant's byte map. Skip only during flushing
-        // (active I/O drain) — seek_pending is fine because
-        // step_recreating_decoder calls this explicitly before building the
-        // new decoder, and stream.len() must return the new variant's total.
-        if !self.coord.timeline().is_flushing() {
-            let mut segments = self.segments.lock_sync();
-            if segments.layout_variant() != current_variant {
-                segments.set_layout_variant(current_variant);
-                if let Some(sizes) = self.playlist_state.segment_sizes(current_variant) {
-                    segments.set_expected_sizes(current_variant, sizes);
-                }
-            }
-        }
+        // Do NOT change layout_variant here — this method is called from
+        // detect_format_change() while the old decoder is still reading.
+        // Switching layout now would make the old decoder read from the
+        // wrong variant's byte map, corrupting Symphonia's moof table.
+        //
+        // Layout change happens later in commit_variant_layout(), called
+        // from step_recreating_decoder() right before building the new
+        // decoder.
 
         if let Some(range) = self.init_segment_range_for_variant(current_variant) {
             return Some(range);
@@ -1198,6 +1192,17 @@ impl Source for HlsSource {
 
     fn clear_variant_fence(&mut self) {
         self.variant_fence = None;
+    }
+
+    fn commit_variant_layout(&mut self) {
+        let target = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let mut segments = self.segments.lock_sync();
+        if segments.layout_variant() != target {
+            segments.set_layout_variant(target);
+            if let Some(sizes) = self.playlist_state.segment_sizes(target) {
+                segments.set_expected_sizes(target, sizes);
+            }
+        }
     }
 
     fn notify_waiting(&self) {

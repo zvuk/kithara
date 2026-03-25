@@ -135,6 +135,8 @@ impl<T: StreamType> Stream<T> {
             pub fn format_change_segment_range(&self) -> Option<Range<u64>>;
             /// Clear variant fence, allowing reads from the next variant.
             pub fn clear_variant_fence(&mut self);
+            /// Switch layout to ABR target variant before decoder recreation.
+            pub fn commit_variant_layout(&mut self);
             /// Set seek epoch for stale request invalidation.
             pub fn set_seek_epoch(&mut self, seek_epoch: u64);
             /// Signal that the given byte range will be needed soon.
