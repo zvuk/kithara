@@ -709,13 +709,14 @@ where
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
         Box::new(move |stream, info, base_offset| {
-            // Update byte_len only when stream reports a known length.
-            // During ABR variant switch, stream.len() may return None —
-            // keeping the previous value prevents Symphonia from computing
-            // corrupted seek deltas (see reader_seek_overflow tests).
-            if let Some(len) = stream.len() {
-                factory_byte_len.store(len.saturating_sub(base_offset), Ordering::Release);
-            }
+            // Compute byte_len from current stream length minus base_offset.
+            // Must be recomputed on every recreation — variant switches change
+            // the effective total, so a stale value from the previous variant
+            // would cause Symphonia to compute corrupted seek deltas.
+            let byte_len = stream
+                .len()
+                .map_or(0, |len| len.saturating_sub(base_offset));
+            factory_byte_len.store(byte_len, Ordering::Release);
             let current_epoch = factory_epoch.load(Ordering::Acquire);
             let config = kithara_decode::DecoderConfig {
                 prefer_hardware,
@@ -731,8 +732,7 @@ where
                 config,
             ) {
                 Ok(d) => {
-                    let current_len = factory_byte_len.load(Ordering::Acquire);
-                    d.update_byte_len(current_len);
+                    d.update_byte_len(byte_len);
                     Some(d)
                 }
                 Err(e) => {
