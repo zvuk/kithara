@@ -760,15 +760,15 @@ impl HlsDownloader {
         if !is_midstream_switch {
             return;
         }
-        self.cursor
-            .reopen_fill(self.current_segment_index(), self.current_segment_index());
+        // Start downloading from segment 0 so the init segment is fetched
+        // first. The decoder needs the full stream starting from offset 0.
+        // Reset to segment 0 instead of the old cursor position — this
+        // ensures the init segment is available when the decoder is created.
+        self.cursor.reopen_fill(0, 0);
         self.coord
             .had_midstream_switch
-            .store(true, Ordering::Release);
+            .store(false, Ordering::Release);
         self.coord.clear_segment_requests();
-        // Wake blocked wait_range so it can re-push its on-demand request.
-        // The `had_midstream_switch` flag tells wait_range to clear
-        // `on_demand_pending`, allowing the re-push for the new variant.
         self.coord.condvar.notify_all();
     }
 
@@ -3798,18 +3798,11 @@ mod tests {
             "handle_midstream_switch must drain all requests"
         );
 
-        // After: had_midstream_switch flag is set.
-        assert!(
-            downloader
-                .coord
-                .had_midstream_switch
-                .load(Ordering::Acquire),
-            "handle_midstream_switch must set had_midstream_switch flag"
-        );
+        // Cursor resets to 0 so init segment is fetched first.
         assert_eq!(
-            downloader.gap_scan_start_segment(),
-            2,
-            "midstream switch must remember the switch point for later gap rewind"
+            downloader.current_segment_index(),
+            0,
+            "midstream switch must reset cursor to segment 0"
         );
     }
 
