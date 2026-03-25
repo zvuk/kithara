@@ -1140,11 +1140,11 @@ impl Source for HlsSource {
         let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
 
         // ABR variant switch: update layout_variant so the recreated decoder
-        // reads from the new variant's byte map. This is the point where
-        // ABR takes effect here — but NOT during an active seek.
-        // If a seek is in-flight, layout_variant must stay on the variant
-        // the seek anchor was resolved in, otherwise read positions desync.
-        if !self.coord.timeline().is_flushing() && !self.coord.timeline().is_seek_pending() {
+        // reads from the new variant's byte map. Skip only during flushing
+        // (active I/O drain) — seek_pending is fine because
+        // step_recreating_decoder calls this explicitly before building the
+        // new decoder, and stream.len() must return the new variant's total.
+        if !self.coord.timeline().is_flushing() {
             let mut segments = self.segments.lock_sync();
             if segments.layout_variant() != current_variant {
                 segments.set_layout_variant(current_variant);
@@ -1383,6 +1383,7 @@ pub(crate) fn build_pair(
         look_ahead_bytes: config.look_ahead_bytes,
         look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
+        download_variant: initial_variant,
     };
 
     let source = HlsSource {

@@ -38,6 +38,11 @@ pub struct AbrOptions {
     /// Minimum interval between variant switches.
     #[derivative(Default(value = "Duration::from_secs(30)"))]
     pub min_switch_interval: Duration,
+    /// Minimum download duration (ms) to record a throughput sample.
+    /// Downloads faster than this are ignored (too short for a reliable
+    /// estimate). Set to 0 for tests with local servers.
+    #[derivative(Default(value = "10"))]
+    pub min_throughput_record_ms: u128,
     /// ABR mode: Auto (adaptive) or Manual (fixed variant).
     pub mode: AbrMode,
     /// Sample window for throughput estimation.

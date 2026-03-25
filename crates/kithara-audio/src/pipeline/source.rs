@@ -1432,6 +1432,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             self.apply_format_change(&recreate.media_info, recreate.offset)
         } else {
+            // For variant switches during seek: ensure layout_variant is
+            // updated BEFORE decoder creation so stream.len() returns the
+            // new variant's total (not the old one's). Without this, byte_len
+            // reflects the old variant and Symphonia computes corrupted seek
+            // deltas (e.g. 3.2 GB instead of 22 MB).
+            if recreate.cause == RecreateCause::VariantSwitch {
+                let _ = self.shared_stream.format_change_segment_range();
+            }
             self.shared_stream.clear_variant_fence();
             if let Err(err) = self.shared_stream.seek(SeekFrom::Start(recreate.offset)) {
                 warn!(
