@@ -225,6 +225,76 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     );
 }
 
+/// Seek after decode-to-EOF in mmap (non-ephemeral) DRM mode must produce samples.
+///
+/// Regression: after ABR switch + full decode to EOF, random seeks land on
+/// segments whose byte offsets are no longer visible in the StreamIndex layout,
+/// causing `read_at` to return Retry forever.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+#[case::drm("/drm/master.m3u8")]
+#[case::hls("/hls/master.m3u8")]
+async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] path: &str) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+
+    let cancel = CancellationToken::new();
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
+
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(false);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+    audio.preload();
+
+    let mut buf = vec![0f32; 4096];
+
+    // Phase 1: Warmup — read a few seconds so ABR can switch variant.
+    let warmup = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < warmup {
+        let _ = audio.read(&mut buf);
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    // Phase 2: Random seeks — same pattern as the stress test.
+    // Each seek must produce at least some samples within 5s.
+    let seek_targets = [
+        50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
+        40.0, 110.0,
+    ];
+    let samples_per_seek: u64 = 48000 * 2;
+    for (idx, &target_secs) in seek_targets.iter().enumerate() {
+        audio
+            .seek(Duration::from_secs_f64(target_secs))
+            .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
+
+        let mut samples = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while samples < samples_per_seek && Instant::now() < deadline {
+            let n = audio.read(&mut buf);
+            samples += n as u64;
+            if n == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        }
+        assert!(
+            samples > 0,
+            "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
+        );
+    }
+}
+
 /// MP3 progressive file must continue producing chunks after seek sequence.
 ///
 /// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
