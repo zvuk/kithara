@@ -232,19 +232,36 @@ impl HlsSource {
         let vs = segments.variant_segments(variant)?;
         // Find first committed segment with init data
         let (seg_idx, seg_data) = vs.iter().find(|(_, data)| data.init_len > 0)?;
-        let seg_range = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-            &segments,
-            (variant, seg_idx),
-        )?;
 
-        if seg_data.init_url.is_none() {
-            drop(segments);
-            if let Some(metadata_range) = self.metadata_range_for_segment(variant, seg_idx) {
-                return Some(metadata_range);
+        // Always return a range starting from offset 0 (segment 0).
+        // During midstream ABR switches the downloader commits a later segment
+        // first (e.g. segment 15 with init). Using that segment's byte offset
+        // as base_offset makes the decoder see only a tail of the stream,
+        // causing "unexpected end of file" on late-track seeks.
+        // Returning 0-based range ensures the decoder sees the full stream.
+        // The pipeline waits (source_is_ready_for_boundary) until segment 0
+        // is actually downloaded before creating the decoder.
+        if seg_idx == 0 {
+            let seg_range =
+                <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, 0))?;
+            if seg_data.init_url.is_none() {
+                drop(segments);
+                if let Some(metadata_range) = self.metadata_range_for_segment(variant, 0) {
+                    return Some(metadata_range);
+                }
             }
+            return Some(seg_range.start..seg_range.end);
         }
 
-        Some(seg_range.start..seg_range.end)
+        // Init-bearing segment is not segment 0 — use segment 0's range
+        // (from byte map or metadata) so the decoder starts at offset 0.
+        if let Some(seg0_range) =
+            <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, 0))
+        {
+            return Some(seg0_range);
+        }
+        drop(segments);
+        self.metadata_range_for_segment(variant, 0)
     }
 
     fn effective_total_bytes(&self) -> Option<u64> {
@@ -2060,7 +2077,10 @@ mod tests {
             },
         );
 
-        assert_eq!(source.format_change_segment_range(), Some(100..200));
+        // Segment 1 has init but segment 0 is not committed yet.
+        // Must return segment 0's metadata range (0..100) so the decoder
+        // starts at offset 0 and sees the full stream.
+        assert_eq!(source.format_change_segment_range(), Some(0..100));
     }
 
     #[kithara::test]
