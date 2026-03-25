@@ -24,7 +24,7 @@ use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 90_000;
+const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
 const WARMUP_TIMEOUT_SECS: u64 = 60;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 60;
