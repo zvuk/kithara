@@ -846,6 +846,7 @@ where
         );
         let notify_waiting = shared_stream.make_notify_fn();
 
+        let initial_variant = stream_media_info.as_ref().and_then(|i| i.variant_index);
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
@@ -855,6 +856,11 @@ where
             effects,
         )
         .with_emit(emit);
+
+        bus.publish(AudioEvent::DecoderReady {
+            base_offset: 0,
+            variant: initial_variant,
+        });
 
         let preload_notify = Arc::new(Notify::new());
         let reader_wake = Arc::new(ThreadWake::new());

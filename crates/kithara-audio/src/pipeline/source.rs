@@ -414,6 +414,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
         {
             let new_duration = new_decoder.duration();
+            let variant = new_info.variant_index;
             // Atomic session update — only on success
             self.session = DecoderSession {
                 base_offset,
@@ -421,6 +422,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 media_info: Some(new_info.clone()),
             };
             debug!(?new_duration, base_offset, "Decoder recreated successfully");
+            self.emit_event(AudioEvent::DecoderReady {
+                base_offset,
+                variant,
+            });
             true
         } else {
             warn!(base_offset, "Failed to recreate decoder");

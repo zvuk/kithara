@@ -40,6 +40,13 @@ pub fn source_note(source: &str, event: &Event) -> Option<String> {
         Event::Hls(HlsEvent::VariantApplied {
             to_variant, reason, ..
         }) => Some(format!("{source} abr v{to_variant} {reason:?}")),
+        Event::Audio(AudioEvent::DecoderReady {
+            base_offset,
+            variant,
+        }) => Some(format!(
+            "{source} decoder ready offset={base_offset} v{v}",
+            v = variant.map_or("?".to_string(), |v| v.to_string())
+        )),
         Event::File(FileEvent::DownloadComplete { total_bytes }) => {
             Some(format!("{source} dl done {total_bytes} bytes"))
         }
