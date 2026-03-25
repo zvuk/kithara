@@ -24,6 +24,7 @@ impl AppConfig {
     pub const DEFAULT_EQ_BANDS: usize = 3;
 
     pub const DEFAULT_TRACKS: &[&str] = &[
+        "https://stream.silvercomet.top/track.mp3",
         "https://stream.silvercomet.top/hls/master.m3u8",
         "https://stream.silvercomet.top/drm/master.m3u8",
         "https://cdn-edge.zvq.me/track/streamhq?id=27390231",

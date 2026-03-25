@@ -187,15 +187,14 @@ impl Playlist {
         if self.order.is_empty() {
             return None;
         }
-        let current_idx = state.current_index.unwrap_or(0);
-        let next = if current_idx + 1 < self.order.len() {
-            current_idx + 1
-        } else {
-            0
-        };
-        if let Some(current) = state.current_index {
-            add_to_history(&mut state.history, current);
-        }
+        let next = state.current_index.map_or(0, |idx| {
+            add_to_history(&mut state.history, idx);
+            if idx + 1 < self.order.len() {
+                idx + 1
+            } else {
+                0
+            }
+        });
         state.current_index = Some(next);
         drop(state);
         Some(next)
@@ -317,6 +316,7 @@ mod tests {
         ];
         let playlist = Playlist::new(urls, &[]);
 
+        assert_eq!(playlist.get_next_track(), Some(0)); // first call → track 0
         assert_eq!(playlist.get_next_track(), Some(1));
         assert_eq!(playlist.get_next_track(), Some(2));
         assert_eq!(playlist.get_next_track(), Some(0)); // wraps
