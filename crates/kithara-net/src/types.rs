@@ -110,7 +110,7 @@ pub struct NetOptions {
     /// Max idle connections per host. Set to 0 to disable pooling and reduce memory.
     pub pool_max_idle_per_host: usize,
     /// Hard timeout per request. Connection is aborted after this duration.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
     pub request_timeout: Duration,
     /// Soft timeout. Calls `on_slow` callback without aborting the request.
     #[derivative(Default(value = "Duration::from_secs(2)"))]

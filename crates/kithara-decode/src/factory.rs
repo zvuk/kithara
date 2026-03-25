@@ -139,14 +139,9 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        // Use hardware decoder if preferred
+        // Use hardware decoder if preferred and codec is supported
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        if config.prefer_hardware {
-            tracing::info!(
-                ?codec,
-                ?container,
-                "Using Apple AudioToolbox hardware decoder"
-            );
+        if config.prefer_hardware && Self::apple_supports_codec(codec) && container.is_some() {
             return Self::create_apple_decoder(source, &config, codec, container);
         }
 
@@ -208,6 +203,20 @@ impl DecoderFactory {
             }
             _ => Err(DecodeError::UnsupportedCodec(codec)),
         }
+    }
+
+    /// Check if the Apple hardware decoder supports this codec.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn apple_supports_codec(codec: AudioCodec) -> bool {
+        matches!(
+            codec,
+            AudioCodec::AacLc
+                | AudioCodec::AacHe
+                | AudioCodec::AacHeV2
+                | AudioCodec::Mp3
+                | AudioCodec::Flac
+                | AudioCodec::Alac
+        )
     }
 
     /// Probe codec from hints.
