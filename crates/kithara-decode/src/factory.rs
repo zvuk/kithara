@@ -139,10 +139,14 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        // Use hardware decoder if preferred and codec is supported
+        // Use hardware decoder if preferred and codec is supported.
+        // Derive container from codec when not explicitly provided.
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        if config.prefer_hardware && Self::apple_supports_codec(codec) && container.is_some() {
-            return Self::create_apple_decoder(source, &config, codec, container);
+        if config.prefer_hardware && Self::apple_supports_codec(codec) {
+            let apple_container = container.or_else(|| Self::default_container_for_codec(codec));
+            if apple_container.is_some() {
+                return Self::create_apple_decoder(source, &config, codec, apple_container);
+            }
         }
 
         // Build Symphonia config from DecoderConfig
@@ -217,6 +221,24 @@ impl DecoderFactory {
                 | AudioCodec::Flac
                 | AudioCodec::Alac
         )
+    }
+
+    /// Derive container format from codec when not provided by metadata.
+    ///
+    /// Apple `AudioToolbox` requires an explicit `AudioFileTypeID`.
+    /// When the caller only has a codec (e.g. from extension hint),
+    /// we infer the most common container for that codec.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                Some(ContainerFormat::Adts)
+            }
+            AudioCodec::Mp3 => Some(ContainerFormat::MpegAudio),
+            AudioCodec::Flac => Some(ContainerFormat::Flac),
+            AudioCodec::Alac => Some(ContainerFormat::Fmp4),
+            _ => None,
+        }
     }
 
     /// Probe codec from hints.

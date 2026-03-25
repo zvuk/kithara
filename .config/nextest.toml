@@ -20,6 +20,7 @@ filter = """
   test(live_stress_real_stream) |
   test(stream_continues_after_seek) |
   test(seek_sequence_from_log_real_stream_drm) |
+  test(stress_random_seek_read_hls) |
   test(test_wait_range_returns_ready_when_data_pushed) |
   test(test_wait_range_transient_eof_with_zero_total_waits_for_data)
 """

@@ -1475,7 +1475,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
     let handle = spawn_blocking(move || source.wait_range(88_300..89_324, Duration::from_secs(1)));
 
-    sleep(Duration::from_millis(20)).await;
+    // Commit data and clear EOF. Repeatedly notify condvar until the
+    // blocking wait_range task wakes up — spawn_blocking may not have
+    // parked yet on the first notify.
     let segment_data = make_segment_data(200_000);
     commit_dummy_resource_from_data(&commit_source, &segment_data);
     {
@@ -1483,14 +1485,24 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
         segments.commit_segment(0, 0, segment_data);
     }
     shared2.timeline.set_eof(false);
-    shared2.condvar.notify_all();
 
-    let result = timeout(Duration::from_millis(200), handle)
+    for _ in 0..50 {
+        shared2.condvar.notify_all();
+        if handle.is_finished() {
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    let result = timeout(Duration::from_secs(2), handle)
         .await
-        .expect("task should complete within 200ms")
+        .expect("task should complete within 2s")
         .expect("task should not panic");
 
-    assert!(matches!(result, Ok(WaitOutcome::Ready)));
+    assert!(
+        matches!(result, Ok(WaitOutcome::Ready)),
+        "expected Ready, got {result:?}"
+    );
 }
 
 #[kithara::test(tokio, browser)]
