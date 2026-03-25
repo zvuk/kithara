@@ -146,6 +146,9 @@ const SECONDS_PER_MINUTE: u32 = 60;
 // EQ band count threshold for simple labels
 const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
 
+const BLINK_DIVISOR: u8 = 5;
+const BLINK_PERIOD: u64 = 2;
+
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let content = column![
@@ -432,7 +435,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         let status = state.playlist.track_status(index);
         let is_failed = status == TrackStatus::Failed;
         let is_slow = status == TrackStatus::Slow;
-        let blink_on = u64::from(state.blink_counter / 5).is_multiple_of(2);
+        let blink_on = u64::from(state.blink_counter / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
         let text_color = if is_failed {
             p.danger
         } else if is_slow && is_current {

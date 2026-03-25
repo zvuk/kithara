@@ -514,9 +514,7 @@ impl DecoderFactory {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Apple AudioToolbox backend
-// ---------------------------------------------------------------------------
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 struct AppleBackend;

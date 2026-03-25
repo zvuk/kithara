@@ -7,6 +7,7 @@ use std::{
 };
 
 use thunderdome::{Arena, Index};
+use url::Url;
 
 const MAX_HISTORY_SIZE: usize = 100;
 
@@ -24,9 +25,9 @@ pub enum TrackStatus {
 impl TrackStatus {
     fn from_u8(val: u8) -> Self {
         match val {
-            1 => Self::Loaded,
-            2 => Self::Slow,
-            3 => Self::Failed,
+            v if v == Self::Loaded as u8 => Self::Loaded,
+            v if v == Self::Slow as u8 => Self::Slow,
+            v if v == Self::Failed as u8 => Self::Failed,
             _ => Self::Pending,
         }
     }
@@ -231,7 +232,7 @@ fn extract_track_name(url: &str) -> String {
 }
 
 fn needs_drm_domain(url: &str, drm_domains: &[String]) -> bool {
-    url::Url::parse(url)
+    Url::parse(url)
         .ok()
         .and_then(|u| {
             u.host_str()

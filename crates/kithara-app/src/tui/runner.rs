@@ -13,7 +13,7 @@ use kithara::{
 };
 use tokio::{
     sync::broadcast::{Receiver, error::RecvError},
-    task::JoinHandle,
+    task::{self, JoinHandle},
 };
 
 use super::{dashboard::Dashboard, session::UiSession};
@@ -82,7 +82,7 @@ pub(super) async fn run_tui(
     let ui_player = player.clone();
     let ui_playlist = Arc::clone(&playlist);
     let ui_load_params = load_params.clone();
-    let mut ui_handle = tokio::task::spawn_blocking(move || {
+    let mut ui_handle = task::spawn_blocking(move || {
         run_ui_loop(
             &ui_player,
             &ui_playlist,

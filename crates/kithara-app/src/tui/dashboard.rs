@@ -38,6 +38,7 @@ const SECONDS_PER_MINUTE: u64 = 60;
 /// using ratatui inline viewport.
 /// Frames between blink toggles (~500ms at 100ms poll).
 const BLINK_DIVISOR: u64 = 5;
+const BLINK_PERIOD: u64 = 2;
 
 pub struct Dashboard {
     colors: TuiPalette,
@@ -135,7 +136,7 @@ impl Dashboard {
             let style = if is_failed {
                 Style::default().fg(c.danger).bg(c.bg)
             } else if is_slow && is_active {
-                let blink_on = (self.frame_count / BLINK_DIVISOR).is_multiple_of(2);
+                let blink_on = (self.frame_count / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
                 let fg = if blink_on { c.warning } else { c.muted };
                 Style::default().fg(fg).bg(c.bg_panel)
             } else if is_slow {

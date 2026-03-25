@@ -8,7 +8,11 @@ use std::{
     },
 };
 
-use kithara::play::{PlayerConfig, PlayerImpl};
+use bytes::Bytes;
+use kithara::{
+    hls::KeyOptions,
+    play::{PlayerConfig, PlayerImpl},
+};
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -272,13 +276,11 @@ impl AudioPlayer {
     }
 
     /// Build `KeyOptions` from the player-level key processor and headers.
-    pub(crate) fn key_options(&self) -> Option<kithara::hls::KeyOptions> {
+    pub(crate) fn key_options(&self) -> Option<KeyOptions> {
         let processor = self.key_processor.lock_sync().clone()?;
-        let mut opts = kithara::hls::KeyOptions::new().with_key_processor(Arc::new(
-            move |key: bytes::Bytes, _ctx| {
-                Ok(bytes::Bytes::from(processor.process_key(key.to_vec())))
-            },
-        ));
+        let mut opts = KeyOptions::new().with_key_processor(Arc::new(move |key: Bytes, _ctx| {
+            Ok(Bytes::from(processor.process_key(key.to_vec())))
+        }));
         if let Some(headers) = self.key_request_headers.lock_sync().clone() {
             opts = opts.with_request_headers(headers);
         }
