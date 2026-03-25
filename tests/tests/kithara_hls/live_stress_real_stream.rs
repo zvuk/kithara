@@ -265,7 +265,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(90, 120)),
+    timeout(browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing(
         "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -1047,7 +1047,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(90, 120)),
+    timeout(browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1107,7 +1107,7 @@ async fn live_ephemeral_small_cache_playback(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(90, 120)),
+    timeout(browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
