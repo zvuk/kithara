@@ -140,9 +140,12 @@ impl From<WavHeader> for Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use crate::signal_pcm::{Finite, Infinite, SignalPcm, signal};
-    use crate::wav::{create_wav_from_signal, create_wav_header};
     use std::time::Duration;
+
+    use crate::{
+        signal_pcm::{Finite, Infinite, SignalPcm, signal},
+        wav::{create_wav_from_signal, create_wav_header},
+    };
 
     const WAV_HEADER_SIZE: usize = 44;
 

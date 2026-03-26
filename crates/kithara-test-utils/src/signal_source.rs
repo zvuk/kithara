@@ -12,9 +12,11 @@ use kithara_stream::{
     StreamType,
 };
 
-use crate::memory_source::MemoryCoord;
-use crate::signal_pcm::{DurationKind, SignalPcm, signal};
-use crate::wav::WavHeader;
+use crate::{
+    memory_source::MemoryCoord,
+    signal_pcm::{DurationKind, SignalPcm, signal},
+    wav::WavHeader,
+};
 
 /// WAV-backed `Source` adapter over [`SignalPcm`].
 pub struct SignalSource<S: signal::SignalFn, F: DurationKind> {

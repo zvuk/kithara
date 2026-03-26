@@ -91,7 +91,6 @@ fn test_progressive_file_seek_resets_frame_offset() {
 mod hls_timeline {
     use std::{sync::Arc, time::Duration};
 
-    use crate::common::test_defaults::SawWav;
     use kithara::{
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
@@ -99,9 +98,10 @@ mod hls_timeline {
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-    use kithara_test_utils::signal_pcm::signal;
-    use kithara_test_utils::{TestTempDir, create_wav_exact_bytes};
+    use kithara_test_utils::{TestTempDir, create_wav_exact_bytes, signal_pcm::signal};
     use tokio_util::sync::CancellationToken;
+
+    use crate::common::test_defaults::SawWav;
 
     const D: SawWav = SawWav::DEFAULT;
     const SEGMENT_COUNT: usize = 10;

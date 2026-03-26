@@ -6,8 +6,9 @@ const MAX_FRAME_BYTES: usize = 32;
 
 /// Built-in signal functions for test PCM generation.
 pub mod signal {
-    use super::SAW_PERIOD;
     use std::f64::consts::PI;
+
+    use super::SAW_PERIOD;
 
     /// Deterministic audio signal generator.
     ///
@@ -238,8 +239,7 @@ impl<S: signal::SignalFn, F: DurationKind> SignalPcm<S, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal_pcm::signal::SignalFn;
-    use crate::signal_pcm::{SignalPcm, signal};
+    use crate::signal_pcm::{SignalPcm, signal, signal::SignalFn};
 
     #[test]
     fn pcm_finite_len() {
