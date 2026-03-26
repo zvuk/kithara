@@ -294,7 +294,13 @@ impl HlsDownloader {
         variant: usize,
         segment_index: usize,
     ) {
-        let previous_variant = self.abr.get_current_variant_index();
+        // Use layout_variant (what the decoder reads), not ABR target.
+        // ABR may have switched to a different codec variant, but the decoder
+        // is still on the layout variant. Comparing against ABR target would
+        // incorrectly set force_init_for_seek=true for same-codec seeks,
+        // injecting init data into mid-stream segments and corrupting the
+        // byte stream.
+        let previous_variant = self.layout_variant();
 
         self.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
@@ -606,13 +612,19 @@ impl HlsDownloader {
                     break;
                 }
 
-                // Init only for the first segment (init-once layout matches metadata)
-                let actual_init_len = if count == 0 { init_len } else { 0 };
+                // Init only for the first segment. Do NOT set init_url for
+                // later segments — a re-download with need_init=true would
+                // inject init data mid-stream, corrupting the decoder.
+                let (actual_init_len, seg_init_url) = if count == 0 {
+                    (init_len, init_url.clone())
+                } else {
+                    (0, None)
+                };
 
                 let data = SegmentData {
                     init_len: actual_init_len,
                     media_len,
-                    init_url: init_url.clone(),
+                    init_url: seg_init_url,
                     media_url: segment_url,
                 };
 
