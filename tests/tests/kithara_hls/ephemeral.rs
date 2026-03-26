@@ -31,7 +31,8 @@ use kithara_platform::tokio::task::spawn_blocking;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_test_utils::wav::create_saw_wav;
+use kithara_test_utils::create_wav_exact_bytes;
+use kithara_test_utils::signal_pcm::signal;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,7 +117,7 @@ fn count_files(dir: &Path) -> usize {
 )]
 async fn ephemeral_pipeline_no_disk_writes() {
     // Generate saw-tooth WAV
-    let wav_data = create_saw_wav(TOTAL_BYTES);
+    let wav_data = create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
     // Spawn HLS server
@@ -134,7 +135,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    // Create Audio pipeline with ephemeral=true
+    // Create an Audio pipeline with ephemeral=true
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true))
         .with_cancel(cancel)

@@ -26,52 +26,28 @@ use kithara_platform::{
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_test_utils::{TestTempDir, fixture_protocol::DelayRule};
-use tokio_util::sync::CancellationToken;
-use tracing::info;
 
 use crate::common::test_defaults::SawWav;
+use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+use kithara_test_utils::wav::create_wav_header;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 30;
 
 fn create_wav_init_segment() -> Vec<u8> {
-    let bytes_per_sample: u16 = 2;
-    let byte_rate = D.sample_rate * D.channels as u32 * bytes_per_sample as u32;
-    let block_align = D.channels * bytes_per_sample;
-    let data_size = 0xFFFF_FFFFu32;
-    let file_size = 0xFFFF_FFFFu32;
-
-    let mut wav = Vec::with_capacity(44);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&file_size.to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&D.channels.to_le_bytes());
-    wav.extend_from_slice(&D.sample_rate.to_le_bytes());
-    wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&block_align.to_le_bytes());
-    wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size.to_le_bytes());
-    wav
+    create_wav_header(D.sample_rate, D.channels, None)
 }
 
 fn create_pcm_segments() -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = ((frame % D.saw_period) as i32 - 32768) as i16;
-        for _ in 0..D.channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    pcm.resize(total_bytes, 0);
-    pcm
+    SignalPcm::new(
+        signal::Sawtooth,
+        D.sample_rate,
+        D.channels,
+        Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+    )
+    .into_vec()
 }
 
 /// ABR must switch variant at least once during HLS playback.

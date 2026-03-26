@@ -2,13 +2,11 @@
 
 This file is the canonical repo-level contract for Codex, Claude Code, Cursor, and other coding agents.
 Use it for repo-wide coding conventions, path routing, and stable coordination shapes.
-Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 
 ## Authority
 
 - `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
 - `.docs/workflow/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
-- `.docs/plans/_template.md` is the required plan shape for split or other non-trivial tasks.
 - If two documents disagree: `AGENTS.md` wins over `.docs/workflow/*`, which wins over crate `README.md`, which wins over tool-specific shims.
 
 ## Core Principles
@@ -23,18 +21,16 @@ Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 - No speculative code. Do not add helpers, branches, or abstractions that are not used by the current task.
 - Workspace-first dependencies. Add versions only in the root workspace and reuse existing crates when possible.
 - Shared media types live in `kithara-stream`. Do not duplicate `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere.
-- Default visibility is `pub(crate)`. Public named-field types exposed across crates should be `#[non_exhaustive]`.
 - Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
-- Keep production code in `src/` and substantial fixtures in `tests/`.
 - Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
 - Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
-- Keep imports at the top of the file. Avoid local `use` statements in production code.
-- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
-- No separator comments and no ad-hoc style variants that conflict with workspace lint rules.
-- Keep comments short and local. Put longer contracts and invariants in crate `README.md`.
 - Do not use destructive git commands unless the user explicitly asks for them.
+- Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
+- Keep code readable and easy to understand.
+- Optimize for performance in hot paths.
+
 
 ## Dependency Management
 
@@ -50,14 +46,14 @@ Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 - Do not pull in a heavy crate for a small utility without checking cost first.
 - If a new dependency is unavoidable, justify it in the task, plan, or PR description and add it to `[workspace.dependencies]` first.
 
-## Code Style
-- Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
+## Coding Conventions
 
 ### Imports and qualified paths
-
+- Keep production code in `src/` and substantial fixtures in `tests/`.
 - Keep `use` imports at the top of the file. Do not place `use` inside functions, methods, or blocks.
 - Prefer short readable names in the body over repeated deep qualified paths.
 - Full paths are acceptable only when they clearly improve readability, such as resolving a name conflict.
+- Default visibility is `pub(crate)`. Public named-field types exposed across crates should be `#[non_exhaustive]`.
 
 ### Naming
 
@@ -66,17 +62,19 @@ Use `.docs/workflow/rust-ai.md` for the recommended execution flow.
 - Avoid clever or overly long names that encode implementation history instead of meaning.
 
 ### Comments and documentation
-
 - Keep in-code comments short and local.
 - Do not add large comment blocks at the top of files.
 - Do not restate the obvious in comments.
 - Contracts, invariants, lifecycle, protocol, or cache explanations belong in the owning crate `README.md`.
+- NO separator comments or banner commends and no ad-hoc style variants that conflict with workspace lint rules.
+- Keep comments short and local. Put longer contracts and invariants in crate `README.md`.
 
 ### File size and decomposition
 
 - Do not let a single `.rs` file grow into a dump of abstractions.
 - Extract large types, big `impl` blocks, or distinct subsystems into their own files or modules.
 - Prefer `mod.rs` plus focused sibling files over one oversized source file.
+- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
 
 ### Tests and fixtures
 

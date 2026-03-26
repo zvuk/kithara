@@ -26,7 +26,7 @@
 //! - `HEAD /s/{id}/file/{filename}` — file HEAD (Content-Length, Accept-Ranges)
 //!
 //! Static routes (backwards compatibility):
-//! - `GET  /master.m3u8`, `/master-jitter.m3u8`, `/playlist/{f}`, `/seg/{f}`
+//! - `GET /master.m3u8`, `/master-jitter.m3u8`, `/playlist/{f}`, `/seg/{f}`
 
 // On wasm32, provide a no-op main.
 #[cfg(target_arch = "wasm32")]
@@ -78,13 +78,14 @@ mod server {
     use kithara_platform::time::sleep;
     use kithara_test_utils::fixture_protocol::{
         AbrSessionConfig, DataMode, EncryptionRequest, FileSessionConfig, HlsSessionConfig,
-        HttpTestSessionConfig, InitMode, PcmPattern, SessionResponse, create_pcm_segments,
-        create_wav_init_header, eval_delay, generate_segment,
+        HttpTestSessionConfig, InitMode, PcmPattern, SessionResponse, create_wav_init_header,
+        eval_delay, generate_segment,
     };
+    use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+    use kithara_test_utils::wav::create_wav_from_signal;
     use tokio::{net::TcpListener, sync::RwLock};
     use tower_http::{cors::CorsLayer, services::ServeDir, set_header::SetResponseHeaderLayer};
     use uuid::Uuid;
-
     // Session Types
 
     enum SessionKind {
@@ -180,7 +181,27 @@ mod server {
     }
 
     fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
-        kithara_test_utils::create_saw_wav(total_bytes)
+        kithara_test_utils::create_wav_exact_bytes(
+            signal::Sawtooth,
+            SAMPLE_RATE,
+            CHANNELS,
+            total_bytes,
+        )
+    }
+
+    fn create_pcm_segments(
+        pattern: &PcmPattern,
+        channels: u16,
+        segment_count: usize,
+        segment_size: usize,
+    ) -> Vec<u8> {
+        SignalPcm::new(
+            pattern.clone(),
+            44_100,
+            channels,
+            Finite::from_segments(segment_count, segment_size, channels),
+        )
+        .into_vec()
     }
 
     fn build_static_fixture(segment_sizes: &[usize]) -> StaticFixture {
@@ -194,7 +215,7 @@ mod server {
         for size in segment_sizes {
             let end = (start + *size).min(wav_data.len());
             segment_ranges.push((start, end));
-            segment_durations_secs.push((end.saturating_sub(start)) as f64 / bytes_per_second);
+            segment_durations_secs.push(end.saturating_sub(start) as f64 / bytes_per_second);
             start = end;
         }
 
@@ -247,14 +268,27 @@ mod server {
                     }
                     data
                 }
+
                 DataMode::CustomData(data) => data.clone(),
+
                 DataMode::CustomDataPerVariant(patterns) => {
                     patterns.get(v).cloned().unwrap_or_default()
                 }
-                DataMode::SawWav { .. } => {
-                    let total = config.segments_per_variant * config.segment_size;
-                    create_saw_wav(total)
-                }
+
+                DataMode::SawWav {
+                    sample_rate,
+                    channels,
+                } => create_wav_from_signal(SignalPcm::new(
+                    signal::Sawtooth,
+                    *sample_rate,
+                    *channels,
+                    Finite::from_segments(
+                        config.segments_per_variant,
+                        config.segment_size,
+                        *channels,
+                    ),
+                )),
+
                 DataMode::PerVariantPcm {
                     channels, patterns, ..
                 } => {
@@ -1367,7 +1401,6 @@ seg/v{}_2.bin
     }
 
     // Server entry point
-
     pub(crate) async fn run(port: u16) {
         let uniform_sizes = vec![UNIFORM_SEGMENT_SIZE; STATIC_SEGMENT_COUNT];
         let static_uniform = Arc::new(build_static_fixture(&uniform_sizes));

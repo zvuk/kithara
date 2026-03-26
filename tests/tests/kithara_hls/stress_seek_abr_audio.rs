@@ -1,6 +1,6 @@
-//! Stress test: ABR variant switch + seek on `Audio<Stream<Hls>>`.
+//! Stress test: ABR variant switch and seek on `Audio<Stream<Hls>>`.
 //!
-//! Two HLS variants with different saw-tooth directions (ascending vs descending).
+//! Two HLS variants with different saw-tooth directions (ascending vs. descending).
 //! V0 segments are delayed after segment 3 to trigger ABR downgrade to V1.
 //! WAV header as HLS init segment (`#EXT-X-MAP`).
 //!
@@ -8,10 +8,11 @@
 //! 1. **Warmup**: read until ABR switches from V0 (ascending) to V1 (descending)
 //! 2. **Post-switch**: 10 chunks of descending data confirm stable V1
 //! 3. **Random seeks**: 200 seek+read cycles with integrity/continuity/direction checks
-//! 4. **EOF**: seek near end, read to EOF
+//! 4. **EOF**: seek near the end, read to EOF
 
 use std::{sync::Arc, time::Duration};
 
+use crate::common::test_defaults::SawWav;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -20,134 +21,19 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
+use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+use kithara_test_utils::wav::create_wav_header;
+use kithara_test_utils::{
+    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    fixture_protocol::DelayRule, phase_from_f32,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
-
-// WAV Generators
-
-/// Ascending saw-tooth: frame 0 → -32768, frame 65535 → 32767.
-fn ascending_sample(frame: usize) -> i16 {
-    ((frame % D.saw_period) as i32 - 32768) as i16
-}
-
-/// Descending saw-tooth: frame 0 → 32767, frame 65535 → -32768.
-fn descending_sample(frame: usize) -> i16 {
-    (32767 - (frame % D.saw_period) as i32) as i16
-}
-
-/// Build WAV init segment (44-byte header) with known PCM data size.
-fn create_wav_init_segment() -> Vec<u8> {
-    let bytes_per_sample: u16 = 2;
-    let byte_rate = D.sample_rate * D.channels as u32 * bytes_per_sample as u32;
-    let block_align = D.channels * bytes_per_sample;
-    // Use 0xFFFFFFFF for streaming mode: the decoder will read until EOF
-    // rather than expecting an exact data size. This avoids size mismatch
-    // when ABR switch starts from a mid-stream segment.
-    let data_size = 0xFFFF_FFFFu32;
-    let file_size = 0xFFFF_FFFFu32;
-
-    let mut wav = Vec::with_capacity(44);
-
-    // RIFF header
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&file_size.to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-
-    // fmt chunk
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&D.channels.to_le_bytes());
-    wav.extend_from_slice(&D.sample_rate.to_le_bytes());
-    wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&block_align.to_le_bytes());
-    wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
-
-    // data chunk
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size.to_le_bytes());
-
-    wav
-}
-
-/// Generate PCM data (no WAV header) for media segments.
-fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = sample_fn(frame);
-        for _ in 0..D.channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    // Pad to exact size if rounding leaves a gap
-    pcm.resize(total_bytes, 0);
-    pcm
-}
-
-// Direction Detection
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Ascending,
-    Descending,
-    Unknown,
-}
-
-/// Recover saw-tooth phase from a decoded f32 sample.
-fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
-
-/// Detect saw-tooth direction from a buffer of interleaved f32 samples.
-///
-/// Checks up to 10 pairs of consecutive frames.
-/// ascending: phase\[f+1\] == (phase\[f\] + 1) % `D.saw_period`
-/// descending: phase\[f+1\] == (phase\[f\] + `D.saw_period` - 1) % `D.saw_period`
-fn detect_direction(buf: &[f32], channels: usize) -> Direction {
-    let frames = buf.len() / channels;
-    if frames < 2 {
-        return Direction::Unknown;
-    }
-
-    let check_count = 10.min(frames - 1);
-    let mut ascending_votes = 0u32;
-    let mut descending_votes = 0u32;
-
-    for f in 0..check_count {
-        let p0 = phase_from_f32(buf[f * channels]);
-        let p1 = phase_from_f32(buf[(f + 1) * channels]);
-
-        let expected_asc = (p0 + 1) % D.saw_period;
-        let expected_desc = (p0 + D.saw_period - 1) % D.saw_period;
-
-        if p1 == expected_asc {
-            ascending_votes += 1;
-        } else if p1 == expected_desc {
-            descending_votes += 1;
-        }
-    }
-
-    if ascending_votes > descending_votes && ascending_votes > 0 {
-        Direction::Ascending
-    } else if descending_votes > ascending_votes && descending_votes > 0 {
-        Direction::Descending
-    } else {
-        Direction::Unknown
-    }
-}
 
 // Stress Test
 
@@ -156,7 +42,7 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 /// Scenario:
 /// 1. Two variants: V0 (ascending, high bandwidth, delayed) and V1 (descending, low bandwidth)
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
-/// 3. Verify switch happened via PCM direction change
+/// 3. Verify the switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
 #[kithara::test(
     native,
@@ -167,9 +53,25 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 )]
 async fn stress_seek_abr_audio() {
     // Generate WAV data for two variants
-    let init_segment = Arc::new(create_wav_init_segment());
-    let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));
-    let v1_pcm = Arc::new(create_pcm_segments(descending_sample));
+    let init_segment = Arc::new(create_wav_header(D.sample_rate, D.channels, None));
+    let v0_pcm = Arc::new(
+        SignalPcm::new(
+            signal::Sawtooth,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
+    let v1_pcm = Arc::new(
+        SignalPcm::new(
+            signal::SawtoothDescending,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
 
     info!(
         init_size = init_segment.len(),
@@ -232,7 +134,7 @@ async fn stress_seek_abr_audio() {
         "Audio pipeline created"
     );
 
-    // Run test phases in blocking thread
+    // Run test phases in a blocking thread
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
@@ -332,8 +234,8 @@ async fn stress_seek_abr_audio() {
 
             // Continuity (descending pattern).
             // Allow up to 1 break per chunk: the old decoder may have already decoded
-            // some V1 data before format change was detected, so when the new decoder
-            // starts from seg4 beginning, there's a position overlap.
+            // some V1 data before the format change was detected, so when the new decoder
+            // starts from the seg4 beginning, there's a position overlap.
             if frames >= 2 {
                 let mut break_count = 0;
                 for f in 1..frames {
@@ -398,7 +300,7 @@ async fn stress_seek_abr_audio() {
 
             let n = audio.read(&mut buf);
             if n == 0 {
-                // After seek, a zero-read can happen if we're at exact EOF boundary
+                // After seek, a zero-read can happen if we're at the exact EOF boundary
                 continue;
             }
 
@@ -460,7 +362,7 @@ async fn stress_seek_abr_audio() {
                         iteration = i,
                         direction = ?dir,
                         pos_secs,
-                        "Unexpected direction (expected Descending)"
+                        "Unexpected direction (expected SawtoothDescending)"
                     );
                 }
             }

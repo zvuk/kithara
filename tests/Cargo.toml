@@ -130,12 +130,6 @@ perf = [
     "kithara/perf",
 ]
 
-# HLS fixture server for browser-based WASM tests (native only)
-[[bin]]
-name = "hls_fixture_server"
-path = "bin/hls_fixture_server.rs"
-test = false
-
 [[bin]]
 name = "fixture_server"
 path = "bin/fixture_server.rs"
