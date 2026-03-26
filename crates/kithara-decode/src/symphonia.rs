@@ -153,10 +153,7 @@ impl SymphoniaInner {
         R: Read + Seek + Send + Sync + 'static,
     {
         // Format options
-        let format_opts = FormatOptions {
-            enable_gapless: config.gapless,
-            ..Default::default()
-        };
+        let format_opts = FormatOptions::default();
 
         if let Some(container) = config.container {
             // Direct reader creation (no probe) - needed for HLS fMP4
@@ -385,9 +382,9 @@ impl SymphoniaInner {
         };
 
         // Create decoder
-        let decoder_opts = AudioDecoderOptions {
-            verify: config.verify,
-        };
+        let mut decoder_opts = AudioDecoderOptions::default();
+        decoder_opts.verify = config.verify;
+        decoder_opts.gapless = config.gapless;
         let decoder = get_codecs()
             .make_audio_decoder(&codec_params, &decoder_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;

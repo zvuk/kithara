@@ -189,7 +189,7 @@ hls_m3u8 = "0.5.1"
 fallible-iterator = "0.3"
 
 # decoding
-symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
+symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 rodio = { version = "0.22.2", default-features = false }
 ratatui = "0.30.0"
@@ -213,7 +213,7 @@ tracing-wasm = "0.2"
 tracing-android = "0.2.0"
 tracing-log = "0.2"
 web-time = "1.1"
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
 console_error_panic_hook = "0.1"
 
 # wasm bindings
@@ -241,7 +241,7 @@ glob = "0.3"
 aes = "0.8.4"
 cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10.9"
+sha2 = "0.11"
 tower = "0.5.3"
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
 tempfile = "3.27.0"
