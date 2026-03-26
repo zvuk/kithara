@@ -296,7 +296,7 @@ iced = { version = "0.14", features = ["tokio", "svg"] }
 iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 crossterm = "0.29"
 
 # xtask tooling
