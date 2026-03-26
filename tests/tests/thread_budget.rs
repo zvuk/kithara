@@ -23,7 +23,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
@@ -39,9 +39,30 @@ fn settle() {
     std::thread::sleep(Duration::from_millis(1500));
 }
 
+fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let last_count = active_named_thread_count();
+        if last_count == target {
+            std::thread::sleep(Duration::from_millis(200));
+            let stable_count = active_named_thread_count();
+            if stable_count == target {
+                return stable_count;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return last_count;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 // AudioWorkerHandle — exactly 1 thread
 
-#[kithara::test]
+#[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let worker = AudioWorkerHandle::new();
@@ -49,12 +70,12 @@ fn thread_budget_audio_worker_is_one_thread() {
     let after = active_named_thread_count();
 
     let delta = after.saturating_sub(before);
+    worker.shutdown();
+    settle();
     assert_eq!(
         delta, 1,
         "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
     );
-
-    worker.shutdown();
 }
 
 // Single HLS pipeline: target = 1 thread (shared worker only)
@@ -66,6 +87,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     tokio,
     multi_thread,
     native,
+    serial,
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
@@ -93,14 +115,16 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let delta = after.saturating_sub(before);
     info!(before, after, delta, "single HLS pipeline");
 
+    drop(audio);
+    cancel.cancel();
+    settle();
+
     // Budget: 1 audio worker. Downloader runs as async task (0 threads).
     assert!(
         delta <= 2,
         "Single pipeline budget: ≤2 kithara threads, got delta={delta} \
          (before={before}, after={after})"
     );
-
-    cancel.cancel();
 }
 
 // 3 tracks with shared worker: target = 0 extra threads
@@ -111,6 +135,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     tokio,
     multi_thread,
     native,
+    serial,
     timeout(Duration::from_secs(20)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
@@ -181,27 +206,22 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         "3 tracks shared worker"
     );
 
-    // Budget: 0 extra kithara threads. Worker already counted in `before`.
-    // Downloaders run as async tasks on the caller's runtime.
-    assert!(
-        delta == 0,
-        "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
-         (before={before}, after={after})"
-    );
-
+    drop(audios);
     cancel.cancel();
     shared_worker.shutdown();
-    drop(audios);
+    settle();
+
+    // Budget: 0 extra kithara threads. Worker already counted in `before`.
+    // Downloaders run as async tasks on the caller's runtime.
+    assert_eq!(delta, 0, "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
+         (before={before}, after={after})");
 }
 
 // Process ceiling — no leaked kithara threads when idle
 
-#[kithara::test]
+#[kithara::test(serial)]
 fn thread_budget_process_ceiling() {
-    let count = active_named_thread_count();
-    assert!(
-        count == 0,
-        "Process has {count} active kithara threads with no active pipelines — \
-         investigate leaked threads."
-    );
+    let count = wait_for_named_threads(0, Duration::from_secs(30));
+    assert_eq!(count, 0, "Process has {count} active kithara threads with no active pipelines — \
+         investigate leaked threads.");
 }

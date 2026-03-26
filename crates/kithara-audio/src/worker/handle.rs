@@ -71,10 +71,28 @@ pub(crate) struct TrackRegistration {
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 #[derive(Clone)]
 pub struct AudioWorkerHandle {
+    inner: Arc<AudioWorkerInner>,
+}
+
+struct AudioWorkerInner {
     cmd_tx: mpsc::Sender<WorkerCmd>,
     wake: Arc<WorkerWake>,
     id_gen: Arc<TrackIdGen>,
     cancel: CancellationToken,
+}
+
+impl AudioWorkerInner {
+    fn shutdown(&self) {
+        let _ = self.cmd_tx.send_sync(WorkerCmd::Shutdown);
+        self.cancel.cancel();
+        self.wake.wake();
+    }
+}
+
+impl Drop for AudioWorkerInner {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 /// Monotonic counter for unique audio-worker thread names.
@@ -97,10 +115,12 @@ impl AudioWorkerHandle {
         });
 
         Self {
-            cmd_tx,
-            wake,
-            id_gen: Arc::new(TrackIdGen::new()),
-            cancel,
+            inner: Arc::new(AudioWorkerInner {
+                cmd_tx,
+                wake,
+                id_gen: Arc::new(TrackIdGen::new()),
+                cancel,
+            }),
         }
     }
 
@@ -110,38 +130,42 @@ impl AudioWorkerHandle {
     /// registration is silently lost and the returned track will produce no
     /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
-        let id = self.id_gen.next();
-        if self.cmd_tx.send_sync(WorkerCmd::Register(id, reg)).is_err() {
+        let id = self.inner.id_gen.next();
+        if self
+            .inner
+            .cmd_tx
+            .send_sync(WorkerCmd::Register(id, reg))
+            .is_err()
+        {
             warn!(track_id = id, "register_track: worker channel closed");
         }
-        self.wake.wake();
+        self.inner.wake.wake();
         id
     }
 
     /// Remove a track by ID.
     pub(crate) fn unregister_track(&self, track_id: TrackId) {
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Unregister(track_id));
-        self.wake.wake();
+        let _ = self.inner.cmd_tx.send_sync(WorkerCmd::Unregister(track_id));
+        self.inner.wake.wake();
     }
 
     /// Update scheduling priority for a track.
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         let _ = self
+            .inner
             .cmd_tx
             .send_sync(WorkerCmd::SetServiceClass(track_id, class));
-        self.wake.wake();
+        self.inner.wake.wake();
     }
 
     /// Wake the worker (e.g. when new data arrives from downloader).
     pub fn wake(&self) {
-        self.wake.wake();
+        self.inner.wake.wake();
     }
 
     /// Request graceful shutdown and cancel the worker.
     pub fn shutdown(&self) {
-        let _ = self.cmd_tx.send_sync(WorkerCmd::Shutdown);
-        self.cancel.cancel();
-        self.wake.wake();
+        self.inner.shutdown();
     }
 }
 
