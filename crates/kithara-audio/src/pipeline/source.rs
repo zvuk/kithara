@@ -1226,6 +1226,26 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
         if !self.source_is_ready() {
+            // Source is blocked — if ABR switched, the downloader stopped
+            // fetching old-variant segments and the data will never arrive.
+            // Start recreation now instead of blocking on wait_range().
+            // Skip during seek — ABR is frozen and recreation would interfere.
+            if !self.timeline.is_seek_pending()
+                && let Some((new_info, target_offset)) = self.detect_format_change()
+            {
+                debug!(
+                    target_offset,
+                    "step_decoding: source blocked with pending format change, recreating"
+                );
+                self.start_recreating_decoder(
+                    RecreateCause::FormatBoundary,
+                    new_info,
+                    RecreateNext::Decode,
+                    target_offset,
+                    0,
+                );
+                return TrackStep::StateChanged;
+            }
             let phase = self.shared_stream.phase();
             trace!(
                 ?phase,
