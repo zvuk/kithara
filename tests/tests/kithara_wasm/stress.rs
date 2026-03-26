@@ -1,7 +1,7 @@
 //! WASM stress tests for the HLS audio pipeline.
 //!
 //! Runs in a dedicated Web Worker via `wasm-bindgen-test-runner` + headless Chrome.
-//! Requires the HLS fixture server to be running (see `just wasm-test`).
+//! Requires the fixture server to be running (see `just wasm-test`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,6 +12,7 @@ use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::time::{Duration, Instant};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara_test_utils::{SAW_PERIOD, phase_distance, phase_from_f32};
 use tracing::{info, warn};
 use url::Url;
 mod kithara {
@@ -242,27 +243,10 @@ async fn yield_ms(ms: u32) {
 
 // ── Saw-tooth verification helpers ──
 //
-// The HLS fixture server (`hls_fixture_server`) serves a deterministic saw-tooth
+// The fixture server serves a deterministic saw-tooth
 // WAV signal with period 65536 frames. Each frame encodes its position as an i16
 // value, allowing content-based seek verification: after seek(T), the decoded
 // phase must match the expected phase for time T.
-
-/// Saw-tooth period: 65536 frames (~1.486s at 44100 Hz).
-const SAW_PERIOD: usize = 65536;
-
-/// Recover saw-tooth phase from a decoded f32 sample.
-///
-/// Inverse of the generator: `sample = ((i % SAW_PERIOD) as i32 - 32768) as i16`.
-fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
-
-/// Circular distance between two phases (mod `SAW_PERIOD`).
-fn phase_distance(a: usize, b: usize) -> usize {
-    let d = a.abs_diff(b);
-    d.min(SAW_PERIOD - d)
-}
 
 #[ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"]
 #[kithara::test(

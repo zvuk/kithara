@@ -26,32 +26,28 @@ use kithara_platform::{
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_test_utils::{TestTempDir, fixture_protocol::DelayRule};
-use tokio_util::sync::CancellationToken;
-use tracing::info;
 
 use crate::common::test_defaults::SawWav;
+use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+use kithara_test_utils::wav::create_wav_header;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 30;
 
 fn create_wav_init_segment() -> Vec<u8> {
-    kithara_test_utils::fixture_protocol::create_wav_init_header(D.sample_rate, D.channels)
+    create_wav_header(D.sample_rate, D.channels, None)
 }
 
 fn create_pcm_segments() -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = ((frame % D.saw_period) as i32 - 32768) as i16;
-        for _ in 0..D.channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    pcm.resize(total_bytes, 0);
-    pcm
+    SignalPcm::new(
+        signal::Sawtooth,
+        D.sample_rate,
+        D.channels,
+        Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+    )
+    .into_vec()
 }
 
 /// ABR must switch variant at least once during HLS playback.

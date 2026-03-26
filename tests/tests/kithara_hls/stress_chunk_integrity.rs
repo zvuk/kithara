@@ -13,6 +13,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use crate::common::test_defaults::SawWav;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
@@ -22,11 +23,11 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
+use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+use kithara_test_utils::wav::create_wav_header;
+use kithara_test_utils::{SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction, fixture_protocol::DelayRule, phase_from_f32};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-
-use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 50;
@@ -38,82 +39,9 @@ const CHUNKS_PER_SEEK: usize = 5;
 const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 30_000;
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 15_000;
 
-// WAV Generators
-
-fn ascending_sample(frame: usize) -> i16 {
-    ((frame % D.saw_period) as i32 - 32768) as i16
-}
-
-fn descending_sample(frame: usize) -> i16 {
-    (32767 - (frame % D.saw_period) as i32) as i16
-}
-
-fn create_wav_init_segment() -> Vec<u8> {
-    kithara_test_utils::fixture_protocol::create_wav_init_header(D.sample_rate, D.channels)
-}
-
-fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = sample_fn(frame);
-        for _ in 0..D.channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    pcm.resize(total_bytes, 0);
-    pcm
-}
-
-// Direction Detection
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Ascending,
-    Descending,
-    Unknown,
-}
-
-fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
-
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;
-    let frames = chunk.frames();
-    if frames < 2 {
-        return Direction::Unknown;
-    }
-
-    let check_count = 10.min(frames - 1);
-    let mut ascending_votes = 0u32;
-    let mut descending_votes = 0u32;
-
-    for f in 0..check_count {
-        let p0 = phase_from_f32(chunk.pcm[f * channels]);
-        let p1 = phase_from_f32(chunk.pcm[(f + 1) * channels]);
-
-        let expected_asc = (p0 + 1) % D.saw_period;
-        let expected_desc = (p0 + D.saw_period - 1) % D.saw_period;
-
-        if p1 == expected_asc {
-            ascending_votes += 1;
-        } else if p1 == expected_desc {
-            descending_votes += 1;
-        }
-    }
-
-    if ascending_votes > descending_votes && ascending_votes > 0 {
-        Direction::Ascending
-    } else if descending_votes > ascending_votes && descending_votes > 0 {
-        Direction::Descending
-    } else {
-        Direction::Unknown
-    }
+    detect_direction(&chunk.pcm, channels)
 }
 
 /// Format chunk metadata for diagnostic output.
@@ -181,9 +109,25 @@ async fn next_chunk_with_timeout(
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // Generate WAV data for two variants
-    let init_segment = Arc::new(create_wav_init_segment());
-    let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));
-    let v1_pcm = Arc::new(create_pcm_segments(descending_sample));
+    let init_segment = Arc::new(create_wav_header(D.sample_rate, D.channels, None));
+    let v0_pcm = Arc::new(
+        SignalPcm::new(
+            signal::Sawtooth,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
+    let v1_pcm = Arc::new(
+        SignalPcm::new(
+            signal::SawtoothDescending,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
 
     info!(
         init_size = init_segment.len(),
@@ -485,7 +429,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                         direction = ?dir,
                         meta = %format_meta(&meta, chunk.pcm.len()),
                         pos_secs,
-                        "Unexpected direction (expected Descending)"
+                        "Unexpected direction (expected SawtoothDescending)"
                     );
                 }
             }

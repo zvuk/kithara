@@ -6,10 +6,14 @@
 //!
 //! # Data Generation
 //!
-//! Pure functions for segment/WAV data generation are also defined here so
+//! Pure functions for segment/WAV data generation are also defined here, so
 //! both server (generates data) and client (computes `expected_byte_at`)
 //! share the exact same logic.
 
+use crate::{
+    signal_pcm::signal,
+    wav::create_wav_header,
+};
 use serde::{Deserialize, Serialize};
 
 /// Configuration for an HLS test session (maps to `HlsTestServer`).
@@ -165,6 +169,16 @@ pub enum PcmPattern {
     ShiftedAscending,
 }
 
+impl signal::SignalFn for PcmPattern {
+    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+        match self {
+            Self::Ascending => signal::Sawtooth.sample(frame, sample_rate),
+            Self::Descending => signal::SawtoothDescending.sample(frame, sample_rate),
+            Self::ShiftedAscending => signal::SawtoothShifted.sample(frame, sample_rate),
+        }
+    }
+}
+
 /// How init segments are generated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum InitMode {
@@ -181,7 +195,7 @@ pub enum InitMode {
 /// Declarative delay rule for segment serving.
 ///
 /// All conditions that are `Some` must match for the rule to apply.
-/// First matching rule wins; if none match, delay is zero.
+/// The first matching rule wins; if none matches, the delay is zero.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DelayRule {
     /// Match only this variant index. `None` = any variant.
@@ -249,9 +263,6 @@ pub struct SessionResponse {
     pub init_len: u64,
 }
 
-/// Saw-tooth period in samples.
-pub const SAW_PERIOD: usize = 65536;
-
 /// Generate test-pattern segment data: `V{v}-SEG-{s}:TEST_SEGMENT_DATA` + `0xFF` padding.
 #[must_use]
 pub fn generate_segment(variant: usize, segment: usize, size: usize) -> Vec<u8> {
@@ -293,45 +304,10 @@ pub fn expected_byte_at_test_pattern(
     }
 }
 
-/// Generate a PCM sample for a given frame and pattern.
-#[must_use]
-pub fn pcm_sample(pattern: &PcmPattern, frame: usize) -> i16 {
-    match pattern {
-        PcmPattern::Ascending => ((frame % SAW_PERIOD) as i32 - 32768) as i16,
-        PcmPattern::Descending => (32767 - (frame % SAW_PERIOD) as i32) as i16,
-        PcmPattern::ShiftedAscending => {
-            (((frame + SAW_PERIOD / 2) % SAW_PERIOD) as i32 - 32768) as i16
-        }
-    }
-}
-
-/// Generate PCM segment data (no WAV header) for a given pattern.
-#[must_use]
-pub fn create_pcm_segments(
-    pattern: &PcmPattern,
-    channels: u16,
-    segment_count: usize,
-    segment_size: usize,
-) -> Vec<u8> {
-    let total_bytes = segment_count * segment_size;
-    let bytes_per_frame = channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = pcm_sample(pattern, frame);
-        for _ in 0..channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    pcm.resize(total_bytes, 0);
-    pcm
-}
-
 /// Create a 44-byte WAV init segment header (streaming mode: sizes = 0xFFFFFFFF).
 #[must_use]
 pub fn create_wav_init_header(sample_rate: u32, channels: u16) -> Vec<u8> {
-    crate::wav::build_wav_header(sample_rate, channels, None).to_vec()
+    create_wav_header(sample_rate, channels, None)
 }
 
 #[cfg(test)]

@@ -28,7 +28,8 @@ use kithara_platform::{
     time::{Duration, Instant, sleep},
     tokio,
 };
-use kithara_test_utils::{TestHttpServer, TestTempDir, create_saw_wav, temp_dir};
+use kithara_test_utils::signal_pcm::signal;
+use kithara_test_utils::{TestHttpServer, TestTempDir, create_wav_exact_bytes, temp_dir};
 use tokio::time::timeout;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
@@ -260,7 +261,12 @@ async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
 async fn open_audio_hls_server() -> HlsTestServer {
     let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(create_saw_wav(HLS_TOTAL_BYTES))),
+        custom_data: Some(Arc::new(create_wav_exact_bytes(
+            signal::Sawtooth,
+            44_100u32,
+            2u16,
+            HLS_TOTAL_BYTES,
+        ))),
         segment_duration_secs: segment_duration,
         segment_size: HLS_SEGMENT_SIZE,
         segments_per_variant: HLS_SEGMENT_COUNT,
@@ -718,8 +724,8 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 ///
 /// Tests MP3→HLS, HLS→MP3, MP3→MP3 transitions with offline render.
 /// Measures per-block render time and silence gaps.
-/// Every render() call must complete within the audio block budget
-/// (~11.6ms at 512 frames / 44100Hz) and no silence gaps > 1 block
+/// Every render() call must be complete within the audio block budget
+/// (~11.6ms at 512 frames / 44100Hz), and no silence gaps > 1 block
 /// are allowed during crossfade.
 #[kithara::test(
     tokio,
@@ -740,7 +746,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let worker = AudioWorkerHandle::new();
     let mut player = OfflinePlayer::new(SR);
 
-    // Local MP3 path (simulates disk-cached file, like production).
+    // Local MP3 path (simulates a disk-cached file, like production).
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
     // Helper: create MP3 resource (NO preload — match production timing)
@@ -764,10 +770,10 @@ async fn stress_offline_crossfade_no_gaps() {
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
             let cfg = HlsConfig::new(u).with_store(s);
-            let acfg = AudioConfig::<Hls>::new(cfg)
+            let audio_config = AudioConfig::<Hls>::new(cfg)
                 .with_media_info(wav_info)
                 .with_worker(w);
-            let audio = Audio::<Stream<Hls>>::new(acfg).await.expect("HLS audio");
+            let audio = Audio::<Stream<Hls>>::new(audio_config).await.expect("HLS audio");
             let mut r = resource_from_reader(audio);
             timeout(READ_TIMEOUT, r.preload())
                 .await
@@ -823,7 +829,7 @@ async fn stress_offline_crossfade_no_gaps() {
             } else {
                 cur_silence += 1;
             }
-            // Simulate real audio callback period (~11.6ms between blocks).
+            // Simulate a real audio callback period (~11.6ms between blocks).
             // Without this, the tight loop outpaces the worker, creating
             // artificial silence that wouldn't happen in production.
             thread::sleep(block_budget.saturating_sub(d));
