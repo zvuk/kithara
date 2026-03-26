@@ -58,11 +58,12 @@ pub struct HlsSource {
     pub(crate) _backend: Option<kithara_stream::Backend>,
 }
 
-const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 10;
+const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 25;
 /// Condvar sleep per spin in `wait_range`. Kept short so the audio worker
 /// can round-robin between tracks without one slow source starving others.
 /// Previous value 50ms caused audible glitches during multi-track mixing.
 const WAIT_RANGE_SLEEP_MS: u64 = 2;
+const WAIT_RANGE_HANG_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
 enum SeekLayout {
@@ -77,6 +78,33 @@ enum ResolvedSegment {
     Committed(SegmentIndex),
     Layout(SegmentIndex),
     Fallback(SegmentIndex),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetadataMissReason {
+    VariantOutOfRange,
+    UnresolvedOffset,
+}
+
+impl MetadataMissReason {
+    const fn label(self) -> Option<&'static str> {
+        match self {
+            Self::VariantOutOfRange => Some("variant_out_of_range"),
+            Self::UnresolvedOffset => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DemandRequestOutcome {
+    Requested {
+        queued: bool,
+    },
+    TransientGap,
+    MetadataMiss {
+        variant: VariantIndex,
+        reason: MetadataMissReason,
+    },
 }
 
 /// Snapshot of segment data needed for reading, copied out of the lock.
@@ -306,6 +334,15 @@ impl HlsSource {
         }
 
         true
+    }
+
+    fn is_transient_empty_eof(&self, segments: &StreamIndex) -> bool {
+        self.coord.timeline().eof() && segments.effective_total(self.playlist_state.as_ref()) == 0
+    }
+
+    fn is_transient_demand_gap(&self) -> bool {
+        let segments = self.segments.lock_sync();
+        self.is_transient_empty_eof(&segments)
     }
 
     fn metadata_miss(
@@ -731,63 +768,61 @@ impl HlsSource {
         clippy::result_large_err,
         reason = "Stream source APIs use StreamResult<_, HlsError> consistently"
     )]
-    fn request_on_demand_segment(
-        &self,
-        range_start: u64,
-        seek_epoch: u64,
-        metadata_miss_count: &mut usize,
-        max_metadata_miss_spins: usize,
-    ) -> StreamResult<bool, HlsError> {
+    fn request_on_demand_segment(&self, range_start: u64, seek_epoch: u64) -> DemandRequestOutcome {
         // Always use layout_variant for demand — ABR is invisible to source.
         if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
-            *metadata_miss_count = 0;
             trace!(
                 variant,
                 segment_index,
                 offset = range_start,
                 "wait_range: layout on-demand segment load"
             );
-            return Ok(self.push_segment_request(variant, segment_index, seek_epoch));
+            return DemandRequestOutcome::Requested {
+                queued: self.push_segment_request(variant, segment_index, seek_epoch),
+            };
         }
 
         let current_variant = self.resolve_demand_variant();
         if current_variant >= self.playlist_state.num_variants() {
-            return self
-                .metadata_miss(
-                    range_start,
-                    seek_epoch,
-                    current_variant,
-                    metadata_miss_count,
-                    max_metadata_miss_spins,
-                    Some("variant_out_of_range"),
-                )
-                .map_err(|error| StreamError::Source(HlsError::SegmentNotFound(error)));
+            if self.is_transient_demand_gap() {
+                self.coord.reader_advanced.notify_one();
+                return DemandRequestOutcome::TransientGap;
+            }
+
+            return DemandRequestOutcome::MetadataMiss {
+                variant: current_variant,
+                reason: MetadataMissReason::VariantOutOfRange,
+            };
         }
 
         if let Some(resolved) = self.resolve_segment_for_offset(range_start, current_variant) {
-            *metadata_miss_count = 0;
             let segment_index = Self::segment_index(resolved);
             self.log_resolved_demand_segment(range_start, seek_epoch, current_variant, resolved);
-            return Ok(self.push_segment_request(current_variant, segment_index, seek_epoch));
+            return DemandRequestOutcome::Requested {
+                queued: self.push_segment_request(current_variant, segment_index, seek_epoch),
+            };
         }
 
         debug!(
             offset = range_start,
             variant = current_variant,
             seek_epoch,
-            metadata_miss_count = metadata_miss_count.saturating_add(1),
             "wait_range: no metadata to find segment"
         );
-        self.metadata_miss(
-            range_start,
-            seek_epoch,
-            current_variant,
-            metadata_miss_count,
-            max_metadata_miss_spins,
-            None,
-        )
-        .map_err(|error| StreamError::Source(HlsError::SegmentNotFound(error)))
+        if self.is_transient_demand_gap() {
+            self.coord.reader_advanced.notify_one();
+            return DemandRequestOutcome::TransientGap;
+        }
+
+        DemandRequestOutcome::MetadataMiss {
+            variant: current_variant,
+            reason: MetadataMissReason::UnresolvedOffset,
+        }
     }
+}
+
+fn wait_range_hang_timeout(timeout: Duration) -> Duration {
+    timeout.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
 }
 
 impl Source for HlsSource {
@@ -813,7 +848,7 @@ impl Source for HlsSource {
         clippy::significant_drop_tightening,
         reason = "lock must be held for condvar wait"
     )]
-    #[kithara_hang_detector::hang_watchdog(timeout = timeout)]
+    #[kithara_hang_detector::hang_watchdog(timeout = wait_range_hang_timeout(timeout))]
     fn wait_range(
         &mut self,
         range: Range<u64>,
@@ -898,12 +933,25 @@ impl Source for HlsSource {
 
             // Re-issue the demand on each spin so a stale pending request for
             // the same epoch gets replaced by the segment that owns this range.
-            self.request_on_demand_segment(
-                range.start,
-                seek_epoch,
-                &mut metadata_miss_count,
-                WAIT_RANGE_MAX_METADATA_MISS_SPINS,
-            )?;
+            // During a stale EOF + zero-total reset window, demand resolution
+            // can legitimately observe an empty layout before fresh metadata
+            // arrives; treat that as a transient gap instead of a terminal miss.
+            match self.request_on_demand_segment(range.start, seek_epoch) {
+                DemandRequestOutcome::Requested { .. } | DemandRequestOutcome::TransientGap => {
+                    metadata_miss_count = 0;
+                }
+                DemandRequestOutcome::MetadataMiss { variant, reason } => {
+                    self.metadata_miss(
+                        range.start,
+                        seek_epoch,
+                        variant,
+                        &mut metadata_miss_count,
+                        WAIT_RANGE_MAX_METADATA_MISS_SPINS,
+                        reason.label(),
+                    )
+                    .map_err(|error| StreamError::Source(HlsError::SegmentNotFound(error)))?;
+                }
+            }
 
             // Honour the overall time budget.  Placed after decision logic
             // and on-demand requests so that errors (e.g. SegmentNotFound)
@@ -1831,11 +1879,9 @@ mod tests {
     async fn on_demand_request_notifies_downloader_once() {
         let source = build_test_source(1);
         let wake = source.coord.reader_advanced.notified();
-        let mut miss_count = 0;
 
-        source
-            .request_on_demand_segment(0, 7, &mut miss_count, 5)
-            .expect("request should succeed");
+        let outcome = source.request_on_demand_segment(0, 7);
+        assert_eq!(outcome, DemandRequestOutcome::Requested { queued: true });
 
         let req = source
             .coord
@@ -1860,14 +1906,11 @@ mod tests {
         };
         source.coord.requeue_segment_request(request);
 
-        let mut miss_count = 0;
-        let requested = source
-            .request_on_demand_segment(0, 7, &mut miss_count, 5)
-            .expect("request should succeed");
+        let outcome = source.request_on_demand_segment(0, 7);
 
         assert!(
-            !requested,
-            "request_on_demand_segment must report false when dedupe suppresses enqueue"
+            matches!(outcome, DemandRequestOutcome::Requested { queued: false }),
+            "request_on_demand_segment must report dedupe when enqueue is suppressed"
         );
         assert_eq!(
             source.coord.take_segment_request(),

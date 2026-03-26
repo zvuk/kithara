@@ -1,6 +1,6 @@
 //! Stress test: 1000 random seek+read cycles on `Audio<Stream<Hls>>` (20 MB WAV over HLS).
 //!
-//! Generates a deterministic WAV with a saw-tooth pattern (period = 65536 frames),
+//! Generates a deterministic WAV with a saw-tooth pattern (period = 65_536 frames),
 //! serves it as HLS segments via [`HlsTestServer`], creates `Audio<Stream<Hls>>`,
 //! and performs 1000 random time-based seeks with three-level PCM verification:
 //!
@@ -9,10 +9,11 @@
 //! 3. **Position**: decoded phase matches expected position (±50 frames tolerance)
 //!
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
-//! No external network required.
+//! No external network is required.
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
+use crate::common::test_defaults::SawWav;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -21,24 +22,17 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_saw_wav};
+use kithara_test_utils::signal_pcm::signal;
+use kithara_test_utils::{
+    TestTempDir, Xorshift64, create_wav_exact_bytes, phase_distance, phase_from_f32,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 100;
 const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size; // 20 MB
 const SEEK_ITERATIONS: usize = 1000;
-
-// Verification Helpers
-
-/// Recover saw-tooth phase from a decoded f32 sample.
-fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
 
 /// Compute the expected duration in seconds for the generated WAV.
 fn expected_duration_secs() -> f64 {
@@ -46,12 +40,6 @@ fn expected_duration_secs() -> f64 {
     let bytes_per_frame = D.channels as usize * 2;
     let frame_count = (TOTAL_BYTES - header_size) / bytes_per_frame;
     frame_count as f64 / D.sample_rate as f64
-}
-
-/// Check circular distance between two phases (mod `D.saw_period`).
-fn phase_distance(a: usize, b: usize) -> usize {
-    let d = a.abs_diff(b);
-    d.min(D.saw_period - d)
 }
 
 // Stress Test
@@ -62,13 +50,13 @@ fn phase_distance(a: usize, b: usize) -> usize {
 /// Scenario:
 /// 1. Generate saw-tooth WAV (20 MB, ~113s, stereo 44.1 kHz)
 /// 2. Spawn `HlsTestServer` with `custom_data` = WAV bytes
-/// 3. Create `Audio<Stream<Hls>>` with format hint "wav"
+/// 3. Create `Audio<Stream<Hls>>` with a format hint "wav"
 /// 4. Verify duration ≈ expected
 /// 5. 1000 random seeks with verification:
 ///    - Level 1: integrity (finite, range, L==R)
-///    - Level 2: continuity (consecutive frames follow pattern)
+///    - Level 2: continuity (consecutive frames follow a pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
-/// 6. Final seek near end → read to EOF
+/// 6. Final seek near the end → read to EOF
 #[kithara::test(
     tokio,
     native,
@@ -81,7 +69,7 @@ fn phase_distance(a: usize, b: usize) -> usize {
 #[case::mmap(false)]
 async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     // Step 1: Generate WAV
-    let wav_data = create_saw_wav(TOTAL_BYTES);
+    let wav_data = create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
     let expected_dur = expected_duration_secs();
     info!(
         total_bytes = TOTAL_BYTES,
@@ -109,7 +97,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        // Ephemeral mode auto-evicts MemResources from LRU cache.
+        // Ephemeral mode auto-evicts MemResources from the LRU cache.
         // Increase capacity so all segments remain accessible for random seeks.
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"));
         store.ephemeral = true;
@@ -322,7 +310,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             "{position_errors} position mismatches (>3 tolerance) — seek landed in wrong place"
         );
 
-        // Step 6: Final seek near end → read to EOF
+        // Step 6: Final seek near the end → read to EOF
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");
 
@@ -356,7 +344,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         info!(remaining_samples, "Final read done — EOF confirmed");
 
         // Step 7: Regression check — seek after EOF must resume playback.
-        // This catches false-EOF races where seek re-queues demand, but downloader
+        // This catches false-EOF races where seek re-queues demand, but the downloader 
         // marks EOF before demand is processed.
         let resume_positions = [0.5_f64, total_secs * 0.25, total_secs * 0.75];
         for (i, pos_secs) in resume_positions.iter().copied().enumerate() {

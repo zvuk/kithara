@@ -19,7 +19,7 @@ fn test_progressive_file_timeline_monotonic() {
     while let Ok(Some(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
-        // Spec correct
+        // Ensure the spec is correct
         assert_eq!(meta.spec.sample_rate, 44100);
         assert_eq!(meta.spec.channels, 2);
 
@@ -76,7 +76,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     let chunk = decoder.next_chunk().unwrap().unwrap();
     let expected_frame = (0.5 * 44100.0) as u64;
 
-    // frame_offset should be approximately at seek position
+    // frame_offset should be approximately at the seek position
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
     assert!(
         diff < 2048,
@@ -92,6 +92,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 mod hls_timeline {
     use std::{sync::Arc, time::Duration};
 
+    use crate::common::test_defaults::SawWav;
     use kithara::{
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
@@ -99,10 +100,9 @@ mod hls_timeline {
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-    use kithara_test_utils::{TestTempDir, wav::create_saw_wav};
+    use kithara_test_utils::signal_pcm::signal;
+    use kithara_test_utils::{TestTempDir, create_wav_exact_bytes};
     use tokio_util::sync::CancellationToken;
-
-    use crate::common::test_defaults::SawWav;
 
     const D: SawWav = SawWav::DEFAULT;
     const SEGMENT_COUNT: usize = 10;
@@ -117,7 +117,9 @@ mod hls_timeline {
     )]
     async fn test_hls_timeline_segment_tracking() {
         // Generate WAV data served as HLS segments
-        let wav_data = create_saw_wav(TOTAL_BYTES);
+        let wav_data =
+            create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
+
         let segment_duration =
             D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
 
@@ -142,7 +144,7 @@ mod hls_timeline {
                 ..AbrOptions::default()
             });
 
-        // Create HLS stream and build StreamContext before moving stream to decoder
+        // Create an HLS stream and build StreamContext before moving stream to decoder
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
         let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 

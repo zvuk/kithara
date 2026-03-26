@@ -1,4 +1,4 @@
-//! Aggressive lifecycle stress test: rapid seeks + seek-to-zero integrity.
+//! Aggressive lifecycle stress test: rapid seeks and seek-to-zero integrity.
 //!
 //! Designed to catch bugs where:
 //! - `read()` returns 0 after seek (player stalls, never resumes)
@@ -11,11 +11,12 @@
 //! Phases:
 //! 1. **Warmup**: read until ABR switch from V0→V1
 //! 2. **Stress**: 2000 random seeks — verify read() always produces data
-//! 3. **Reset**: seek to 0 → read entire track beginning to end,
+//! 3. **Reset**: seek to 0 → read the entire track beginning to end,
 //!    verify saw-tooth continuity on every frame
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
+use crate::common::test_defaults::SawWav;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -24,11 +25,14 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
+use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
+use kithara_test_utils::wav::create_wav_header;
+use kithara_test_utils::{
+    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    fixture_protocol::DelayRule, phase_from_f32,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-
-use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 40;
@@ -37,104 +41,6 @@ const STRESS_SEEK_ITERATIONS: usize = 2000;
 
 /// Maximum consecutive zero-reads before declaring the pipeline stuck.
 const MAX_ZERO_READS: usize = 50;
-
-/// Ascending saw-tooth: frame 0 → -32768, frame 65535 → 32767.
-fn ascending_sample(frame: usize) -> i16 {
-    ((frame % D.saw_period) as i32 - 32768) as i16
-}
-
-/// Descending saw-tooth: frame 0 → 32767, frame 65535 → -32768.
-fn descending_sample(frame: usize) -> i16 {
-    (32767 - (frame % D.saw_period) as i32) as i16
-}
-
-/// Ascending saw-tooth with phase offset (distinguishes V2 from V0).
-fn shifted_ascending_sample(frame: usize) -> i16 {
-    (((frame + D.saw_period / 2) % D.saw_period) as i32 - 32768) as i16
-}
-
-/// Build WAV init segment (44-byte streaming header).
-fn create_wav_init_segment() -> Vec<u8> {
-    let bytes_per_sample: u16 = 2;
-    let byte_rate = D.sample_rate * D.channels as u32 * bytes_per_sample as u32;
-    let block_align = D.channels * bytes_per_sample;
-    let data_size = 0xFFFF_FFFFu32;
-    let file_size = 0xFFFF_FFFFu32;
-
-    let mut wav = Vec::with_capacity(44);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&file_size.to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&D.channels.to_le_bytes());
-    wav.extend_from_slice(&D.sample_rate.to_le_bytes());
-    wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&block_align.to_le_bytes());
-    wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size.to_le_bytes());
-    wav
-}
-
-/// Generate PCM data for media segments (no WAV header).
-fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
-    let total_frames = total_bytes / bytes_per_frame;
-
-    let mut pcm = Vec::with_capacity(total_bytes);
-    for frame in 0..total_frames {
-        let sample = sample_fn(frame);
-        for _ in 0..D.channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-    pcm.resize(total_bytes, 0);
-    pcm
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Direction {
-    Ascending,
-    Descending,
-    Unknown,
-}
-
-fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
-
-fn detect_direction(buf: &[f32], channels: usize) -> Direction {
-    let frames = buf.len() / channels;
-    if frames < 2 {
-        return Direction::Unknown;
-    }
-
-    let check = 10.min(frames - 1);
-    let mut asc = 0u32;
-    let mut desc = 0u32;
-
-    for f in 0..check {
-        let p0 = phase_from_f32(buf[f * channels]);
-        let p1 = phase_from_f32(buf[(f + 1) * channels]);
-        if p1 == (p0 + 1) % D.saw_period {
-            asc += 1;
-        } else if p1 == (p0 + D.saw_period - 1) % D.saw_period {
-            desc += 1;
-        }
-    }
-
-    if asc > desc && asc > 0 {
-        Direction::Ascending
-    } else if desc > asc && desc > 0 {
-        Direction::Descending
-    } else {
-        Direction::Unknown
-    }
-}
 
 /// Read with retry: keeps trying until data arrives or stuck.
 /// Returns (samples_read, retries_needed).
@@ -166,10 +72,34 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
-    let init_segment = Arc::new(create_wav_init_segment());
-    let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));
-    let v1_pcm = Arc::new(create_pcm_segments(descending_sample));
-    let v2_pcm = Arc::new(create_pcm_segments(shifted_ascending_sample));
+    let init_segment = Arc::new(create_wav_header(D.sample_rate, D.channels, None));
+    let v0_pcm = Arc::new(
+        SignalPcm::new(
+            signal::Sawtooth,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
+    let v1_pcm = Arc::new(
+        SignalPcm::new(
+            signal::SawtoothDescending,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
+    let v2_pcm = Arc::new(
+        SignalPcm::new(
+            signal::SawtoothShifted,
+            D.sample_rate,
+            D.channels,
+            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        )
+        .into_vec(),
+    );
 
     let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
     let total_secs = segment_duration * SEGMENT_COUNT as f64;
@@ -297,7 +227,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
 
         for i in 0..STRESS_SEEK_ITERATIONS {
             // Mix of random positions: 10% chance to seek near start (< 1s),
-            // 10% chance to seek near end (last 2s), 80% random.
+            // 10% chance to seek near the end (last 2s), 80% random.
             let r = rng.next_f64();
             let pos_secs = if r < 0.1 {
                 rng.range_f64(0.0, 1.0)
@@ -487,7 +417,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
                 }
             }
 
-            // Track last phase for inter-chunk check
+            // Track the last phase for inter-chunk check
             let last_frame_phase = phase_from_f32(buf[(frames - 1) * channels]);
             prev_phase = Some(last_frame_phase);
 
