@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use ratatui::{
     Frame,
@@ -8,7 +8,10 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
-use crate::theme::tui::TuiPalette;
+use crate::{
+    playlist::{Playlist, TrackStatus},
+    theme::tui::TuiPalette,
+};
 
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
@@ -33,32 +36,38 @@ const SECONDS_PER_MINUTE: u64 = 60;
 ///
 /// Renders playlist, progress bar, volume, and status information
 /// using ratatui inline viewport.
+/// Frames between blink toggles (~500ms at 100ms poll).
+const BLINK_DIVISOR: u64 = 5;
+const BLINK_PERIOD: u64 = 2;
+
 pub struct Dashboard {
     colors: TuiPalette,
     crossfade_progress: Option<f32>,
     current_index: usize,
+    frame_count: u64,
     item_count: usize,
     last_note: Option<String>,
     playing: bool,
+    playlist: Arc<Playlist>,
     position_ms: u64,
     total_ms: Option<u64>,
-    tracks: Vec<String>,
     volume: f32,
 }
 
 impl Dashboard {
     #[must_use]
-    pub fn new(tracks: Vec<String>, palette: TuiPalette) -> Self {
+    pub fn new(playlist: Arc<Playlist>, palette: TuiPalette) -> Self {
         Self {
             colors: palette,
             crossfade_progress: None,
             current_index: 0,
+            frame_count: 0,
             item_count: 0,
             last_note: None,
             playing: false,
+            playlist,
             position_ms: 0,
             total_ms: None,
-            tracks,
             volume: 1.0,
         }
     }
@@ -66,7 +75,7 @@ impl Dashboard {
     #[must_use]
     #[expect(clippy::cast_possible_truncation)]
     pub fn height(&self) -> u16 {
-        self.tracks.len() as u16 + 1
+        self.playlist.len() as u16 + 1
     }
 
     pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
@@ -99,12 +108,13 @@ impl Dashboard {
         self.volume = volume.clamp(0.0, 1.0);
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame) {
+        self.frame_count = self.frame_count.wrapping_add(1);
         let area = frame.area();
         frame.render_widget(Clear, area);
 
         #[expect(clippy::cast_possible_truncation)]
-        let playlist_lines = self.tracks.len() as u16;
+        let playlist_lines = self.playlist.len() as u16;
         let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
             .split(area);
 
@@ -114,12 +124,24 @@ impl Dashboard {
 
     fn render_playlist(&self, frame: &mut Frame, area: Rect) {
         let c = &self.colors;
-        for (i, track) in self.tracks.iter().enumerate() {
+        for i in 0..self.playlist.len() {
+            let track_name = self.playlist.track_name(i);
             let is_active = i == self.current_index;
+            let status = self.playlist.track_status(i);
+            let is_failed = status == TrackStatus::Failed;
+            let is_slow = status == TrackStatus::Slow;
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
-            let text = format!(" {marker} {number}  {track}");
-            let style = if is_active {
+            let text = format!(" {marker} {number}  {track_name}");
+            let style = if is_failed {
+                Style::default().fg(c.danger).bg(c.bg)
+            } else if is_slow && is_active {
+                let blink_on = (self.frame_count / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
+                let fg = if blink_on { c.warning } else { c.muted };
+                Style::default().fg(fg).bg(c.bg_panel)
+            } else if is_slow {
+                Style::default().fg(c.warning).bg(c.bg)
+            } else if is_active {
                 Style::default().fg(c.accent).bg(c.bg_panel)
             } else {
                 Style::default().fg(c.muted).bg(c.bg)
@@ -147,10 +169,7 @@ impl Dashboard {
             .saturating_sub(PROGRESS_BAR_OVERHEAD)
             .max(MIN_PROGRESS_BAR_WIDTH);
         let icon = if self.playing { '▶' } else { '⏸' };
-        let active_track = self
-            .tracks
-            .get(self.current_index)
-            .map_or("-", |s| s.as_str());
+        let active_track = self.playlist.track_name(self.current_index);
         let queue_current = self.current_index.saturating_add(1).max(1);
         let queue_total = self.item_count.max(1);
         let segments = [

@@ -13,7 +13,6 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use crate::common::test_defaults::SawWav;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
@@ -23,21 +22,27 @@ use kithara::{
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::signal_pcm::{Finite, SignalPcm, signal};
-use kithara_test_utils::wav::create_wav_header;
-use kithara_test_utils::{SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction, fixture_protocol::DelayRule, phase_from_f32};
+use kithara_test_utils::{
+    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    fixture_protocol::DelayRule,
+    phase_from_f32,
+    signal_pcm::{Finite, SignalPcm, signal},
+    wav::create_wav_header,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
-const WARMUP_TIMEOUT_SECS: u64 = 60;
-const TEST_TIMEOUT_SECS: u64 = 120;
+const WARMUP_TIMEOUT_SECS: u64 = 30;
+const TEST_TIMEOUT_SECS: u64 = 60;
 const POST_SWITCH_CHUNKS: usize = 50;
 const CHUNKS_PER_SEEK: usize = 5;
-const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 30_000;
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 15_000;
+const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
+const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;

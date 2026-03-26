@@ -85,14 +85,19 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::drm_abr_auto("/drm/master.m3u8", true)]
-#[case::hls_abr_auto("/hls/master.m3u8", true)]
-#[case::drm_manual_v0("/drm/master.m3u8", false)]
-#[case::hls_manual_v0("/hls/master.m3u8", false)]
+#[case::drm_abr_auto_sw("/drm/master.m3u8", true, false)]
+#[case::drm_abr_auto_hw("/drm/master.m3u8", true, true)]
+#[case::hls_abr_auto_sw("/hls/master.m3u8", true, false)]
+#[case::hls_abr_auto_hw("/hls/master.m3u8", true, true)]
+#[case::drm_manual_v0_sw("/drm/master.m3u8", false, false)]
+#[case::drm_manual_v0_hw("/drm/master.m3u8", false, true)]
+#[case::hls_manual_v0_sw("/hls/master.m3u8", false, false)]
+#[case::hls_manual_v0_hw("/hls/master.m3u8", false, true)]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] abr_auto: bool,
+    #[case] prefer_hardware: bool,
 ) {
     let server = serve_assets().await;
     let url = server.url(path);
@@ -111,7 +116,7 @@ async fn stream_continues_after_seek(
             ..Default::default()
         });
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -220,6 +225,77 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     );
 }
 
+/// Seek after decode-to-EOF in mmap (non-ephemeral) DRM mode must produce samples.
+///
+/// Regression: after ABR switch + full decode to EOF, random seeks land on
+/// segments whose byte offsets are no longer visible in the StreamIndex layout,
+/// causing `read_at` to return Retry forever.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
+)]
+#[case::drm("/drm/master.m3u8")]
+#[case::hls("/hls/master.m3u8")]
+async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] path: &str) {
+    let server = serve_assets().await;
+    let url = server.url(path);
+
+    let cancel = CancellationToken::new();
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
+
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(false);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+    audio.preload();
+
+    let mut buf = vec![0f32; 4096];
+
+    // Phase 1: Warmup — read a few seconds so ABR can switch variant.
+    let warmup = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < warmup {
+        let _ = audio.read(&mut buf);
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    // Phase 2: Random seeks — same pattern as the stress test.
+    // Each seek must produce at least some samples within 5s.
+    let seek_targets = [
+        50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
+        40.0, 110.0,
+    ];
+    let samples_per_seek: u64 = 48000 * 2;
+    for (idx, &target_secs) in seek_targets.iter().enumerate() {
+        audio
+            .seek(Duration::from_secs_f64(target_secs))
+            .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
+
+        let mut samples = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while samples < samples_per_seek && Instant::now() < deadline {
+            let n = audio.read(&mut buf);
+            samples += n as u64;
+            if n == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        }
+        assert!(
+            samples > 0,
+            "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
+        );
+    }
+}
+
 /// MP3 progressive file must continue producing chunks after seek sequence.
 ///
 /// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
@@ -289,5 +365,120 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     assert!(
         post_seek_samples > 0,
         "[mp3] playback after seeks must continue, got 0 samples"
+    );
+}
+
+/// ABR must be frozen during seek and resume afterwards.
+///
+/// Invariant: variant must not change between seek() and the first post-seek
+/// chunk. After playback resumes, ABR must still work (variant changes again).
+/// Uses chunk metadata (variant_index) instead of broadcast events to avoid
+/// broadcast lag issues.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(20)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    tracing("kithara_audio=info,kithara_hls=info")
+)]
+async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
+    use kithara::{audio::PcmReader, decode::PcmChunk};
+
+    let server = serve_assets().await;
+    let url = server.url("/hls/master.m3u8");
+
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_abr(AbrOptions {
+            down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            min_throughput_record_ms: 0,
+            sample_window: Duration::from_secs(1),
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.0,
+            ..AbrOptions::default()
+        });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    // Helper: read one chunk with timeout.
+    async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            if let Some(chunk) = PcmReader::next_chunk(audio) {
+                return Some(chunk);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            audio.preload();
+            sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    // Phase 1: warmup — read chunks until variant changes from initial (0).
+    info!("Phase 1: warmup until ABR switches from variant 0");
+    let mut initial_variant = None;
+    let warmup_deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < warmup_deadline {
+        let Some(chunk) = next_chunk(&mut audio, 500).await else {
+            continue;
+        };
+        let v = chunk.meta.variant_index;
+        if initial_variant.is_none() {
+            initial_variant = v;
+        }
+        if v != initial_variant && v.is_some() {
+            info!(?initial_variant, switched_to = ?v, "ABR switched");
+            break;
+        }
+    }
+    let current_variant = next_chunk(&mut audio, 500)
+        .await
+        .and_then(|c| c.meta.variant_index);
+    assert!(
+        current_variant != initial_variant || current_variant.is_none(),
+        "ABR must switch at least once during warmup: initial={initial_variant:?} current={current_variant:?}"
+    );
+    info!(?current_variant, "Pre-seek variant established");
+
+    // Phase 2: seek — variant must stay the same.
+    let variant_before_seek = current_variant;
+    audio
+        .seek(Duration::from_secs(50))
+        .expect("seek must not fail");
+    audio.preload();
+
+    let post_seek_chunk = next_chunk(&mut audio, 500).await;
+    assert!(
+        post_seek_chunk.is_some(),
+        "seek must produce a chunk within 500ms"
+    );
+    let variant_after_seek = post_seek_chunk.unwrap().meta.variant_index;
+    assert_eq!(
+        variant_before_seek, variant_after_seek,
+        "ABR must NOT switch variant during seek"
+    );
+
+    // Phase 3: resume playback — ABR must still function.
+    info!("Phase 3: verify ABR still works post-seek");
+    let resume_deadline = Instant::now() + Duration::from_secs(8);
+    let mut resume_chunks = 0u32;
+    while Instant::now() < resume_deadline {
+        if next_chunk(&mut audio, 200).await.is_some() {
+            resume_chunks += 1;
+            if resume_chunks >= 4 {
+                break;
+            }
+        }
+    }
+    assert!(
+        resume_chunks >= 4,
+        "playback must continue after seek (got {resume_chunks} chunks)"
     );
 }

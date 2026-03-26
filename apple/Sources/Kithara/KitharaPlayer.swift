@@ -156,6 +156,48 @@ public final class KitharaPlayer: @unchecked Sendable {
         _inner.removeAllItems()
         _knownItems.removeAll()
     }
+
+    // MARK: - Key processing (DRM)
+
+    /// Set a key processor for HLS DRM key decryption.
+    ///
+    /// The processor is applied to all items' key requests when loading.
+    /// Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
+    ///
+    /// - Parameters:
+    ///   - processor: Callback that receives encrypted key bytes and returns decrypted bytes.
+    ///   - headers: Optional HTTP headers for key requests only.
+    public func setKeyProcessor(_ processor: KeyProcessor, headers: [String: String]? = nil) {
+        let bridge = KeyProcessorBridge(processor: processor)
+        _inner.setKeyProcessor(processor: bridge, headers: headers)
+    }
+
+}
+
+// MARK: - Key processor
+
+/// Callback for processing (decrypting) HLS encryption keys.
+///
+/// Implement this protocol to provide custom key decryption logic.
+/// The player calls ``processKey(_:)`` for each key fetched from the server.
+public protocol KeyProcessor: Sendable {
+    /// Process (decrypt) raw key bytes received from the server.
+    ///
+    /// - Parameter key: Encrypted key bytes.
+    /// - Returns: Decrypted key bytes.
+    func processKey(_ key: Data) -> Data
+}
+
+private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
+    private let processor: KeyProcessor
+
+    init(processor: KeyProcessor) {
+        self.processor = processor
+    }
+
+    func processKey(key: Data) -> Data {
+        processor.processKey(key)
+    }
 }
 
 // MARK: - PlayerObserver bridge (single on_event callback)

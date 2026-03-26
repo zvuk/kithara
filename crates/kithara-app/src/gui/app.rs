@@ -1,10 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use iced::{Subscription, Task, Theme, time as iced_time};
-use kithara::{
-    play::Engine,
-    prelude::{PlayerImpl, Resource, ResourceConfig},
-};
+use kithara::{play::Engine, prelude::PlayerImpl};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 
@@ -12,13 +9,18 @@ use super::{
     message::{Message, Tab},
     theme,
 };
-use crate::{playlist::Playlist, theme::gui};
+use crate::{
+    controls::TrackLoadParams,
+    playlist::{Playlist, TrackStatus},
+    theme::gui,
+};
 
 /// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) player: Arc<PlayerImpl>,
     pub(crate) playlist: Arc<Playlist>,
     pub(crate) palette: gui::GuiPalette,
+    pub(crate) load_params: TrackLoadParams,
 
     // Playback state (synced from player on each tick).
     pub(crate) playing: bool,
@@ -44,26 +46,29 @@ pub(crate) struct Kithara {
     pub(crate) active_tab: Tab,
     pub(crate) shuffle_enabled: bool,
     pub(crate) repeat_enabled: bool,
-    pub(crate) autoplay: bool,
+    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {
     /// Boot function for `iced::application()`.
     pub(crate) fn new(
         player: Arc<PlayerImpl>,
-        tracks: Vec<String>,
-        autoplay: bool,
+        playlist: Arc<Playlist>,
+        load_params: TrackLoadParams,
         palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
-        let playlist = Arc::new(Playlist::new(tracks));
         let volume = player.volume();
         let crossfade = player.crossfade_duration();
         let eq_band_count = player.eq_band_count();
+
+        // Reserve player slots for all tracks.
+        player.reserve_slots(playlist.len());
 
         let mut state = Self {
             player,
             playlist,
             palette,
+            load_params,
             playing: false,
             position: 0.0,
             duration: 0.0,
@@ -77,23 +82,39 @@ impl Kithara {
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
             repeat_enabled: false,
-            autoplay,
+            blink_counter: 0,
         };
 
         // Start event logging inside iced's tokio runtime.
         start_event_logging(&state.player);
 
-        // Initialize first track if available.
-        let task = if !state.playlist.is_empty() {
+        // Spawn async loading for all tracks.
+        let mut tasks = Vec::new();
+        for i in 0..state.playlist.len() {
+            let params = state.load_params.clone();
+            tasks.push(Task::perform(
+                async move {
+                    let ok = params.load_and_apply(i).await;
+                    (i, ok)
+                },
+                |(index, ok)| {
+                    if ok {
+                        Message::TrackLoaded(index, Ok(()))
+                    } else {
+                        Message::TrackLoaded(index, Err(format!("load failed for #{}", index + 1)))
+                    }
+                },
+            ));
+        }
+
+        // Set initial track name.
+        if !state.playlist.is_empty() {
             state.current_track_index = Some(0);
             state.track_name = state.playlist.track_name(0);
             state.playlist.on_track_selected(0);
-            state.load_track(0)
-        } else {
-            Task::none()
-        };
+        }
 
-        (state, task)
+        (state, Task::batch(tasks))
     }
 
     /// The dark + gold theme.
@@ -108,34 +129,28 @@ impl Kithara {
         iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
     }
 
-    /// Asynchronously load a track by playlist index.
+    /// Load a track and select it for playback.
+    ///
+    /// Unlike `load_and_apply` (which only auto-selects the first loaded track),
+    /// this explicitly calls `select_item` after loading — needed for user-initiated
+    /// track switches (Next/Prev/SelectTrack).
     pub(crate) fn load_track(&self, index: usize) -> Task<Message> {
-        let Some(path) = self.playlist.track_path(index) else {
-            return Task::none();
-        };
-
-        let path = path.to_string();
+        let params = self.load_params.clone();
         let player = Arc::clone(&self.player);
-        let autoplay = self.playing || self.autoplay;
-
         Task::perform(
             async move {
-                let mut config = ResourceConfig::new(&path).map_err(|e| format!("{e}"))?;
-                player.prepare_config(&mut config);
-                let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
-
-                // Single-slot model: always use slot 0 to avoid index overflow.
-                if player.item_count() > 0 {
-                    player.replace_item(0, resource);
-                } else {
-                    player.insert(resource, None);
-                }
+                let resource = params
+                    .load_resource(index)
+                    .await
+                    .map_err(|e| format!("{e}"))?;
+                player.replace_item(index, resource);
+                params.playlist().set_status(index, TrackStatus::Loaded);
                 player
-                    .select_item(0, autoplay)
+                    .select_item(index, true)
                     .map_err(|e| format!("{e}"))?;
                 Ok(())
             },
-            Message::TrackLoaded,
+            move |result| Message::TrackLoaded(index, result),
         )
     }
 }

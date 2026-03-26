@@ -1,11 +1,18 @@
 //! FFI wrapper for the audio player.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use kithara::play::{PlayerConfig, PlayerImpl};
+use bytes::Bytes;
+use kithara::{
+    hls::KeyOptions,
+    play::{PlayerConfig, PlayerImpl},
+};
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -13,7 +20,7 @@ use tracing::{debug, error};
 use crate::{
     event_bridge::EventBridge,
     item::AudioPlayerItem,
-    observer::{PlayerObserver, SeekCallback},
+    observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{FfiError, FfiItemEvent, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
@@ -40,6 +47,8 @@ pub struct AudioPlayer {
     queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
+    key_processor: Mutex<Option<Arc<dyn FfiKeyProcessor>>>,
+    key_request_headers: Mutex<Option<HashMap<String, String>>>,
 }
 
 /// Methods exported across the FFI boundary.
@@ -53,6 +62,8 @@ impl AudioPlayer {
             queue: Arc::new(Mutex::new(Vec::new())),
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
+            key_processor: Mutex::new(None),
+            key_request_headers: Mutex::new(None),
         })
     }
 
@@ -108,12 +119,13 @@ impl AudioPlayer {
 
         let ffi_pos = after_ffi_index.map_or(queue.len(), |i| i + 1);
 
-        // Inject shared worker + runtime so item's downloader reuses them.
+        // Inject shared worker, runtime, and key options.
         {
             let player = self.inner.lock_sync();
             *item.worker.lock_sync() = Some(player.worker().clone());
             *item.runtime.lock_sync() = player.runtime().cloned();
         }
+        *item.key_options.lock_sync() = self.key_options();
 
         let entry = Arc::new(QueueEntry {
             item: Arc::clone(&item),
@@ -221,6 +233,19 @@ impl AudioPlayer {
         }
     }
 
+    /// Set a key processor callback for HLS DRM key decryption.
+    ///
+    /// The processor is applied to all items' `KeyOptions` when loading.
+    /// Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
+    pub fn set_key_processor(
+        &self,
+        processor: Arc<dyn FfiKeyProcessor>,
+        headers: Option<HashMap<String, String>>,
+    ) {
+        *self.key_processor.lock_sync() = Some(processor);
+        *self.key_request_headers.lock_sync() = headers;
+    }
+
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
         let rx = self.inner.lock_sync().subscribe();
 
@@ -248,6 +273,18 @@ impl AudioPlayer {
     #[expect(dead_code, reason = "reserved for future event bridge extensions")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
         self.observer.lock_sync().clone()
+    }
+
+    /// Build `KeyOptions` from the player-level key processor and headers.
+    pub(crate) fn key_options(&self) -> Option<KeyOptions> {
+        let processor = self.key_processor.lock_sync().clone()?;
+        let mut opts = KeyOptions::new().with_key_processor(Arc::new(move |key: Bytes, _ctx| {
+            Ok(Bytes::from(processor.process_key(key.to_vec())))
+        }));
+        if let Some(headers) = self.key_request_headers.lock_sync().clone() {
+            opts = opts.with_request_headers(headers);
+        }
+        Some(opts)
     }
 
     /// Spawn an async task that waits for the item to load, then inserts

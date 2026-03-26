@@ -1,6 +1,6 @@
 id: style.no-magic-numbers
 message: Magic number detected; extract it into a named constant.
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/src/**/*.rs
@@ -27,6 +27,10 @@ rule:
             inside:
               kind: field_expression
               field: field
+        - not:
+            inside:
+              kind: enum_variant
+              stopBy: end
         - not:
             inside:
               kind: type_arguments

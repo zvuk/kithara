@@ -32,9 +32,6 @@ use crate::{
 /// Maximum number of plans to log at debug level.
 const MAX_LOG_PLANS: usize = 4;
 
-/// Minimum throughput recording duration in milliseconds.
-const MIN_THROUGHPUT_RECORD_MS: u128 = 10;
-
 /// Maximum initial segment index for verbose logging.
 const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
@@ -189,6 +186,10 @@ pub(crate) struct HlsDownloader {
     pub(crate) look_ahead_segments: Option<usize>,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
+    /// Variant the downloader is currently targeting. Used for transition
+    /// classification instead of shared `layout_variant` to avoid racing
+    /// with the decoder thread.
+    pub(crate) download_variant: VariantIndex,
 }
 
 impl HlsDownloader {
@@ -284,7 +285,7 @@ impl HlsDownloader {
     }
 
     fn classify_variant_transition(&self, variant: usize, segment_index: usize) -> (bool, bool) {
-        classify_layout_transition(self.layout_variant(), variant, segment_index)
+        classify_layout_transition(self.download_variant, variant, segment_index)
     }
 
     fn reset_for_seek_epoch(
@@ -293,7 +294,13 @@ impl HlsDownloader {
         variant: usize,
         segment_index: usize,
     ) {
-        let previous_variant = self.abr.get_current_variant_index();
+        // Use layout_variant (what the decoder reads), not ABR target.
+        // ABR may have switched to a different codec variant, but the decoder
+        // is still on the layout variant. Comparing against ABR target would
+        // incorrectly set force_init_for_seek=true for same-codec seeks,
+        // injecting init data into mid-stream segments and corrupting the
+        // byte stream.
+        let previous_variant = self.layout_variant();
 
         self.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
@@ -330,6 +337,8 @@ impl HlsDownloader {
                 .timeline()
                 .set_download_position(download_position);
         }
+
+        self.download_variant = variant;
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -603,13 +612,19 @@ impl HlsDownloader {
                     break;
                 }
 
-                // Init only for the first segment (init-once layout matches metadata)
-                let actual_init_len = if count == 0 { init_len } else { 0 };
+                // Init only for the first segment. Do NOT set init_url for
+                // later segments — a re-download with need_init=true would
+                // inject init data mid-stream, corrupting the decoder.
+                let (actual_init_len, seg_init_url) = if count == 0 {
+                    (init_len, init_url.clone())
+                } else {
+                    (0, None)
+                };
 
                 let data = SegmentData {
                     init_len: actual_init_len,
                     media_len,
-                    init_url: init_url.clone(),
+                    init_url: seg_init_url,
                     media_url: segment_url,
                 };
 
@@ -742,11 +757,13 @@ impl HlsDownloader {
             if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
                 segments.set_expected_sizes(variant, sizes);
             }
-            // For initial download (not midstream), align layout_variant with
-            // the download variant so the source reads from the correct byte map.
-            if is_variant_switch && !is_midstream_switch {
-                segments.set_layout_variant(variant);
-            }
+            // layout_variant is owned by the source thread via
+            // format_change_segment_range(). The downloader must NOT call
+            // set_layout_variant — doing so races with the decoder thread's
+            // byte map queries and corrupts seek offsets.
+        }
+        if is_variant_switch {
+            self.download_variant = variant;
         }
 
         let (cached_count, cached_end_offset) =
@@ -760,15 +777,15 @@ impl HlsDownloader {
         if !is_midstream_switch {
             return;
         }
-        self.cursor
-            .reopen_fill(self.current_segment_index(), self.current_segment_index());
+        // Start downloading from segment 0 so the init segment is fetched
+        // first. The decoder needs the full stream starting from offset 0.
+        // Reset to segment 0 instead of the old cursor position — this
+        // ensures the init segment is available when the decoder is created.
+        self.cursor.reopen_fill(0, 0);
         self.coord
             .had_midstream_switch
-            .store(true, Ordering::Release);
+            .store(false, Ordering::Release);
         self.coord.clear_segment_requests();
-        // Wake blocked wait_range so it can re-push its on-demand request.
-        // The `had_midstream_switch` flag tells wait_range to clear
-        // `on_demand_pending`, allowing the re-push for the new variant.
         self.coord.condvar.notify_all();
     }
 
@@ -1059,11 +1076,11 @@ impl HlsDownloader {
             return PlanOutcome::Idle;
         };
 
+        self.publish_variant_applied(old_variant, variant, &decision);
+
         if self.handle_tail_state(variant, num_segments) {
             return PlanOutcome::Idle;
         }
-
-        self.publish_variant_applied(old_variant, variant, &decision);
 
         let (is_variant_switch, is_midstream_switch) = match self
             .ensure_variant_ready(variant, self.current_segment_index())
@@ -1220,6 +1237,12 @@ impl HlsDownloader {
         if !decision.changed {
             return;
         }
+        debug!(
+            from = old_variant,
+            to = variant,
+            reason = ?decision.reason,
+            "publishing VariantApplied event"
+        );
         self.bus.publish(HlsEvent::VariantApplied {
             from_variant: old_variant,
             to_variant: variant,
@@ -1338,6 +1361,18 @@ impl HlsDownloader {
     }
 
     fn make_abr_decision(&mut self) -> AbrDecision {
+        // Freeze ABR during seek — variant switch mid-seek causes the decoder
+        // to be recreated with mismatched byte_len / base_offset, breaking
+        // late-track seeks with "unexpected end of file".
+        if self.coord.timeline().is_seek_pending() {
+            let current = self.abr.get_current_variant_index();
+            return AbrDecision {
+                target_variant_index: current,
+                reason: AbrReason::MinInterval,
+                changed: false,
+            };
+        }
+
         let now = Instant::now();
         let current_variant = self.abr.get_current_variant_index();
         let decision = self.abr.decide(now);
@@ -1367,7 +1402,8 @@ impl HlsDownloader {
         duration: Duration,
         content_duration: Option<Duration>,
     ) {
-        if duration.as_millis() < MIN_THROUGHPUT_RECORD_MS {
+        let min_ms = self.abr.min_throughput_record_ms();
+        if duration.as_millis() < min_ms {
             return;
         }
 
@@ -3798,18 +3834,11 @@ mod tests {
             "handle_midstream_switch must drain all requests"
         );
 
-        // After: had_midstream_switch flag is set.
-        assert!(
-            downloader
-                .coord
-                .had_midstream_switch
-                .load(Ordering::Acquire),
-            "handle_midstream_switch must set had_midstream_switch flag"
-        );
+        // Cursor resets to 0 so init segment is fetched first.
         assert_eq!(
-            downloader.gap_scan_start_segment(),
-            2,
-            "midstream switch must remember the switch point for later gap rewind"
+            downloader.current_segment_index(),
+            0,
+            "midstream switch must reset cursor to segment 0"
         );
     }
 

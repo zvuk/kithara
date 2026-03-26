@@ -288,16 +288,27 @@ apple-demo:
     just xcframework --profile debug
     KITHARA_LOCAL_DEV=1 swift run KitharaDemo
 
+# Temporarily patch project.yml to use local package path for xcodegen.
+[private]
+xcodegen-local:
+    cd apple/Examples/KitharaDemo && \
+    sed -i.bak \
+      -e 's|url: https://github.com/zvuk/kithara|path: ../../..|' \
+      -e '/from:/d' \
+      project.yml && \
+    KITHARA_LOCAL_DEV=1 xcodegen generate && \
+    mv project.yml.bak project.yml
+
 # Generate Xcode project for KitharaDemo and open it.
 apple-xcode:
     just xcframework --profile debug
-    cd apple/Examples/KitharaDemo && KITHARA_LOCAL_DEV=1 xcodegen generate
+    just xcodegen-local
     open apple/Examples/KitharaDemo/KitharaDemo.xcodeproj
 
 # Build KitharaDemo for iOS Simulator.
 apple-ios-build scheme="KitharaDemo_iOS" destination="generic/platform=iOS Simulator":
     just xcframework --profile debug
-    cd apple/Examples/KitharaDemo && KITHARA_LOCAL_DEV=1 xcodegen generate
+    just xcodegen-local
     KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
         -scheme {{scheme}} \
         -destination '{{destination}}' \

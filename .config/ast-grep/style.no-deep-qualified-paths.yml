@@ -1,6 +1,6 @@
 id: style.no-deep-qualified-paths
 message: Qualified path 3+ segments; add `use` import at file top.
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs

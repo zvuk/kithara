@@ -46,7 +46,7 @@ struct PlayerView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.kitharaBg)
+        .background(Color.kitharaBg.ignoresSafeArea())
     }
 
     // MARK: - Header

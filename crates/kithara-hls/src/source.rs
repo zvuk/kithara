@@ -260,19 +260,36 @@ impl HlsSource {
         let vs = segments.variant_segments(variant)?;
         // Find first committed segment with init data
         let (seg_idx, seg_data) = vs.iter().find(|(_, data)| data.init_len > 0)?;
-        let seg_range = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-            &segments,
-            (variant, seg_idx),
-        )?;
 
-        if seg_data.init_url.is_none() {
-            drop(segments);
-            if let Some(metadata_range) = self.metadata_range_for_segment(variant, seg_idx) {
-                return Some(metadata_range);
+        // Always return a range starting from offset 0 (segment 0).
+        // During midstream ABR switches the downloader commits a later segment
+        // first (e.g. segment 15 with init). Using that segment's byte offset
+        // as base_offset makes the decoder see only a tail of the stream,
+        // causing "unexpected end of file" on late-track seeks.
+        // Returning 0-based range ensures the decoder sees the full stream.
+        // The pipeline waits (source_is_ready_for_boundary) until segment 0
+        // is actually downloaded before creating the decoder.
+        if seg_idx == 0 {
+            let seg_range =
+                <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, 0))?;
+            if seg_data.init_url.is_none() {
+                drop(segments);
+                if let Some(metadata_range) = self.metadata_range_for_segment(variant, 0) {
+                    return Some(metadata_range);
+                }
             }
+            return Some(seg_range.start..seg_range.end);
         }
 
-        Some(seg_range.start..seg_range.end)
+        // Init-bearing segment is not segment 0 — use segment 0's range
+        // (from byte map or metadata) so the decoder starts at offset 0.
+        if let Some(seg0_range) =
+            <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, 0))
+        {
+            return Some(seg0_range);
+        }
+        drop(segments);
+        self.metadata_range_for_segment(variant, 0)
     }
 
     fn effective_total_bytes(&self) -> Option<u64> {
@@ -1170,20 +1187,14 @@ impl Source for HlsSource {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
 
-        // ABR variant switch: update layout_variant so the recreated decoder
-        // reads from the new variant's byte map. This is the point where
-        // ABR takes effect here — but NOT during an active seek.
-        // If a seek is in-flight, layout_variant must stay on the variant
-        // the seek anchor was resolved in, otherwise read positions desync.
-        if !self.coord.timeline().is_flushing() && !self.coord.timeline().is_seek_pending() {
-            let mut segments = self.segments.lock_sync();
-            if segments.layout_variant() != current_variant {
-                segments.set_layout_variant(current_variant);
-                if let Some(sizes) = self.playlist_state.segment_sizes(current_variant) {
-                    segments.set_expected_sizes(current_variant, sizes);
-                }
-            }
-        }
+        // Do NOT change layout_variant here — this method is called from
+        // detect_format_change() while the old decoder is still reading.
+        // Switching layout now would make the old decoder read from the
+        // wrong variant's byte map, corrupting Symphonia's moof table.
+        //
+        // Layout change happens later in commit_variant_layout(), called
+        // from step_recreating_decoder() right before building the new
+        // decoder.
 
         if let Some(range) = self.init_segment_range_for_variant(current_variant) {
             return Some(range);
@@ -1229,6 +1240,17 @@ impl Source for HlsSource {
 
     fn clear_variant_fence(&mut self) {
         self.variant_fence = None;
+    }
+
+    fn commit_variant_layout(&mut self) {
+        let target = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let mut segments = self.segments.lock_sync();
+        if segments.layout_variant() != target {
+            segments.set_layout_variant(target);
+            if let Some(sizes) = self.playlist_state.segment_sizes(target) {
+                segments.set_expected_sizes(target, sizes);
+            }
+        }
     }
 
     fn notify_waiting(&self) {
@@ -1414,6 +1436,7 @@ pub(crate) fn build_pair(
         look_ahead_bytes: config.look_ahead_bytes,
         look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
+        download_variant: initial_variant,
     };
 
     let source = HlsSource {
@@ -2103,7 +2126,10 @@ mod tests {
             },
         );
 
-        assert_eq!(source.format_change_segment_range(), Some(100..200));
+        // Segment 1 has init but segment 0 is not committed yet.
+        // Must return segment 0's metadata range (0..100) so the decoder
+        // starts at offset 0 and sees the full stream.
+        assert_eq!(source.format_change_segment_range(), Some(0..100));
     }
 
     #[kithara::test]

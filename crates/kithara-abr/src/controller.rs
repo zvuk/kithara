@@ -106,6 +106,11 @@ impl<E: Estimator> AbrController<E> {
         self.estimator.push_sample(sample);
     }
 
+    /// Minimum download duration (ms) to record a throughput sample.
+    pub fn min_throughput_record_ms(&self) -> u128 {
+        self.cfg.min_throughput_record_ms
+    }
+
     /// Reset buffer level (e.g., on seek).
     pub fn reset_buffer(&mut self) {
         self.estimator.reset_buffer();

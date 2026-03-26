@@ -213,8 +213,11 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     // Budget: 0 extra kithara threads. Worker already counted in `before`.
     // Downloaders run as async tasks on the caller's runtime.
-    assert_eq!(delta, 0, "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
-         (before={before}, after={after})");
+    assert_eq!(
+        delta, 0,
+        "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
+         (before={before}, after={after})"
+    );
 }
 
 // Process ceiling — no leaked kithara threads when idle
@@ -222,6 +225,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 #[kithara::test(serial)]
 fn thread_budget_process_ceiling() {
     let count = wait_for_named_threads(0, Duration::from_secs(30));
-    assert_eq!(count, 0, "Process has {count} active kithara threads with no active pipelines — \
-         investigate leaked threads.");
+    assert_eq!(
+        count, 0,
+        "Process has {count} active kithara threads with no active pipelines — \
+         investigate leaked threads."
+    );
 }

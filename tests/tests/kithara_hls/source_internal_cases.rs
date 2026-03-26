@@ -775,8 +775,11 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     let source = make_test_source(Arc::clone(&shared), cancel);
 
     shared.abr_variant_index.store(1, Ordering::Release);
-    // In variant 1's byte map: seg1 at 0..100, seg2 at 100..240 (init 40 + media 100)
-    assert_eq!(Source::format_change_segment_range(&source), Some(100..240));
+    // Segment 2 has init but segment 0 is not committed.
+    // Must return segment 0's metadata range (0..100) so the decoder starts
+    // at offset 0 and sees the full stream — using segment 2's offset would
+    // truncate the stream and cause seek failures near the track end.
+    assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
 #[kithara::test]
@@ -837,26 +840,20 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
     }
     shared.abr_variant_index.store(1, Ordering::Release);
 
-    // In variant 1's per-variant byte map, seg 2 is the first committed segment.
-    // With expected_sizes not set for variant 1, seg 2 starts at offset 0 in v1's byte space
-    // (per-variant byte maps don't share offsets with other variants).
-    // TODO: verify this test reflects per-variant byte map semantics
-    let seg2_offset = {
-        let segments = shared.segments.lock_sync();
-        segments
-            .find_at_offset(0)
-            .map(|s| s.byte_offset)
-            .unwrap_or(0)
-    };
+    // Segment 2 has init but segment 0 is not committed. The range must
+    // start from offset 0 (segment 0 metadata) so the decoder sees the full
+    // stream. Without expected_sizes, segment 2 sits at offset 0 in the byte
+    // map, so reading at offset 0 returns segment 2's data.
     assert_eq!(
         Source::format_change_segment_range(&source),
-        Some(seg2_offset..seg2_offset + expected.len() as u64),
-        "decoder-start boundary must use the segment's position in the per-variant byte map"
+        Some(0..100),
+        "decoder-start boundary must use segment 0 metadata range"
     );
 
+    // Data at offset 0 is segment 2 (first committed), verifying readability.
     let mut buf = vec![0u8; expected.len()];
     let read = source
-        .read_at(seg2_offset, &mut buf)
+        .read_at(0, &mut buf)
         .expect("read_at from decoder-start boundary");
 
     assert_eq!(
@@ -1475,7 +1472,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
     let handle = spawn_blocking(move || source.wait_range(88_300..89_324, Duration::from_secs(1)));
 
-    sleep(Duration::from_millis(20)).await;
+    // Commit data and clear EOF. Repeatedly notify condvar until the
+    // blocking wait_range task wakes up — spawn_blocking may not have
+    // parked yet on the first notify.
     let segment_data = make_segment_data(200_000);
     commit_dummy_resource_from_data(&commit_source, &segment_data);
     {
@@ -1483,14 +1482,24 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
         segments.commit_segment(0, 0, segment_data);
     }
     shared2.timeline.set_eof(false);
-    shared2.condvar.notify_all();
 
-    let result = timeout(Duration::from_millis(200), handle)
+    for _ in 0..50 {
+        shared2.condvar.notify_all();
+        if handle.is_finished() {
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    let result = timeout(Duration::from_secs(2), handle)
         .await
-        .expect("task should complete within 200ms")
+        .expect("task should complete within 2s")
         .expect("task should not panic");
 
-    assert!(matches!(result, Ok(WaitOutcome::Ready)));
+    assert!(
+        matches!(result, Ok(WaitOutcome::Ready)),
+        "expected Ready, got {result:?}"
+    );
 }
 
 #[kithara::test(tokio, browser)]

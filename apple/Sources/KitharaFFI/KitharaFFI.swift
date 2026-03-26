@@ -519,6 +519,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -571,6 +589,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func seek(toSeconds: Double, callback: SeekCallback) 
     
     func setDefaultRate(rate: Float) 
+    
+    /**
+     * Set a key processor callback for HLS DRM key decryption.
+     *
+     * The processor is applied to all items' `KeyOptions` when loading.
+     * Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
+     */
+    func setKeyProcessor(processor: FfiKeyProcessor, headers: [String: String]?) 
     
     func setMuted(muted: Bool) 
     
@@ -758,6 +784,21 @@ open func setDefaultRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_default_rate(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(rate),$0
+    )
+}
+}
+    
+    /**
+     * Set a key processor callback for HLS DRM key decryption.
+     *
+     * The processor is applied to all items' `KeyOptions` when loading.
+     * Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
+     */
+open func setKeyProcessor(processor: FfiKeyProcessor, headers: [String: String]?)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_key_processor(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiKeyProcessor_lower(processor),
+        FfiConverterOptionDictionaryStringString.lower(headers),$0
     )
 }
 }
@@ -1084,6 +1125,366 @@ public func FfiConverterTypeAudioPlayerItem_lift(_ handle: UInt64) throws -> Aud
 #endif
 public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> UInt64 {
     return FfiConverterTypeAudioPlayerItem.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Position-dependent symmetric cipher for DRM key decryption.
+ *
+ * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
+ * Also implements `FfiKeyProcessor` so it can be passed directly
+ * to `AudioPlayer.setKeyProcessor()`.
+ */
+public protocol FfiCipherProtocol: AnyObject, Sendable {
+    
+    /**
+     * Decrypt data using this cipher.
+     */
+    func decrypt(data: Data)  -> Data
+    
+    func processKey(key: Data)  -> Data
+    
+}
+/**
+ * Position-dependent symmetric cipher for DRM key decryption.
+ *
+ * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
+ * Also implements `FfiKeyProcessor` so it can be passed directly
+ * to `AudioPlayer.setKeyProcessor()`.
+ */
+open class FfiCipher: FfiCipherProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_fficipher(self.handle, $0) }
+    }
+    /**
+     * Create a new cipher from a key string.
+     */
+public convenience init(key: String) {
+    let handle =
+        try! rustCall() {
+    uniffi_kithara_ffi_fn_constructor_fficipher_new(
+        FfiConverterString.lower(key),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_fficipher(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Decrypt data using this cipher.
+     */
+open func decrypt(data: Data) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_fficipher_decrypt(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(data),$0
+    )
+})
+}
+    
+open func processKey(key: Data) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_fficipher_process_key(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(key),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCipher: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiCipher
+
+    public static func lift(_ handle: UInt64) throws -> FfiCipher {
+        return FfiCipher(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiCipher) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCipher {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiCipher, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+extension FfiCipher: FfiKeyProcessor {}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCipher_lift(_ handle: UInt64) throws -> FfiCipher {
+    return try FfiConverterTypeFfiCipher.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCipher_lower(_ value: FfiCipher) -> UInt64 {
+    return FfiConverterTypeFfiCipher.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Callback for processing (decrypting) HLS encryption keys.
+ *
+ * Called for each key fetched from the server. The implementation should
+ * return the decrypted key bytes.
+ */
+public protocol FfiKeyProcessor: AnyObject, Sendable {
+    
+    func processKey(key: Data)  -> Data
+    
+}
+/**
+ * Callback for processing (decrypting) HLS encryption keys.
+ *
+ * Called for each key fetched from the server. The implementation should
+ * return the decrypted key bytes.
+ */
+open class FfiKeyProcessorImpl: FfiKeyProcessor, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffikeyprocessor(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffikeyprocessor(handle, $0) }
+    }
+
+    
+
+    
+open func processKey(key: Data) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffikeyprocessor_process_key(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(key),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiKeyProcessor {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceFfiKeyProcessor] = [UniffiVTableCallbackInterfaceFfiKeyProcessor(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFfiKeyProcessor.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiKeyProcessor: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFfiKeyProcessor.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiKeyProcessor: handle missing in uniffiClone")
+            }
+        },
+        processKey: { (
+            uniffiHandle: UInt64,
+            key: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypeFfiKeyProcessor.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.processKey(
+                     key: try FfiConverterData.lift(key)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitFfiKeyProcessor() {
+    uniffi_kithara_ffi_fn_init_callback_vtable_ffikeyprocessor(UniffiCallbackInterfaceFfiKeyProcessor.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiKeyProcessor: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<FfiKeyProcessor>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiKeyProcessor
+
+    public static func lift(_ handle: UInt64) throws -> FfiKeyProcessor {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiKeyProcessorImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: FfiKeyProcessor) -> UInt64 {
+         if let rustImpl = value as? FfiKeyProcessorImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiKeyProcessor {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiKeyProcessor, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeyProcessor_lift(_ handle: UInt64) throws -> FfiKeyProcessor {
+    return try FfiConverterTypeFfiKeyProcessor.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeyProcessor_lower(_ value: FfiKeyProcessor) -> UInt64 {
+    return FfiConverterTypeFfiKeyProcessor.lower(value)
 }
 
 
@@ -2638,6 +3039,12 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15435) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 34424) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_id() != 43480) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2663,6 +3070,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 17628) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 29170) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 60649) {
@@ -2707,6 +3117,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_key_processor() != 4468) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 50507) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2722,6 +3135,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 50555) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 63309) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 37818) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2729,6 +3145,7 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitFfiKeyProcessor()
     uniffiCallbackInitItemObserver()
     uniffiCallbackInitPlayerObserver()
     uniffiCallbackInitSeekCallback()

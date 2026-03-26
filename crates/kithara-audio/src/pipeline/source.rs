@@ -64,6 +64,7 @@ impl<T: StreamType> SharedStream<T> {
             fn current_segment_range(&self) -> Option<Range<u64>>;
             fn format_change_segment_range(&self) -> Option<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
+            pub(crate) fn commit_variant_layout(&self);
             pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
@@ -283,7 +284,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Applying format change: old decoder finished, seeking to new segment start"
         );
 
-        // Clear variant fence so the new decoder can read the new variant.
+        // Switch layout and clear variant fence so the new decoder reads
+        // from the correct variant's byte map.
+        self.shared_stream.commit_variant_layout();
         self.shared_stream.clear_variant_fence();
 
         if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
@@ -414,6 +417,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
         {
             let new_duration = new_decoder.duration();
+            let variant = new_info.variant_index;
             // Atomic session update — only on success
             self.session = DecoderSession {
                 base_offset,
@@ -421,6 +425,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 media_info: Some(new_info.clone()),
             };
             debug!(?new_duration, base_offset, "Decoder recreated successfully");
+            self.emit_event(AudioEvent::DecoderReady {
+                base_offset,
+                variant,
+            });
             true
         } else {
             warn!(base_offset, "Failed to recreate decoder");
@@ -624,6 +632,29 @@ impl<T: StreamType> StreamAudioSource<T> {
             "seek anchor path: starting exact decoder seek"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
+            // Decoder internal state may be corrupted (e.g. Symphonia's moof
+            // table has stale byte offsets). Recover by recreating the decoder
+            // at the anchor offset — fresh state resolves the corruption.
+            warn!(
+                ?err,
+                epoch,
+                ?position,
+                "seek anchor path: decoder seek failed, recreating decoder"
+            );
+            let info = self
+                .shared_stream
+                .media_info()
+                .or_else(|| self.session.media_info.clone());
+            if let Some(info) = info {
+                self.start_recreating_decoder(
+                    RecreateCause::VariantSwitch,
+                    info,
+                    RecreateNext::Seek(request),
+                    anchor.byte_offset,
+                    request.attempt,
+                );
+                return false;
+            }
             self.fail_seek(request, err, "seek anchor path: exact decoder seek failed");
             return false;
         }
@@ -1195,6 +1226,26 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
         if !self.source_is_ready() {
+            // Source is blocked — if ABR switched, the downloader stopped
+            // fetching old-variant segments and the data will never arrive.
+            // Start recreation now instead of blocking on wait_range().
+            // Skip during seek — ABR is frozen and recreation would interfere.
+            if !self.timeline.is_seek_pending()
+                && let Some((new_info, target_offset)) = self.detect_format_change()
+            {
+                debug!(
+                    target_offset,
+                    "step_decoding: source blocked with pending format change, recreating"
+                );
+                self.start_recreating_decoder(
+                    RecreateCause::FormatBoundary,
+                    new_info,
+                    RecreateNext::Decode,
+                    target_offset,
+                    0,
+                );
+                return TrackStep::StateChanged;
+            }
             let phase = self.shared_stream.phase();
             trace!(
                 ?phase,
@@ -1427,6 +1478,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             self.apply_format_change(&recreate.media_info, recreate.offset)
         } else {
+            // Switch layout to the target variant BEFORE decoder creation so
+            // stream.len() returns the new variant's total and the new decoder
+            // reads from the correct byte map. This is safe because the old
+            // decoder is no longer reading at this point.
+            self.shared_stream.commit_variant_layout();
             self.shared_stream.clear_variant_fence();
             if let Err(err) = self.shared_stream.seek(SeekFrom::Start(recreate.offset)) {
                 warn!(

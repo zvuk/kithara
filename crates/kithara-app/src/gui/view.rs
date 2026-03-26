@@ -22,7 +22,7 @@ use super::{
     icons::Icon,
     message::{Message, Tab},
 };
-use crate::theme::gui::GuiPalette;
+use crate::{playlist::TrackStatus, theme::gui::GuiPalette};
 
 // Layout
 const OUTER_PADDING: f32 = 18.0;
@@ -145,6 +145,9 @@ const SECONDS_PER_MINUTE: u32 = 60;
 
 // EQ band count threshold for simple labels
 const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
+
+const BLINK_DIVISOR: u8 = 5;
+const BLINK_PERIOD: u64 = 2;
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
@@ -429,8 +432,32 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for index in 0..state.playlist.len() {
         let is_current = state.current_track_index == Some(index);
-        let text_color = if is_current { p.accent } else { p.text };
-        let index_color = if is_current { p.accent } else { p.muted };
+        let status = state.playlist.track_status(index);
+        let is_failed = status == TrackStatus::Failed;
+        let is_slow = status == TrackStatus::Slow;
+        let blink_on = u64::from(state.blink_counter / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
+        let text_color = if is_failed {
+            p.danger
+        } else if is_slow && is_current {
+            if blink_on { p.warning } else { p.muted }
+        } else if is_slow {
+            p.warning
+        } else if is_current {
+            p.accent
+        } else {
+            p.text
+        };
+        let index_color = if is_failed {
+            p.danger
+        } else if is_slow && is_current {
+            if blink_on { p.warning } else { p.muted }
+        } else if is_slow {
+            p.warning
+        } else if is_current {
+            p.accent
+        } else {
+            p.muted
+        };
         let track_name = truncate_name(&state.playlist.track_name(index), PLAYLIST_MAX_NAME_CHARS);
 
         let item = button(

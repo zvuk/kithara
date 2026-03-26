@@ -69,7 +69,18 @@ impl StreamType for Hls {
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let cancel = config.cancel.clone().unwrap_or_default();
-        let net = HttpClient::new(config.net.clone());
+
+        // Create event bus early so soft timeout callback can publish to it.
+        let bus = config
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
+        let net = HttpClient::new({
+            let mut opts = config.net.clone();
+            let slow_bus = bus.clone();
+            opts.on_slow = Some(Arc::new(move || slow_bus.publish(HlsEvent::LoadSlow)));
+            opts
+        });
 
         // Build DRM process function for ProcessingAssets
         let drm_process_fn: ProcessChunkFn<DecryptContext> =
@@ -144,11 +155,7 @@ impl StreamType for Hls {
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
 
-        // Create or reuse event bus.
-        let bus = config
-            .bus
-            .clone()
-            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
+        // Event bus was created earlier (before HttpClient) for soft timeout callback.
 
         // Emit VariantsDiscovered event
         let variant_info = variant_info_from_master(&master);

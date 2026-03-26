@@ -49,6 +49,11 @@ pub enum AudioEvent {
         target: Duration,
         attempts: u8,
     },
+    /// Decoder initialized or recreated (ABR switch, format boundary, recovery).
+    DecoderReady {
+        base_offset: u64,
+        variant: Option<u32>,
+    },
     /// Decoding finished (EOF).
     EndOfStream,
 }

@@ -138,8 +138,10 @@ pub(crate) mod tui {
         pub bg: Color,
         pub bg_panel: Color,
         pub accent: Color,
+        pub danger: Color,
         pub muted: Color,
         pub text: Color,
+        pub warning: Color,
     }
 
     impl From<Palette> for TuiPalette {
@@ -148,8 +150,10 @@ pub(crate) mod tui {
                 bg: to_ratatui(p.bg),
                 bg_panel: to_ratatui(p.bg_panel),
                 accent: to_ratatui(p.accent),
+                danger: to_ratatui(p.danger),
                 muted: to_ratatui(p.muted),
                 text: to_ratatui(p.text),
+                warning: to_ratatui(p.warning),
             }
         }
     }

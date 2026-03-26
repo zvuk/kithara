@@ -709,6 +709,10 @@ where
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
         Box::new(move |stream, info, base_offset| {
+            // Compute byte_len from current stream length minus base_offset.
+            // Must be recomputed on every recreation — variant switches change
+            // the effective total, so a stale value from the previous variant
+            // would cause Symphonia to compute corrupted seek deltas.
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
@@ -842,6 +846,7 @@ where
         );
         let notify_waiting = shared_stream.make_notify_fn();
 
+        let initial_variant = stream_media_info.as_ref().and_then(|i| i.variant_index);
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
@@ -851,6 +856,11 @@ where
             effects,
         )
         .with_emit(emit);
+
+        bus.publish(AudioEvent::DecoderReady {
+            base_offset: 0,
+            variant: initial_variant,
+        });
 
         let preload_notify = Arc::new(Notify::new());
         let reader_wake = Arc::new(ThreadWake::new());

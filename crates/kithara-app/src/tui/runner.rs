@@ -1,23 +1,27 @@
 use std::{
-    sync::mpsc::{self, TryRecvError},
+    sync::{
+        Arc,
+        mpsc::{self, TryRecvError},
+    },
     time::Duration,
 };
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
     play::{Engine, EngineEvent, PlayerEvent},
-    prelude::{PlayerImpl, Resource, ResourceConfig},
+    prelude::PlayerImpl,
 };
 use tokio::{
     sync::broadcast::{Receiver, error::RecvError},
-    task::{JoinHandle, spawn_blocking},
+    task::{self, JoinHandle},
 };
 
 use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
-    controls::{AppController, PlayerControls},
+    controls::{AppController, PlayerControls, TrackLoadParams},
     crossfade::{CrossfadeClock, ProgressLog},
     events::{UiMsg, format_seconds, is_progress_event, source_note},
+    playlist::Playlist,
     theme::tui,
 };
 
@@ -41,61 +45,48 @@ enum ControlOutcome {
 /// Returns an error if the TUI event loop fails.
 pub(super) async fn run_tui(
     controller: &mut AppController,
-    urls: Vec<String>,
-    track_names: Vec<String>,
-    palette: tui::TuiPalette,
+    config: &crate::config::AppConfig,
 ) -> RunnerResult {
+    let palette: tui::TuiPalette = config.palette.into();
     let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let player = controller.player().clone();
+    let load_params = controller.load_params();
+    let playlist = Arc::clone(load_params.playlist());
 
-    let mut forwarders = vec![
+    let forwarders = vec![
         forward_player_events(player.subscribe(), ui_tx.clone()),
         forward_engine_events(player.engine().subscribe(), ui_tx.clone()),
     ];
 
-    // Load tracks.
-    for (i, url) in urls.iter().enumerate() {
-        let mut config = match ResourceConfig::new(url) {
-            Ok(c) => c,
-            Err(err) => {
-                tracing::warn!(?err, url, "invalid URL, skipping");
-                continue;
-            }
-        };
-        player.prepare_config(&mut config);
-        match Resource::new(config).await {
-            Ok(resource) => {
-                let source_events = resource.subscribe();
-                player.insert(resource, None);
-                let label = format!("src{}", i + 1);
-                forwarders.push(forward_source_events(source_events, label, ui_tx.clone()));
-                let _ = ui_tx.send(UiMsg::Note(format!("loaded #{}: {url}", i + 1)));
-            }
-            Err(err) => {
-                tracing::warn!(?err, url, "failed to load resource, skipping");
-                let _ = ui_tx.send(UiMsg::Note(format!("skip #{}: {err}", i + 1)));
-            }
-        }
-    }
+    // Reserve player slots for all tracks so replace_item works by index.
+    player.reserve_slots(playlist.len());
 
-    if track_names.is_empty() {
-        return Err("no tracks loaded".into());
+    // Spawn async loading for each track.
+    for i in 0..playlist.len() {
+        let params = load_params.clone();
+        let tx = ui_tx.clone();
+        tokio::spawn(async move {
+            let ok = params.load_and_apply(i).await;
+            let msg = if ok {
+                UiMsg::Note(format!("loaded #{}", i + 1))
+            } else {
+                UiMsg::Note(format!("failed #{}", i + 1))
+            };
+            let _ = tx.send(msg);
+        });
     }
-
-    controller.play();
 
     // Run blocking UI loop in a separate thread.
-    let player_for_ui = player.clone();
-    let ui_tx_for_loop = ui_tx.clone();
-    let urls_for_loop = urls.clone();
-    let mut ui_handle = spawn_blocking(move || {
+    let ui_player = player.clone();
+    let ui_playlist = Arc::clone(&playlist);
+    let ui_load_params = load_params.clone();
+    let mut ui_handle = task::spawn_blocking(move || {
         run_ui_loop(
-            &player_for_ui,
-            &urls_for_loop,
-            track_names,
-            &ui_tx_for_loop,
+            &ui_player,
+            &ui_playlist,
+            &ui_load_params,
             &ui_rx,
             &stop_rx,
             palette,
@@ -132,18 +123,17 @@ pub(super) async fn run_tui(
 
 fn run_ui_loop(
     player: &PlayerImpl,
-    urls: &[String],
-    track_names: Vec<String>,
-    ui_tx: &mpsc::Sender<UiMsg>,
+    playlist: &Arc<Playlist>,
+    load_params: &TrackLoadParams,
     ui_rx: &mpsc::Receiver<UiMsg>,
     stop_rx: &mpsc::Receiver<()>,
     palette: tui::TuiPalette,
 ) -> RunnerResult {
-    let track_count = track_names.len();
-    let dashboard = Dashboard::new(track_names, palette);
+    let track_count = playlist.len();
+    let dashboard = Dashboard::new(Arc::clone(playlist), palette);
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
-        "controls: 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
+        "controls: space play/pause, 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
         track_count.min(MAX_DIGIT_TRACKS),
         VOLUME_STEP * PERCENT_SCALE
     ))?;
@@ -252,9 +242,8 @@ fn run_ui_loop(
                 let next = current + 1;
                 switch_track(
                     player,
+                    load_params,
                     next,
-                    urls,
-                    ui_tx,
                     &mut ui,
                     &mut crossfade_clock,
                     &mut auto_advanced_index,
@@ -276,9 +265,8 @@ fn run_ui_loop(
                             if index < player.item_count() {
                                 switch_track(
                                     player,
+                                    load_params,
                                     index,
-                                    urls,
-                                    ui_tx,
                                     &mut ui,
                                     &mut crossfade_clock,
                                     &mut auto_advanced_index,
@@ -323,6 +311,14 @@ fn handle_key(
         }
         KeyCode::Down => {
             apply_volume(player, -VOLUME_STEP, dashboard);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Char(' ') => {
+            if player.is_playing() {
+                player.pause();
+            } else {
+                player.play();
+            }
             ControlOutcome::Continue(None)
         }
         KeyCode::Char('q') => ControlOutcome::Quit,
@@ -381,45 +377,17 @@ fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
 
 fn switch_track(
     player: &PlayerImpl,
+    load_params: &TrackLoadParams,
     index: usize,
-    urls: &[String],
-    ui_tx: &mpsc::Sender<UiMsg>,
     ui: &mut UiSession,
     crossfade_clock: &mut Option<CrossfadeClock>,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
     let handle = tokio::runtime::Handle::current();
-    let url = &urls[index];
-    let resource = handle.block_on(async {
-        let mut config = ResourceConfig::new(url)?;
-        player.prepare_config(&mut config);
-        Resource::new(config).await
-    })?;
-    let events = resource.subscribe();
-    player.replace_item(index, resource);
 
-    let label = format!("src{}", index + 1);
-    let tx = ui_tx.clone();
-    handle.spawn(async move {
-        let mut rx = events;
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx
-                        .send(UiMsg::Source {
-                            event,
-                            source: label.clone(),
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => break,
-            }
-        }
-    });
+    // Use TrackLoadParams — THE ONLY place for DRM config + resource loading.
+    let resource = handle.block_on(load_params.load_resource(index))?;
+    player.replace_item(index, resource);
 
     match player.select_item(index, true) {
         Ok(()) => {
@@ -478,39 +446,6 @@ fn forward_engine_events(mut rx: Receiver<EngineEvent>, tx: mpsc::Sender<UiMsg>)
                 Err(RecvError::Lagged(n)) => {
                     if tx
                         .send(UiMsg::Note(format!("engine events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-}
-
-fn forward_source_events(
-    mut rx: Receiver<kithara::prelude::Event>,
-    source: String,
-    tx: mpsc::Sender<UiMsg>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx
-                        .send(UiMsg::Source {
-                            event,
-                            source: source.clone(),
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("{source} events lagged n={n}")))
                         .is_err()
                     {
                         break;

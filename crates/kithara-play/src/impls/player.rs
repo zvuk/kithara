@@ -183,6 +183,12 @@ impl PlayerImpl {
         }
     }
 
+    /// Pre-allocate empty slots so `replace_item` can fill them by index.
+    pub fn reserve_slots(&self, count: usize) {
+        self.items.lock_sync().resize_with(count, || None);
+        debug!(count, "slots reserved");
+    }
+
     /// Insert a resource at a specific position, or append to the end.
     pub fn insert(&self, resource: Resource, at_position: Option<usize>) {
         let mut items = self.items.lock_sync();

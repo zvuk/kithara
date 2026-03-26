@@ -35,6 +35,7 @@ final class PlayerViewModel: ObservableObject {
     private var shouldReloadCurrentTrack = false
 
     init() {
+        configureDrm(on: player)
         volume = player.volume
         isMuted = player.isMuted
         player.defaultRate = selectedRate

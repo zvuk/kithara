@@ -12,6 +12,7 @@
 //! fetched from the server is itself encrypted and needs to be unwrapped
 //! with an application-embedded key.
 
+mod cipher;
 mod context;
 mod decrypt;
 mod error;
@@ -19,6 +20,7 @@ mod error;
 #[cfg(feature = "internal")]
 pub mod internal;
 
+pub use cipher::UniqueBinaryCipher;
 pub use context::DecryptContext;
 pub use decrypt::aes128_cbc_process_chunk;
 pub use error::DrmError;

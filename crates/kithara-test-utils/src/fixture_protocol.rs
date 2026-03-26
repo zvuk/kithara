@@ -10,11 +10,9 @@
 //! both server (generates data) and client (computes `expected_byte_at`)
 //! share the exact same logic.
 
-use crate::{
-    signal_pcm::signal,
-    wav::create_wav_header,
-};
 use serde::{Deserialize, Serialize};
+
+use crate::{signal_pcm::signal, wav::create_wav_header};
 
 /// Configuration for an HLS test session (maps to `HlsTestServer`).
 #[derive(Serialize, Deserialize, Clone, Debug)]

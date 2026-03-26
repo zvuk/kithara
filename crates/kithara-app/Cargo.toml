@@ -15,10 +15,20 @@ gui = ["dep:iced"]
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
+kithara-drm = { workspace = true }
+thunderdome = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+kithara = { workspace = true, features = ["apple"] }
+bytes = { workspace = true }
 clap = { workspace = true }
+crabtime = { workspace = true }
+obfstr = { workspace = true }
+rand = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+url = { workspace = true }
 
 # TUI-only
 ratatui = { workspace = true, optional = true }

@@ -206,6 +206,14 @@ pub trait Source: Send + 'static {
     /// Default no-op for non-HLS sources.
     fn clear_variant_fence(&mut self) {}
 
+    /// Switch layout to the ABR target variant.
+    ///
+    /// Must be called right before decoder recreation so the new decoder
+    /// reads from the correct variant's byte map. Separate from
+    /// `format_change_segment_range()` to avoid switching layout while
+    /// the old decoder is still reading.
+    fn commit_variant_layout(&mut self) {}
+
     /// Wake any blocked `wait_range()` calls.
     ///
     /// Called after `Timeline::initiate_seek()` to ensure immediate response
