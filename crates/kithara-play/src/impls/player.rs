@@ -43,10 +43,13 @@ const PLAYER_EVENT_CHANNEL_CAPACITY: usize = 64;
 const MIN_PLAYBACK_RATE: f32 = 0.01;
 
 /// Configuration for the player.
-#[derive(Clone, Debug, Derivative, Setters)]
-#[derivative(Default)]
+#[derive(Clone, Derivative, Setters)]
+#[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
+    /// Shared ABR controller. When `None`, a default one is created.
+    #[derivative(Debug = "ignore")]
+    pub abr: Option<kithara_abr::AbrController<kithara_abr::ThroughputEstimator>>,
     /// Crossfade duration in seconds. Default: 1.0.
     #[derivative(Default(value = "1.0"))]
     pub crossfade_duration: f32,
@@ -99,7 +102,7 @@ pub struct PlayerImpl {
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
-    pub fn new(config: PlayerConfig) -> Self {
+    pub fn new(mut config: PlayerConfig) -> Self {
         let resolved_pool = config
             .pcm_pool
             .clone()
@@ -114,6 +117,12 @@ impl PlayerImpl {
         let engine = EngineImpl::new(engine_config);
 
         let (events_tx, _) = broadcast::channel(PLAYER_EVENT_CHANNEL_CAPACITY);
+        if config.abr.is_none() {
+            config.abr = Some(kithara_abr::AbrController::new(
+                kithara_abr::AbrOptions::default(),
+            ));
+        }
+
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
@@ -162,6 +171,10 @@ impl PlayerImpl {
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
         if let Some(rt) = self.engine.runtime() {
             config.runtime = Some(rt.clone());
+        }
+        #[cfg(feature = "hls")]
+        if config.abr.is_none() {
+            config.abr.clone_from(&self.config.abr);
         }
     }
 
@@ -537,6 +550,19 @@ impl PlayerImpl {
         Ok(())
     }
 
+    /// Get the shared ABR controller (if configured).
+    #[must_use]
+    pub fn abr(&self) -> Option<&kithara_abr::AbrController<kithara_abr::ThroughputEstimator>> {
+        self.config.abr.as_ref()
+    }
+
+    /// Change ABR mode at runtime. Takes effect on next `decide()`.
+    pub fn set_abr_mode(&self, mode: kithara_abr::AbrMode) {
+        if let Some(ref ctrl) = self.config.abr {
+            ctrl.set_mode(mode);
+        }
+    }
+
     /// Select and load a queue item by index.
     pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
         let items_len = self.item_count();
@@ -837,6 +863,7 @@ mod tests {
     #[kithara::test]
     fn player_config_custom() {
         let config = PlayerConfig {
+            abr: None,
             crossfade_duration: 2.0,
             default_rate: 0.5,
             eq_layout: generate_log_spaced_bands(5),
