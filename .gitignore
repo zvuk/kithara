@@ -83,3 +83,5 @@ android/local.properties
 
 # Node.js
 package-lock.json
+.build
+.swiftpm
