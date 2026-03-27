@@ -31,7 +31,7 @@ fn abr_decision_with_sample(
     sample: ThroughputSample,
     now: Instant,
 ) -> AbrDecision {
-    controller.push_throughput_sample(sample);
+    controller.push_sample(sample);
     controller.decide(now)
 }
 
@@ -159,7 +159,7 @@ fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenari
                     source: ThroughputSampleSource::Network,
                     content_duration: Some(Duration::from_secs(10)),
                 };
-                controller.push_throughput_sample(sample);
+                controller.push_sample(sample);
             }
 
             hotpath::measure_block!("pure_decide_loop", {

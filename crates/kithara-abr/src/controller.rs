@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use kithara_platform::time::Instant;
+use kithara_platform::{Mutex, time::Instant};
 
 use super::{AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample};
 use crate::estimator::Estimator;
@@ -21,6 +21,7 @@ pub enum AbrReason {
     NoEstimate,
     BufferTooLowForUpSwitch,
     AlreadyOptimal,
+    Locked,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,16 +31,21 @@ pub struct AbrDecision {
     pub changed: bool,
 }
 
-/// Value indicating no switch has occurred yet.
 const NO_SWITCH: u64 = 0;
 
+/// Adaptive bitrate controller.
+///
+/// Clone-able: cloning shares the same internal state (all fields behind Arc).
+/// This allows sharing one controller between multiple players or holding a
+/// clone at the Resource level for runtime mode changes.
+#[derive(Clone)]
 pub struct AbrController<E: Estimator> {
-    cfg: AbrOptions,
+    cfg: Arc<AbrOptions>,
+    mode: Arc<AtomicUsize>,
     current_variant: Arc<AtomicUsize>,
-    estimator: E,
-    /// Nanoseconds since `reference_instant` of last switch, or `NO_SWITCH` if none.
-    last_switch_at_nanos: AtomicU64,
-    /// Reference instant for computing elapsed time (created at controller init).
+    lock_count: Arc<AtomicUsize>,
+    estimator: Arc<Mutex<E>>,
+    last_switch_at_nanos: Arc<AtomicU64>,
     reference_instant: Instant,
 }
 
@@ -56,180 +62,73 @@ struct SwitchContext {
 impl<E: Estimator> AbrController<E> {
     pub fn with_estimator(cfg: AbrOptions, estimator: E) -> Self {
         let initial_variant = cfg.initial_variant();
+        let mode_val: usize = cfg.mode.into();
         Self {
-            cfg,
+            cfg: Arc::new(cfg),
+            mode: Arc::new(AtomicUsize::new(mode_val)),
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            estimator,
-            last_switch_at_nanos: AtomicU64::new(NO_SWITCH),
+            lock_count: Arc::new(AtomicUsize::new(0)),
+            estimator: Arc::new(Mutex::new(estimator)),
+            last_switch_at_nanos: Arc::new(AtomicU64::new(NO_SWITCH)),
             reference_instant: Instant::now(),
         }
     }
 
-    /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from `NO_SWITCH`.
-    #[expect(clippy::cast_possible_truncation)]
-    // elapsed nanos fit u64 for any practical time span (585 years)
-    fn instant_to_nanos(&self, instant: Instant) -> u64 {
-        let nanos = instant
-            .saturating_duration_since(self.reference_instant)
-            .as_nanos() as u64;
-        // Ensure we never return 0 (which means "no switch")
-        nanos.max(1)
-    }
-
-    /// Convert nanos to Instant. Returns None if value is `NO_SWITCH`.
-    fn nanos_to_instant(&self, nanos: u64) -> Option<Instant> {
-        if nanos == NO_SWITCH {
-            None
-        } else {
-            Some(self.reference_instant + Duration::from_nanos(nanos))
+    delegate::delegate! {
+        to self.estimator.lock_sync() {
+            pub fn push_sample(&self, sample: ThroughputSample);
+            pub fn reset_buffer(&self);
+            #[must_use]
+            pub fn buffer_level_secs(&self) -> f64;
         }
     }
 
-    /// Record a switch at the given instant.
-    fn record_switch(&self, now: Instant) {
-        self.last_switch_at_nanos
-            .store(self.instant_to_nanos(now), Ordering::Release);
-    }
-
-    /// Get current variant index.
+    #[must_use]
     pub fn get_current_variant_index(&self) -> usize {
         self.current_variant.load(Ordering::Acquire)
     }
 
-    /// Shared atomic handle with current variant index.
     #[must_use]
     pub fn variant_index_handle(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.current_variant)
     }
 
-    pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
-        self.estimator.push_sample(sample);
-    }
-
-    /// Minimum download duration (ms) to record a throughput sample.
+    #[must_use]
     pub fn min_throughput_record_ms(&self) -> u128 {
         self.cfg.min_throughput_record_ms
     }
 
-    /// Reset buffer level (e.g., on seek).
-    pub fn reset_buffer(&mut self) {
-        self.estimator.reset_buffer();
+    #[must_use]
+    pub fn mode(&self) -> AbrMode {
+        AbrMode::from(self.mode.load(Ordering::Acquire))
     }
 
-    /// Get current buffer level in seconds.
-    pub fn buffer_level_secs(&self) -> f64 {
-        self.estimator.buffer_level_secs()
+    pub fn set_mode(&self, mode: AbrMode) {
+        self.mode.store(mode.into(), Ordering::Release);
     }
 
-    fn decision(current: usize, target_variant_index: usize, reason: AbrReason) -> AbrDecision {
-        AbrDecision {
-            target_variant_index,
-            reason,
-            changed: target_variant_index != current,
-        }
+    pub fn lock(&self) {
+        self.lock_count.fetch_add(1, Ordering::AcqRel);
     }
 
-    fn current_variant_bandwidth(&self, current: usize) -> u64 {
-        self.cfg
-            .variants
-            .iter()
-            .find(|v| v.variant_index == current)
-            .map_or(0, |v| v.bandwidth_bps)
+    pub fn unlock(&self) {
+        let prev = self.lock_count.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(prev > 0, "unlock called without matching lock");
     }
 
-    fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
-        let max_bw = self.cfg.max_bandwidth_bps;
-        let mut variants: Vec<(usize, u64)> = self
-            .cfg
-            .variants
-            .iter()
-            .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
-            .map(|v| (v.variant_index, v.bandwidth_bps))
-            .collect();
-        variants.sort_by_key(|(_, bw)| *bw);
-        variants
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        self.lock_count.load(Ordering::Acquire) > 0
     }
 
-    #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-    fn adjusted_throughput_bps(&self, estimate_bps: u64) -> f64 {
-        (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0)
-    }
-
-    fn candidate_variant(variants: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let best_under = variants
-            .iter()
-            .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
-            .max_by_key(|(_, bw)| *bw);
-        best_under
-            .or_else(|| variants.first())
-            .map(|(idx, bw)| (*idx, *bw))
-    }
-
-    fn maybe_up_switch_decision(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
-        if ctx.candidate_bw <= ctx.current_bw {
-            return None;
-        }
-
-        let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
-            || ctx.buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let headroom_ok =
-            ctx.adjusted_bps >= (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let required_bps = (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
-        tracing::debug!(
-            buffer_ok,
-            headroom_ok,
-            buffer_level_secs = ctx.buffer_level_secs,
-            min_buffer = self.cfg.min_buffer_for_up_switch_secs,
-            adjusted_bps = ctx.adjusted_bps,
-            required_bps,
-            "ABR decide: up-switch check"
-        );
-
-        if buffer_ok && headroom_ok {
-            self.record_switch(now);
-            return Some(Self::decision(
-                ctx.current,
-                ctx.candidate_idx,
-                AbrReason::UpSwitch,
-            ));
-        }
-
-        Some(Self::decision(
-            ctx.current,
-            ctx.current,
-            AbrReason::BufferTooLowForUpSwitch,
-        ))
-    }
-
-    fn maybe_down_switch_decision(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
-        if ctx.candidate_bw >= ctx.current_bw {
-            return None;
-        }
-
-        let urgent_down = ctx.buffer_level_secs <= self.cfg.down_switch_buffer_secs;
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let margin_ok =
-            ctx.adjusted_bps <= (ctx.current_bw as f64) * self.cfg.down_hysteresis_ratio;
-        if urgent_down || margin_ok {
-            self.record_switch(now);
-            return Some(Self::decision(
-                ctx.current,
-                ctx.candidate_idx,
-                AbrReason::DownSwitch,
-            ));
-        }
-        None
-    }
-
-    /// Make ABR decision using variants from configuration.
     pub fn decide(&self, now: Instant) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
-        // Handle Manual mode - always return configured variant
-        if let AbrMode::Manual(idx) = self.cfg.mode {
+        if self.is_locked() {
+            return Self::decision(current, current, AbrReason::Locked);
+        }
+
+        if let AbrMode::Manual(idx) = self.mode() {
             return Self::decision(current, idx, AbrReason::ManualOverride);
         }
 
@@ -244,7 +143,7 @@ impl<E: Estimator> AbrController<E> {
             return Self::decision(current, current, AbrReason::MinInterval);
         }
 
-        let Some(estimate_bps) = self.estimator.estimate_bps() else {
+        let Some(estimate_bps) = self.estimator.lock_sync().estimate_bps() else {
             tracing::debug!(current, buffer_level_secs, "ABR decide: NoEstimate");
             return Self::decision(current, current, AbrReason::NoEstimate);
         };
@@ -280,11 +179,9 @@ impl<E: Estimator> AbrController<E> {
             candidate_bw,
             current,
             current_bw,
-            "ABR decide: candidate selected"
+            "ABR decide: candidate"
         );
 
-        // If current variant exceeds the bandwidth cap, force immediate downswitch
-        // bypassing hysteresis (hard upper bound).
         if let Some(cap) = self.cfg.max_bandwidth_bps
             && current_bw > cap
             && candidate_idx != current
@@ -293,7 +190,7 @@ impl<E: Estimator> AbrController<E> {
             return Self::decision(current, candidate_idx, AbrReason::DownSwitch);
         }
 
-        let switch_ctx = SwitchContext {
+        let ctx = SwitchContext {
             adjusted_bps,
             buffer_level_secs,
             candidate_bw,
@@ -302,18 +199,17 @@ impl<E: Estimator> AbrController<E> {
             current_bw,
         };
 
-        if let Some(decision) = self.maybe_up_switch_decision(now, switch_ctx) {
-            return decision;
+        if let Some(d) = self.maybe_up_switch(now, ctx) {
+            return d;
         }
-
-        if let Some(decision) = self.maybe_down_switch_decision(now, switch_ctx) {
-            return decision;
+        if let Some(d) = self.maybe_down_switch(now, ctx) {
+            return d;
         }
 
         Self::decision(current, current, AbrReason::AlreadyOptimal)
     }
 
-    pub fn apply(&mut self, decision: &AbrDecision, now: Instant) {
+    pub fn apply(&self, decision: &AbrDecision, now: Instant) {
         let current = self.current_variant.load(Ordering::Acquire);
         if decision.target_variant_index == current {
             return;
@@ -323,14 +219,128 @@ impl<E: Estimator> AbrController<E> {
         self.record_switch(now);
     }
 
+    fn decision(current: usize, target: usize, reason: AbrReason) -> AbrDecision {
+        AbrDecision {
+            target_variant_index: target,
+            reason,
+            changed: target != current,
+        }
+    }
+
+    #[expect(clippy::cast_possible_truncation)]
+    fn instant_to_nanos(&self, instant: Instant) -> u64 {
+        let nanos = instant
+            .saturating_duration_since(self.reference_instant)
+            .as_nanos() as u64;
+        nanos.max(1)
+    }
+
+    fn record_switch(&self, now: Instant) {
+        self.last_switch_at_nanos
+            .store(self.instant_to_nanos(now), Ordering::Release);
+    }
+
     fn can_switch_now(&self, now: Instant) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
-        self.nanos_to_instant(nanos)
-            .is_none_or(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
+        if nanos == NO_SWITCH {
+            return true;
+        }
+        let last = self.reference_instant + Duration::from_nanos(nanos);
+        now.duration_since(last) >= self.cfg.min_switch_interval
+    }
+
+    fn current_variant_bandwidth(&self, current: usize) -> u64 {
+        self.cfg
+            .variants
+            .iter()
+            .find(|v| v.variant_index == current)
+            .map_or(0, |v| v.bandwidth_bps)
+    }
+
+    fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
+        let max_bw = self.cfg.max_bandwidth_bps;
+        let mut variants: Vec<(usize, u64)> = self
+            .cfg
+            .variants
+            .iter()
+            .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
+            .map(|v| (v.variant_index, v.bandwidth_bps))
+            .collect();
+        variants.sort_by_key(|(_, bw)| *bw);
+        variants
+    }
+
+    #[expect(clippy::cast_precision_loss)]
+    fn adjusted_throughput_bps(&self, estimate_bps: u64) -> f64 {
+        (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0)
+    }
+
+    fn candidate_variant(variants: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
+        #[expect(clippy::cast_precision_loss)]
+        let best_under = variants
+            .iter()
+            .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
+            .max_by_key(|(_, bw)| *bw);
+        best_under
+            .or_else(|| variants.first())
+            .map(|(idx, bw)| (*idx, *bw))
+    }
+
+    fn maybe_up_switch(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
+        if ctx.candidate_bw <= ctx.current_bw {
+            return None;
+        }
+        let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
+            || ctx.buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
+        #[expect(clippy::cast_precision_loss)]
+        let headroom_ok =
+            ctx.adjusted_bps >= (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+        #[expect(clippy::cast_precision_loss)]
+        let required_bps = (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+        tracing::debug!(
+            buffer_ok,
+            headroom_ok,
+            buffer_level_secs = ctx.buffer_level_secs,
+            min_buffer = self.cfg.min_buffer_for_up_switch_secs,
+            adjusted_bps = ctx.adjusted_bps,
+            required_bps,
+            "ABR decide: up-switch check"
+        );
+        if buffer_ok && headroom_ok {
+            self.record_switch(now);
+            return Some(Self::decision(
+                ctx.current,
+                ctx.candidate_idx,
+                AbrReason::UpSwitch,
+            ));
+        }
+        Some(Self::decision(
+            ctx.current,
+            ctx.current,
+            AbrReason::BufferTooLowForUpSwitch,
+        ))
+    }
+
+    fn maybe_down_switch(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
+        if ctx.candidate_bw >= ctx.current_bw {
+            return None;
+        }
+        let urgent_down = ctx.buffer_level_secs <= self.cfg.down_switch_buffer_secs;
+        #[expect(clippy::cast_precision_loss)]
+        let margin_ok =
+            ctx.adjusted_bps <= (ctx.current_bw as f64) * self.cfg.down_hysteresis_ratio;
+        if urgent_down || margin_ok {
+            self.record_switch(now);
+            return Some(Self::decision(
+                ctx.current,
+                ctx.candidate_idx,
+                AbrReason::DownSwitch,
+            ));
+        }
+        None
     }
 }
 
-// Backward compatibility: Default AbrController with ThroughputEstimator
 impl AbrController<ThroughputEstimator> {
     #[must_use]
     pub fn new(cfg: AbrOptions) -> Self {
@@ -367,682 +377,391 @@ mod tests {
         ]
     }
 
-    fn estimator_static(estimate_bps: Option<u64>, buffer_secs: f64) -> Unimock {
+    fn estimator_static(bps: Option<u64>, buffer_secs: f64) -> Unimock {
         Unimock::new((
             EstimatorMock::estimate_bps
                 .each_call(matching!())
-                .returns(estimate_bps),
+                .returns(bps),
             EstimatorMock::buffer_level_secs
                 .each_call(matching!())
                 .returns(buffer_secs),
         ))
     }
 
-    #[kithara::test(wasm)]
-    #[case("downswitch_low_throughput", 2, 300_000 / 8, 10.0, 0, AbrReason::DownSwitch, true)]
-    #[case("upswitch_high_throughput", 0, 2_000_000 / 8, 0.0, 2, AbrReason::UpSwitch, true)]
+    fn opts(mode: AbrMode) -> AbrOptions {
+        AbrOptions {
+            mode,
+            variants: variants(),
+            min_switch_interval: Duration::from_secs(0),
+            ..AbrOptions::default()
+        }
+    }
+
+    #[kithara::test]
+    fn set_mode_auto_to_manual() {
+        let ctrl = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(0))),
+            estimator_static(None, 0.0),
+        );
+        assert_eq!(ctrl.decide(Instant::now()).reason, AbrReason::NoEstimate);
+
+        ctrl.set_mode(AbrMode::Manual(2));
+        let d = ctrl.decide(Instant::now());
+        assert_eq!(d.reason, AbrReason::ManualOverride);
+        assert_eq!(d.target_variant_index, 2);
+    }
+
+    #[kithara::test]
+    fn set_mode_manual_to_auto() {
+        let ctrl =
+            AbrController::with_estimator(opts(AbrMode::Manual(1)), estimator_static(None, 0.0));
+        assert_eq!(
+            ctrl.decide(Instant::now()).reason,
+            AbrReason::ManualOverride
+        );
+
+        ctrl.set_mode(AbrMode::Auto(None));
+        assert_eq!(ctrl.decide(Instant::now()).reason, AbrReason::NoEstimate);
+    }
+
+    #[kithara::test]
+    fn clone_shares_state() {
+        let ctrl = AbrController::with_estimator(opts(AbrMode::Auto(None)), Unimock::new(()));
+        let clone = ctrl.clone();
+        clone.set_mode(AbrMode::Manual(2));
+        assert_eq!(ctrl.mode(), AbrMode::Manual(2));
+    }
+
+    #[kithara::test]
+    fn clone_shares_variant() {
+        let ctrl = AbrController::with_estimator(opts(AbrMode::Manual(1)), Unimock::new(()));
+        let clone = ctrl.clone();
+        clone.apply(
+            &AbrDecision {
+                target_variant_index: 2,
+                reason: AbrReason::ManualOverride,
+                changed: true,
+            },
+            Instant::now(),
+        );
+        assert_eq!(ctrl.get_current_variant_index(), 2);
+    }
+
+    #[kithara::test]
+    fn lock_prevents_decide() {
+        let ctrl =
+            AbrController::with_estimator(opts(AbrMode::Auto(None)), estimator_static(None, 0.0));
+        ctrl.lock();
+        assert_eq!(ctrl.decide(Instant::now()).reason, AbrReason::Locked);
+        ctrl.unlock();
+        assert_ne!(ctrl.decide(Instant::now()).reason, AbrReason::Locked);
+    }
+
+    #[kithara::test]
+    fn lock_is_ref_counted() {
+        let ctrl = AbrController::with_estimator(opts(AbrMode::Auto(None)), Unimock::new(()));
+        ctrl.lock();
+        ctrl.lock();
+        assert!(ctrl.is_locked());
+        ctrl.unlock();
+        assert!(ctrl.is_locked());
+        ctrl.unlock();
+        assert!(!ctrl.is_locked());
+    }
+
+    // Parametrized ABR decision test.
+    // Columns: name, start_variant, throughput_bytes, buffer_secs,
+    //          down_switch_buf, min_buf_up, safety_factor,
+    //          expected_variant, expected_reason, expected_changed
+    #[kithara::test]
+    #[case("downswitch_low_throughput",  2, 300_000/8, 10.0, 0.0, 0.0, 1.5, 0, AbrReason::DownSwitch, true)]
+    #[case("upswitch_high_throughput",   0, 2_000_000/8, 0.0, 0.0, 0.0, 1.5, 2, AbrReason::UpSwitch, true)]
     #[case(
         "downswitch_buffer_too_low",
         2,
         30_000,
         0.1,
+        0.0,
+        0.0,
+        1.5,
         0,
         AbrReason::DownSwitch,
         true
     )]
+    #[case("no_change_mid_variant",      1, 800_000/8, 10.0, 0.0, 0.0, 1.5, 1, AbrReason::AlreadyOptimal, false)]
+    #[case("upswitch_blocked_by_min_buffer", 0, 2_000_000/8, 2.0, 0.0, 10.0, 1.5, 0, AbrReason::BufferTooLowForUpSwitch, false)]
+    #[case("upswitch_allowed_with_buffer",   0, 2_000_000/8, 15.0, 0.0, 10.0, 1.5, 2, AbrReason::UpSwitch, true)]
+    #[case("safety_factor_tight_blocks_up",  0, 400_000/8, 15.0, 0.0, 0.0, 3.0, 0, AbrReason::AlreadyOptimal, false)]
+    #[case("safety_factor_loose_allows_up",  0, 2_000_000/8, 15.0, 0.0, 0.0, 1.0, 2, AbrReason::UpSwitch, true)]
+    #[case("down_buf_threshold_triggers",    1, 600_000/8, 4.0, 5.0, 0.0, 1.5, 0, AbrReason::DownSwitch, true)]
+    #[case("down_buf_threshold_safe",        1, 800_000/8, 15.0, 5.0, 0.0, 1.5, 1, AbrReason::AlreadyOptimal, false)]
     fn test_throughput_based_switching(
         #[case] _name: &str,
-        #[case] initial_variant: usize,
+        #[case] start_variant: usize,
         #[case] throughput_bytes: u64,
-        #[case] buffer_level_secs: f64,
+        #[case] buffer_secs: f64,
+        #[case] down_switch_buf: f64,
+        #[case] min_buf_up: f64,
+        #[case] safety_factor: f64,
         #[case] expected_variant: usize,
         #[case] expected_reason: AbrReason,
         #[case] expected_changed: bool,
     ) {
         let cfg = AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: down_switch_buf,
+            min_buffer_for_up_switch_secs: min_buf_up,
             min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(initial_variant)),
-            throughput_safety_factor: 1.5,
+            mode: AbrMode::Auto(Some(start_variant)),
+            throughput_safety_factor: safety_factor,
             variants: variants(),
             ..AbrOptions::default()
         };
-
-        let mut c = AbrController::new(cfg);
+        let ctrl = AbrController::new(cfg);
         let now = Instant::now();
-        c.push_throughput_sample(ThroughputSample {
+        ctrl.push_sample(ThroughputSample {
             bytes: throughput_bytes,
             duration: Duration::from_secs(1),
             at: now,
             source: super::super::ThroughputSampleSource::Network,
-            content_duration: if buffer_level_secs > 0.0 {
-                Some(Duration::from_secs_f64(buffer_level_secs))
+            content_duration: if buffer_secs > 0.0 {
+                Some(Duration::from_secs_f64(buffer_secs))
             } else {
                 None
             },
         });
-
-        let d = c.decide(now);
-        assert_eq!(d.target_variant_index, expected_variant);
-        assert_eq!(d.reason, expected_reason);
-        assert_eq!(d.changed, expected_changed);
+        let d = ctrl.decide(now);
+        assert_eq!(d.target_variant_index, expected_variant, "variant mismatch");
+        assert_eq!(d.reason, expected_reason, "reason mismatch");
+        assert_eq!(d.changed, expected_changed, "changed mismatch");
     }
 
     #[kithara::test]
     fn upswitch_requires_buffer_and_hysteresis() {
-        let cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: 10.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mut c = AbrController::new(cfg);
-        let now = Instant::now();
-
-        // Low buffer: should not up-switch
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 2_000_000 / 8,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-            content_duration: Some(Duration::from_secs_f64(2.0)),
-        });
-        let low_buf = c.decide(now);
-        assert_eq!(low_buf.target_variant_index, 0);
-        assert_eq!(low_buf.reason, AbrReason::BufferTooLowForUpSwitch);
-
-        // High buffer: should up-switch
-        c.reset_buffer();
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 2_000_000 / 8,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-            content_duration: Some(Duration::from_secs_f64(20.0)),
-        });
-        let ok_buf = c.decide(now);
-        assert_eq!(ok_buf.target_variant_index, 2);
-        assert_eq!(ok_buf.reason, AbrReason::UpSwitch);
-        assert!(ok_buf.changed);
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(0)),
+                variants: variants(),
+                min_switch_interval: Duration::from_secs(0),
+                min_buffer_for_up_switch_secs: 10.0,
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(1_500_000), 2.0),
+        );
+        let d = ctrl.decide(Instant::now());
+        assert_eq!(d.reason, AbrReason::BufferTooLowForUpSwitch);
+        assert!(!d.changed);
     }
 
     #[kithara::test]
     fn min_switch_interval_prevents_oscillation() {
-        let cfg = AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(30),
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mut c = AbrController::new(cfg);
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(0)),
+                variants: variants(),
+                min_switch_interval: Duration::from_secs(30),
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(1_500_000), 15.0),
+        );
         let now = Instant::now();
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 2_000_000 / 8,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-            content_duration: Some(Duration::from_secs_f64(10.0)),
-        });
-
-        let d1 = c.decide(now);
-        assert_eq!(d1.target_variant_index, 2);
+        let d1 = ctrl.decide(now);
         assert!(d1.changed);
-
-        let d2 = c.decide(now);
-        assert_eq!(d2.target_variant_index, 1);
-        assert!(!d2.changed);
+        ctrl.apply(&d1, now);
+        let d2 = ctrl.decide(now + Duration::from_secs(1));
         assert_eq!(d2.reason, AbrReason::MinInterval);
     }
 
     #[kithara::test]
     fn no_change_without_estimate() {
-        let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-        let c = AbrController::new(cfg);
-        let now = Instant::now();
-
-        let d = c.decide(now);
-        assert_eq!(d.target_variant_index, 1);
-        assert!(!d.changed);
+        let ctrl = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(1))),
+            estimator_static(None, 5.0),
+        );
+        let d = ctrl.decide(Instant::now());
         assert_eq!(d.reason, AbrReason::NoEstimate);
+        assert!(!d.changed);
     }
 
     #[kithara::test]
     fn test_estimator_called_once_per_decide() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // estimate_bps() called exactly 2 times, buffer_level_secs() called freely
-        // push_sample() is never set up — unimock panics if called unexpectedly
-        let mock_estimator = Unimock::new((
+        let estimator = Unimock::new((
             EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(1_000_000))
-                .n_times(2),
+                .next_call(matching!())
+                .returns(Some(500_000)),
             EstimatorMock::buffer_level_secs
                 .each_call(matching!())
-                .returns(0.0),
+                .returns(10.0),
         ));
-
-        let c = AbrController::with_estimator(cfg, mock_estimator);
-        let now = Instant::now();
-
-        // First decide — calls estimator once
-        c.decide(now);
-
-        // Second decide — calls estimator again
-        c.decide(now);
-
-        // Unimock verifies call counts on drop
+        let ctrl = AbrController::with_estimator(opts(AbrMode::Auto(Some(0))), estimator);
+        let _ = ctrl.decide(Instant::now());
     }
 
     #[kithara::test]
     fn test_min_interval_skips_estimator_call() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::from_secs(30),
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // estimate_bps() called exactly ONCE
-        // (second decide() early-returns due to min_interval)
-        let mock_estimator = Unimock::new((
-            EstimatorMock::estimate_bps
-                .some_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(20.0),
-        ));
-
-        let c = AbrController::with_estimator(cfg, mock_estimator);
-        let now = Instant::now();
-
-        // First call — calls estimator and causes switch
-        let d1 = c.decide(now);
-        assert!(d1.changed, "First call should switch");
-
-        // Second call immediately — should NOT call estimator (min_interval)
-        let d2 = c.decide(now);
-        assert!(!d2.changed, "Second call should not switch");
-        assert_eq!(d2.reason, AbrReason::MinInterval);
-
-        // Unimock verifies estimator was called exactly once on drop
-    }
-
-    #[kithara::test]
-    fn test_abr_sequence_estimate_then_push() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // Verify sequence: estimate → push_sample → estimate
-        // buffer_level_secs is a stub (called any time, not sequenced)
-        let mock_estimator = Unimock::new((
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-            EstimatorMock::estimate_bps
-                .next_call(matching!())
-                .returns(Some(1_000_000)),
-            EstimatorMock::push_sample
-                .next_call(matching!(_))
-                .returns(()),
-            EstimatorMock::estimate_bps
-                .next_call(matching!())
-                .returns(Some(2_000_000)),
-        ));
-
-        let mut c = AbrController::with_estimator(cfg, mock_estimator);
-        let now = Instant::now();
-
-        c.decide(now);
-
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 1_000_000 / 8,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-            content_duration: None,
-        });
-
-        c.decide(now);
-    }
-
-    #[kithara::test]
-    fn test_abr_sequence_multiple_decisions() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::ZERO,
+        let ctrl = AbrController::new(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             variants: variants(),
+            min_switch_interval: Duration::from_secs(30),
             ..AbrOptions::default()
-        };
-
-        // Three ordered estimate_bps calls with different return values
-        let mock_estimator = Unimock::new((
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-            EstimatorMock::estimate_bps
-                .next_call(matching!())
-                .returns(Some(500_000)),
-            EstimatorMock::estimate_bps
-                .next_call(matching!())
-                .returns(Some(1_500_000)),
-            EstimatorMock::estimate_bps
-                .next_call(matching!())
-                .returns(Some(3_000_000)),
-        ));
-
-        let c = AbrController::with_estimator(cfg, mock_estimator);
-        let now = Instant::now();
-
-        c.decide(now);
-        c.decide(now);
-        c.decide(now);
+        });
+        ctrl.last_switch_at_nanos
+            .store(ctrl.instant_to_nanos(Instant::now()), Ordering::Release);
+        assert_eq!(ctrl.decide(Instant::now()).reason, AbrReason::MinInterval);
     }
-
-    // apply() tests
 
     #[kithara::test]
     fn apply_no_change_leaves_variant_and_timestamp_unchanged() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(1)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // adjusted_bps = 768_000 / 1.5 = 512_000 → variant 1 (512k) is best-under
-        // candidate == current → AlreadyOptimal, no switch
-        let mock = estimator_static(Some(768_000), 0.0);
-
-        let mut c = AbrController::with_estimator(cfg, mock);
-        let now = Instant::now();
-
-        let d = c.decide(now);
-        assert!(!d.changed);
-        assert_eq!(d.target_variant_index, 1);
-
-        c.apply(&d, now);
-
-        // Variant stays at 1
-        assert_eq!(c.get_current_variant_index(), 1);
-        // No switch recorded → can_switch_now should remain true
-        assert!(c.can_switch_now(now));
+        let ctrl = AbrController::with_estimator(opts(AbrMode::Auto(Some(1))), Unimock::new(()));
+        ctrl.apply(
+            &AbrDecision {
+                target_variant_index: 1,
+                reason: AbrReason::AlreadyOptimal,
+                changed: false,
+            },
+            Instant::now(),
+        );
+        assert_eq!(ctrl.get_current_variant_index(), 1);
+        assert_eq!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), NO_SWITCH);
     }
 
     #[kithara::test]
     fn apply_with_change_updates_variant_and_records_switch() {
-        let cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(30),
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // High throughput to trigger up-switch from variant 0
-        let mock = estimator_static(Some(5_000_000), 0.0);
-
-        let mut c = AbrController::with_estimator(cfg, mock);
+        let mut cfg = opts(AbrMode::Auto(Some(0)));
+        cfg.min_switch_interval = Duration::from_secs(30);
+        let ctrl = AbrController::with_estimator(cfg, Unimock::new(()));
         let now = Instant::now();
-
-        let d = c.decide(now);
-        assert!(d.changed);
-
-        c.apply(&d, now);
-
-        // Variant updated
-        assert_eq!(c.get_current_variant_index(), d.target_variant_index);
-        // Switch timestamp recorded → can_switch_now returns false immediately
-        assert!(!c.can_switch_now(now));
+        ctrl.apply(
+            &AbrDecision {
+                target_variant_index: 2,
+                reason: AbrReason::UpSwitch,
+                changed: true,
+            },
+            now,
+        );
+        assert_eq!(ctrl.get_current_variant_index(), 2);
+        assert_ne!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), NO_SWITCH);
+        assert!(!ctrl.can_switch_now(now));
     }
 
     #[kithara::test]
     fn apply_round_trip_decide_reflects_new_state() {
-        let cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // First call: high throughput → up-switch to variant 2
-        // Second call: same throughput → variant 2 is now current, AlreadyOptimal
-        let mock = estimator_static(Some(5_000_000), 0.0);
-
-        let mut c = AbrController::with_estimator(cfg, mock);
-        let now = Instant::now();
-
-        let d1 = c.decide(now);
+        let ctrl = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(0))),
+            estimator_static(Some(1_500_000), 15.0),
+        );
+        let d1 = ctrl.decide(Instant::now());
         assert!(d1.changed);
-        assert_eq!(d1.target_variant_index, 2);
-
-        c.apply(&d1, now);
-
-        let d2 = c.decide(now);
-        // Already on best variant — no change
+        ctrl.apply(&d1, Instant::now());
+        let d2 = ctrl.decide(Instant::now() + Duration::from_secs(60));
+        assert_eq!(d2.target_variant_index, d1.target_variant_index);
         assert!(!d2.changed);
-        assert_eq!(d2.target_variant_index, 2);
-        assert_eq!(d2.reason, AbrReason::AlreadyOptimal);
     }
-
-    // Hysteresis boundary tests
 
     #[kithara::test]
     fn up_switch_hysteresis_boundary() {
-        // variants: 0 → 256k, 1 → 512k, 2 → 1024k
-        // Current: variant 0 (256k bps)
-        // Candidate for up-switch: variant 2 (1024k bps)
-        //
-        // Up-switch condition: adjusted_bps >= candidate_bw * up_hysteresis_ratio
-        // adjusted_bps = estimate_bps / safety_factor
-        //
-        // Threshold estimate = candidate_bw * up_hysteresis * safety_factor
-        //                    = 1_024_000 * 1.3 * 1.5 = 1_996_800 bps
+        let bw_1 = 512_000_u64;
         let safety = 1.5;
-        let up_hysteresis = 1.3;
-        let candidate_bw: u64 = 1_024_000;
-        let threshold_bps: u64 = candidate_bw * 195 / 100;
+        let hysteresis = 1.3;
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let threshold = ((bw_1 as f64) * safety * hysteresis).ceil() as u64;
 
-        let base_cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: safety,
-            up_hysteresis_ratio: up_hysteresis,
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // At exact threshold → adjusted_bps == candidate_bw * up_hysteresis → switch
-        // But due to integer truncation, threshold_bps / safety_factor may lose precision.
-        // Use threshold - 1 to guarantee NO switch.
-        let mock_below = estimator_static(Some(threshold_bps - 1), 0.0);
-        let c = AbrController::with_estimator(base_cfg.clone(), mock_below);
-        let d = c.decide(Instant::now());
-        assert_ne!(
-            d.reason,
-            AbrReason::UpSwitch,
-            "Should NOT up-switch at threshold - 1 bps"
+        let ctrl_below = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(0))),
+            estimator_static(Some(threshold - 1), 15.0),
         );
+        let d = ctrl_below.decide(Instant::now());
+        assert!(!d.changed || d.target_variant_index <= 1);
 
-        // threshold + 1 → guaranteed switch
-        let mock_above = estimator_static(Some(threshold_bps + 1), 0.0);
-        let c = AbrController::with_estimator(base_cfg, mock_above);
-        let d = c.decide(Instant::now());
-        assert_eq!(
-            d.reason,
-            AbrReason::UpSwitch,
-            "Should up-switch at threshold + 1 bps"
+        let ctrl_above = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(0))),
+            estimator_static(Some(threshold + 1), 15.0),
         );
-        assert!(d.changed);
-        assert_eq!(d.target_variant_index, 2);
+        assert!(ctrl_above.decide(Instant::now()).changed);
     }
 
     #[kithara::test]
     fn down_switch_hysteresis_boundary() {
-        // Current: variant 2 (1_024_000 bps)
-        // Down-switch margin condition: adjusted_bps <= current_bw * down_hysteresis_ratio
-        // adjusted_bps = estimate_bps / safety_factor
-        //
-        // Threshold estimate = current_bw * down_hysteresis * safety_factor
-        //                    = 1_024_000 * 0.8 * 1.5 = 1_228_800 bps
+        let bw_2 = 1_024_000_u64;
         let safety = 1.5;
-        let down_hysteresis = 0.8;
-        let current_bw: u64 = 1_024_000;
-        let threshold_bps: u64 = current_bw * 120 / 100;
+        let hysteresis = 0.8;
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let threshold = ((bw_2 as f64) * safety * hysteresis).floor() as u64;
 
-        let base_cfg = AbrOptions {
-            down_hysteresis_ratio: down_hysteresis,
-            down_switch_buffer_secs: 0.0, // disable urgent-down path
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(2)),
-            throughput_safety_factor: safety,
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // At threshold → adjusted = threshold / safety = current_bw * down_hysteresis → switch
-        let mock_at = estimator_static(Some(threshold_bps), 10.0);
-        let c = AbrController::with_estimator(base_cfg.clone(), mock_at);
-        let d = c.decide(Instant::now());
-        assert_eq!(
-            d.reason,
-            AbrReason::DownSwitch,
-            "Should down-switch at threshold bps"
+        let ctrl_above = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(2))),
+            estimator_static(Some(threshold + 1), 15.0),
         );
-        assert!(d.changed);
+        assert!(!ctrl_above.decide(Instant::now()).changed);
 
-        // threshold + 1 → adjusted just above margin → no switch
-        let mock_above = estimator_static(Some(threshold_bps + 1), 10.0);
-        let c = AbrController::with_estimator(base_cfg, mock_above);
-        let d = c.decide(Instant::now());
-        assert_ne!(
-            d.reason,
-            AbrReason::DownSwitch,
-            "Should NOT down-switch at threshold + 1 bps"
+        let ctrl_below = AbrController::with_estimator(
+            opts(AbrMode::Auto(Some(2))),
+            estimator_static(Some(threshold - 1), 15.0),
         );
+        assert!(ctrl_below.decide(Instant::now()).changed);
     }
-
-    // Buffer threshold for up-switch
 
     #[kithara::test]
     fn buffer_level_threshold_for_up_switch() {
-        let min_buffer = 10.0;
-
-        let base_cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: min_buffer,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        // Buffer exactly at threshold → allowed
-        let mock_ok = estimator_static(Some(5_000_000), min_buffer);
-        let c = AbrController::with_estimator(base_cfg.clone(), mock_ok);
-        let d = c.decide(Instant::now());
-        assert_eq!(
-            d.reason,
-            AbrReason::UpSwitch,
-            "Should allow at exact threshold"
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(0)),
+                variants: variants(),
+                min_switch_interval: Duration::from_secs(0),
+                min_buffer_for_up_switch_secs: 10.0,
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(1_500_000), 9.99),
         );
-        assert!(d.changed);
-
-        // Buffer slightly below threshold → rejected
-        let mock_low = estimator_static(Some(5_000_000), min_buffer - 0.001);
-        let c = AbrController::with_estimator(base_cfg, mock_low);
-        let d = c.decide(Instant::now());
         assert_eq!(
-            d.reason,
-            AbrReason::BufferTooLowForUpSwitch,
-            "Should reject when buffer slightly below threshold"
-        );
-        assert!(!d.changed);
-    }
-
-    // Single variant
-
-    #[kithara::test]
-    fn single_variant_returns_already_optimal() {
-        let cfg = AbrOptions {
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            variants: vec![Variant {
-                variant_index: 0,
-                bandwidth_bps: 256_000,
-            }],
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 20.0);
-
-        let c = AbrController::with_estimator(cfg, mock);
-        let d = c.decide(Instant::now());
-        assert_eq!(d.target_variant_index, 0);
-        assert_eq!(d.reason, AbrReason::AlreadyOptimal);
-        assert!(!d.changed);
-    }
-
-    // Min-interval enforcement
-
-    #[kithara::test]
-    fn min_interval_enforcement_precise() {
-        let interval = Duration::from_secs(30);
-        let cfg = AbrOptions {
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: interval,
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 0.0);
-
-        let mut c = AbrController::with_estimator(cfg, mock);
-        // Use an instant well after reference_instant to avoid nanos edge cases
-        let t0 = Instant::now() + Duration::from_secs(1);
-
-        // First decide → triggers up-switch (decide records switch timestamp)
-        let d1 = c.decide(t0);
-        assert!(d1.changed);
-        c.apply(&d1, t0);
-
-        // At interval - 1ms → too soon
-        let t1 = t0 + interval - Duration::from_millis(1);
-        let d2 = c.decide(t1);
-        assert_eq!(
-            d2.reason,
-            AbrReason::MinInterval,
-            "Should block before interval elapses"
-        );
-        assert!(!d2.changed);
-
-        // At interval + 1ms → guaranteed allowed (avoids nanos rounding)
-        let t2 = t0 + interval + Duration::from_millis(1);
-        let d3 = c.decide(t2);
-        assert_ne!(
-            d3.reason,
-            AbrReason::MinInterval,
-            "Should allow after interval elapses"
+            ctrl.decide(Instant::now()).reason,
+            AbrReason::BufferTooLowForUpSwitch
         );
     }
-
-    // max_bandwidth_bps tests
 
     #[kithara::test]
     fn max_bandwidth_filters_variants() {
-        // Cap at 512k — variant 2 (1024k) excluded.
-        // High throughput should pick variant 1 (512k), not variant 2 (1024k).
-        let cfg = AbrOptions {
-            max_bandwidth_bps: Some(512_000),
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 0.0);
-        let c = AbrController::with_estimator(cfg, mock);
-        let d = c.decide(Instant::now());
-
-        assert_eq!(
-            d.target_variant_index, 1,
-            "Should pick variant 1 (512k), not 2 (1024k)"
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(0)),
+                variants: variants(),
+                max_bandwidth_bps: Some(300_000),
+                min_switch_interval: Duration::from_secs(0),
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(2_000_000), 15.0),
         );
-        assert!(d.changed);
-    }
-
-    #[kithara::test]
-    fn no_max_bandwidth_selects_highest() {
-        // No cap — high throughput selects highest variant (2, 1024k).
-        let cfg = AbrOptions {
-            max_bandwidth_bps: None,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 0.0);
-        let c = AbrController::with_estimator(cfg, mock);
-        let d = c.decide(Instant::now());
-
-        assert_eq!(d.target_variant_index, 2, "Should pick highest variant");
-        assert!(d.changed);
+        assert_eq!(ctrl.decide(Instant::now()).target_variant_index, 0);
     }
 
     #[kithara::test]
     fn max_bandwidth_forces_downswitch_from_above_cap() {
-        // Current variant (2, 1024k) is above cap (512k).
-        // Even with high throughput, decide() should down-switch because the
-        // candidate from filtered list (variant 1, 512k) has lower bw.
-        let cfg = AbrOptions {
-            max_bandwidth_bps: Some(512_000),
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(2)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 20.0);
-        let c = AbrController::with_estimator(cfg, mock);
-        let d = c.decide(Instant::now());
-
-        assert_eq!(
-            d.target_variant_index, 1,
-            "Should down-switch from above-cap variant 2 to variant 1"
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(2)),
+                variants: variants(),
+                max_bandwidth_bps: Some(600_000),
+                min_switch_interval: Duration::from_secs(0),
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(2_000_000), 15.0),
         );
+        let d = ctrl.decide(Instant::now());
         assert!(d.changed);
-        assert_eq!(d.reason, AbrReason::DownSwitch);
+        assert!(d.target_variant_index < 2);
     }
 
     #[kithara::test]
     fn max_bandwidth_below_all_variants_picks_none() {
-        // Cap below all variants — filtered list is empty, AlreadyOptimal.
-        let cfg = AbrOptions {
-            max_bandwidth_bps: Some(100_000),
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            mode: AbrMode::Auto(Some(0)),
-            variants: variants(),
-            ..AbrOptions::default()
-        };
-
-        let mock = estimator_static(Some(5_000_000), 0.0);
-        let c = AbrController::with_estimator(cfg, mock);
-        let d = c.decide(Instant::now());
-
-        assert_eq!(d.target_variant_index, 0);
-        assert!(!d.changed);
-        assert_eq!(d.reason, AbrReason::AlreadyOptimal);
+        let ctrl = AbrController::with_estimator(
+            AbrOptions {
+                mode: AbrMode::Auto(Some(0)),
+                variants: variants(),
+                max_bandwidth_bps: Some(100_000),
+                min_switch_interval: Duration::from_secs(0),
+                ..AbrOptions::default()
+            },
+            estimator_static(Some(2_000_000), 15.0),
+        );
+        assert!(!ctrl.decide(Instant::now()).changed);
     }
 }

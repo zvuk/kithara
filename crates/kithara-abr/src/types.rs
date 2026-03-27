@@ -16,6 +16,34 @@ pub enum AbrMode {
     Manual(usize),
 }
 
+impl From<AbrMode> for usize {
+    fn from(mode: AbrMode) -> Self {
+        match mode {
+            AbrMode::Manual(v) => {
+                debug_assert!(v < Self::MAX / 2, "variant index too large");
+                v
+            }
+            AbrMode::Auto(None) => Self::MAX,
+            AbrMode::Auto(Some(v)) => {
+                debug_assert!(v < Self::MAX / 2, "variant index too large");
+                Self::MAX - 1 - v
+            }
+        }
+    }
+}
+
+impl From<usize> for AbrMode {
+    fn from(val: usize) -> Self {
+        if val == usize::MAX {
+            Self::Auto(None)
+        } else if val >= usize::MAX / 2 {
+            Self::Auto(Some(usize::MAX - 1 - val))
+        } else {
+            Self::Manual(val)
+        }
+    }
+}
+
 /// ABR (Adaptive Bitrate) configuration.
 #[derive(Clone, Derivative)]
 #[derivative(Default, Debug)]
@@ -114,4 +142,32 @@ pub struct VariantInfo {
     pub codecs: Option<String>,
     /// Container format (MP4, MPEG-TS, etc.).
     pub container: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    #[case(AbrMode::Auto(None))]
+    #[case(AbrMode::Auto(Some(0)))]
+    #[case(AbrMode::Auto(Some(5)))]
+    #[case(AbrMode::Auto(Some(42)))]
+    #[case(AbrMode::Manual(0))]
+    #[case(AbrMode::Manual(1))]
+    #[case(AbrMode::Manual(99))]
+    fn abr_mode_usize_round_trip(#[case] mode: AbrMode) {
+        let encoded: usize = mode.into();
+        let decoded: AbrMode = encoded.into();
+        assert_eq!(decoded, mode);
+    }
+
+    #[kithara::test]
+    fn manual_and_auto_encode_differently() {
+        let manual: usize = AbrMode::Manual(0).into();
+        let auto: usize = AbrMode::Auto(None).into();
+        assert_ne!(manual, auto);
+    }
 }

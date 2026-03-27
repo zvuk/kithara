@@ -86,7 +86,7 @@ fn bench_controller_decide(c: &mut Criterion) {
                     let estimator = ThroughputEstimator::new(&cfg);
                     let mut controller = AbrController::with_estimator(cfg, estimator);
                     for _ in 0..8 {
-                        controller.push_throughput_sample(sample(bytes, duration_ms));
+                        controller.push_sample(sample(bytes, duration_ms));
                     }
                     black_box(controller.decide(Instant::now()))
                 });

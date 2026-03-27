@@ -1415,7 +1415,7 @@ impl HlsDownloader {
             content_duration,
         };
 
-        self.abr.push_throughput_sample(sample);
+        self.abr.push_sample(sample);
 
         #[expect(
             clippy::cast_precision_loss,

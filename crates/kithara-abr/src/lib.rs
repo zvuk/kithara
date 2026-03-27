@@ -42,6 +42,7 @@
 
 mod controller;
 mod estimator;
+mod ewma;
 mod types;
 
 #[cfg(feature = "internal")]

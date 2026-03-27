@@ -2,22 +2,16 @@
 use unimock::unimock;
 
 use super::{AbrOptions, ThroughputSample, ThroughputSampleSource};
+use crate::ewma::Ewma;
 
 /// Trait for throughput estimation strategies.
 ///
 /// Allows testing `AbrController` with mock estimators.
 #[cfg_attr(test, unimock(api = EstimatorMock))]
 pub trait Estimator {
-    /// Get estimated throughput in bits per second.
     fn estimate_bps(&self) -> Option<u64>;
-
-    /// Push a new throughput sample for estimation.
     fn push_sample(&mut self, sample: ThroughputSample);
-
-    /// Get buffer level in seconds (total buffered content duration).
     fn buffer_level_secs(&self) -> f64;
-
-    /// Reset buffer level.
     fn reset_buffer(&mut self);
 }
 
@@ -37,7 +31,6 @@ impl ThroughputEstimator {
     const MIN_DURATION_MS: f64 = 0.5;
     const MS_PER_SEC: f64 = 1000.0;
     const BITS_PER_BYTE_MS: f64 = 8000.0;
-    /// Initial throughput estimate for cache hits (100 Mbps).
     const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
 
     #[must_use]
@@ -53,7 +46,6 @@ impl ThroughputEstimator {
 
     #[must_use]
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    // bandwidth in bits/sec is always positive and within u64 range
     pub fn estimate_bps(&self) -> Option<u64> {
         let est = self
             .fast_ewma
@@ -70,15 +62,11 @@ impl ThroughputEstimator {
     }
 
     pub fn push_sample(&mut self, sample: ThroughputSample) {
-        // Accumulate buffered content duration
         if let Some(content_duration) = sample.content_duration {
             self.buffered_content_secs += content_duration.as_secs_f64();
         }
 
-        // Cache hits indicate data is available instantly — set high initial_bps
-        // to allow ABR to switch to higher variants immediately.
         if matches!(sample.source, ThroughputSampleSource::Cache) {
-            // 100 Mbps — effectively unlimited for audio streaming
             self.initial_bps = Self::CACHE_INITIAL_BPS;
             return;
         }
@@ -88,7 +76,7 @@ impl ThroughputEstimator {
         }
 
         let dur_ms = (sample.duration.as_secs_f64() * Self::MS_PER_SEC).max(Self::MIN_DURATION_MS);
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible
+        #[expect(clippy::cast_precision_loss)]
         let bps = (sample.bytes as f64) * Self::BITS_PER_BYTE_MS / dur_ms;
         let weight_secs = dur_ms / Self::MS_PER_SEC;
 
@@ -108,61 +96,12 @@ impl ThroughputEstimator {
 }
 
 impl Estimator for ThroughputEstimator {
-    fn estimate_bps(&self) -> Option<u64> {
-        self.estimate_bps()
-    }
-
-    fn push_sample(&mut self, sample: ThroughputSample) {
-        self.push_sample(sample);
-    }
-
-    fn buffer_level_secs(&self) -> f64 {
-        self.buffer_level_secs()
-    }
-
-    fn reset_buffer(&mut self) {
-        self.reset_buffer();
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Ewma {
-    alpha: f64,
-    last_estimate: f64,
-    total_weight: f64,
-}
-
-impl Ewma {
-    /// Half-life decay base: ln(0.5) gives exponential half-life.
-    const HALF_LIFE_BASE: f64 = 0.5;
-    /// Minimum half-life to avoid division by zero.
-    const MIN_HALF_LIFE_SECS: f64 = 0.001;
-    /// Floor to prevent division by zero in bias correction.
-    const MIN_ZERO_FACTOR: f64 = 1e-6;
-
-    fn new(half_life_secs: f64) -> Self {
-        Self {
-            alpha: f64::exp(
-                Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS),
-            ),
-            last_estimate: 0.0,
-            total_weight: 0.0,
-        }
-    }
-
-    fn add_sample(&mut self, weight: f64, val: f64) {
-        let adj_alpha = self.alpha.powf(weight.max(0.0));
-        let new_estimate = val * (1.0 - adj_alpha) + adj_alpha * self.last_estimate;
-        self.last_estimate = new_estimate;
-        self.total_weight += weight.max(0.0);
-    }
-
-    fn get_estimate(&self) -> f64 {
-        if self.total_weight <= 0.0 {
-            0.0
-        } else {
-            let zero_factor = 1.0 - self.alpha.powf(self.total_weight);
-            self.last_estimate / zero_factor.max(Self::MIN_ZERO_FACTOR)
+    delegate::delegate! {
+        to self {
+            fn estimate_bps(&self) -> Option<u64>;
+            fn push_sample(&mut self, sample: ThroughputSample);
+            fn buffer_level_secs(&self) -> f64;
+            fn reset_buffer(&mut self);
         }
     }
 }
@@ -176,10 +115,7 @@ mod tests {
 
     #[kithara::test]
     fn cache_hit_sets_high_initial_bps() {
-        let cfg = AbrOptions::default();
-        let mut est = ThroughputEstimator::new(&cfg);
-
-        // Before cache hit, no estimate available
+        let mut est = ThroughputEstimator::new(&AbrOptions::default());
         assert_eq!(est.estimate_bps(), None);
 
         est.push_sample(ThroughputSample {
@@ -189,24 +125,16 @@ mod tests {
             source: ThroughputSampleSource::Cache,
             content_duration: None,
         });
-
-        // Cache hit sets high initial_bps (100 Mbps) for immediate ABR upswitch
         assert_eq!(est.estimate_bps(), Some(100_000_000));
     }
 
     #[kithara::test(wasm)]
-    #[case(vec![(500_000, 1000)], 3_500_000, "Single sample")]
-    #[case(vec![(500_000, 1000), (500_000, 1000)], 3_800_000, "Stable throughput")]
-    #[case(vec![(1_000_000, 1000), (1_000_000, 1000), (1_000_000, 1000)], 7_500_000, "Multiple stable samples")]
-    fn test_ewma_estimation(
-        #[case] samples: Vec<(u64, u64)>,
-        #[case] expected_min_bps: u64,
-        #[case] _description: &str,
-    ) {
-        let cfg = AbrOptions::default();
-        let mut est = ThroughputEstimator::new(&cfg);
+    #[case(vec![(500_000, 1000)], 3_500_000)]
+    #[case(vec![(500_000, 1000), (500_000, 1000)], 3_800_000)]
+    #[case(vec![(1_000_000, 1000), (1_000_000, 1000), (1_000_000, 1000)], 7_500_000)]
+    fn test_ewma_estimation(#[case] samples: Vec<(u64, u64)>, #[case] expected_min_bps: u64) {
+        let mut est = ThroughputEstimator::new(&AbrOptions::default());
         let now = Instant::now();
-
         for (bytes, duration_ms) in samples {
             est.push_sample(ThroughputSample {
                 bytes,
@@ -216,25 +144,15 @@ mod tests {
                 content_duration: None,
             });
         }
-
         let estimate = est.estimate_bps();
-        assert!(
-            estimate.is_some(),
-            "Should have estimate after network samples"
-        );
-        assert!(
-            estimate.unwrap() >= expected_min_bps,
-            "Estimate should be at least {expected_min_bps}"
-        );
+        assert!(estimate.is_some());
+        assert!(estimate.unwrap_or(0) >= expected_min_bps);
     }
 
     #[kithara::test]
     fn test_min_chunk_size_filtering() {
-        let cfg = AbrOptions::default();
-        let mut est = ThroughputEstimator::new(&cfg);
+        let mut est = ThroughputEstimator::new(&AbrOptions::default());
         let now = Instant::now();
-
-        // Too small (< 16_000 bytes)
         est.push_sample(ThroughputSample {
             bytes: 10_000,
             duration: Duration::from_millis(100),
@@ -242,10 +160,8 @@ mod tests {
             source: ThroughputSampleSource::Network,
             content_duration: None,
         });
+        assert_eq!(est.estimate_bps(), None);
 
-        assert_eq!(est.estimate_bps(), None, "Small chunks should be ignored");
-
-        // Large enough
         est.push_sample(ThroughputSample {
             bytes: 100_000,
             duration: Duration::from_secs(1),
@@ -253,42 +169,27 @@ mod tests {
             source: ThroughputSampleSource::Network,
             content_duration: None,
         });
-
-        assert!(
-            est.estimate_bps().is_some(),
-            "Large chunks should be counted"
-        );
+        assert!(est.estimate_bps().is_some());
     }
 
     #[kithara::test]
     fn test_min_duration_clamping() {
-        let cfg = AbrOptions::default();
-        let mut est = ThroughputEstimator::new(&cfg);
-        let now = Instant::now();
-
-        // Very short duration (gets clamped to MIN_DURATION_MS)
+        let mut est = ThroughputEstimator::new(&AbrOptions::default());
         est.push_sample(ThroughputSample {
             bytes: 100_000,
             duration: Duration::from_nanos(1),
-            at: now,
+            at: Instant::now(),
             source: ThroughputSampleSource::Network,
             content_duration: None,
         });
-
         let estimate = est.estimate_bps();
-        assert!(estimate.is_some(), "Should still produce estimate");
-        // With clamped duration, throughput should be very high
-        assert!(
-            estimate.unwrap() > 1_000_000,
-            "Clamped duration should yield high throughput"
-        );
+        assert!(estimate.is_some());
+        assert!(estimate.unwrap_or(0) > 1_000_000);
     }
 
     #[kithara::test]
     fn test_no_estimate_without_samples() {
-        let cfg = AbrOptions::default();
-        let est = ThroughputEstimator::new(&cfg);
-
-        assert_eq!(est.estimate_bps(), None, "No estimate without samples");
+        let est = ThroughputEstimator::new(&AbrOptions::default());
+        assert_eq!(est.estimate_bps(), None);
     }
 }
