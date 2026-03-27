@@ -1,7 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use iced::{Subscription, Task, Theme, time as iced_time};
-use kithara::{play::Engine, prelude::PlayerImpl};
+use kithara::{
+    play::Engine,
+    prelude::{Event, HlsEvent, PlayerImpl, Resource},
+};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 
@@ -44,6 +50,8 @@ pub(crate) struct Kithara {
     // Track info.
     pub(crate) current_track_index: Option<usize>,
     pub(crate) track_name: String,
+    pub(crate) variant_label: String,
+    pub(crate) shared_variant_label: Arc<Mutex<String>>,
 
     // UI state.
     pub(crate) active_tab: Tab,
@@ -83,6 +91,8 @@ impl Kithara {
             crossfade,
             current_track_index: None,
             track_name: String::new(),
+            variant_label: String::new(),
+            shared_variant_label: Arc::new(Mutex::new(String::new())),
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
             repeat_enabled: false,
@@ -133,30 +143,72 @@ impl Kithara {
         iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
     }
 
-    /// Load a track and select it for playback.
-    ///
-    /// Unlike `load_and_apply` (which only auto-selects the first loaded track),
-    /// this explicitly calls `select_item` after loading — needed for user-initiated
-    /// track switches (Next/Prev/SelectTrack).
+    /// Load a track, select it for playback, and listen for variant events.
     pub(crate) fn load_track(&self, index: usize) -> Task<Message> {
         let params = self.load_params.clone();
         let player = Arc::clone(&self.player);
+        let variant_label = Arc::clone(&self.shared_variant_label);
         Task::perform(
             async move {
-                let resource = params
-                    .load_resource(index)
-                    .await
-                    .map_err(|e| format!("{e}"))?;
+                let config = params.build_config(index).map_err(|e| format!("{e}"))?;
+                let event_rx = config
+                    .bus
+                    .as_ref()
+                    .map(kithara::events::EventBus::subscribe);
+                let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
                 player.replace_item(index, resource);
                 params.playlist().set_status(index, TrackStatus::Loaded);
                 player
                     .select_item(index, true)
                     .map_err(|e| format!("{e}"))?;
+
+                // Listen for ABR variant changes in the background.
+                if let Some(mut rx) = event_rx {
+                    tokio::spawn(async move {
+                        let mut variants = Vec::new();
+                        while let Ok(event) = rx.recv().await {
+                            match &event {
+                                Event::Hls(HlsEvent::VariantsDiscovered {
+                                    variants: v,
+                                    initial_variant,
+                                }) => {
+                                    variants.clone_from(v);
+                                    let text = variant_display_label(&variants, *initial_variant);
+                                    if let Ok(mut l) = variant_label.lock() {
+                                        *l = text;
+                                    }
+                                }
+                                Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
+                                    let text = variant_display_label(&variants, *to_variant);
+                                    if let Ok(mut l) = variant_label.lock() {
+                                        *l = text;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                }
+
                 Ok(())
             },
             move |result| Message::TrackLoaded(index, result),
         )
     }
+}
+
+fn variant_display_label(variants: &[kithara::abr::VariantInfo], index: usize) -> String {
+    variants.get(index).map_or_else(
+        || format!("variant {index}"),
+        |v| {
+            v.name.clone().unwrap_or_else(|| {
+                v.bandwidth_bps.map_or_else(
+                    || format!("variant {index}"),
+                    |b| format!("{} kbps", b / 1000),
+                )
+            })
+        },
+    )
 }
 
 /// Spawn background tasks that log player and engine events.

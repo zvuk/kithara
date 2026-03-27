@@ -225,22 +225,26 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
 
     let subtitle = track_subtitle(state);
 
-    container(
-        column![
-            row![
-                Icon::MusicNote.view(MUSIC_NOTE_SIZE, p.accent),
-                text(track_name).size(TRACK_NAME_FONT).color(p.text)
-            ]
-            .spacing(ELEMENT_SPACING)
-            .align_y(Alignment::Center),
-            text(subtitle).size(CAPTION_FONT).color(p.muted)
+    let mut col = column![
+        row![
+            Icon::MusicNote.view(MUSIC_NOTE_SIZE, p.accent),
+            text(track_name).size(TRACK_NAME_FONT).color(p.text)
         ]
-        .spacing(COMPACT_SPACING),
-    )
-    .width(Length::Fill)
-    .padding(SECTION_PADDING)
-    .style(section_style(p))
-    .into()
+        .spacing(ELEMENT_SPACING)
+        .align_y(Alignment::Center),
+        text(subtitle).size(CAPTION_FONT).color(p.muted)
+    ]
+    .spacing(COMPACT_SPACING);
+
+    if !state.variant_label.is_empty() {
+        col = col.push(text(&state.variant_label).size(CAPTION_FONT).color(p.muted));
+    }
+
+    container(col)
+        .width(Length::Fill)
+        .padding(SECTION_PADDING)
+        .style(section_style(p))
+        .into()
 }
 
 fn view_seek(state: &Kithara) -> Element<'_, Message> {

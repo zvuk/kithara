@@ -24,6 +24,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             if let Some(next_idx) = state.playlist.get_next_track() {
                 state.current_track_index = Some(next_idx);
                 state.track_name = state.playlist.track_name(next_idx);
+                state.variant_label.clear();
                 state.load_track(next_idx)
             } else {
                 Task::none()
@@ -34,6 +35,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             if let Some(prev_idx) = state.playlist.get_prev_track() {
                 state.current_track_index = Some(prev_idx);
                 state.track_name = state.playlist.track_name(prev_idx);
+                state.variant_label.clear();
                 state.load_track(prev_idx)
             } else {
                 Task::none()
@@ -100,6 +102,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             state.playlist.on_track_selected(idx);
             state.current_track_index = Some(idx);
             state.track_name = state.playlist.track_name(idx);
+            state.variant_label.clear();
             state.load_track(idx)
         }
 
@@ -123,6 +126,13 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         Message::Tick => {
             let _ = state.player.tick();
             state.blink_counter = state.blink_counter.wrapping_add(1);
+
+            // Sync variant label from background listener.
+            if let Ok(label) = state.shared_variant_label.lock()
+                && *label != state.variant_label
+            {
+                state.variant_label.clone_from(&label);
+            }
 
             // Sync playback state.
             state.playing = state.player.is_playing();
