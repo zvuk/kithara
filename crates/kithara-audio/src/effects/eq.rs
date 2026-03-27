@@ -153,10 +153,13 @@ pub fn compute_coefficients(
     if gain_db.abs() < GAIN_PASSTHROUGH_THRESHOLD {
         return PASSTHROUGH;
     }
+    // Second-order shelf filters reach only half the requested gain at
+    // one octave from cutoff. Doubling the internal gain compensates so
+    // the user-facing value matches the measured attenuation/boost.
     let filter_type = match band.kind {
-        FilterKind::LowShelf => Type::LowShelf(gain_db),
+        FilterKind::LowShelf => Type::LowShelf(gain_db * 2.0),
         FilterKind::Peaking => Type::PeakingEQ(gain_db),
-        FilterKind::HighShelf => Type::HighShelf(gain_db),
+        FilterKind::HighShelf => Type::HighShelf(gain_db * 2.0),
     };
     Coefficients::<f32>::from_params(filter_type, sample_rate, band.frequency.hz(), band.q_factor)
         .unwrap_or(PASSTHROUGH)
@@ -492,7 +495,7 @@ mod tests {
         assert!((eq.target_gain(0).unwrap() - 6.0).abs() < f32::EPSILON);
 
         eq.set_gain(0, -100.0);
-        assert!((eq.target_gain(0).unwrap() - (-24.0)).abs() < f32::EPSILON);
+        assert!((eq.target_gain(0).unwrap() - MIN_GAIN_DB).abs() < f32::EPSILON);
 
         eq.set_gain(0, 3.0);
         assert!((eq.target_gain(0).unwrap() - 3.0).abs() < f32::EPSILON);
@@ -793,6 +796,62 @@ mod tests {
         assert!(
             gain_bass > 1.3,
             "40Hz should be boosted by LowShelf band 0, got gain={gain_bass:.3}"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_shelf_gain_matches_requested() {
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        // Test LowShelf at 200 Hz, measure at 50 Hz (1 octave below)
+        let band = EqBandConfig {
+            frequency: 200.0,
+            q_factor: 0.707,
+            gain_db: 0.0,
+            kind: FilterKind::LowShelf,
+        };
+
+        // Test many gain values
+        for requested_db in [-24.0, -18.0, -12.0, -6.0, -3.0, 3.0, 6.0] {
+            let mut eq = EqEffect::new(vec![band.clone()], spec.sample_rate, spec.channels);
+            eq.set_gain(0, requested_db);
+            converge_smoother(&mut eq, spec);
+
+            let gain = measure_sine_gain(&mut eq, 50.0, spec);
+            let measured_db = 20.0 * gain.log10();
+            let error = (measured_db - requested_db).abs();
+
+            eprintln!(
+                "requested={requested_db:+.0}dB measured={measured_db:+.1}dB error={error:.1}dB"
+            );
+            assert!(
+                error < 6.0,
+                "shelf gain error too large: requested={requested_db}dB measured={measured_db:.1}dB"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn eq_all_bands_at_min_attenuates() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        for i in 0..3 {
+            eq.set_gain(i, MIN_GAIN_DB);
+        }
+        converge_smoother(&mut eq, spec);
+
+        // -24 dB shelf attenuates each band's frequency range.
+        // Cascade of 3 shelves gives strong attenuation at band centers.
+        let gain_mid = measure_sine_gain(&mut eq, 1897.0, spec);
+        assert!(
+            gain_mid < 0.6,
+            "mid at min should be attenuated, got {gain_mid:.3}"
         );
     }
 }
