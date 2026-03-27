@@ -8,8 +8,6 @@ use std::{
 };
 
 use derive_setters::Setters;
-#[cfg(feature = "hls")]
-use kithara_abr::AbrOptions;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
@@ -86,9 +84,9 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 #[derive(Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct ResourceConfig {
-    /// ABR (Adaptive Bitrate) configuration.
+    /// ABR controller (shared across tracks in a player).
     #[cfg(feature = "hls")]
-    pub abr: AbrOptions,
+    pub abr: Option<kithara_abr::AbrController<kithara_abr::ThroughputEstimator>>,
     /// Unified event bus for streaming, decode, and audio events.
     ///
     /// When set, the bus is propagated to the underlying stream and audio
@@ -215,7 +213,7 @@ impl ResourceConfig {
 
         Ok(Self {
             #[cfg(feature = "hls")]
-            abr: AbrOptions::default(),
+            abr: None,
             bus: None,
             byte_pool: None,
             cancel: None,
@@ -355,20 +353,21 @@ impl ResourceConfig {
             }
         };
 
-        let mut abr_opts = self.abr;
+        let mut hls_config = HlsConfig::new(url)
+            .with_store(self.store)
+            .with_net(self.net)
+            .with_keys(self.keys);
+
+        hls_config.abr = self.abr;
+
         if self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate >= 1.0 {
             #[expect(clippy::cast_sign_loss)]
             #[expect(clippy::cast_possible_truncation)]
             let cap = self.preferred_peak_bitrate as u64;
-            abr_opts.max_bandwidth_bps = Some(cap);
+            if let Some(ref ctrl) = hls_config.abr {
+                ctrl.set_max_bandwidth_bps(Some(cap));
+            }
         }
-        let abr_controller = kithara_abr::AbrController::new(abr_opts);
-
-        let mut hls_config = HlsConfig::new(url)
-            .with_store(self.store)
-            .with_net(self.net)
-            .with_abr(abr_controller)
-            .with_keys(self.keys);
 
         if let Some(bytes) = self.look_ahead_bytes {
             hls_config = hls_config.with_look_ahead_bytes(bytes);

@@ -245,12 +245,20 @@ impl AudioPlayerItem {
         }
 
         if let Some(mode) = *self.abr_mode.lock_sync() {
-            config.abr.mode = match mode {
+            let abr_mode = match mode {
                 crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
                 crate::types::FfiAbrMode::Manual { variant_index } => {
                     AbrMode::Manual(variant_index as usize)
                 }
             };
+            if let Some(ref ctrl) = config.abr {
+                ctrl.set_mode(abr_mode);
+            } else {
+                config.abr = Some(kithara::abr::AbrController::new(kithara::abr::AbrOptions {
+                    mode: abr_mode,
+                    ..kithara::abr::AbrOptions::default()
+                }));
+            }
         }
 
         Ok(ResourceLoadConfig { config })

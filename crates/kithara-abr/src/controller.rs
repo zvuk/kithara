@@ -38,11 +38,14 @@ const NO_SWITCH: u64 = 0;
 /// Clone-able: cloning shares the same internal state (all fields behind Arc).
 /// This allows sharing one controller between multiple players or holding a
 /// clone at the Resource level for runtime mode changes.
+const NO_BANDWIDTH_CAP: u64 = 0;
+
 #[derive(Clone)]
 pub struct AbrController<E: Estimator> {
     cfg: Arc<AbrOptions>,
     variants: Arc<Mutex<Vec<Variant>>>,
     mode: Arc<AtomicUsize>,
+    max_bandwidth_bps: Arc<AtomicU64>,
     current_variant: Arc<AtomicUsize>,
     lock_count: Arc<AtomicUsize>,
     estimator: Arc<Mutex<E>>,
@@ -65,8 +68,10 @@ impl<E: Estimator> AbrController<E> {
         let initial_variant = cfg.initial_variant();
         let mode_val: usize = cfg.mode.into();
         let variants = cfg.variants.clone();
+        let max_bw = cfg.max_bandwidth_bps.unwrap_or(NO_BANDWIDTH_CAP);
         Self {
             variants: Arc::new(Mutex::new(variants)),
+            max_bandwidth_bps: Arc::new(AtomicU64::new(max_bw)),
             cfg: Arc::new(cfg),
             mode: Arc::new(AtomicUsize::new(mode_val)),
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
@@ -108,7 +113,13 @@ impl<E: Estimator> AbrController<E> {
 
     #[must_use]
     pub fn max_bandwidth_bps(&self) -> Option<u64> {
-        self.cfg.max_bandwidth_bps
+        let v = self.max_bandwidth_bps.load(Ordering::Acquire);
+        if v == NO_BANDWIDTH_CAP { None } else { Some(v) }
+    }
+
+    pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
+        self.max_bandwidth_bps
+            .store(cap.unwrap_or(NO_BANDWIDTH_CAP), Ordering::Release);
     }
 
     #[must_use]
@@ -195,7 +206,7 @@ impl<E: Estimator> AbrController<E> {
             "ABR decide: candidate"
         );
 
-        if let Some(cap) = self.cfg.max_bandwidth_bps
+        if let Some(cap) = self.max_bandwidth_bps()
             && current_bw > cap
             && candidate_idx != current
         {
@@ -271,7 +282,7 @@ impl<E: Estimator> AbrController<E> {
     }
 
     fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
-        let max_bw = self.cfg.max_bandwidth_bps;
+        let max_bw = self.max_bandwidth_bps();
         let mut sorted: Vec<(usize, u64)> = self
             .variants
             .lock_sync()
