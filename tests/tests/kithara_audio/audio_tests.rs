@@ -3,7 +3,7 @@
 use std::{fs::File, io::Write};
 
 use kithara_audio::internal::audio::*;
-use kithara_events::{AudioEvent, SeekLifecycleStage};
+use kithara_events::{AudioEvent, Event, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
@@ -185,7 +185,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
         .await
         .unwrap();
 
-    let mut events = audio.decode_events();
+    let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
 
     let _ = audio.read(&mut buf);
@@ -194,19 +194,16 @@ async fn test_audio_playback_progress_uses_output_commit() {
     let deadline = Instant::now() + Duration::from_millis(300);
     while Instant::now() < deadline {
         match timeout(Duration::from_millis(40), events.recv()).await {
-            Ok(Ok(event)) => {
-                if let AudioEvent::PlaybackProgress {
-                    position_ms,
-                    total_ms,
-                    seek_epoch,
-                } = event
-                {
-                    assert!(position_ms > 0);
-                    assert!(total_ms.is_some());
-                    assert_eq!(seek_epoch, 0);
-                    saw_progress = true;
-                    break;
-                }
+            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                position_ms,
+                total_ms,
+                seek_epoch,
+            }))) => {
+                assert!(position_ms > 0);
+                assert!(total_ms.is_some());
+                assert_eq!(seek_epoch, 0);
+                saw_progress = true;
+                break;
             }
             _ => {}
         }
@@ -222,7 +219,7 @@ async fn test_seek_emits_matching_playback_progress() {
         .await
         .unwrap();
 
-    let mut events = audio.decode_events();
+    let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
 
     // Epoch comes from Timeline now, not from caller.
@@ -234,7 +231,7 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         match timeout(Duration::from_millis(40), events.recv()).await {
-            Ok(Ok(AudioEvent::PlaybackProgress { seek_epoch, .. })) => {
+            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) => {
                 matched_epoch = Some(seek_epoch);
                 break;
             }
@@ -252,14 +249,14 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
         .await
         .unwrap();
 
-    let mut events = audio.decode_events();
+    let mut events = audio.event_bus().subscribe();
     // Epoch comes from Timeline now, not from caller.
     audio.seek(Duration::from_secs_f64(1.5)).unwrap();
     let expected_epoch = seek_epoch(&audio);
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv() {
-        if matches!(event, AudioEvent::SeekComplete { .. }) {
+        if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
         }
@@ -278,15 +275,15 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut saw_output_committed = false;
     while Instant::now() < deadline {
         match timeout(Duration::from_millis(40), events.recv()).await {
-            Ok(Ok(AudioEvent::SeekLifecycle {
+            Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,
                 ..
-            })) => {
+            }))) => {
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_output_committed = true;
             }
-            Ok(Ok(AudioEvent::SeekComplete { seek_epoch, .. })) => {
+            Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_seek_complete = true;
                 break;

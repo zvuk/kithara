@@ -227,8 +227,8 @@ impl PlayerResource {
 mod tests {
     use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
-    use kithara_platform::{time::Duration, tokio::sync::broadcast};
+    use kithara_events::EventBus;
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -247,16 +247,15 @@ mod tests {
     }
 
     struct PendingReader {
-        events_tx: broadcast::Sender<AudioEvent>,
+        bus: EventBus,
         meta: TrackMetadata,
         spec: PcmSpec,
     }
 
     impl PendingReader {
         fn new() -> Self {
-            let (events_tx, _) = broadcast::channel(1);
             Self {
-                events_tx,
+                bus: EventBus::default(),
                 meta: TrackMetadata::default(),
                 spec: mock_spec(),
             }
@@ -296,8 +295,8 @@ mod tests {
             &self.meta
         }
 
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
         }
     }
 

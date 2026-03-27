@@ -18,10 +18,7 @@ use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
     thread::park_timeout,
-    tokio::{
-        sync::{Notify, broadcast},
-        task::spawn_blocking,
-    },
+    tokio::{sync::Notify, task::spawn_blocking},
 };
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
@@ -49,8 +46,6 @@ use crate::{
     },
 };
 
-/// Default capacity for broadcast event channels.
-const DEFAULT_EVENT_CAPACITY: usize = 64;
 /// Backoff duration between receive attempts.
 const RECV_BACKOFF: Duration = Duration::from_micros(100);
 
@@ -143,9 +138,6 @@ pub struct Audio<S> {
     /// Track metadata (title, artist, album, artwork).
     metadata: TrackMetadata,
 
-    /// Audio events channel (for `decode_events()` backward compat).
-    audio_events_tx: broadcast::Sender<AudioEvent>,
-
     /// Unified event bus.
     bus: EventBus,
 
@@ -222,13 +214,6 @@ impl<S> Audio<S> {
 
     /// Subscribe to audio events.
     ///
-    /// For `Audio<Stream<T>>`, prefer `events()` which provides unified
-    /// stream + audio events.
-    #[must_use]
-    pub fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-        self.audio_events_tx.subscribe()
-    }
-
     /// Get current audio specification.
     ///
     /// Returns sample rate and channel count for audio output setup.
@@ -261,8 +246,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
-        self.bus.publish(event.clone());
-        let _ = self.audio_events_tx.send(event);
+        self.bus.publish(event);
     }
 
     fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
@@ -614,7 +598,7 @@ where
     fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
         T::event_bus(stream_config)
             .or(config_bus)
-            .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY))
+            .unwrap_or_default()
     }
 
     async fn create_stream_with_probe(
@@ -685,15 +669,10 @@ where
         (cmd_tx, cmd_rx, data_tx, data_rx)
     }
 
-    fn create_emit(
-        bus: &EventBus,
-        audio_events_tx: &broadcast::Sender<AudioEvent>,
-    ) -> Box<dyn Fn(AudioEvent) + Send> {
+    fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
         let emit_bus = bus.clone();
-        let emit_raw_tx = audio_events_tx.clone();
         Box::new(move |event: AudioEvent| {
-            emit_bus.publish(event.clone());
-            let _ = emit_raw_tx.send(event);
+            emit_bus.publish(event);
         })
     }
 
@@ -815,7 +794,6 @@ where
             Self::create_channels(command_channel_capacity, pcm_buffer_chunks);
 
         let epoch = Arc::new(AtomicU64::new(0));
-        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
 
@@ -836,7 +814,7 @@ where
             "Audio pipeline created"
         );
 
-        let emit = Self::create_emit(&bus, &audio_events_tx);
+        let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
             prefer_hardware,
             &stream_ctx,
@@ -891,7 +869,6 @@ where
             consumer_phase: ConsumerPhase::Buffering,
             timeline,
             metadata,
-            audio_events_tx,
             bus,
             cancel: Some(cancel),
             pcm_pool: pool.clone(),
@@ -912,7 +889,9 @@ where
     ///
     /// Returns a receiver for all events published to the bus.
     #[must_use]
-    pub fn events(&self) -> broadcast::Receiver<kithara_events::Event> {
+    pub fn events(
+        &self,
+    ) -> kithara_platform::tokio::sync::broadcast::Receiver<kithara_events::Event> {
         self.bus.subscribe()
     }
 
@@ -993,8 +972,8 @@ impl<S: Send> PcmReader for Audio<S> {
         Self::metadata(self)
     }
 
-    fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-        Self::decode_events(self)
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -1063,7 +1042,6 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
         let (_data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(1).split();
-        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
 
         Audio {
             cmd_tx,
@@ -1076,8 +1054,7 @@ mod tests {
             consumer_phase: ConsumerPhase::Buffering,
             timeline: Timeline::new(),
             metadata: TrackMetadata::default(),
-            audio_events_tx,
-            bus: EventBus::new(16),
+            bus: EventBus::default(),
             cancel: None,
             pcm_pool: pcm_pool().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
@@ -1124,7 +1101,6 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, HeapProd<Fetch<PcmChunk>>) {
         let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
         let (data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(4).split();
-        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
 
         let audio = Audio {
             cmd_tx,
@@ -1137,8 +1113,7 @@ mod tests {
             consumer_phase: ConsumerPhase::Buffering,
             timeline: Timeline::new(),
             metadata: TrackMetadata::default(),
-            audio_events_tx,
-            bus: EventBus::new(16),
+            bus: EventBus::default(),
             cancel: None,
             pcm_pool: pcm_pool().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),

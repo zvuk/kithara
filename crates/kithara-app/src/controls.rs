@@ -99,8 +99,6 @@ impl AppController {
     }
 }
 
-const EVENT_BUS_CAPACITY: usize = 32;
-
 /// Shared, cloneable context for loading tracks asynchronously.
 ///
 /// This is THE ONLY place that builds DRM config, creates resources,
@@ -148,7 +146,7 @@ impl TrackLoadParams {
 
         // Attach an event bus so File/HLS can wire the on_slow callback
         // and we can subscribe before Resource::new().
-        config = config.with_events(EventBus::new(EVENT_BUS_CAPACITY));
+        config = config.with_events(EventBus::default());
 
         Ok(config)
     }

@@ -5,16 +5,10 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
-use kithara_platform::tokio::{
-    sync::broadcast::{self, error::RecvError},
-    task::spawn as task_spawn,
-};
+use kithara_platform::tokio::sync::broadcast;
 use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
-
-/// Capacity of the resource event bus.
-const RESOURCE_EVENT_BUS_CAPACITY: usize = 64;
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -72,25 +66,11 @@ impl Resource {
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// Audio events from the reader are forwarded to the bus as `Event::Audio`.
+    /// The resource shares the reader's event bus directly.
     /// Use this for custom sources.
     #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        let bus = EventBus::new(RESOURCE_EVENT_BUS_CAPACITY);
-
-        // Forward AudioEvents from the generic PcmReader into the unified EventBus.
-        let forward_bus = bus.clone();
-        let mut decode_rx = reader.decode_events();
-        task_spawn(async move {
-            loop {
-                match decode_rx.recv().await {
-                    Ok(event) => forward_bus.publish(event),
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => break,
-                }
-            }
-        });
-
+        let bus = reader.event_bus().clone();
         Self {
             inner: Box::new(reader),
             bus,
@@ -108,11 +88,7 @@ impl Resource {
         src: Arc<str>,
     ) -> DecodeResult<Self> {
         // Extract existing bus from stream config, or create a new one.
-        let bus = config
-            .stream
-            .bus
-            .clone()
-            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
+        let bus = config.stream.bus.clone().unwrap_or_default();
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
@@ -133,11 +109,7 @@ impl Resource {
         src: Arc<str>,
     ) -> DecodeResult<Self> {
         // Extract existing bus from stream config, or create a new one.
-        let bus = config
-            .stream
-            .bus
-            .clone()
-            .unwrap_or_else(|| EventBus::new(RESOURCE_EVENT_BUS_CAPACITY));
+        let bus = config.stream.bus.clone().unwrap_or_default();
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
@@ -265,8 +237,8 @@ impl Resource {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
-    use kithara_events::{AudioEvent, Event};
-    use kithara_platform::{time, time::Duration, tokio::sync::broadcast};
+    use kithara_events::{AudioEvent, Event, EventBus};
+    use kithara_platform::{time, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::Resource;
@@ -282,11 +254,11 @@ mod tests {
         Resource::from_reader(TestPcmReader::new(mock_spec(), 1.0))
     }
 
-    fn make_resource_with_sender() -> (Resource, broadcast::Sender<AudioEvent>) {
+    fn make_resource_with_bus() -> (Resource, EventBus) {
         let reader = TestPcmReader::new(mock_spec(), 1.0);
-        let sender = reader.events_sender();
+        let bus = reader.event_bus().clone();
         let resource = Resource::from_reader(reader);
-        (resource, sender)
+        (resource, bus)
     }
 
     #[derive(Clone, Copy)]
@@ -370,16 +342,12 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
-        let (resource, sender) = make_resource_with_sender();
+        let (resource, bus) = make_resource_with_bus();
         let mut rx = resource.subscribe();
 
-        // Send an AudioEvent through the mock's broadcast channel.
-        // The Resource's forwarding task converts it to Event::Audio.
+        // Publish an AudioEvent through the shared bus directly.
         let spec = mock_spec();
-        sender.send(AudioEvent::FormatDetected { spec }).unwrap();
-
-        // Allow the forwarding task to run.
-        time::sleep(Duration::from_millis(10)).await;
+        bus.publish(AudioEvent::FormatDetected { spec });
 
         let event = time::timeout(Duration::from_millis(200), rx.recv())
             .await

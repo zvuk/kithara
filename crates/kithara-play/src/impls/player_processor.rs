@@ -515,8 +515,8 @@ mod tests {
 
     use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
-    use kithara_platform::{Mutex as PlatformMutex, time::Duration, tokio::sync::broadcast};
+    use kithara_events::EventBus;
+    use kithara_platform::{Mutex as PlatformMutex, time::Duration};
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,
@@ -550,18 +550,17 @@ mod tests {
     struct SampleRateTrackingReader {
         spec: PcmSpec,
         meta: TrackMetadata,
-        events_tx: broadcast::Sender<AudioEvent>,
+        bus: EventBus,
         recorded_host_rate: TestArc<AtomicU32>,
     }
 
     impl SampleRateTrackingReader {
         fn new(spec: PcmSpec) -> (Self, TestArc<AtomicU32>) {
-            let (events_tx, _) = broadcast::channel(1);
             let recorded = TestArc::new(AtomicU32::new(0));
             let reader = Self {
                 spec,
                 meta: TrackMetadata::default(),
-                events_tx,
+                bus: EventBus::default(),
                 recorded_host_rate: TestArc::clone(&recorded),
             };
             (reader, recorded)
@@ -601,8 +600,8 @@ mod tests {
             &self.meta
         }
 
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
         }
 
         fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -819,7 +818,7 @@ mod tests {
             spec: PcmSpec,
             metadata: TrackMetadata,
             seek_log: TestArc<Mutex<Vec<u64>>>,
-            events_tx: broadcast::Sender<AudioEvent>,
+            bus: EventBus,
         }
 
         impl PcmReader for SeekTrackingReader {
@@ -863,12 +862,11 @@ mod tests {
                 &self.metadata
             }
 
-            fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-                self.events_tx.subscribe()
+            fn event_bus(&self) -> &EventBus {
+                &self.bus
             }
         }
 
-        let (events_tx, _) = broadcast::channel(1);
         let reader = SeekTrackingReader {
             spec: PcmSpec {
                 channels: 2,
@@ -881,7 +879,7 @@ mod tests {
                 title: Some("Tracking".to_owned()),
             },
             seek_log,
-            events_tx,
+            bus: EventBus::default(),
         };
 
         let resource = Resource::from_reader(reader);

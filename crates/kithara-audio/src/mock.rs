@@ -7,26 +7,23 @@
 )]
 
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-use kithara_events::AudioEvent;
-use kithara_platform::{time::Duration, tokio::sync::broadcast};
+use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 
 use crate::traits::PcmReader;
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};
 
-/// Capacity of the mock event broadcast channel.
-const MOCK_EVENT_CHANNEL_CAPACITY: usize = 64;
-
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
 /// Produces a constant sample value (0.5), tracks seek position and EOF,
-/// and exposes an `AudioEvent` sender for event forwarding tests.
+/// and exposes an `EventBus` for event publishing in tests.
 pub struct TestPcmReader {
     spec: PcmSpec,
     metadata: TrackMetadata,
     total_frames: u64,
     position_frames: u64,
     eof: bool,
-    events_tx: broadcast::Sender<AudioEvent>,
+    bus: EventBus,
 }
 
 impl TestPcmReader {
@@ -34,7 +31,6 @@ impl TestPcmReader {
     #[must_use]
     pub fn new(spec: PcmSpec, duration_secs: f64) -> Self {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
-        let (events_tx, _) = broadcast::channel(MOCK_EVENT_CHANNEL_CAPACITY);
         Self {
             spec,
             metadata: TrackMetadata {
@@ -46,14 +42,14 @@ impl TestPcmReader {
             total_frames,
             position_frames: 0,
             eof: false,
-            events_tx,
+            bus: EventBus::default(),
         }
     }
 
-    /// Get a clone of the event sender for sending mock events.
+    /// Get a reference to the event bus for publishing mock events.
     #[must_use]
-    pub fn events_sender(&self) -> broadcast::Sender<AudioEvent> {
-        self.events_tx.clone()
+    pub fn event_bus(&self) -> &EventBus {
+        &self.bus
     }
 
     fn frames_to_duration(&self, frames: u64) -> Duration {
@@ -138,7 +134,7 @@ impl PcmReader for TestPcmReader {
         &self.metadata
     }
 
-    fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-        self.events_tx.subscribe()
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
     }
 }

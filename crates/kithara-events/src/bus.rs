@@ -4,6 +4,12 @@ use kithara_platform::tokio::sync::broadcast;
 
 use crate::Event;
 
+/// Default capacity for event bus channels.
+///
+/// Sized for real-time audio pipelines: large enough to absorb bursts
+/// (seek lifecycle, format changes) without lagging subscribers.
+pub const DEFAULT_EVENT_BUS_CAPACITY: usize = 64;
+
 /// Unified event bus for the kithara audio pipeline.
 ///
 /// All components receive a cloned `EventBus` and publish events directly.
@@ -41,6 +47,12 @@ impl EventBus {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
+    }
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new(DEFAULT_EVENT_BUS_CAPACITY)
     }
 }
 

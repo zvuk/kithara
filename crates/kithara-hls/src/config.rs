@@ -69,7 +69,7 @@ pub struct HlsConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Capacity of the event bus channel (used when `bus` is not provided).
-    #[derivative(Default(value = "32"))]
+    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
     #[setters(rename = "with_events")]

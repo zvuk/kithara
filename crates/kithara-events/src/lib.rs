@@ -16,7 +16,7 @@ pub mod internal;
 
 #[cfg(feature = "audio")]
 pub use audio::{AudioEvent, SeekLifecycleStage};
-pub use bus::EventBus;
+pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use event::Event;
 pub use file::FileEvent;
 #[cfg(feature = "hls")]

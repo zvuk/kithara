@@ -27,8 +27,8 @@
 //!     play_audio(chunk);
 //! }
 //!
-//! // Events via decode_events()
-//! let mut events = audio.decode_events();
+//! // Events via event_bus()
+//! let mut events = audio.event_bus().subscribe();
 //! while let Ok(event) = events.recv().await {
 //!     println!("Audio: {:?}", event);
 //! }
