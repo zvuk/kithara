@@ -338,14 +338,57 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
     .width(Length::Fill)
     .align_y(Alignment::Center);
 
+    let rate_row = view_playrate(state);
+
     container(
-        column![transport_row, toggles_row]
+        column![transport_row, rate_row, toggles_row]
             .spacing(ELEMENT_SPACING)
             .align_x(Alignment::Center),
     )
     .width(Length::Fill)
     .padding([TRANSPORT_PADDING_Y, TRANSPORT_PADDING_X])
     .into()
+}
+
+fn view_playrate(state: &Kithara) -> Element<'_, Message> {
+    const RATES: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+    let p = state.palette;
+
+    let buttons = RATES.iter().map(|&rate| {
+        let is_selected = (state.selected_rate - rate).abs() < f32::EPSILON;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "rate 0.5–2.0"
+        )]
+        let label = if rate == rate.floor() {
+            format!("{}x", rate as u8)
+        } else {
+            format!("{rate:.2}x")
+        };
+        let btn_text = text(label)
+            .size(SMALL_FONT)
+            .color(if is_selected { p.bg } else { p.muted });
+        let btn = button(btn_text)
+            .style(move |_theme, _status| button::Style {
+                background: Some(if is_selected {
+                    p.accent.into()
+                } else {
+                    p.bg_panel.into()
+                }),
+                text_color: if is_selected { p.bg } else { p.muted },
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .padding([3, 6])
+            .on_press(Message::PlayRateChanged(rate));
+        Element::from(btn)
+    });
+
+    row(buttons).spacing(4).align_y(Alignment::Center).into()
 }
 
 fn view_volume(state: &Kithara) -> Element<'_, Message> {

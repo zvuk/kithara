@@ -81,6 +81,15 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::PlayRateChanged(rate) => {
+            state.selected_rate = rate;
+            state.player.set_default_rate(rate);
+            if state.playing {
+                state.player.play();
+            }
+            Task::none()
+        }
+
         Message::CrossfadeChanged(secs) => {
             state.crossfade = secs;
             state.player.set_crossfade_duration(secs);

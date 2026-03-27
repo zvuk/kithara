@@ -35,6 +35,9 @@ pub(crate) struct Kithara {
     // EQ band gains in dB (one per band from eq_layout).
     pub(crate) eq_bands: Vec<f32>,
 
+    // Playback rate.
+    pub(crate) selected_rate: f32,
+
     // Crossfade duration in seconds.
     pub(crate) crossfade: f32,
 
@@ -76,6 +79,7 @@ impl Kithara {
             seek_position: 0.0,
             is_seeking: false,
             eq_bands: vec![0.0; eq_band_count],
+            selected_rate: 1.0,
             crossfade,
             current_track_index: None,
             track_name: String::new(),

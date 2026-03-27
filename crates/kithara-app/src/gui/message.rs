@@ -17,6 +17,8 @@ pub(crate) enum Message {
     EqBandChanged(usize, f32),
     /// Reset a single EQ band to 0 dB.
     EqBandReset(usize),
+    /// Playback rate changed.
+    PlayRateChanged(f32),
     /// Crossfade duration changed (seconds).
     CrossfadeChanged(f32),
     /// Select a track from the playlist by index.
