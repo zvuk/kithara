@@ -48,7 +48,11 @@ const MIN_GAIN_DB: f32 = -24.0;
 const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.001;
 
 /// Lowest frequency for log-spaced EQ bands (Hz).
-const BAND_MIN_FREQ: f32 = 60.0;
+///
+/// 200 Hz gives an effective bass shelf for all band counts.
+/// Lower values (e.g. 30–60 Hz) produce near-unity biquad coefficients
+/// due to `cos(2π·f/fs) ≈ 1` at standard sample rates.
+const BAND_MIN_FREQ: f32 = 200.0;
 
 /// Highest frequency for log-spaced EQ bands (Hz).
 const BAND_MAX_FREQ: f32 = 18000.0;
@@ -88,7 +92,7 @@ pub struct EqBandConfig {
     pub kind: FilterKind,
 }
 
-/// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.
+/// Generate logarithmically-spaced EQ bands from 200 Hz to 18 kHz.
 ///
 /// First band is `LowShelf`, last band is `HighShelf`, interior bands are `Peaking`.
 /// Q factor is scaled by `1.4 * sqrt(count / 10)` to provide narrower bands
@@ -765,5 +769,30 @@ mod tests {
             (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
 
         output_rms / input_rms
+    }
+
+    #[kithara::test]
+    fn eq_3band_low_shelf_affects_bass() {
+        let bands = generate_log_spaced_bands(3);
+        eprintln!(
+            "3-band layout: {:?}",
+            bands
+                .iter()
+                .map(|b| format!("{:.0}Hz {:?}", b.frequency, b.kind))
+                .collect::<Vec<_>>()
+        );
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, 6.0);
+        converge_smoother(&mut eq, spec);
+
+        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        assert!(
+            gain_bass > 1.3,
+            "40Hz should be boosted by LowShelf band 0, got gain={gain_bass:.3}"
+        );
     }
 }
