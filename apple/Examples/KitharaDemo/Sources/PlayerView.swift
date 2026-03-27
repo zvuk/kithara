@@ -122,10 +122,17 @@ struct PlayerView: View {
             Image(systemName: "music.note")
                 .font(.system(size: 16))
                 .foregroundStyle(Color.kitharaGold)
-            Text(viewModel.trackName)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.kitharaLight)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModel.trackName)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.kitharaLight)
+                    .lineLimit(1)
+                if let variant = viewModel.currentVariantLabel {
+                    Text(variant)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.kitharaMuted)
+                }
+            }
             Spacer()
         }
         .padding(12)

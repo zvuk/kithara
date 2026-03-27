@@ -29,6 +29,7 @@ final class PlayerViewModel: ObservableObject {
     @Published var isMuted = false
     @Published var selectedRate: Float = 1.0
     @Published var eqGains: [Float] = []
+    @Published var currentVariantLabel: String?
 
     private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -261,6 +262,7 @@ final class PlayerViewModel: ObservableObject {
         isSeeking = false
         status = .unknown
         shouldReloadCurrentTrack = false
+        currentVariantLabel = nil
 
         let item = KitharaPlayerItem(url: track.url)
         itemCancellable = item.eventPublisher
@@ -273,6 +275,13 @@ final class PlayerViewModel: ObservableObject {
                     self?.status = .failed
                 case let .durationChanged(seconds):
                     print("[KitharaDemo] duration: \(seconds)s")
+                case let .variantsDiscovered(variants):
+                    let labels = variants.map { "\($0.bandwidthBps / 1000)k" }.joined(separator: ", ")
+                    print("[KitharaDemo] variants: \(labels)")
+                case let .variantChanged(variant):
+                    let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
+                    print("[KitharaDemo] variant changed: \(label)")
+                    self?.currentVariantLabel = label
                 default:
                     break
                 }
