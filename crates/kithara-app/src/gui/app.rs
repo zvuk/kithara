@@ -109,9 +109,20 @@ impl Kithara {
         // Start event logging inside iced's tokio runtime.
         start_event_logging(&state.player);
 
-        // Spawn async loading for all tracks.
+        // Set initial track name.
+        if !state.playlist.is_empty() {
+            state.current_track_index = Some(0);
+            state.track_name = state.playlist.track_name(0);
+            state.playlist.on_track_selected(0);
+        }
+
+        // Load all tracks. The first track uses load_track() which subscribes
+        // to variant events for the GUI label/picker. Others use load_and_apply.
         let mut tasks = Vec::new();
-        for i in 0..state.playlist.len() {
+        if !state.playlist.is_empty() {
+            tasks.push(state.load_track(0));
+        }
+        for i in 1..state.playlist.len() {
             let params = state.load_params.clone();
             tasks.push(Task::perform(
                 async move {
@@ -126,13 +137,6 @@ impl Kithara {
                     }
                 },
             ));
-        }
-
-        // Set initial track name.
-        if !state.playlist.is_empty() {
-            state.current_track_index = Some(0);
-            state.track_name = state.playlist.track_name(0);
-            state.playlist.on_track_selected(0);
         }
 
         (state, Task::batch(tasks))

@@ -246,26 +246,6 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
         col = col.push(text(&state.variant_label).size(CAPTION_FONT).color(p.muted));
     }
 
-    if !state.abr_variants.is_empty() {
-        let mut abr_row = row![].spacing(COMPACT_SPACING);
-        abr_row = abr_row.push(abr_button(
-            "Auto",
-            state.abr_mode_is_auto,
-            p,
-            Message::SetAbrMode(None),
-        ));
-        for (idx, label) in &state.abr_variants {
-            let active = !state.abr_mode_is_auto;
-            abr_row = abr_row.push(abr_button(
-                label,
-                active,
-                p,
-                Message::SetAbrMode(Some(*idx)),
-            ));
-        }
-        col = col.push(abr_row);
-    }
-
     container(col)
         .width(Length::Fill)
         .padding(SECTION_PADDING)
@@ -666,18 +646,33 @@ fn view_dj(state: &Kithara) -> Element<'_, Message> {
 
 fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    container(
-        column![
-            text("Settings").size(HEADING_FONT).color(p.text),
-            text("Playback and appearance options will be added here.")
-                .size(SETTINGS_BODY_FONT)
-                .color(p.muted),
-        ]
-        .spacing(SETTINGS_SPACING),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    let mut col =
+        column![text("Settings").size(HEADING_FONT).color(p.text),].spacing(SETTINGS_SPACING);
+
+    // Quality picker (ABR mode)
+    col = col.push(text("Quality").size(SETTINGS_BODY_FONT).color(p.text));
+    let mut quality_row = row![].spacing(COMPACT_SPACING);
+    quality_row = quality_row.push(abr_button(
+        "Auto",
+        state.abr_mode_is_auto,
+        p,
+        Message::SetAbrMode(None),
+    ));
+    for (idx, label) in &state.abr_variants {
+        let active = !state.abr_mode_is_auto;
+        quality_row = quality_row.push(abr_button(
+            label,
+            active,
+            p,
+            Message::SetAbrMode(Some(*idx)),
+        ));
+    }
+    col = col.push(quality_row);
+
+    container(col)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn truncate_name(name: &str, max_chars: usize) -> String {

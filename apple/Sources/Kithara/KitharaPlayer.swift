@@ -97,6 +97,17 @@ public final class KitharaPlayer: @unchecked Sendable {
         try? _inner.resetEq()
     }
 
+    /// Change ABR mode at runtime.
+    public func setAbrMode(_ mode: AbrMode) {
+        let ffiMode: FfiAbrMode = switch mode {
+        case .auto:
+            .auto
+        case .manual(let index):
+            .manual(variantIndex: UInt32(index))
+        }
+        _inner.setAbrMode(mode: ffiMode)
+    }
+
     // MARK: - Init
 
     /// Configuration for player creation.

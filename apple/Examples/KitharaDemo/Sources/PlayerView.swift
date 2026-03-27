@@ -42,6 +42,8 @@ struct PlayerView: View {
             Spacer().frame(height: 16)
             eqSection
             Spacer().frame(height: 16)
+            qualitySection
+            Spacer().frame(height: 16)
             playlistSection
             Spacer().frame(height: 16)
             errorSection
@@ -319,6 +321,49 @@ struct PlayerView: View {
             return String(format: "%.0fk", freq / 1000)
         }
         return String(format: "%.0f", freq)
+    }
+
+    // MARK: - Quality
+
+    private var qualitySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quality")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.kitharaLight)
+
+            HStack(spacing: 6) {
+                Button {
+                    viewModel.setAbrMode(variantIndex: nil)
+                } label: {
+                    Text("Auto")
+                        .font(.system(size: 12, weight: viewModel.abrIsAuto ? .bold : .regular))
+                        .foregroundStyle(viewModel.abrIsAuto ? Color.kitharaBg : .kitharaMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(viewModel.abrIsAuto ? Color.kitharaGold : Color.kitharaPanel)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+
+                ForEach(viewModel.discoveredVariants, id: \.index) { variant in
+                    Button {
+                        viewModel.setAbrMode(variantIndex: variant.index)
+                    } label: {
+                        Text(variant.label)
+                            .font(.system(size: 12, weight: !viewModel.abrIsAuto ? .bold : .regular))
+                            .foregroundStyle(!viewModel.abrIsAuto ? Color.kitharaBg : .kitharaMuted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(!viewModel.abrIsAuto ? Color.kitharaGold : Color.kitharaPanel)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.kitharaPanel)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Playlist

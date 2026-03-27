@@ -30,6 +30,8 @@ final class PlayerViewModel: ObservableObject {
     @Published var selectedRate: Float = 1.0
     @Published var eqGains: [Float] = []
     @Published var currentVariantLabel: String?
+    @Published private(set) var discoveredVariants: [(index: UInt32, label: String)] = []
+    @Published var abrIsAuto = true
 
     private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -160,6 +162,18 @@ final class PlayerViewModel: ObservableObject {
         eqGains = Array(repeating: 0, count: eqGains.count)
     }
 
+    // MARK: - ABR
+
+    func setAbrMode(variantIndex: UInt32?) {
+        if let idx = variantIndex {
+            player.setAbrMode(.manual(index: Int(idx)))
+            abrIsAuto = false
+        } else {
+            player.setAbrMode(.auto)
+            abrIsAuto = true
+        }
+    }
+
     // MARK: - Rate
 
     static let availableRates: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
@@ -278,6 +292,10 @@ final class PlayerViewModel: ObservableObject {
                 case let .variantsDiscovered(variants):
                     let labels = variants.map { "\($0.bandwidthBps / 1000)k" }.joined(separator: ", ")
                     print("[KitharaDemo] variants: \(labels)")
+                    self?.discoveredVariants = variants.map { v in
+                        let label = v.name ?? "\(v.bandwidthBps / 1000)k"
+                        return (index: v.index, label: label)
+                    }
                 case let .variantChanged(variant):
                     let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
                     print("[KitharaDemo] variant changed: \(label)")
