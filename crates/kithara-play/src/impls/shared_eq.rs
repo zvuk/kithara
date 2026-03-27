@@ -1,11 +1,12 @@
 use std::sync::{Arc, atomic::Ordering};
 
+use kithara_audio::effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB};
 use portable_atomic::AtomicF32;
 
 use crate::error::PlayError;
 
-pub(crate) const EQ_MAX_GAIN_DB: f32 = 6.0;
-pub(crate) const EQ_MIN_GAIN_DB: f32 = -24.0;
+pub(crate) const EQ_MAX_GAIN_DB: f32 = MAX_GAIN_DB;
+pub(crate) const EQ_MIN_GAIN_DB: f32 = MIN_GAIN_DB;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SharedEq {

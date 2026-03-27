@@ -54,9 +54,7 @@ pub mod internal;
 
 // Public API exports
 pub use audio::Audio;
-pub use effects::eq::{
-    EqBandConfig, EqEffect, FilterKind, compute_coefficients, generate_log_spaced_bands,
-};
+pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
 pub use pipeline::config::AudioConfig;
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};

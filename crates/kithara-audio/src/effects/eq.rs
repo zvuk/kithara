@@ -1,11 +1,15 @@
-//! Parametric EQ effect using biquad filter cascade.
+//! Isolator-style crossover EQ.
 //!
-//! Provides an N-band parametric equalizer implementing [`AudioEffect`].
-//! Each band uses a configurable biquad filter (low-shelf, peaking, or high-shelf)
-//! per channel, applied as a cascade. Gain changes are smoothed per-block using a
-//! one-pole exponential smoother to avoid clicks and pops.
+//! Splits the input signal into N frequency bands using Linkwitz-Riley (LR-4)
+//! crossover filters with explicit LP/HP pairs, applies independent linear
+//! gain to each band, and sums the result. At minimum gain the band
+//! multiplier is exactly zero — true silence.
+//!
+//! Each crossover splits the signal with parallel LP and HP LR-4 filters
+//! (24 dB/oct). Allpass compensation on earlier bands ensures flat magnitude
+//! sum at unity gains.
 
-use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
+use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use derivative::Derivative;
 use kithara_decode::PcmChunk;
 
@@ -23,7 +27,7 @@ const PASSTHROUGH: Coefficients<f32> = Coefficients {
 /// Smoothing time constant in milliseconds.
 const SMOOTH_TIME_MS: f32 = 10.0;
 
-/// Number of samples between coefficient recalculations during smoothing.
+/// Number of samples between gain-smoothing steps.
 const SMOOTH_BLOCK_SIZE: usize = 32;
 
 /// Q scaling factor for log-spaced band generation.
@@ -35,69 +39,76 @@ const Q_REFERENCE_BANDS: f32 = 10.0;
 /// Base-10 exponent base for log-spaced frequency calculation.
 const LOG_FREQ_BASE: f32 = 10.0;
 
-/// Minimum gain threshold (dB) below which the filter is treated as passthrough.
-const GAIN_PASSTHROUGH_THRESHOLD: f32 = 0.01;
-
 /// Maximum EQ band gain in dB.
-const MAX_GAIN_DB: f32 = 6.0;
+pub const MAX_GAIN_DB: f32 = 6.0;
 
-/// Minimum EQ band gain in dB.
-const MIN_GAIN_DB: f32 = -24.0;
+/// Minimum EQ band gain in dB. At this value the band is fully killed.
+pub const MIN_GAIN_DB: f32 = -24.0;
 
-/// Convergence threshold for gain smoothing (dB).
-const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.001;
+/// Convergence threshold for linear gain smoothing.
+const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
 
 /// Lowest frequency for log-spaced EQ bands (Hz).
 ///
-/// 200 Hz gives an effective bass shelf for all band counts.
-/// Lower values (e.g. 30–60 Hz) produce near-unity biquad coefficients
-/// due to `cos(2π·f/fs) ≈ 1` at standard sample rates.
-const BAND_MIN_FREQ: f32 = 200.0;
+/// 60 Hz produces a ~250 Hz low/mid crossover for 3 bands — close to the
+/// industry-standard DJ EQ split point.
+const BAND_MIN_FREQ: f32 = 60.0;
 
 /// Highest frequency for log-spaced EQ bands (Hz).
 const BAND_MAX_FREQ: f32 = 18000.0;
 
-/// Milliseconds per second for time constant conversion.
+/// Milliseconds per second.
 const MS_PER_SEC: f32 = 1000.0;
 
 /// Minimum channel count for stereo processing.
 const STEREO_CHANNELS: usize = 2;
 
+/// Butterworth Q factor (1/√2) for LR-4 crossover construction.
+const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
 /// The type of biquad filter used for an EQ band.
+///
+/// Retained for band layout description; the isolator crossover ignores this
+/// during processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum FilterKind {
-    /// Low-shelf filter: boosts/cuts frequencies below the center frequency.
     LowShelf,
-    /// Peaking EQ filter: boosts/cuts frequencies around the center frequency.
     #[default]
     Peaking,
-    /// High-shelf filter: boosts/cuts frequencies above the center frequency.
     HighShelf,
 }
 
-/// Configuration for a single parametric EQ band.
+impl From<u8> for FilterKind {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => Self::LowShelf,
+            2 => Self::HighShelf,
+            _ => Self::Peaking,
+        }
+    }
+}
+
+/// Configuration for a single EQ band.
 #[derive(Debug, Clone, Copy, Derivative, PartialEq)]
 #[derivative(Default)]
 pub struct EqBandConfig {
     /// Center frequency in Hz.
     #[derivative(Default(value = "1000.0"))]
     pub frequency: f32,
-    /// Q factor (bandwidth control).
+    /// Q factor (used only by `compute_coefficients` for parametric mode).
     #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
     pub q_factor: f32,
-    /// Gain in dB (clamped to -24..+6 on set).
+    /// Gain in dB (clamped to [`MIN_GAIN_DB`]..=[`MAX_GAIN_DB`] on set).
     pub gain_db: f32,
-    /// Filter type for this band.
+    /// Filter type label for this band.
     pub kind: FilterKind,
 }
 
-/// Generate logarithmically-spaced EQ bands from 200 Hz to 18 kHz.
+/// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.
 ///
-/// First band is `LowShelf`, last band is `HighShelf`, interior bands are `Peaking`.
-/// Q factor is scaled by `1.4 * sqrt(count / 10)` to provide narrower bands
-/// when there are more of them. For a single band, the geometric mean frequency
-/// of 30 Hz and 18 kHz is used with `Peaking` kind.
+/// First band is `LowShelf`, last band is `HighShelf`, interior bands are
+/// `Peaking`. Q factor scales with band count.
 #[must_use]
 #[expect(
     clippy::cast_precision_loss,
@@ -144,107 +155,347 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 }
 
 /// Clamp sample to safe range, replacing NaN/Inf with 0.0.
-///
-/// Prevents corrupted filter state from reaching the audio driver
-/// which could damage hardware (speakers, amplifiers).
 #[inline]
 fn clamp_sample(sample: f32) -> f32 {
     if sample.is_finite() { sample } else { 0.0 }
 }
 
-/// Compute biquad coefficients for a band with the given gain.
-#[must_use]
-pub fn compute_coefficients(
-    band: &EqBandConfig,
-    gain_db: f32,
-    sample_rate: biquad::Hertz<f32>,
-) -> Coefficients<f32> {
-    if gain_db.abs() < GAIN_PASSTHROUGH_THRESHOLD {
-        return PASSTHROUGH;
+/// Convert dB to linear gain. Full kill at [`MIN_GAIN_DB`].
+#[inline]
+fn db_to_linear(db: f32) -> f32 {
+    if db <= MIN_GAIN_DB {
+        0.0
+    } else {
+        10.0_f32.powf(db / 20.0)
     }
-    // Second-order shelf filters reach only half the requested gain at
-    // one octave from cutoff. Doubling the internal gain compensates so
-    // the user-facing value matches the measured attenuation/boost.
-    let filter_type = match band.kind {
-        FilterKind::LowShelf => Type::LowShelf(gain_db * 2.0),
-        FilterKind::Peaking => Type::PeakingEQ(gain_db),
-        FilterKind::HighShelf => Type::HighShelf(gain_db * 2.0),
-    };
-    Coefficients::<f32>::from_params(filter_type, sample_rate, band.frequency.hz(), band.q_factor)
+}
+
+/// LR-4 (Linkwitz-Riley 4th-order) filter stage: two cascaded biquads.
+struct LR4 {
+    bq1: DirectForm1<f32>,
+    bq2: DirectForm1<f32>,
+}
+
+impl LR4 {
+    fn new(coeffs: Coefficients<f32>) -> Self {
+        Self {
+            bq1: DirectForm1::new(coeffs),
+            bq2: DirectForm1::new(coeffs),
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        self.bq2.run(self.bq1.run(input))
+    }
+}
+
+/// Compute biquad coefficients using correct normalisation.
+///
+/// `from_params` in biquad 0.5 normalises as `f0/(2·fs)` instead of the
+/// Audio EQ Cookbook's `f0/fs`, giving coefficients at 4× lower frequency.
+/// We bypass it with `from_normalized_params` and `2·f0/fs`.
+fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients<f32> {
+    let normalized = 2.0 * freq / sample_rate;
+    Coefficients::<f32>::from_normalized_params(filter, normalized, BUTTERWORTH_Q)
         .unwrap_or(PASSTHROUGH)
 }
 
-/// Per-band smoother state for click-free gain transitions.
-struct BandState {
-    /// Target gain set by the user (clamped).
-    target_gain_db: f32,
-    /// Current smoothed gain applied to the filter.
-    current_gain_db: f32,
+/// Per-band gain with linear smoothing.
+struct GainState {
+    target_db: f32,
+    target_linear: f32,
+    current_linear: f32,
 }
 
-/// Parametric EQ effect using biquad filter cascade.
+impl GainState {
+    fn new(gain_db: f32) -> Self {
+        let linear = db_to_linear(gain_db);
+        Self {
+            target_db: gain_db,
+            target_linear: linear,
+            current_linear: linear,
+        }
+    }
+
+    fn set_target(&mut self, gain_db: f32) {
+        let clamped = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        if (clamped - self.target_db).abs() < f32::EPSILON {
+            return;
+        }
+        self.target_db = clamped;
+        self.target_linear = db_to_linear(clamped);
+    }
+
+    #[inline]
+    fn smooth(&mut self, coeff: f32) {
+        let diff = self.target_linear - self.current_linear;
+        if diff.abs() < SMOOTH_CONVERGENCE_THRESHOLD {
+            self.current_linear = self.target_linear;
+        } else {
+            self.current_linear += coeff * diff;
+        }
+    }
+}
+
+/// One-pole smoother coefficient, accounting for block-rate updates.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "SMOOTH_BLOCK_SIZE is a small constant"
+)]
+fn compute_smooth_coeff(sample_rate: f32) -> f32 {
+    let tau = SMOOTH_TIME_MS / MS_PER_SEC;
+    let effective_rate = sample_rate / SMOOTH_BLOCK_SIZE as f32;
+    1.0 - (-1.0 / (tau * effective_rate)).exp()
+}
+
+/// Single-channel isolator crossover EQ.
 ///
-/// Applies N configurable biquad filters (low-shelf, peaking, high-shelf) in series
-/// per channel. Gain changes are smoothed using a one-pole exponential filter to
-/// prevent clicks and pops during real-time parameter updates.
-pub struct EqEffect {
-    bands: Vec<EqBandConfig>,
-    states: Vec<BandState>,
-    filters_l: Vec<DirectForm1<f32>>,
-    filters_r: Vec<DirectForm1<f32>>,
-    sample_rate: u32,
-    channels: u16,
-    /// One-pole smoother coefficient: `1 - exp(-1 / (tau * fs))`.
+/// Splits the input into N frequency bands using LR-4 crossover filters
+/// with explicit LP/HP pairs and allpass phase compensation. At
+/// [`MIN_GAIN_DB`] the band multiplier is zero — true silence.
+///
+/// ## Crossover topology (3 bands, 2 crossovers at f₁, f₂)
+///
+/// ```text
+/// input → LP₁ → AP₂ → ×gain₀ ──┐
+///       → HP₁ → LP₂ → ×gain₁ ──┼─► Σ → output
+///       → HP₁ → HP₂ → ×gain₂ ──┘
+/// ```
+///
+/// The allpass at f₂ on the low band compensates for the phase shift of
+/// the second crossover, so LP + HP sums to a flat allpass at unity gains.
+pub struct IsolatorEq {
+    /// N-1 LR-4 lowpass stages (one per crossover).
+    lps: Vec<LR4>,
+    /// N-1 LR-4 highpass stages (one per crossover).
+    hps: Vec<LR4>,
+    /// Flattened allpass compensation filters (contiguous for cache locality).
+    /// Band k's allpasses are at `ap_filters[ap_offsets[k]..ap_offsets[k+1]]`.
+    ap_filters: Vec<DirectForm1<f32>>,
+    /// Start offset per band into `ap_filters` (length = N+1).
+    ap_offsets: Vec<usize>,
+    /// Scratch buffer for LP outputs (pre-allocated, size N-1).
+    lp_scratch: Vec<f32>,
+    /// Per-band gain state.
+    gains: Vec<GainState>,
+    /// Crossover frequencies (N-1).
+    crossover_freqs: Vec<f32>,
+    sample_rate: f32,
     smooth_coeff: f32,
+    block_counter: usize,
 }
 
-impl EqEffect {
-    /// Create a new EQ effect with the given bands and audio format.
+impl IsolatorEq {
+    /// Create a new isolator EQ for the given band layout.
     #[must_use]
     #[expect(
         clippy::cast_precision_loss,
         reason = "sample rate fits in f32 for audio"
     )]
-    pub fn new(bands: Vec<EqBandConfig>, sample_rate: u32, channels: u16) -> Self {
+    pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
+        let sr = sample_rate as f32;
         let n = bands.len();
-        let states: Vec<BandState> = bands
-            .iter()
-            .map(|b| BandState {
-                target_gain_db: b.gain_db,
-                current_gain_db: b.gain_db,
-            })
-            .collect();
-        let smooth_coeff = Self::compute_smooth_coeff(sample_rate as f32);
-        let mut eq = Self {
-            bands,
-            states,
-            filters_l: vec![DirectForm1::<f32>::new(PASSTHROUGH); n],
-            filters_r: vec![DirectForm1::<f32>::new(PASSTHROUGH); n],
-            sample_rate,
-            channels,
-            smooth_coeff,
-        };
-        eq.recompute_all_coefficients();
-        eq
-    }
+        let xover_count = n.saturating_sub(1);
 
-    /// Set the gain for a specific band (clamped to -24..+6 dB).
-    ///
-    /// The gain change is smoothed over ~10ms to avoid clicks.
-    pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
-        if let Some(state) = self.states.get_mut(band_index) {
-            state.target_gain_db = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        let crossover_freqs: Vec<f32> = if n >= 2 {
+            (0..xover_count)
+                .map(|i| (bands[i].frequency * bands[i + 1].frequency).sqrt())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let lps: Vec<LR4> = crossover_freqs
+            .iter()
+            .map(|&f| LR4::new(biquad_coeffs(Type::LowPass, f, sr)))
+            .collect();
+
+        let hps: Vec<LR4> = crossover_freqs
+            .iter()
+            .map(|&f| LR4::new(biquad_coeffs(Type::HighPass, f, sr)))
+            .collect();
+
+        // Build flattened allpass array. Band k needs allpasses at
+        // crossover frequencies k+1 .. N-2 (LR-4 LP+HP = 2nd-order allpass).
+        let mut ap_filters = Vec::new();
+        let mut ap_offsets = Vec::with_capacity(n + 1);
+        for band in 0..n {
+            ap_offsets.push(ap_filters.len());
+            if band + 1 < xover_count {
+                for &f in &crossover_freqs[band + 1..] {
+                    ap_filters.push(DirectForm1::new(biquad_coeffs(Type::AllPass, f, sr)));
+                }
+            }
+        }
+        ap_offsets.push(ap_filters.len());
+
+        let gains = bands.iter().map(|b| GainState::new(b.gain_db)).collect();
+
+        Self {
+            lps,
+            hps,
+            ap_filters,
+            ap_offsets,
+            lp_scratch: vec![0.0; xover_count],
+            gains,
+            crossover_freqs,
+            sample_rate: sr,
+            smooth_coeff: compute_smooth_coeff(sr),
+            block_counter: 0,
         }
     }
 
-    /// Get the band layout (frequency, Q, kind). Gains reflect target values.
+    /// Set the target gain for a band (dB, clamped to min/max).
+    pub fn set_gain(&mut self, band: usize, gain_db: f32) {
+        if let Some(state) = self.gains.get_mut(band) {
+            state.set_target(gain_db);
+        }
+    }
+
+    /// Current target gain for a band (dB).
+    #[must_use]
+    pub fn target_gain(&self, band: usize) -> Option<f32> {
+        self.gains.get(band).map(|s| s.target_db)
+    }
+
+    /// Number of bands.
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.gains.len()
+    }
+
+    /// Whether any band is still smoothing toward its target.
+    #[must_use]
+    pub fn is_smoothing(&self) -> bool {
+        self.gains
+            .iter()
+            .any(|g| (g.target_linear - g.current_linear).abs() > SMOOTH_CONVERGENCE_THRESHOLD)
+    }
+
+    /// Process a single sample through the crossover EQ.
+    ///
+    /// Gain smoothing advances automatically every [`SMOOTH_BLOCK_SIZE`] calls.
+    #[inline]
+    pub fn process_sample(&mut self, input: f32) -> f32 {
+        self.block_counter += 1;
+        if self.block_counter >= SMOOTH_BLOCK_SIZE {
+            self.block_counter = 0;
+            for gain in &mut self.gains {
+                gain.smooth(self.smooth_coeff);
+            }
+        }
+
+        let n = self.gains.len();
+        if n == 0 {
+            return input;
+        }
+        if n == 1 {
+            return clamp_sample(input * self.gains[0].current_linear);
+        }
+
+        // Split via LP/HP chain: each crossover peels off a band via LP,
+        // and the HP output feeds the next crossover.
+        let mut hp = input;
+        for i in 0..n - 1 {
+            self.lp_scratch[i] = self.lps[i].process(hp);
+            hp = self.hps[i].process(hp);
+        }
+
+        // Accumulate: each LP band runs through its allpass compensation,
+        // then is scaled by the band gain.
+        let mut output = 0.0;
+        for i in 0..n - 1 {
+            let mut band = self.lp_scratch[i];
+            let ap_start = self.ap_offsets[i];
+            let ap_end = self.ap_offsets[i + 1];
+            for ap in &mut self.ap_filters[ap_start..ap_end] {
+                band = ap.run(band);
+            }
+            output += band * self.gains[i].current_linear;
+        }
+        // Last band is the final HP remainder.
+        output += hp * self.gains[n - 1].current_linear;
+
+        clamp_sample(output)
+    }
+
+    /// Reset all gains to 0 dB (unity) and clear filter state.
+    pub fn reset(&mut self) {
+        for gain in &mut self.gains {
+            gain.target_db = 0.0;
+            gain.target_linear = 1.0;
+            gain.current_linear = 1.0;
+        }
+        self.rebuild_filters();
+        self.block_counter = 0;
+    }
+
+    /// Re-initialise for a new sample rate (e.g. after stream change).
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "sample rate fits in f32 for audio"
+    )]
+    pub fn update_sample_rate(&mut self, sample_rate: u32) {
+        self.sample_rate = sample_rate as f32;
+        self.smooth_coeff = compute_smooth_coeff(self.sample_rate);
+        self.rebuild_filters();
+    }
+
+    fn rebuild_filters(&mut self) {
+        for (i, &freq) in self.crossover_freqs.iter().enumerate() {
+            self.lps[i] = LR4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
+            self.hps[i] = LR4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
+        }
+        for band in 0..self.gains.len() {
+            let start = self.ap_offsets[band];
+            let end = self.ap_offsets[band + 1];
+            for (j, ap) in self.ap_filters[start..end].iter_mut().enumerate() {
+                let freq = self.crossover_freqs[band + 1 + j];
+                *ap = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
+            }
+        }
+    }
+}
+
+/// N-band isolator EQ implementing [`AudioEffect`].
+///
+/// Wraps two [`IsolatorEq`] instances (L/R) and processes interleaved PCM.
+pub struct EqEffect {
+    eq_l: IsolatorEq,
+    eq_r: IsolatorEq,
+    bands: Vec<EqBandConfig>,
+    channels: u16,
+}
+
+impl EqEffect {
+    /// Create a new EQ effect with the given bands and audio format.
+    #[must_use]
+    pub fn new(bands: Vec<EqBandConfig>, sample_rate: u32, channels: u16) -> Self {
+        let eq_l = IsolatorEq::new(&bands, sample_rate);
+        let eq_r = IsolatorEq::new(&bands, sample_rate);
+        Self {
+            eq_l,
+            eq_r,
+            bands,
+            channels,
+        }
+    }
+
+    /// Set the gain for a specific band (clamped to min/max dB).
+    pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
+        self.eq_l.set_gain(band_index, gain_db);
+        self.eq_r.set_gain(band_index, gain_db);
+    }
+
+    /// Get the band layout. Gains reflect target values.
     #[must_use]
     pub fn bands(&self) -> Vec<EqBandConfig> {
         self.bands
             .iter()
-            .zip(self.states.iter())
-            .map(|(band, state)| EqBandConfig {
-                gain_db: state.target_gain_db,
+            .enumerate()
+            .map(|(i, band)| EqBandConfig {
+                gain_db: self.eq_l.target_gain(i).unwrap_or(0.0),
                 ..*band
             })
             .collect()
@@ -253,75 +504,13 @@ impl EqEffect {
     /// Get the target gain for a specific band.
     #[must_use]
     pub fn target_gain(&self, band_index: usize) -> Option<f32> {
-        self.states.get(band_index).map(|s| s.target_gain_db)
+        self.eq_l.target_gain(band_index)
     }
 
-    /// Check if any band is currently smoothing (target != current).
+    /// Check if any band is currently smoothing.
     #[cfg(test)]
     fn is_smoothing(&self) -> bool {
-        self.states
-            .iter()
-            .any(|s| (s.target_gain_db - s.current_gain_db).abs() > SMOOTH_CONVERGENCE_THRESHOLD)
-    }
-
-    /// Compute the one-pole smoother coefficient for the given sample rate.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "SMOOTH_BLOCK_SIZE is a small constant"
-    )]
-    fn compute_smooth_coeff(sample_rate: f32) -> f32 {
-        let tau = SMOOTH_TIME_MS / MS_PER_SEC;
-        // Scale by block size since we apply smoothing per-block, not per-sample
-        let effective_rate = sample_rate / SMOOTH_BLOCK_SIZE as f32;
-        1.0 - (-1.0 / (tau * effective_rate)).exp()
-    }
-
-    /// Recompute all coefficients from current gains (used at startup).
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
-    fn recompute_all_coefficients(&mut self) {
-        let sr = (self.sample_rate as f32).hz();
-        for (i, band) in self.bands.iter().enumerate() {
-            let gain = self.states[i].current_gain_db;
-            let coeffs = compute_coefficients(band, gain, sr);
-            self.filters_l[i].update_coefficients(coeffs);
-            self.filters_r[i].update_coefficients(coeffs);
-        }
-    }
-
-    /// Advance smoothers and update coefficients for bands that changed.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
-    fn smooth_and_update(&mut self) {
-        let sr = (self.sample_rate as f32).hz();
-        let coeff = self.smooth_coeff;
-
-        for i in 0..self.bands.len() {
-            let state = &mut self.states[i];
-            let diff = state.target_gain_db - state.current_gain_db;
-
-            if diff.abs() < SMOOTH_CONVERGENCE_THRESHOLD {
-                // Close enough — snap to target
-                if diff.abs() > f32::EPSILON {
-                    state.current_gain_db = state.target_gain_db;
-                    let coeffs = compute_coefficients(&self.bands[i], state.current_gain_db, sr);
-                    self.filters_l[i].update_coefficients(coeffs);
-                    self.filters_r[i].update_coefficients(coeffs);
-                }
-                continue;
-            }
-
-            // One-pole exponential smoothing
-            state.current_gain_db += coeff * diff;
-            let gain = state.current_gain_db;
-            let coeffs = compute_coefficients(&self.bands[i], gain, sr);
-            self.filters_l[i].update_coefficients(coeffs);
-            self.filters_r[i].update_coefficients(coeffs);
-        }
+        self.eq_l.is_smoothing()
     }
 }
 
@@ -333,37 +522,12 @@ impl AudioEffect for EqEffect {
         }
 
         let samples = chunk.pcm.as_mut_slice();
-        let n_bands = self.bands.len();
-        let total_frames = samples.len() / channels;
 
-        // Process in blocks for smooth coefficient updates
-        let mut frame_offset = 0;
-        while frame_offset < total_frames {
-            // Update smoothed coefficients at block boundaries
-            self.smooth_and_update();
-
-            let block_end = (frame_offset + SMOOTH_BLOCK_SIZE).min(total_frames);
-            let block_samples = &mut samples[frame_offset * channels..block_end * channels];
-
-            for frame in block_samples.chunks_exact_mut(channels) {
-                // Left channel (or mono)
-                let mut sample_l = frame[0];
-                for f in &mut self.filters_l[..n_bands] {
-                    sample_l = f.run(sample_l);
-                }
-                frame[0] = clamp_sample(sample_l);
-
-                // Right channel (if stereo or more)
-                if channels >= STEREO_CHANNELS {
-                    let mut sample_r = frame[1];
-                    for f in &mut self.filters_r[..n_bands] {
-                        sample_r = f.run(sample_r);
-                    }
-                    frame[1] = clamp_sample(sample_r);
-                }
+        for frame in samples.chunks_exact_mut(channels) {
+            frame[0] = self.eq_l.process_sample(frame[0]);
+            if channels >= STEREO_CHANNELS {
+                frame[1] = self.eq_r.process_sample(frame[1]);
             }
-
-            frame_offset = block_end;
         }
 
         Some(chunk)
@@ -374,16 +538,8 @@ impl AudioEffect for EqEffect {
     }
 
     fn reset(&mut self) {
-        for f in &mut self.filters_l {
-            *f = DirectForm1::new(PASSTHROUGH);
-        }
-        for f in &mut self.filters_r {
-            *f = DirectForm1::new(PASSTHROUGH);
-        }
-        for state in &mut self.states {
-            state.target_gain_db = 0.0;
-            state.current_gain_db = 0.0;
-        }
+        self.eq_l.reset();
+        self.eq_r.reset();
     }
 }
 
@@ -436,63 +592,95 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_flat_gain_is_passthrough() {
+    fn generate_bands_3_first_is_low_shelf() {
+        let bands = generate_log_spaced_bands(3);
+        assert_eq!(bands[0].kind, FilterKind::LowShelf);
+    }
+
+    #[kithara::test]
+    fn generate_bands_3_last_is_high_shelf() {
+        let bands = generate_log_spaced_bands(3);
+        assert_eq!(bands[2].kind, FilterKind::HighShelf);
+    }
+
+    #[kithara::test]
+    fn generate_bands_3_mid_is_peaking() {
+        let bands = generate_log_spaced_bands(3);
+        assert_eq!(bands[1].kind, FilterKind::Peaking);
+    }
+
+    #[kithara::test]
+    fn generate_bands_10_edges_are_shelves() {
         let bands = generate_log_spaced_bands(10);
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        let num_frames = 1024;
-        let mut pcm = Vec::with_capacity(num_frames * 2);
-        for i in 0..num_frames {
-            let sample = (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin();
-            pcm.push(sample);
-            pcm.push(sample);
-        }
-
-        let input_copy = pcm.clone();
-        let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
-
-        let out_samples = output.samples();
-        for (i, (&out, &inp)) in out_samples.iter().zip(input_copy.iter()).enumerate() {
-            assert!(
-                (out - inp).abs() < 1e-5,
-                "Sample {i} differs: input={inp}, output={out}"
-            );
+        assert_eq!(bands[0].kind, FilterKind::LowShelf);
+        assert_eq!(bands[9].kind, FilterKind::HighShelf);
+        for band in &bands[1..9] {
+            assert_eq!(band.kind, FilterKind::Peaking);
         }
     }
 
     #[kithara::test]
-    fn eq_reset_clears_gains_and_history() {
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = EqEffect::new(bands, 44100, 2);
+    fn filter_kind_default_is_peaking() {
+        assert_eq!(FilterKind::default(), FilterKind::Peaking);
+    }
 
-        eq.set_gain(0, 6.0);
-        // Process some audio to apply gain
+    #[kithara::test]
+    fn eq_band_config_has_filter_kind() {
+        let band = EqBandConfig::default();
+        assert_eq!(band.kind, FilterKind::Peaking);
+    }
+
+    #[kithara::test]
+    fn three_band_crossover_near_250_and_2500() {
+        let bands = generate_log_spaced_bands(3);
+        let xover_low = (bands[0].frequency * bands[1].frequency).sqrt();
+        let xover_high = (bands[1].frequency * bands[2].frequency).sqrt();
+
+        assert!(
+            (200.0..350.0).contains(&xover_low),
+            "low crossover {xover_low:.0} Hz should be near 250 Hz"
+        );
+        assert!(
+            (2000.0..6000.0).contains(&xover_high),
+            "high crossover {xover_high:.0} Hz should be near 2500 Hz"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_flat_gain_preserves_magnitude() {
+        let bands = generate_log_spaced_bands(10);
         let spec = PcmSpec {
-            channels: 2,
+            channels: 1,
             sample_rate: 44100,
         };
-        let pcm = vec![0.5f32; 256];
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        // Process enough audio for the crossover filters to settle.
+        let warmup = vec![0.0f32; 4096];
+        let _ = eq.process(test_chunk(spec, warmup));
+
+        let num_frames = 44100;
+        let pcm: Vec<f32> = (0..num_frames)
+            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+            .collect();
+
+        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
+
         let chunk = test_chunk(spec, pcm);
-        let _ = eq.process(chunk);
+        let output = eq.process(chunk).unwrap();
+        let out = output.samples();
 
-        eq.reset();
+        // Skip transient, measure steady-state RMS.
+        let steady = &out[4096..];
+        let output_rms: f32 =
+            (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
+        let gain = output_rms / input_rms;
 
-        // All target and current gains should be 0
-        for state in &eq.states {
-            assert!(
-                state.target_gain_db.abs() < f32::EPSILON,
-                "target should be 0 after reset"
-            );
-            assert!(
-                state.current_gain_db.abs() < f32::EPSILON,
-                "current should be 0 after reset"
-            );
-        }
+        // At unity gains the crossover is an allpass (magnitude 1).
+        assert!(
+            (gain - 1.0).abs() < 0.05,
+            "Unity gain should preserve magnitude, got gain={gain:.4}"
+        );
     }
 
     #[kithara::test]
@@ -501,7 +689,7 @@ mod tests {
         let mut eq = EqEffect::new(bands, 44100, 2);
 
         eq.set_gain(0, 100.0);
-        assert!((eq.target_gain(0).unwrap() - 6.0).abs() < f32::EPSILON);
+        assert!((eq.target_gain(0).unwrap() - MAX_GAIN_DB).abs() < f32::EPSILON);
 
         eq.set_gain(0, -100.0);
         assert!((eq.target_gain(0).unwrap() - MIN_GAIN_DB).abs() < f32::EPSILON);
@@ -514,11 +702,221 @@ mod tests {
     fn eq_set_gain_out_of_bounds_band_is_noop() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
-
         eq.set_gain(99, 5.0);
         for i in 0..3 {
             assert!(eq.target_gain(i).unwrap().abs() < f32::EPSILON);
         }
+    }
+
+    #[kithara::test]
+    fn eq_reset_clears_gains_and_history() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = EqEffect::new(bands, 44100, 2);
+
+        eq.set_gain(0, 6.0);
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
+        };
+        let pcm = vec![0.5f32; 256];
+        let chunk = test_chunk(spec, pcm);
+        let _ = eq.process(chunk);
+
+        eq.reset();
+
+        for i in 0..3 {
+            assert!(
+                eq.target_gain(i).unwrap().abs() < f32::EPSILON,
+                "target should be 0 after reset"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn eq_single_band_kill() {
+        let bands = vec![EqBandConfig {
+            frequency: 1000.0,
+            ..Default::default()
+        }];
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, MIN_GAIN_DB);
+        converge_smoother(&mut eq, spec);
+
+        let gain = measure_sine_gain(&mut eq, 1000.0, spec);
+        assert!(
+            gain < 0.001,
+            "single band at min should be killed, got gain={gain:.6}"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_3band_kill_low() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, MIN_GAIN_DB);
+        converge_smoother(&mut eq, spec);
+
+        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        let gain_treble = measure_sine_gain(&mut eq, 10000.0, spec);
+        assert!(
+            gain_bass < 0.05,
+            "bass should be killed, got {gain_bass:.4}"
+        );
+        assert!(
+            gain_treble > 0.8,
+            "treble should pass, got {gain_treble:.4}"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_3band_kill_high() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(2, MIN_GAIN_DB);
+        converge_smoother(&mut eq, spec);
+
+        let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
+        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        assert!(
+            gain_treble < 0.05,
+            "treble should be killed, got {gain_treble:.4}"
+        );
+        assert!(gain_bass > 0.8, "bass should pass, got {gain_bass:.4}");
+    }
+
+    #[kithara::test]
+    fn eq_3band_kill_all_produces_silence() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        for i in 0..3 {
+            eq.set_gain(i, MIN_GAIN_DB);
+        }
+        converge_smoother(&mut eq, spec);
+
+        for freq in [40.0, 1000.0, 10000.0] {
+            let gain = measure_sine_gain(&mut eq, freq, spec);
+            assert!(
+                gain < 0.001,
+                "all bands killed: {freq}Hz gain should be ~0, got {gain:.6}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn eq_low_shelf_boosts_bass() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, MAX_GAIN_DB);
+        converge_smoother(&mut eq, spec);
+
+        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        assert!(
+            gain_bass > 1.5,
+            "40Hz should be boosted, got gain={gain_bass:.3}"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_high_shelf_boosts_treble() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(2, MAX_GAIN_DB);
+        converge_smoother(&mut eq, spec);
+
+        let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
+        assert!(
+            gain_treble > 1.5,
+            "15kHz should be boosted, got gain={gain_treble:.3}"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_gain_change_starts_smoothing() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = EqEffect::new(bands, 44100, 2);
+
+        assert!(!eq.is_smoothing(), "should not be smoothing initially");
+        eq.set_gain(0, 6.0);
+        assert!(eq.is_smoothing(), "should be smoothing after set_gain");
+    }
+
+    #[kithara::test]
+    fn eq_smooth_gain_converges() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, 6.0);
+
+        converge_smoother(&mut eq, spec);
+
+        assert!(
+            !eq.is_smoothing(),
+            "should have converged after sufficient processing"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_smooth_no_discontinuity() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        // Warmup
+        let warmup: Vec<f32> = (0..4096)
+            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+            .collect();
+        let chunk = test_chunk(spec, warmup);
+        let _ = eq.process(chunk);
+
+        // Abrupt gain change
+        eq.set_gain(0, MAX_GAIN_DB);
+
+        let signal: Vec<f32> = (0..4096)
+            .map(|i| (2.0 * PI * 1000.0 * (i + 4096) as f32 / 44100.0).sin())
+            .collect();
+        let chunk = test_chunk(spec, signal);
+        let output = eq.process(chunk).unwrap();
+        let out = output.samples();
+
+        let max_diff = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_diff < 0.5,
+            "Discontinuity detected: max sample diff = {max_diff:.4}"
+        );
     }
 
     #[kithara::test]
@@ -553,317 +951,6 @@ mod tests {
         assert!(eq.flush().is_none());
     }
 
-    // FilterKind tests
-
-    #[kithara::test]
-    fn filter_kind_default_is_peaking() {
-        assert_eq!(FilterKind::default(), FilterKind::Peaking);
-    }
-
-    #[kithara::test]
-    fn eq_band_config_has_filter_kind() {
-        let band = EqBandConfig::default();
-        assert_eq!(band.kind, FilterKind::Peaking);
-    }
-
-    #[kithara::test]
-    fn generate_bands_3_first_is_low_shelf() {
-        let bands = generate_log_spaced_bands(3);
-        assert_eq!(bands[0].kind, FilterKind::LowShelf);
-    }
-
-    #[kithara::test]
-    fn generate_bands_3_last_is_high_shelf() {
-        let bands = generate_log_spaced_bands(3);
-        assert_eq!(bands[2].kind, FilterKind::HighShelf);
-    }
-
-    #[kithara::test]
-    fn generate_bands_3_mid_is_peaking() {
-        let bands = generate_log_spaced_bands(3);
-        assert_eq!(bands[1].kind, FilterKind::Peaking);
-    }
-
-    #[kithara::test]
-    fn generate_bands_10_edges_are_shelves() {
-        let bands = generate_log_spaced_bands(10);
-        assert_eq!(bands[0].kind, FilterKind::LowShelf);
-        assert_eq!(bands[9].kind, FilterKind::HighShelf);
-        for band in &bands[1..9] {
-            assert_eq!(band.kind, FilterKind::Peaking);
-        }
-    }
-
-    #[kithara::test]
-    fn eq_low_shelf_boosts_bass() {
-        let bands = vec![EqBandConfig {
-            frequency: 200.0,
-            kind: FilterKind::LowShelf,
-            gain_db: 6.0,
-            ..Default::default()
-        }];
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        let gain_bass = measure_sine_gain(&mut eq, 50.0, spec);
-        eq.reset();
-        // Re-set the gain after reset (reset zeros everything)
-        eq.set_gain(0, 6.0);
-        // Process enough to converge the smoother
-        converge_smoother(&mut eq, spec);
-        let gain_treble = measure_sine_gain(&mut eq, 4000.0, spec);
-
-        assert!(
-            gain_bass > 1.2,
-            "50Hz should be boosted by LowShelf, got gain={gain_bass:.3}"
-        );
-        assert!(
-            gain_bass > gain_treble * 1.3,
-            "Bass gain ({gain_bass:.3}) should exceed treble ({gain_treble:.3})"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_high_shelf_boosts_treble() {
-        let bands = vec![EqBandConfig {
-            frequency: 5000.0,
-            kind: FilterKind::HighShelf,
-            gain_db: 6.0,
-            ..Default::default()
-        }];
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        let gain_treble = measure_sine_gain(&mut eq, 10000.0, spec);
-        eq.reset();
-        eq.set_gain(0, 6.0);
-        converge_smoother(&mut eq, spec);
-        let gain_bass = measure_sine_gain(&mut eq, 200.0, spec);
-
-        assert!(
-            gain_treble > 1.5,
-            "10kHz should be boosted by HighShelf, got gain={gain_treble:.3}"
-        );
-        assert!(
-            gain_treble > gain_bass * 1.3,
-            "Treble gain ({gain_treble:.3}) should exceed bass ({gain_bass:.3})"
-        );
-    }
-
-    // Smooth transition tests
-
-    #[kithara::test]
-    fn eq_gain_change_starts_smoothing() {
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = EqEffect::new(bands, 44100, 2);
-
-        assert!(!eq.is_smoothing(), "should not be smoothing initially");
-
-        eq.set_gain(0, 6.0);
-        assert!(eq.is_smoothing(), "should be smoothing after set_gain");
-    }
-
-    #[kithara::test]
-    fn eq_smooth_gain_converges() {
-        let bands = vec![EqBandConfig {
-            frequency: 1000.0,
-            kind: FilterKind::Peaking,
-            gain_db: 0.0,
-            ..Default::default()
-        }];
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        eq.set_gain(0, 6.0);
-
-        // Process enough audio for smoother to converge (~50ms = 2205 samples)
-        converge_smoother(&mut eq, spec);
-
-        assert!(
-            !eq.is_smoothing(),
-            "should have converged after sufficient processing"
-        );
-        assert!(
-            (eq.states[0].current_gain_db - 6.0).abs() < 0.01,
-            "current gain should match target after convergence"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_smooth_no_discontinuity() {
-        // Verify no large sample-to-sample jumps when gain changes abruptly
-        let bands = vec![EqBandConfig {
-            frequency: 1000.0,
-            kind: FilterKind::Peaking,
-            gain_db: 0.0,
-            ..Default::default()
-        }];
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        // Process some audio at 0dB to establish filter state
-        let warmup: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
-            .collect();
-        let chunk = test_chunk(spec, warmup);
-        let _ = eq.process(chunk);
-
-        // Now change gain abruptly
-        eq.set_gain(0, 6.0);
-
-        // Process more audio and check for discontinuities
-        let signal: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * (i + 4096) as f32 / 44100.0).sin())
-            .collect();
-        let chunk = test_chunk(spec, signal);
-        let output = eq.process(chunk).unwrap();
-        let out = output.samples();
-
-        // Check max sample-to-sample difference is bounded
-        let max_diff = out
-            .windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .fold(0.0f32, f32::max);
-
-        // A 1kHz sine at 44.1kHz has max derivative ≈ 2π*1000/44100 ≈ 0.143 per sample
-        // With +6dB boost (2x), max should be ~0.286. Allow some headroom.
-        assert!(
-            max_diff < 0.5,
-            "Discontinuity detected: max sample diff = {max_diff:.4}"
-        );
-    }
-
-    // Helpers
-
-    /// Process enough audio for the smoother to converge.
-    fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
-        // ~200ms of silence: 10ms time constant needs ~120 blocks (32 samples each)
-        let frames = (spec.sample_rate as usize) / 5; // 200ms
-        let pcm = vec![0.0f32; frames * spec.channels as usize];
-        let chunk = test_chunk(spec, pcm);
-        let _ = eq.process(chunk);
-    }
-
-    /// Measure the linear gain of a sine wave through the EQ.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "frame count and index are small integers"
-    )]
-    fn measure_sine_gain(eq: &mut EqEffect, freq_hz: f32, spec: PcmSpec) -> f32 {
-        let num_frames = 44100; // 1 second
-        let mut pcm = Vec::with_capacity(num_frames);
-        for i in 0..num_frames {
-            let sample = (2.0 * PI * freq_hz * i as f32 / spec.sample_rate as f32).sin();
-            pcm.push(sample);
-        }
-
-        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
-
-        let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
-        let out = output.samples();
-
-        // Skip first 4096 samples (filter transient)
-        let steady = &out[4096..];
-        let output_rms: f32 =
-            (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
-
-        output_rms / input_rms
-    }
-
-    #[kithara::test]
-    fn eq_3band_low_shelf_affects_bass() {
-        let bands = generate_log_spaced_bands(3);
-        eprintln!(
-            "3-band layout: {:?}",
-            bands
-                .iter()
-                .map(|b| format!("{:.0}Hz {:?}", b.frequency, b.kind))
-                .collect::<Vec<_>>()
-        );
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-        eq.set_gain(0, 6.0);
-        converge_smoother(&mut eq, spec);
-
-        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
-        assert!(
-            gain_bass > 1.3,
-            "40Hz should be boosted by LowShelf band 0, got gain={gain_bass:.3}"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_shelf_gain_matches_requested() {
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        // Test LowShelf at 200 Hz, measure at 50 Hz (1 octave below)
-        let band = EqBandConfig {
-            frequency: 200.0,
-            q_factor: 0.707,
-            gain_db: 0.0,
-            kind: FilterKind::LowShelf,
-        };
-
-        // Test many gain values
-        for requested_db in [-24.0, -18.0, -12.0, -6.0, -3.0, 3.0, 6.0] {
-            let mut eq = EqEffect::new(vec![band.clone()], spec.sample_rate, spec.channels);
-            eq.set_gain(0, requested_db);
-            converge_smoother(&mut eq, spec);
-
-            let gain = measure_sine_gain(&mut eq, 50.0, spec);
-            let measured_db = 20.0 * gain.log10();
-            let error = (measured_db - requested_db).abs();
-
-            eprintln!(
-                "requested={requested_db:+.0}dB measured={measured_db:+.1}dB error={error:.1}dB"
-            );
-            assert!(
-                error < 6.0,
-                "shelf gain error too large: requested={requested_db}dB measured={measured_db:.1}dB"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn eq_all_bands_at_min_attenuates() {
-        let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-        for i in 0..3 {
-            eq.set_gain(i, MIN_GAIN_DB);
-        }
-        converge_smoother(&mut eq, spec);
-
-        // -24 dB shelf attenuates each band's frequency range.
-        // Cascade of 3 shelves gives strong attenuation at band centers.
-        let gain_mid = measure_sine_gain(&mut eq, 1897.0, spec);
-        assert!(
-            gain_mid < 0.6,
-            "mid at min should be attenuated, got {gain_mid:.3}"
-        );
-    }
-
     #[kithara::test]
     fn eq_output_never_nan_or_inf() {
         let bands = generate_log_spaced_bands(10);
@@ -874,7 +961,11 @@ mod tests {
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
         for round in 0..100 {
-            let gain = if round % 2 == 0 { 6.0 } else { MIN_GAIN_DB };
+            let gain = if round % 2 == 0 {
+                MAX_GAIN_DB
+            } else {
+                MIN_GAIN_DB
+            };
             for band in 0..10 {
                 eq.set_gain(band, gain);
             }
@@ -921,7 +1012,11 @@ mod tests {
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
         for round in 0..200 {
-            let gain = if round % 2 == 0 { 6.0 } else { MIN_GAIN_DB };
+            let gain = if round % 2 == 0 {
+                MAX_GAIN_DB
+            } else {
+                MIN_GAIN_DB
+            };
             eq.set_gain(0, gain);
             eq.set_gain(1, -gain);
             eq.set_gain(2, gain);
@@ -933,5 +1028,64 @@ mod tests {
                 assert!(s.is_finite());
             }
         }
+    }
+
+    #[kithara::test]
+    fn butterworth_lp_dc_gain_is_unity() {
+        let coeffs = biquad_coeffs(Type::LowPass, 250.0, 44100.0);
+        let dc_gain = (coeffs.b0 + coeffs.b1 + coeffs.b2) / (1.0 + coeffs.a1 + coeffs.a2);
+        assert!(
+            (dc_gain - 1.0).abs() < 0.001,
+            "LP DC gain should be 1.0, got {dc_gain}"
+        );
+    }
+
+    #[kithara::test]
+    fn db_to_linear_kill_at_min() {
+        assert!((db_to_linear(MIN_GAIN_DB)).abs() < f32::EPSILON);
+        assert!((db_to_linear(-30.0)).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn db_to_linear_unity_at_zero() {
+        assert!((db_to_linear(0.0) - 1.0).abs() < 0.001);
+    }
+
+    #[kithara::test]
+    fn db_to_linear_boost_at_6db() {
+        let gain = db_to_linear(6.0);
+        assert!((gain - 2.0).abs() < 0.02, "+6dB should be ~2.0, got {gain}");
+    }
+
+    fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
+        let frames = (spec.sample_rate as usize) / 5;
+        let pcm = vec![0.0f32; frames * spec.channels as usize];
+        let chunk = test_chunk(spec, pcm);
+        let _ = eq.process(chunk);
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "frame count and index are small integers"
+    )]
+    fn measure_sine_gain(eq: &mut EqEffect, freq_hz: f32, spec: PcmSpec) -> f32 {
+        let num_frames = 44100;
+        let mut pcm = Vec::with_capacity(num_frames);
+        for i in 0..num_frames {
+            let sample = (2.0 * PI * freq_hz * i as f32 / spec.sample_rate as f32).sin();
+            pcm.push(sample);
+        }
+
+        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
+
+        let chunk = test_chunk(spec, pcm);
+        let output = eq.process(chunk).unwrap();
+        let out = output.samples();
+
+        let steady = &out[4096..];
+        let output_rms: f32 =
+            (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
+
+        output_rms / input_rms
     }
 }

@@ -30,10 +30,6 @@ impl AppConfig {
         "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
         "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
         "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-        "https://slicer-stage-k8s.zvq.me/hls/track/105861205_1/master.m3u8",
-        "https://slicer-stage-k8s.zvq.me/drm/track/105861205_1/master.m3u8",
-        "https://slicer-stage-k8s.zvq.me/hls/track/93010217_1/master.m3u8",
-        "https://slicer-stage-k8s.zvq.me/drm/track/93010217_1/master.m3u8",
     ];
 
     /// Create config with default tracks if none provided.

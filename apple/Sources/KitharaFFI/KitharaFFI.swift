@@ -425,6 +425,38 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
     typealias FfiType = Float
     typealias SwiftType = Float
@@ -547,6 +579,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
     func defaultRate()  -> Float
     
+    func eqBandCount()  -> UInt32
+    
+    func eqGain(band: UInt32)  -> Float
+    
     /**
      * Insert an item into the queue.
      *
@@ -581,6 +617,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems() 
     
     /**
+     * # Errors
+     *
+     * Returns error if the engine is not running.
+     */
+    func resetEq() throws 
+    
+    /**
      * Seek to a position in the current item.
      *
      * The callback is invoked synchronously with `true` if the seek command
@@ -589,6 +632,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func seek(toSeconds: Double, callback: SeekCallback) 
     
     func setDefaultRate(rate: Float) 
+    
+    /**
+     * # Errors
+     *
+     * Returns error if the engine is not running.
+     */
+    func setEqGain(band: UInt32, gainDb: Float) throws 
     
     /**
      * Set a key processor callback for HLS DRM key decryption.
@@ -657,10 +707,11 @@ open class AudioPlayer: AudioPlayerProtocol, @unchecked Sendable {
     public func uniffiCloneHandle() -> UInt64 {
         return try! rustCall { uniffi_kithara_ffi_fn_clone_audioplayer(self.handle, $0) }
     }
-public convenience init() {
+public convenience init(config: FfiPlayerConfig) {
     let handle =
         try! rustCall() {
-    uniffi_kithara_ffi_fn_constructor_audioplayer_new($0
+    uniffi_kithara_ffi_fn_constructor_audioplayer_new(
+        FfiConverterTypeFfiPlayerConfig_lower(config),$0
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -682,6 +733,23 @@ open func defaultRate() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_default_rate(
             self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func eqBandCount() -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_eq_band_count(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func eqGain(band: UInt32) -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_eq_gain(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(band),$0
     )
 })
 }
@@ -766,6 +834,18 @@ open func removeAllItems()  {try! rustCall() {
 }
     
     /**
+     * # Errors
+     *
+     * Returns error if the engine is not running.
+     */
+open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_reset_eq(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+    /**
      * Seek to a position in the current item.
      *
      * The callback is invoked synchronously with `true` if the seek command
@@ -784,6 +864,20 @@ open func setDefaultRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_default_rate(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(rate),$0
+    )
+}
+}
+    
+    /**
+     * # Errors
+     *
+     * Returns error if the engine is not running.
+     */
+open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_eq_gain(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(band),
+        FfiConverterFloat.lower(gainDb),$0
     )
 }
 }
@@ -922,6 +1016,11 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     
     func preferredPeakBitrateForExpensiveNetworks()  -> Double
     
+    /**
+     * Set ABR mode. Must be called before `load()`.
+     */
+    func setAbrMode(mode: FfiAbrMode) 
+    
     func setObserver(observer: ItemObserver) 
     
     func setPreferredPeakBitrate(bitrate: Double) 
@@ -1040,6 +1139,17 @@ open func preferredPeakBitrateForExpensiveNetworks() -> Double  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+    
+    /**
+     * Set ABR mode. Must be called before `load()`.
+     */
+open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_set_abr_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAbrMode_lower(mode),$0
+    )
+}
 }
     
 open func setObserver(observer: ItemObserver)  {try! rustCall() {
@@ -2073,6 +2183,65 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 
 
 /**
+ * FFI-friendly player configuration.
+ */
+public struct FfiPlayerConfig: Equatable, Hashable {
+    /**
+     * Number of EQ bands (log-spaced). Default: 10.
+     */
+    public let eqBandCount: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Number of EQ bands (log-spaced). Default: 10.
+         */eqBandCount: UInt32) {
+        self.eqBandCount = eqBandCount
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiPlayerConfig: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerConfig {
+        return
+            try FfiPlayerConfig(
+                eqBandCount: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerConfig_lift(_ buf: RustBuffer) throws -> FfiPlayerConfig {
+    return try FfiConverterTypeFfiPlayerConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlayerConfig_lower(_ value: FfiPlayerConfig) -> RustBuffer {
+    return FfiConverterTypeFfiPlayerConfig.lower(value)
+}
+
+
+/**
  * Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
  *
  * Fields are `Option` when no current item is loaded — callers should
@@ -2210,6 +2379,67 @@ public func FfiConverterTypeFfiTimeRange_lower(_ value: FfiTimeRange) -> RustBuf
 
 
 /**
+ * FFI-friendly HLS variant descriptor.
+ */
+public struct FfiVariant: Equatable, Hashable {
+    public let index: UInt32
+    public let bandwidthBps: UInt64
+    public let name: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(index: UInt32, bandwidthBps: UInt64, name: String?) {
+        self.index = index
+        self.bandwidthBps = bandwidthBps
+        self.name = name
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiVariant: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiVariant: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVariant {
+        return
+            try FfiVariant(
+                index: FfiConverterUInt32.read(from: &buf), 
+                bandwidthBps: FfiConverterUInt64.read(from: &buf), 
+                name: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiVariant, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.index, into: &buf)
+        FfiConverterUInt64.write(value.bandwidthBps, into: &buf)
+        FfiConverterOptionString.write(value.name, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVariant_lift(_ buf: RustBuffer) throws -> FfiVariant {
+    return try FfiConverterTypeFfiVariant.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiVariant_lower(_ value: FfiVariant) -> RustBuffer {
+    return FfiConverterTypeFfiVariant.lower(value)
+}
+
+
+/**
  * Store configuration forwarded from platform layer to resource creation.
  */
 public struct StoreOptions: Equatable, Hashable {
@@ -2260,6 +2490,79 @@ public func FfiConverterTypeStoreOptions_lift(_ buf: RustBuffer) throws -> Store
 public func FfiConverterTypeStoreOptions_lower(_ value: StoreOptions) -> RustBuffer {
     return FfiConverterTypeStoreOptions.lower(value)
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * FFI-friendly ABR mode.
+ */
+
+public enum FfiAbrMode: Equatable, Hashable {
+    
+    case auto
+    case manual(variantIndex: UInt32
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAbrMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAbrMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAbrMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAbrMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .auto
+        
+        case 2: return .manual(variantIndex: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAbrMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .auto:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .manual(variantIndex):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt32.write(variantIndex, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAbrMode_lift(_ buf: RustBuffer) throws -> FfiAbrMode {
+    return try FfiConverterTypeFfiAbrMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAbrMode_lower(_ value: FfiAbrMode) -> RustBuffer {
+    return FfiConverterTypeFfiAbrMode.lower(value)
+}
+
 
 
 /**
@@ -2394,6 +2697,10 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     case statusChanged(status: FfiItemStatus
     )
+    case variantsDiscovered(variants: [FfiVariant]
+    )
+    case variantChanged(variant: FfiVariant
+    )
     case error(error: String
     )
 
@@ -2426,7 +2733,13 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 3: return .statusChanged(status: try FfiConverterTypeFfiItemStatus.read(from: &buf)
         )
         
-        case 4: return .error(error: try FfiConverterString.read(from: &buf)
+        case 4: return .variantsDiscovered(variants: try FfiConverterSequenceTypeFfiVariant.read(from: &buf)
+        )
+        
+        case 5: return .variantChanged(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
+        )
+        
+        case 6: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2452,8 +2765,18 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterTypeFfiItemStatus.write(status, into: &buf)
             
         
-        case let .error(error):
+        case let .variantsDiscovered(variants):
             writeInt(&buf, Int32(4))
+            FfiConverterSequenceTypeFfiVariant.write(variants, into: &buf)
+            
+        
+        case let .variantChanged(variant):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeFfiVariant.write(variant, into: &buf)
+            
+        
+        case let .error(error):
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(error, into: &buf)
             
         }
@@ -3001,6 +3324,31 @@ fileprivate struct FfiConverterSequenceTypeAudioPlayerItem: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiVariant: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiVariant]
+
+    public static func write(_ value: [FfiVariant], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiVariant.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiVariant] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiVariant]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiVariant.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
     public static func write(_ value: [String: String], into buf: inout [UInt8]) {
         let len = Int32(value.count)
@@ -3057,6 +3405,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_preferred_peak_bitrate_for_expensive_networks() != 36652) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_abr_mode() != 9527) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_observer() != 63173) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3087,6 +3438,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_default_rate() != 41174) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_band_count() != 24870) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 4051) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 37914) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3111,10 +3468,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 32344) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 7094) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 62537) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 38702) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_key_processor() != 4468) {
@@ -3141,7 +3504,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 37818) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 56553) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 61841) {
         return InitializationResult.apiChecksumMismatch
     }
 
