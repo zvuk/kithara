@@ -118,6 +118,20 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
     })
 }
 
+/// FFI-friendly player configuration.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiPlayerConfig {
+    /// Number of EQ bands (log-spaced). Default: 10.
+    pub eq_band_count: u32,
+}
+
+impl Default for FfiPlayerConfig {
+    fn default() -> Self {
+        Self { eq_band_count: 10 }
+    }
+}
+
 /// FFI-friendly mirror of [`PlayerStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]

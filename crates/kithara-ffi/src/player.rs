@@ -10,6 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use kithara::{
+    audio::generate_log_spaced_bands,
     hls::KeyOptions,
     play::{PlayerConfig, PlayerImpl},
 };
@@ -21,7 +22,7 @@ use crate::{
     event_bridge::EventBridge,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiError, FfiItemEvent, FfiPlayerSnapshot, FfiPlayerStatus},
+    types::{FfiError, FfiItemEvent, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
 /// Entry in the FFI queue. Tracks whether the item has been inserted
@@ -56,9 +57,13 @@ pub struct AudioPlayer {
 impl AudioPlayer {
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
-    pub fn new() -> Arc<Self> {
+    pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
+        let player_config = PlayerConfig {
+            eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
+            ..PlayerConfig::default()
+        };
         Arc::new(Self {
-            inner: Arc::new(Mutex::new(PlayerImpl::new(PlayerConfig::default()))),
+            inner: Arc::new(Mutex::new(PlayerImpl::new(player_config))),
             queue: Arc::new(Mutex::new(Vec::new())),
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
@@ -215,6 +220,34 @@ impl AudioPlayer {
         self.inner.lock_sync().set_muted(muted);
     }
 
+    // MARK: - EQ
+
+    #[expect(clippy::cast_possible_truncation, reason = "EQ band count fits u32")]
+    pub fn eq_band_count(&self) -> u32 {
+        self.inner.lock_sync().eq_band_count() as u32
+    }
+
+    pub fn eq_gain(&self, band: u32) -> f32 {
+        self.inner.lock_sync().eq_gain(band as usize).unwrap_or(0.0)
+    }
+
+    /// # Errors
+    ///
+    /// Returns error if the engine is not running.
+    pub fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
+        self.inner
+            .lock_sync()
+            .set_eq_gain(band as usize, gain_db)
+            .map_err(FfiError::from)
+    }
+
+    /// # Errors
+    ///
+    /// Returns error if the engine is not running.
+    pub fn reset_eq(&self) -> Result<(), FfiError> {
+        self.inner.lock_sync().reset_eq().map_err(FfiError::from)
+    }
+
     /// Return a snapshot of the player's current state.
     ///
     /// Cheap synchronous read — Swift should use this instead of caching
@@ -347,12 +380,12 @@ mod tests {
 
     #[kithara::test]
     fn create_player() {
-        let _player = AudioPlayer::new();
+        let _player = AudioPlayer::new(FfiPlayerConfig::default());
     }
 
     #[kithara::test]
     fn default_rate_roundtrip() {
-        let player = AudioPlayer::new();
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.5);
         assert!((player.default_rate() - 0.5).abs() < f32::EPSILON);
@@ -360,13 +393,13 @@ mod tests {
 
     #[kithara::test]
     fn items_initially_empty() {
-        let player = AudioPlayer::new();
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
         assert!(player.items().is_empty());
     }
 
     #[kithara::test]
     fn remove_all_items_on_empty_queue() {
-        let player = AudioPlayer::new();
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
         player.remove_all_items();
         assert!(player.items().is_empty());
     }
@@ -427,7 +460,7 @@ mod tests {
 
     #[kithara::test]
     fn volume_roundtrip() {
-        let player = AudioPlayer::new();
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
         assert!((player.volume() - 1.0).abs() < f32::EPSILON);
         player.set_volume(0.5);
         assert!((player.volume() - 0.5).abs() < f32::EPSILON);
@@ -435,9 +468,41 @@ mod tests {
 
     #[kithara::test]
     fn muted_roundtrip() {
-        let player = AudioPlayer::new();
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
         assert!(!player.is_muted());
         player.set_muted(true);
         assert!(player.is_muted());
+    }
+
+    #[kithara::test]
+    fn eq_band_count_from_config() {
+        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        assert_eq!(player.eq_band_count(), 3);
+    }
+
+    #[kithara::test]
+    fn eq_gain_default_zero() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        assert!((player.eq_gain(0) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn eq_set_without_engine_returns_error() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        let result = player.set_eq_gain(0, 3.0);
+        assert!(result.is_err());
+    }
+
+    #[kithara::test]
+    fn eq_reset_without_engine_returns_error() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        let result = player.reset_eq();
+        assert!(result.is_err());
+    }
+
+    #[kithara::test]
+    fn eq_gain_out_of_range_band() {
+        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        assert!((player.eq_gain(99) - 0.0).abs() < f32::EPSILON);
     }
 }
