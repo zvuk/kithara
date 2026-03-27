@@ -318,7 +318,9 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
         Icon::Repeat
     };
 
-    let toggles_row = row![
+    let rate_buttons = view_playrate(state);
+
+    let bottom_row = row![
         icon_button(
             Icon::Shuffle,
             TOGGLE_ICON_SIZE,
@@ -326,6 +328,8 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
             TOGGLE_ICON_PADDING,
             Message::ToggleShuffle
         ),
+        Space::new().width(Length::Fill),
+        rate_buttons,
         Space::new().width(Length::Fill),
         icon_button(
             repeat_icon,
@@ -338,10 +342,8 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
     .width(Length::Fill)
     .align_y(Alignment::Center);
 
-    let rate_row = view_playrate(state);
-
     container(
-        column![transport_row, rate_row, toggles_row]
+        column![transport_row, bottom_row]
             .spacing(ELEMENT_SPACING)
             .align_x(Alignment::Center),
     )
