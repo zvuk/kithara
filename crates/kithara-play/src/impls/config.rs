@@ -364,9 +364,10 @@ impl ResourceConfig {
             #[expect(clippy::cast_sign_loss)]
             #[expect(clippy::cast_possible_truncation)]
             let cap = self.preferred_peak_bitrate as u64;
-            if let Some(ref ctrl) = hls_config.abr {
-                ctrl.set_max_bandwidth_bps(Some(cap));
-            }
+            let ctrl = hls_config.abr.get_or_insert_with(|| {
+                kithara_abr::AbrController::new(kithara_abr::AbrOptions::default())
+            });
+            ctrl.set_max_bandwidth_bps(Some(cap));
         }
 
         if let Some(bytes) = self.look_ahead_bytes {
