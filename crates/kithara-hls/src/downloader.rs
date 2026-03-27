@@ -302,6 +302,8 @@ impl HlsDownloader {
         // byte stream.
         let previous_variant = self.layout_variant();
 
+        self.abr.lock();
+
         self.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
         self.coord
@@ -1361,16 +1363,9 @@ impl HlsDownloader {
     }
 
     fn make_abr_decision(&mut self) -> AbrDecision {
-        // Freeze ABR during seek — variant switch mid-seek causes the decoder
-        // to be recreated with mismatched byte_len / base_offset, breaking
-        // late-track seeks with "unexpected end of file".
-        if self.coord.timeline().is_seek_pending() {
-            let current = self.abr.get_current_variant_index();
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::MinInterval,
-                changed: false,
-            };
+        // Unlock ABR when seek is no longer pending.
+        if self.abr.is_locked() && !self.coord.timeline().is_seek_pending() {
+            self.abr.unlock();
         }
 
         let now = Instant::now();

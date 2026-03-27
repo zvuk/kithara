@@ -1109,10 +1109,10 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     let variants = parsed_variants(2);
     let fetch = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
-        abr: AbrOptions {
+        abr: Some(kithara_abr::AbrController::new(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
-        },
+        })),
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
