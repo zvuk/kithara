@@ -42,6 +42,17 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         set { _inner.setPreferredPeakBitrateForExpensiveNetworks(bitrate: newValue) }
     }
 
+    // MARK: - ABR
+
+    /// Set ABR mode. Must be called before ``load()``.
+    public func setAbrMode(_ mode: AbrMode) {
+        let ffiMode: FfiAbrMode = switch mode {
+        case .auto: .auto
+        case .manual(let variantIndex): .manual(variantIndex: UInt32(variantIndex))
+        }
+        _inner.setAbrMode(mode: ffiMode)
+    }
+
     // MARK: - Internal
 
     nonisolated let _inner: AudioPlayerItem

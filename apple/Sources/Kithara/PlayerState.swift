@@ -55,6 +55,34 @@ public enum KitharaError: Error, Sendable {
     case `internal`(String)
 }
 
+// MARK: - ABR
+
+/// HLS variant descriptor.
+public struct Variant: Identifiable, Sendable, Equatable {
+    /// Variant index in the master playlist.
+    public let index: Int
+    /// Bandwidth in bits per second.
+    public let bandwidthBps: UInt64
+    /// Human-readable name, if available.
+    public let name: String?
+
+    public var id: Int { index }
+
+    init(ffi: FfiVariant) {
+        self.index = Int(ffi.index)
+        self.bandwidthBps = ffi.bandwidthBps
+        self.name = ffi.name
+    }
+}
+
+/// ABR (Adaptive Bitrate) mode.
+public enum AbrMode: Sendable {
+    /// Automatic quality selection based on throughput.
+    case auto
+    /// Fixed to a specific variant.
+    case manual(variantIndex: Int)
+}
+
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
 /// Player event from Rust — use with ``KitharaPlayer/eventPublisher``.

@@ -75,11 +75,43 @@ public final class KitharaPlayer: @unchecked Sendable {
         set { _inner.setMuted(muted: newValue) }
     }
 
+    // MARK: - EQ
+
+    /// Number of EQ bands (fixed at creation).
+    public var eqBandCount: Int {
+        Int(_inner.eqBandCount())
+    }
+
+    /// Get the current gain for a band in dB.
+    public func eqGain(band: Int) -> Float {
+        _inner.eqGain(band: UInt32(band))
+    }
+
+    /// Set the gain for a band in dB (-24..+6).
+    public func setEqGain(band: Int, gainDb: Float) {
+        try? _inner.setEqGain(band: UInt32(band), gainDb: gainDb)
+    }
+
+    /// Reset all EQ bands to 0 dB.
+    public func resetEq() {
+        try? _inner.resetEq()
+    }
+
     // MARK: - Init
 
+    /// Configuration for player creation.
+    public struct Config: Sendable {
+        /// Number of EQ bands (log-spaced). Default: 10.
+        public var eqBandCount: Int
+
+        public init(eqBandCount: Int = 10) {
+            self.eqBandCount = eqBandCount
+        }
+    }
+
     /// Create a new player instance.
-    public init() {
-        self._inner = AudioPlayer()
+    public init(config: Config = Config()) {
+        self._inner = AudioPlayer(config: FfiPlayerConfig(eqBandCount: UInt32(config.eqBandCount)))
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
