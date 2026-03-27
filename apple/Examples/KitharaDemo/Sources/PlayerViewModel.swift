@@ -28,6 +28,7 @@ final class PlayerViewModel: ObservableObject {
     @Published var volume: Float = 1.0
     @Published var isMuted = false
     @Published var selectedRate: Float = 1.0
+    @Published var eqGains: [Float] = []
 
     private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -39,6 +40,7 @@ final class PlayerViewModel: ObservableObject {
         volume = player.volume
         isMuted = player.isMuted
         player.defaultRate = selectedRate
+        eqGains = Array(repeating: 0, count: player.eqBandCount)
 
         player.eventPublisher
             .receive(on: DispatchQueue.main)
@@ -141,6 +143,20 @@ final class PlayerViewModel: ObservableObject {
         if shouldStartPlayback {
             loadTrack(entry, force: true)
         }
+    }
+
+    // MARK: - EQ
+
+    func setEqGain(band: Int, db: Float) {
+        player.setEqGain(band: band, gainDb: db)
+        if band < eqGains.count {
+            eqGains[band] = db
+        }
+    }
+
+    func resetEq() {
+        player.resetEq()
+        eqGains = Array(repeating: 0, count: eqGains.count)
     }
 
     // MARK: - Rate

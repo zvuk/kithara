@@ -40,6 +40,8 @@ struct PlayerView: View {
             Spacer().frame(height: 16)
             volumeSection
             Spacer().frame(height: 16)
+            eqSection
+            Spacer().frame(height: 16)
             playlistSection
             Spacer().frame(height: 16)
             errorSection
@@ -252,6 +254,64 @@ struct PlayerView: View {
         .padding(12)
         .background(Color.kitharaPanel)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - EQ
+
+    private var eqSection: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("EQ")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.kitharaLight)
+                Spacer()
+                Button {
+                    viewModel.resetEq()
+                } label: {
+                    Text("Reset")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.kitharaMuted)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 4) {
+                ForEach(0..<viewModel.eqGains.count, id: \.self) { band in
+                    VStack(spacing: 4) {
+                        Slider(
+                            value: Binding(
+                                get: { viewModel.eqGains[band] },
+                                set: { viewModel.setEqGain(band: band, db: $0) }
+                            ),
+                            in: -24...6,
+                            step: 0.5
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 20, height: 80)
+
+                        Text(eqBandLabel(band))
+                            .font(.system(size: 8))
+                            .foregroundStyle(Color.kitharaMuted)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(12)
+        .background(Color.kitharaPanel)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func eqBandLabel(_ band: Int) -> String {
+        let count = viewModel.eqGains.count
+        guard count > 0 else { return "" }
+        let minFreq: Double = 30
+        let maxFreq: Double = 18000
+        let freq = minFreq * pow(maxFreq / minFreq, Double(band) / Double(max(count - 1, 1)))
+        if freq >= 1000 {
+            return String(format: "%.0fk", freq / 1000)
+        }
+        return String(format: "%.0f", freq)
     }
 
     // MARK: - Playlist
