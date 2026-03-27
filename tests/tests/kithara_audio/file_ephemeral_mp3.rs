@@ -136,17 +136,23 @@ fn app() -> Router {
 const EXPECTED_DURATION_SECS: f64 = 187.0;
 
 #[kithara::test(tokio)]
-#[case::with_extension_and_hint("/test.mp3", Some("mp3"))]
-#[case::with_extension_no_hint("/test.mp3", None)]
-#[case::no_extension_with_hint("/track/stream", Some("mp3"))]
-#[case::no_extension_no_hint("/track/stream", None)]
-async fn audio_file_mp3_decodes_with_duration(#[case] path: &str, #[case] hint: Option<&str>) {
+#[case::sw_ext_hint("/test.mp3", Some("mp3"), false)]
+#[case::sw_ext("/test.mp3", None, false)]
+#[case::sw_no_ext_hint("/track/stream", Some("mp3"), false)]
+#[case::sw_no_ext("/track/stream", None, false)]
+#[case::hw_ext_hint("/test.mp3", Some("mp3"), true)]
+#[case::hw_no_ext("/track/stream", None, true)]
+async fn audio_file_mp3_decodes_with_duration(
+    #[case] path: &str,
+    #[case] hint: Option<&str>,
+    #[case] prefer_hardware: bool,
+) {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url(path).into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
-    let mut config = AudioConfig::<File>::new(file_config);
+    let mut config = AudioConfig::<File>::new(file_config).with_prefer_hardware(prefer_hardware);
     if let Some(h) = hint {
         config = config.with_hint(h);
     }

@@ -246,8 +246,12 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
+        // Pass only codec, not container. Container forces `new_direct`
+        // (seek disabled during init) which can hang on streaming sources
+        // where the worker blocks waiting for data. Without container,
+        // the probe path with seek enabled is used instead.
         self.content_type_codec
-            .map(|codec| MediaInfo::new(Some(codec), codec.default_container()))
+            .map(|codec| MediaInfo::new(Some(codec), None))
     }
 
     fn demand_range(&self, range: Range<u64>) {

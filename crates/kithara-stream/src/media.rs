@@ -128,23 +128,6 @@ impl AudioCodec {
         None
     }
 
-    /// Infer the default container format for this codec.
-    ///
-    /// Used when codec is known (e.g., from Content-Type) but container is not.
-    /// Providing a container lets the decoder use direct reader creation instead
-    /// of probe, avoiding seek-to-end which breaks streaming sources.
-    #[must_use]
-    pub fn default_container(self) -> Option<ContainerFormat> {
-        match self {
-            Self::Mp3 => Some(ContainerFormat::MpegAudio),
-            Self::AacLc | Self::AacHe | Self::AacHeV2 => Some(ContainerFormat::Adts),
-            Self::Flac => Some(ContainerFormat::Flac),
-            Self::Vorbis | Self::Opus => Some(ContainerFormat::Ogg),
-            Self::Pcm => Some(ContainerFormat::Wav),
-            Self::Alac | Self::Adpcm => None,
-        }
-    }
-
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
