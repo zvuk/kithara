@@ -483,6 +483,70 @@ mod tests {
     }
 
     #[kithara::test]
+    fn two_tracks_shared_controller_lock_unlock() {
+        let opts = AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch_secs: 0.0,
+            ..AbrOptions::default()
+        };
+        let ctrl = AbrController::new(opts);
+        let track_a = ctrl.clone();
+        let track_b = ctrl.clone();
+
+        let sample = |bytes| ThroughputSample {
+            bytes,
+            duration: Duration::from_secs(1),
+            at: Instant::now(),
+            source: super::super::ThroughputSampleSource::Network,
+            content_duration: None,
+        };
+
+        // Both tracks push throughput — ABR should want to upswitch.
+        track_a.push_sample(sample(2_000_000));
+        track_b.push_sample(sample(2_000_000));
+
+        let d = ctrl.decide(Instant::now());
+        assert!(d.changed, "should upswitch before lock");
+        ctrl.apply(&d, Instant::now());
+        let switched_variant = d.target_variant_index;
+        assert_ne!(switched_variant, 0);
+
+        // Track A starts a seek — locks ABR.
+        track_a.lock();
+        let far_future = Instant::now() + Duration::from_secs(120);
+        let d = ctrl.decide(far_future);
+        assert_eq!(
+            d.reason,
+            AbrReason::Locked,
+            "locked controller must not switch"
+        );
+        assert!(!d.changed);
+
+        // Track B also seeks — stacks a second lock.
+        track_b.lock();
+        let d = ctrl.decide(far_future);
+        assert_eq!(d.reason, AbrReason::Locked);
+
+        // Track A finishes seek — one lock remains.
+        track_a.unlock();
+        assert!(ctrl.is_locked(), "still locked by track B");
+        let d = ctrl.decide(far_future);
+        assert_eq!(d.reason, AbrReason::Locked);
+
+        // Track B finishes seek — fully unlocked, ABR resumes.
+        track_b.unlock();
+        assert!(!ctrl.is_locked());
+        let d = ctrl.decide(far_future);
+        assert_ne!(
+            d.reason,
+            AbrReason::Locked,
+            "ABR should resume after full unlock"
+        );
+    }
+
+    #[kithara::test]
     fn set_variants_enables_decisions() {
         let ctrl = AbrController::new(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
