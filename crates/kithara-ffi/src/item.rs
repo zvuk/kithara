@@ -32,6 +32,7 @@ pub struct AudioPlayerItem {
     headers: Option<HashMap<String, String>>,
     preferred_peak_bitrate: Mutex<f64>,
     preferred_peak_bitrate_expensive: Mutex<f64>,
+    abr_mode: Mutex<Option<crate::types::FfiAbrMode>>,
     resource: Mutex<Option<Resource>>,
     store: Mutex<StoreOptions>,
     event_bridge: Mutex<Option<ItemEventBridge>>,
@@ -64,6 +65,7 @@ impl AudioPlayerItem {
             headers: additional_headers,
             preferred_peak_bitrate: Mutex::new(0.0),
             preferred_peak_bitrate_expensive: Mutex::new(0.0),
+            abr_mode: Mutex::new(None),
             resource: Mutex::new(None),
             store: Mutex::new(StoreOptions::default()),
             event_bridge: Mutex::new(None),
@@ -99,6 +101,11 @@ impl AudioPlayerItem {
 
     pub fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64) {
         *self.preferred_peak_bitrate_expensive.lock_sync() = bitrate;
+    }
+
+    /// Set ABR mode. Must be called before `load()`.
+    pub fn set_abr_mode(&self, mode: crate::types::FfiAbrMode) {
+        *self.abr_mode.lock_sync() = Some(mode);
     }
 
     /// Synchronous fire-and-forget load.
@@ -232,6 +239,16 @@ impl AudioPlayerItem {
         }
         if let Some(ref keys) = *self.key_options.lock_sync() {
             config = config.with_keys(keys.clone());
+        }
+
+        if let Some(mode) = *self.abr_mode.lock_sync() {
+            use kithara::abr::AbrMode;
+            config.abr.mode = match mode {
+                crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
+                crate::types::FfiAbrMode::Manual { variant_index } => {
+                    AbrMode::Manual(variant_index as usize)
+                }
+            };
         }
 
         Ok(ResourceLoadConfig { config })

@@ -238,7 +238,26 @@ pub enum FfiItemEvent {
     DurationChanged { seconds: f64 },
     BufferedDurationChanged { seconds: f64 },
     StatusChanged { status: FfiItemStatus },
+    VariantsDiscovered { variants: Vec<FfiVariant> },
+    VariantChanged { variant: FfiVariant },
     Error { error: String },
+}
+
+/// FFI-friendly HLS variant descriptor.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiVariant {
+    pub index: u32,
+    pub bandwidth_bps: u64,
+    pub name: Option<String>,
+}
+
+/// FFI-friendly ABR mode.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiAbrMode {
+    Auto,
+    Manual { variant_index: u32 },
 }
 
 /// Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
