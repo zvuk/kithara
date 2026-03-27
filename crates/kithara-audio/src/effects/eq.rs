@@ -143,6 +143,15 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
         .collect()
 }
 
+/// Clamp sample to safe range, replacing NaN/Inf with 0.0.
+///
+/// Prevents corrupted filter state from reaching the audio driver
+/// which could damage hardware (speakers, amplifiers).
+#[inline]
+fn clamp_sample(sample: f32) -> f32 {
+    if sample.is_finite() { sample } else { 0.0 }
+}
+
 /// Compute biquad coefficients for a band with the given gain.
 #[must_use]
 pub fn compute_coefficients(
@@ -342,7 +351,7 @@ impl AudioEffect for EqEffect {
                 for f in &mut self.filters_l[..n_bands] {
                     sample_l = f.run(sample_l);
                 }
-                frame[0] = sample_l;
+                frame[0] = clamp_sample(sample_l);
 
                 // Right channel (if stereo or more)
                 if channels >= STEREO_CHANNELS {
@@ -350,7 +359,7 @@ impl AudioEffect for EqEffect {
                     for f in &mut self.filters_r[..n_bands] {
                         sample_r = f.run(sample_r);
                     }
-                    frame[1] = sample_r;
+                    frame[1] = clamp_sample(sample_r);
                 }
             }
 
@@ -853,5 +862,76 @@ mod tests {
             gain_mid < 0.6,
             "mid at min should be attenuated, got {gain_mid:.3}"
         );
+    }
+
+    #[kithara::test]
+    fn eq_output_never_nan_or_inf() {
+        let bands = generate_log_spaced_bands(10);
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        for round in 0..100 {
+            let gain = if round % 2 == 0 { 6.0 } else { MIN_GAIN_DB };
+            for band in 0..10 {
+                eq.set_gain(band, gain);
+            }
+
+            let pcm: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.1).sin()).collect();
+            let chunk = test_chunk(spec, pcm);
+            let output = eq.process(chunk).unwrap();
+            for (i, &s) in output.samples().iter().enumerate() {
+                assert!(s.is_finite(), "round {round} sample {i}: got {s}");
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn eq_nan_input_produces_safe_output() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        eq.set_gain(0, 6.0);
+        converge_smoother(&mut eq, spec);
+
+        let mut pcm = vec![0.5f32; 256];
+        pcm[10] = f32::NAN;
+        pcm[20] = f32::INFINITY;
+        pcm[30] = f32::NEG_INFINITY;
+        let chunk = test_chunk(spec, pcm);
+        let output = eq.process(chunk).unwrap();
+
+        for (i, &s) in output.samples().iter().enumerate() {
+            assert!(s.is_finite(), "sample {i}: got {s}");
+        }
+    }
+
+    #[kithara::test]
+    fn eq_extreme_gain_oscillation_stays_safe() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
+        };
+        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        for round in 0..200 {
+            let gain = if round % 2 == 0 { 6.0 } else { MIN_GAIN_DB };
+            eq.set_gain(0, gain);
+            eq.set_gain(1, -gain);
+            eq.set_gain(2, gain);
+
+            let pcm: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.3).sin()).collect();
+            let chunk = test_chunk(spec, pcm);
+            let output = eq.process(chunk).unwrap();
+            for &s in output.samples() {
+                assert!(s.is_finite());
+            }
+        }
     }
 }
