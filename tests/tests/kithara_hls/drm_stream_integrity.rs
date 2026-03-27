@@ -177,7 +177,7 @@ async fn drm_stream_byte_integrity(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel.clone())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: abr_mode,
             down_switch_buffer_secs: 0.0,
             min_buffer_for_up_switch_secs: 0.0,

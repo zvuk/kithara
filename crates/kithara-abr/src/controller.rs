@@ -8,7 +8,7 @@ use std::{
 
 use kithara_platform::{Mutex, time::Instant};
 
-use super::{AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample};
+use super::{AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample, Variant};
 use crate::estimator::Estimator;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,7 @@ const NO_SWITCH: u64 = 0;
 #[derive(Clone)]
 pub struct AbrController<E: Estimator> {
     cfg: Arc<AbrOptions>,
+    variants: Arc<Mutex<Vec<Variant>>>,
     mode: Arc<AtomicUsize>,
     current_variant: Arc<AtomicUsize>,
     lock_count: Arc<AtomicUsize>,
@@ -63,7 +64,9 @@ impl<E: Estimator> AbrController<E> {
     pub fn with_estimator(cfg: AbrOptions, estimator: E) -> Self {
         let initial_variant = cfg.initial_variant();
         let mode_val: usize = cfg.mode.into();
+        let variants = cfg.variants.clone();
         Self {
+            variants: Arc::new(Mutex::new(variants)),
             cfg: Arc::new(cfg),
             mode: Arc::new(AtomicUsize::new(mode_val)),
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
@@ -72,6 +75,11 @@ impl<E: Estimator> AbrController<E> {
             last_switch_at_nanos: Arc::new(AtomicU64::new(NO_SWITCH)),
             reference_instant: Instant::now(),
         }
+    }
+
+    /// Set available variants (called after playlist discovery).
+    pub fn set_variants(&self, variants: Vec<Variant>) {
+        *self.variants.lock_sync() = variants;
     }
 
     delegate::delegate! {
@@ -96,6 +104,11 @@ impl<E: Estimator> AbrController<E> {
     #[must_use]
     pub fn min_throughput_record_ms(&self) -> u128 {
         self.cfg.min_throughput_record_ms
+    }
+
+    #[must_use]
+    pub fn max_bandwidth_bps(&self) -> Option<u64> {
+        self.cfg.max_bandwidth_bps
     }
 
     #[must_use]
@@ -250,8 +263,8 @@ impl<E: Estimator> AbrController<E> {
     }
 
     fn current_variant_bandwidth(&self, current: usize) -> u64 {
-        self.cfg
-            .variants
+        self.variants
+            .lock_sync()
             .iter()
             .find(|v| v.variant_index == current)
             .map_or(0, |v| v.bandwidth_bps)
@@ -259,15 +272,15 @@ impl<E: Estimator> AbrController<E> {
 
     fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
         let max_bw = self.cfg.max_bandwidth_bps;
-        let mut variants: Vec<(usize, u64)> = self
-            .cfg
+        let mut sorted: Vec<(usize, u64)> = self
             .variants
+            .lock_sync()
             .iter()
             .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
             .map(|v| (v.variant_index, v.bandwidth_bps))
             .collect();
-        variants.sort_by_key(|(_, bw)| *bw);
-        variants
+        sorted.sort_by_key(|(_, bw)| *bw);
+        sorted
     }
 
     #[expect(clippy::cast_precision_loss)]
@@ -467,6 +480,33 @@ mod tests {
         assert!(ctrl.is_locked());
         ctrl.unlock();
         assert!(!ctrl.is_locked());
+    }
+
+    #[kithara::test]
+    fn set_variants_enables_decisions() {
+        let ctrl = AbrController::new(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch_secs: 0.0,
+            ..AbrOptions::default()
+        });
+
+        // No variants → no meaningful decision
+        ctrl.push_sample(ThroughputSample {
+            bytes: 3_000_000 / 8,
+            duration: Duration::from_secs(1),
+            at: Instant::now(),
+            source: super::super::ThroughputSampleSource::Network,
+            content_duration: None,
+        });
+        let d = ctrl.decide(Instant::now());
+        assert!(!d.changed, "no variants means no switch");
+
+        // Inject variants at runtime
+        ctrl.set_variants(variants());
+        let d = ctrl.decide(Instant::now());
+        assert!(d.changed, "with variants, ABR should switch");
+        assert_eq!(d.target_variant_index, 2);
     }
 
     // Parametrized ABR decision test.

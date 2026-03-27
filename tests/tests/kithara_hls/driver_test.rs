@@ -53,7 +53,7 @@ async fn test_driver_seek_after_playlist_finished(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
@@ -129,7 +129,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_events(bus)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0,
             mode: AbrMode::Auto(Some(0)),

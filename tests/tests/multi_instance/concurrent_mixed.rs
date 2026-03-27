@@ -222,7 +222,7 @@ async fn mixed_two_file_two_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_abr(AbrOptions {
+            .with_abr_options(AbrOptions {
                 mode: AbrMode::Manual(0),
                 ..AbrOptions::default()
             });
@@ -325,7 +325,7 @@ async fn mixed_four_file_four_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_abr(AbrOptions {
+            .with_abr_options(AbrOptions {
                 mode: AbrMode::Manual(0),
                 ..AbrOptions::default()
             });

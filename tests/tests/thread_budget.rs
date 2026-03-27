@@ -100,7 +100,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(server.url("/hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..Default::default()
         });
@@ -152,7 +152,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(server.url("/hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..Default::default()
         });
@@ -163,7 +163,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config2 = HlsConfig::new(server.url("/hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(1),
             ..Default::default()
         });
@@ -174,7 +174,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let drm_config = HlsConfig::new(server.url("/drm/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..Default::default()
         });

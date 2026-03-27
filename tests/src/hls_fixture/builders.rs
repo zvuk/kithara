@@ -119,7 +119,7 @@ impl HlsStreamBuilder {
         let config = HlsConfig::new(url)
             .with_store(store_opts)
             .with_cancel(cancel_token)
-            .with_abr(self.abr_options);
+            .with_abr_options(self.abr_options);
 
         Stream::<Hls>::new(config)
             .await

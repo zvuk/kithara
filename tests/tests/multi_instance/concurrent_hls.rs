@@ -126,7 +126,7 @@ async fn create_hls_audio(server: &HlsTestServer, cache_dir: &Path) -> Audio<Str
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
@@ -148,7 +148,7 @@ async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..AbrOptions::default()
         });

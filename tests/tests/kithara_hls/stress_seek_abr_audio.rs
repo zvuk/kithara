@@ -114,7 +114,7 @@ async fn stress_seek_abr_audio() {
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.0,
             min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::from_secs(120),

@@ -115,7 +115,7 @@ async fn create_hls_audio(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });

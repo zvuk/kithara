@@ -324,7 +324,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     };
                     let config = HlsConfig::new(url)
                         .with_store(store)
-                        .with_abr(abr)
+                        .with_abr_options(abr)
                         .with_net(net)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);

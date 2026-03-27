@@ -43,7 +43,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0), // Stay on variant 0
             ..Default::default()
         });

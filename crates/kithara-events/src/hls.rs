@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_abr::{AbrReason, VariantInfo};
+use kithara_abr::{AbrMode, AbrReason, VariantInfo};
 use kithara_platform::time::Duration;
 
 use crate::SeekEpoch;
@@ -13,6 +13,8 @@ pub enum HlsEvent {
         variants: Vec<VariantInfo>,
         initial_variant: usize,
     },
+    /// ABR mode changed at runtime.
+    AbrModeChanged { mode: AbrMode },
     /// Variant (quality level) changed.
     VariantApplied {
         from_variant: usize,

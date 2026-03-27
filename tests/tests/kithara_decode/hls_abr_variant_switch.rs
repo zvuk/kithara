@@ -79,7 +79,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
             mode: AbrMode::Auto(Some(0)),       // Start with variant 0
@@ -212,7 +212,7 @@ async fn test_basic_multi_segment_reading(
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0), // Fixed variant - no ABR
             ..Default::default()
         });
@@ -287,7 +287,7 @@ async fn test_abr_variant_switch_with_seek_backward(
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0,
             mode: AbrMode::Auto(Some(0)),

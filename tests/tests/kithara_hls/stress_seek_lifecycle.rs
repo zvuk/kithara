@@ -156,7 +156,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.0,
             min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::from_secs(120),

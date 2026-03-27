@@ -38,7 +38,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
         })

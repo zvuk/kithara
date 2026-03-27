@@ -355,21 +355,19 @@ impl ResourceConfig {
             }
         };
 
-        let mut abr = self.abr;
-        // Map preferred_peak_bitrate → AbrOptions::max_bandwidth_bps.
-        // Only apply if the value is a finite number >= 1.0 bps.
+        let mut abr_opts = self.abr;
         if self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate >= 1.0 {
-            #[expect(clippy::cast_sign_loss)] // guarded by >= 1.0 check above
+            #[expect(clippy::cast_sign_loss)]
             #[expect(clippy::cast_possible_truncation)]
-            // f64 → u64 is fine for bitrate values in practical range
             let cap = self.preferred_peak_bitrate as u64;
-            abr.max_bandwidth_bps = Some(cap);
+            abr_opts.max_bandwidth_bps = Some(cap);
         }
+        let abr_controller = kithara_abr::AbrController::new(abr_opts);
 
         let mut hls_config = HlsConfig::new(url)
             .with_store(self.store)
             .with_net(self.net)
-            .with_abr(abr)
+            .with_abr(abr_controller)
             .with_keys(self.keys);
 
         if let Some(bytes) = self.look_ahead_bytes {
@@ -532,7 +530,12 @@ mod tests {
             .unwrap()
             .with_preferred_peak_bitrate(512_000.0);
         let audio_config = config.into_hls_config().unwrap();
-        assert_eq!(audio_config.stream.abr.max_bandwidth_bps, Some(512_000));
+        let abr = audio_config
+            .stream
+            .abr
+            .as_ref()
+            .expect("controller should be set");
+        assert_eq!(abr.max_bandwidth_bps(), Some(512_000));
     }
 
     #[kithara::test]

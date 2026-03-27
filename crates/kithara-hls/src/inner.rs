@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
+use kithara_abr::AbrController;
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
@@ -153,7 +154,10 @@ impl StreamType for Hls {
         let fetch_manager = Arc::new(fetch_manager);
 
         // Determine initial variant
-        let initial_variant = config.abr.initial_variant();
+        let initial_variant = config
+            .abr
+            .as_ref()
+            .map_or(0, AbrController::get_current_variant_index);
 
         // Event bus was created earlier (before HttpClient) for soft timeout callback.
 

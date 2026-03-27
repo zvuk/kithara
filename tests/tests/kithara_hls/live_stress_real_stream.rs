@@ -223,10 +223,12 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..AbrOptions::default()
+        });
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
@@ -287,15 +289,17 @@ async fn live_ephemeral_revisit_sequence_regression(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_millis(250),
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_millis(250),
+            min_throughput_record_ms: 0,
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.0,
+            ..AbrOptions::default()
+        });
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -438,15 +442,17 @@ async fn live_real_stream_fixed_seek_window_regression(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_millis(250),
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_millis(250),
+            min_throughput_record_ms: 0,
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.0,
+            ..AbrOptions::default()
+        });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -559,15 +565,17 @@ async fn live_real_stream_random_seek_prefix_regression(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_millis(250),
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_millis(250),
+            min_throughput_record_ms: 0,
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.0,
+            ..AbrOptions::default()
+        });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -677,10 +685,12 @@ async fn live_real_stream_seek_resume_native(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..AbrOptions::default()
+        });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -769,15 +779,17 @@ async fn live_stress_real_stream_seek_read_cache(
         store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
     }
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_millis(250),
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_millis(250),
+            min_throughput_record_ms: 0,
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.0,
+            ..AbrOptions::default()
+        });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -1064,10 +1076,12 @@ async fn live_ephemeral_small_cache_playback(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..AbrOptions::default()
+        });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -1133,10 +1147,12 @@ async fn live_ephemeral_small_cache_seek_stress(
         .with_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
 
-    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..AbrOptions::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_abr_options(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..AbrOptions::default()
+        });
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)

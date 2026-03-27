@@ -59,7 +59,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });

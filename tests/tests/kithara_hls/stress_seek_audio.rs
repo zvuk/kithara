@@ -107,7 +107,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });

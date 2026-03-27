@@ -37,7 +37,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         });
@@ -111,7 +111,7 @@ async fn stream_continues_after_seek(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: abr_mode,
             ..Default::default()
         });
@@ -193,7 +193,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..Default::default()
         });
@@ -248,7 +248,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         });
@@ -390,7 +390,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             down_switch_buffer_secs: 0.0,
             min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::ZERO,

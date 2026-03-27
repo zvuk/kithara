@@ -138,7 +138,7 @@ mod hls_timeline {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
             .with_cancel(cancel)
-            .with_abr(AbrOptions {
+            .with_abr_options(AbrOptions {
                 mode: AbrMode::Manual(0),
                 ..AbrOptions::default()
             });

@@ -57,7 +57,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
 
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
-            .with_abr(AbrOptions {
+            .with_abr_options(AbrOptions {
                 mode: AbrMode::Auto(Some(0)),
                 ..Default::default()
             });
@@ -145,7 +145,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         });

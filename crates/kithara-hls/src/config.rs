@@ -27,7 +27,7 @@ pub struct KeyContext {
 pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>;
 
 // Re-export ABR types from kithara-abr crate
-pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
 
 /// Encryption key handling configuration.
 #[derive(Clone, Default, Derivative, Setters)]
@@ -62,8 +62,10 @@ impl KeyOptions {
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct HlsConfig {
-    /// ABR (Adaptive Bitrate) configuration.
-    pub abr: AbrOptions,
+    /// Pre-created ABR controller. When `None`, `build_pair()` creates
+    /// one from default `AbrOptions`.
+    #[derivative(Debug = "ignore")]
+    pub abr: Option<AbrController<ThroughputEstimator>>,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
@@ -126,6 +128,13 @@ impl HlsConfig {
             url,
             ..Self::default()
         }
+    }
+
+    /// Create ABR controller from options and set it.
+    #[must_use]
+    pub fn with_abr_options(mut self, opts: AbrOptions) -> Self {
+        self.abr = Some(AbrController::new(opts));
+        self
     }
 
     /// Set name for cache disambiguation.

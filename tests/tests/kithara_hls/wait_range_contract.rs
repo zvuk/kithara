@@ -51,7 +51,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
@@ -165,7 +165,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr(AbrOptions {
+        .with_abr_options(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
