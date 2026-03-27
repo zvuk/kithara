@@ -33,6 +33,7 @@ use kithara_test_utils::{
     TestHttpServer, TestTempDir, create_wav_exact_bytes, signal_pcm::signal, temp_dir,
 };
 use tokio::time::timeout;
+use tracing::{debug, info};
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -879,15 +880,15 @@ async fn stress_offline_crossfade_no_gaps() {
     let s3 = render_phase(&mut player, 80, "MP3→MP3 fade");
 
     // Report
-    eprintln!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
+    info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
     for s in [&s1a, &s1b, &s2, &s3] {
-        eprintln!("  {s}");
+        info!("  {s}");
     }
 
     // Scenario 4: repeated HLS to MP3 (intermittent glitch)
     // User reports: "чаще всего при переключении с hls на mp3,
     // это длится около 2х секунд". Run multiple iterations to catch it.
-    eprintln!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
+    info!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
     let mut worst_silence = 0u32;
     let mut worst_slow = 0u32;
     let mut worst_render = Duration::ZERO;
@@ -905,7 +906,7 @@ async fn stress_offline_crossfade_no_gaps() {
         player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
         let sm = render_phase(&mut player, 60, &format!("HLS→MP3 #{iter}"));
 
-        eprintln!("  {sm}");
+        info!("  {sm}");
         if sm.max_silence_run > worst_silence {
             worst_silence = sm.max_silence_run;
         }
@@ -917,7 +918,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     }
 
-    eprintln!(
+    info!(
         "\n  Worst across 5 HLS→MP3: silence={worst_silence} slow={worst_slow} \
          max_render={worst_render:?}"
     );
@@ -1132,7 +1133,7 @@ async fn player_mp3_duration_matches_app_flow(#[case] url: &str, temp_dir: TestT
     sleep(Duration::from_millis(500)).await;
 
     let dur = player.duration_seconds();
-    eprintln!("{url} duration_seconds={dur:?}");
+    debug!("{url} duration_seconds={dur:?}");
     assert!(
         dur.is_some(),
         "{url}: player.duration_seconds() must not be None"

@@ -35,7 +35,10 @@ pub(crate) enum TrackState {
     #[default]
     Preloading,
     /// Track is paused (explicit pause by user).
-    #[expect(dead_code, reason = "retained for future explicit-pause support")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "retained for future explicit-pause support")
+    )]
     Paused,
     /// Track is actively playing at full volume.
     Playing,

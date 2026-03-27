@@ -109,6 +109,7 @@ const SEEK_STEP: f32 = 0.1;
 const BORDER_RADIUS: f32 = 12.0;
 const BORDER_RADIUS_SECTION: f32 = 10.0;
 const BORDER_RADIUS_BUTTON: f32 = 8.0;
+const BORDER_RADIUS_PILL: f32 = 4.0;
 const BORDER_WIDTH: f32 = 1.0;
 const BORDER_RADIUS_CIRCLE: f32 = 100.0;
 
@@ -148,6 +149,11 @@ const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
 
 const BLINK_DIVISOR: u8 = 5;
 const BLINK_PERIOD: u64 = 2;
+
+// Playrate pill buttons
+const PLAYRATE_PADDING_Y: u16 = 3;
+const PLAYRATE_PADDING_X: u16 = 6;
+const PLAYRATE_SPACING: f32 = 4.0;
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
@@ -384,17 +390,20 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
                 }),
                 text_color: if is_selected { p.bg } else { p.muted },
                 border: Border {
-                    radius: 4.0.into(),
+                    radius: BORDER_RADIUS_PILL.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             })
-            .padding([3, 6])
+            .padding([PLAYRATE_PADDING_Y, PLAYRATE_PADDING_X])
             .on_press(Message::PlayRateChanged(rate));
         Element::from(btn)
     });
 
-    row(buttons).spacing(4).align_y(Alignment::Center).into()
+    row(buttons)
+        .spacing(PLAYRATE_SPACING)
+        .align_y(Alignment::Center)
+        .into()
 }
 
 fn view_volume(state: &Kithara) -> Element<'_, Message> {

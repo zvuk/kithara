@@ -122,13 +122,18 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
-    /// Number of EQ bands (log-spaced). Default: 10.
+    /// Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
     pub eq_band_count: u32,
 }
 
+/// Default number of log-spaced EQ bands.
+const DEFAULT_EQ_BAND_COUNT: u32 = 10;
+
 impl Default for FfiPlayerConfig {
     fn default() -> Self {
-        Self { eq_band_count: 10 }
+        Self {
+            eq_band_count: DEFAULT_EQ_BAND_COUNT,
+        }
     }
 }
 

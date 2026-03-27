@@ -66,6 +66,18 @@ const STEREO_CHANNELS: usize = 2;
 /// Butterworth Q factor (1/√2) for LR-4 crossover construction.
 const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
+/// `FilterKind::HighShelf` discriminant in the u8 representation.
+const HIGH_SHELF_DISCRIMINANT: u8 = 2;
+
+/// Standard dB-to-linear formula divisor: `10^(dB / DB_DIVISOR)`.
+const DB_DIVISOR: f32 = 20.0;
+
+/// Nyquist normalisation factor for `from_normalized_params`: `2 * f0 / fs`.
+const NYQUIST_FACTOR: f32 = 2.0;
+
+/// Minimum number of bands that requires crossover filters.
+const MIN_CROSSOVER_BANDS: usize = 2;
+
 /// The type of biquad filter used for an EQ band.
 ///
 /// Retained for band layout description; the isolator crossover ignores this
@@ -83,7 +95,7 @@ impl From<u8> for FilterKind {
     fn from(v: u8) -> Self {
         match v {
             0 => Self::LowShelf,
-            2 => Self::HighShelf,
+            HIGH_SHELF_DISCRIMINANT => Self::HighShelf,
             _ => Self::Peaking,
         }
     }
@@ -166,7 +178,7 @@ fn db_to_linear(db: f32) -> f32 {
     if db <= MIN_GAIN_DB {
         0.0
     } else {
-        10.0_f32.powf(db / 20.0)
+        LOG_FREQ_BASE.powf(db / DB_DIVISOR)
     }
 }
 
@@ -196,7 +208,7 @@ impl LR4 {
 /// Audio EQ Cookbook's `f0/fs`, giving coefficients at 4× lower frequency.
 /// We bypass it with `from_normalized_params` and `2·f0/fs`.
 fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients<f32> {
-    let normalized = 2.0 * freq / sample_rate;
+    let normalized = NYQUIST_FACTOR * freq / sample_rate;
     Coefficients::<f32>::from_normalized_params(filter, normalized, BUTTERWORTH_Q)
         .unwrap_or(PASSTHROUGH)
 }
@@ -298,7 +310,7 @@ impl IsolatorEq {
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
 
-        let crossover_freqs: Vec<f32> = if n >= 2 {
+        let crossover_freqs: Vec<f32> = if n >= MIN_CROSSOVER_BANDS {
             (0..xover_count)
                 .map(|i| (bands[i].frequency * bands[i + 1].frequency).sqrt())
                 .collect()

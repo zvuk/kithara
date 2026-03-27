@@ -23,6 +23,7 @@ use kithara_platform::{
 };
 use kithara_test_utils::{TestTempDir, serve_assets, temp_dir};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 fn is_known_box(tag: &[u8; 4]) -> bool {
     matches!(
@@ -83,7 +84,7 @@ fn scan_boxes(
         let mut header = [0u8; 16];
         let n = read_exact_retry(stream, &mut header[..8], Duration::from_secs(5));
         if n < 8 {
-            eprintln!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
+            debug!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
             break;
         }
         let Some((size, tag)) = parse_box_header(&header[..n]) else {
@@ -95,7 +96,7 @@ fn scan_boxes(
                 .map(|b| format!("{b:02x}"))
                 .collect::<Vec<_>>()
                 .join(" ");
-            eprintln!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
+            warn!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
             break;
         }
         let tag_str = String::from_utf8_lossy(&tag).to_string();
@@ -105,10 +106,10 @@ fn scan_boxes(
                 .map(|b| format!("{b:02x}"))
                 .collect::<Vec<_>>()
                 .join(" ");
-            eprintln!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
+            warn!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
             break;
         }
-        eprintln!(
+        debug!(
             "[{label}] scan: box #{:<3} pos={:<10} size={:<10} tag='{tag_str}'",
             boxes.len(),
             pos,
@@ -121,7 +122,7 @@ fn scan_boxes(
         }
         pos += size;
         if stream.seek(SeekFrom::Start(pos)).is_err() {
-            eprintln!("[{label}] scan: seek to {pos} failed");
+            error!("[{label}] scan: seek to {pos} failed");
             break;
         }
     }
@@ -194,7 +195,7 @@ async fn drm_stream_byte_integrity(
         let label = &label;
 
         // Phase 1: Read to EOF, clearing variant fence on each VariantChangeError.
-        eprintln!("[{label}] Phase 1: reading to EOF");
+        info!("[{label}] Phase 1: reading to EOF");
         let mut buf = vec![0u8; 65536];
         let mut total_read = 0u64;
         let deadline = Instant::now() + Duration::from_secs(25);
@@ -218,7 +219,7 @@ async fn drm_stream_byte_integrity(
                         stream.clear_variant_fence();
                         continue;
                     }
-                    eprintln!("[{label}] read error: {e}");
+                    error!("[{label}] read error: {e}");
                     read_error = Some(e.to_string());
                     break;
                 }
@@ -230,11 +231,11 @@ async fn drm_stream_byte_integrity(
         }
 
         let stream_len = stream.len().unwrap_or(0);
-        eprintln!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
+        info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
 
         // Phase 2: Seek to beginning and scan fMP4 box structure.
         stream.clear_variant_fence();
-        eprintln!("[{label}] Phase 2: scanning fMP4 from pos 0");
+        info!("[{label}] Phase 2: scanning fMP4 from pos 0");
         let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
 
         // Verify contiguity.
@@ -253,7 +254,7 @@ async fn drm_stream_byte_integrity(
         let moof_count = boxes.iter().filter(|(_, _, t)| t == "moof").count();
         let mdat_count = boxes.iter().filter(|(_, _, t)| t == "mdat").count();
 
-        eprintln!(
+        info!(
             "[{label}] Phase 2 result: {} boxes, {moof_count} moofs, {mdat_count} mdats, \
              last_end={last_end}, stream_len={stream_len}",
             boxes.len()
@@ -270,7 +271,7 @@ async fn drm_stream_byte_integrity(
         // total_read should match stream_len (what we actually read == declared total).
         // Allow small delta for DRM padding reconciliation timing.
         let read_vs_len = (total_read as i64) - (stream_len as i64);
-        eprintln!("[{label}] total_read - stream_len = {read_vs_len}");
+        debug!("[{label}] total_read - stream_len = {read_vs_len}");
         assert!(
             !hit_deadline || read_vs_len.unsigned_abs() < 1024,
             "[{label}] Phase 1 hit deadline before EOF: total_read={total_read} \
@@ -291,7 +292,7 @@ async fn drm_stream_byte_integrity(
         // If last_end > total_read → mdat sizes extend past what we read (BAD: possible encrypted size leak).
         // If last_end < total_read → boxes don't cover all data (gap at tail).
         let coverage_delta = (last_end as i64) - (total_read as i64);
-        eprintln!("[{label}] box coverage delta (last_end - total_read) = {coverage_delta}");
+        debug!("[{label}] box coverage delta (last_end - total_read) = {coverage_delta}");
 
         assert!(
             coverage_delta.unsigned_abs() < 1024,
@@ -299,7 +300,7 @@ async fn drm_stream_byte_integrity(
              last_end={last_end} total_read={total_read} delta={coverage_delta}"
         );
 
-        eprintln!("[{label}] PASSED");
+        info!("[{label}] PASSED");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await

@@ -1955,10 +1955,8 @@ mod tests {
         let evicted = ResourceKey::from_url(
             &Url::parse("https://example.com/seg-0-0.m4s").expect("valid segment URL"),
         );
-        {
-            let mut segments = source.segments.lock_sync();
-            assert!(segments.remove_resource(&evicted));
-        }
+        let removed = source.segments.lock_sync().remove_resource(&evicted);
+        assert!(removed);
 
         // ABR wants variant 1, but layout is still variant 0
         source.coord.abr_variant_index.store(1, Ordering::Release);

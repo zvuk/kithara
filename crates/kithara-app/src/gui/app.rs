@@ -5,6 +5,7 @@ use std::{
 
 use iced::{Subscription, Task, Theme, time as iced_time};
 use kithara::{
+    events::EventBus,
     play::Engine,
     prelude::{Event, HlsEvent, PlayerImpl, Resource},
 };
@@ -151,10 +152,7 @@ impl Kithara {
         Task::perform(
             async move {
                 let config = params.build_config(index).map_err(|e| format!("{e}"))?;
-                let event_rx = config
-                    .bus
-                    .as_ref()
-                    .map(kithara::events::EventBus::subscribe);
+                let event_rx = config.bus.as_ref().map(EventBus::subscribe);
                 let resource = Resource::new(config).await.map_err(|e| format!("{e}"))?;
                 player.replace_item(index, resource);
                 params.playlist().set_status(index, TrackStatus::Loaded);

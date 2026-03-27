@@ -8,7 +8,10 @@ use std::{
     },
 };
 
-use kithara::play::{Resource, ResourceConfig};
+use kithara::{
+    abr::AbrMode,
+    play::{Resource, ResourceConfig},
+};
 use kithara_platform::{
     Mutex,
     tokio::{runtime as tokio_runtime, sync::Notify},
@@ -242,7 +245,6 @@ impl AudioPlayerItem {
         }
 
         if let Some(mode) = *self.abr_mode.lock_sync() {
-            use kithara::abr::AbrMode;
             config.abr.mode = match mode {
                 crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
                 crate::types::FfiAbrMode::Manual { variant_index } => {
@@ -276,6 +278,8 @@ impl AudioPlayerItem {
 
 #[cfg(test)]
 mod tests {
+    use tracing::debug;
+
     use super::*;
 
     #[kithara::test]
@@ -370,7 +374,7 @@ mod tests {
         );
         let resource = resource.expect("checked");
         let duration = resource.duration();
-        eprintln!("{url}: duration={duration:?}");
+        debug!("{url}: duration={duration:?}");
         assert!(
             duration.is_some(),
             "{url}: duration must be reported (got None)"

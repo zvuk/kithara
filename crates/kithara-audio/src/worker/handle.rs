@@ -530,7 +530,43 @@ fn drain_worker_commands(
     false
 }
 
-// Tests
+/// Process CPU time in milliseconds (user + system).
+#[cfg(test)]
+fn cpu_time_ms() -> u64 {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps failed");
+    let s = String::from_utf8_lossy(&output.stdout);
+    parse_cputime(s.trim())
+}
+
+/// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
+#[cfg(test)]
+fn parse_cputime(s: &str) -> u64 {
+    const HMS_PARTS: usize = 3;
+    const MS_PARTS: usize = 2;
+    const SECS_PER_HOUR: u64 = 3600;
+    const SECS_PER_MIN: u64 = 60;
+    const MS_PER_SEC: u64 = 1000;
+    const SEC_IDX: usize = 2;
+
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        HMS_PARTS => {
+            let h: u64 = parts[0].trim().parse().unwrap_or(0);
+            let m: u64 = parts[1].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[SEC_IDX].trim().parse().unwrap_or(0);
+            (h * SECS_PER_HOUR + m * SECS_PER_MIN + sec) * MS_PER_SEC
+        }
+        MS_PARTS => {
+            let m: u64 = parts[0].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[1].trim().parse().unwrap_or(0);
+            (m * SECS_PER_MIN + sec) * MS_PER_SEC
+        }
+        _ => 0,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1159,43 +1195,5 @@ mod tests {
             "Worker should NOT busy-spin on backpressure: \
              used {cpu_used_ms}ms CPU in 500ms wall time (expected <100ms)"
         );
-    }
-}
-
-/// Process CPU time in milliseconds (user + system).
-#[cfg(test)]
-fn cpu_time_ms() -> u64 {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps failed");
-    let s = String::from_utf8_lossy(&output.stdout);
-    parse_cputime(s.trim())
-}
-
-/// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
-#[cfg(test)]
-fn parse_cputime(s: &str) -> u64 {
-    const HMS_PARTS: usize = 3;
-    const MS_PARTS: usize = 2;
-    const SECS_PER_HOUR: u64 = 3600;
-    const SECS_PER_MIN: u64 = 60;
-    const MS_PER_SEC: u64 = 1000;
-    const SEC_IDX: usize = 2;
-
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.len() {
-        HMS_PARTS => {
-            let h: u64 = parts[0].trim().parse().unwrap_or(0);
-            let m: u64 = parts[1].trim().parse().unwrap_or(0);
-            let sec: u64 = parts[SEC_IDX].trim().parse().unwrap_or(0);
-            (h * SECS_PER_HOUR + m * SECS_PER_MIN + sec) * MS_PER_SEC
-        }
-        MS_PARTS => {
-            let m: u64 = parts[0].trim().parse().unwrap_or(0);
-            let sec: u64 = parts[1].trim().parse().unwrap_or(0);
-            (m * SECS_PER_MIN + sec) * MS_PER_SEC
-        }
-        _ => 0,
     }
 }

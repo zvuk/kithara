@@ -14,6 +14,7 @@ use thirtyfour::{
     prelude::*,
 };
 use tokio::time::{Instant, sleep};
+use tracing::warn;
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -1104,7 +1105,7 @@ impl WasmPlayerSelenium {
         }
 
         if !seek_ok {
-            eprintln!("[drm_seek] {label}: seek NOT ok, positions={position_samples:?}");
+            warn!("[drm_seek] {label}: seek NOT ok, positions={position_samples:?}");
             return Ok((false, false));
         }
 
@@ -1133,9 +1134,7 @@ impl WasmPlayerSelenium {
             positions.len() >= 2 && positions.last().copied().unwrap_or(0.0) > positions[0] + 100.0;
 
         if !advancing {
-            eprintln!(
-                "[drm_seek] {label}: NOT advancing, positions={positions:?}\nevents:\n{events}"
-            );
+            warn!("[drm_seek] {label}: NOT advancing, positions={positions:?}\nevents:\n{events}");
         }
 
         Ok((true, advancing))

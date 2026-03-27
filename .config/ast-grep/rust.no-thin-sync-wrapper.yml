@@ -31,4 +31,4 @@ rule:
         has:
           kind: identifier
           field: name
-          regex: '^(default|from|into|drop|fmt|clone|new|main|fallback_timeout|to_iced|to_ratatui)$'
+          regex: '^(default|from|into|drop|fmt|clone|new|main|fallback_timeout|to_iced|to_ratatui|wait_range_hang_timeout)$'

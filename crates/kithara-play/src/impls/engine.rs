@@ -21,10 +21,6 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
 };
 use portable_atomic::AtomicF32;
-#[cfg(test)]
-use ringbuf::HeapRb;
-#[cfg(test)]
-use ringbuf::traits::Split;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
 
@@ -47,11 +43,6 @@ use crate::{
 
 /// Capacity of the engine event broadcast channel.
 const ENGINE_EVENT_CHANNEL_CAPACITY: usize = 64;
-
-/// Capacity of the player command ring buffer for slot communication.
-/// Ringbuf capacity for slot commands in tests.
-#[cfg(test)]
-const SLOT_CMD_RINGBUF_CAPACITY: usize = 32;
 
 /// Configuration for the audio engine.
 #[derive(Clone, Debug, Derivative, Setters)]
@@ -442,21 +433,6 @@ impl EngineImpl {
             return self.config.sample_rate;
         }
         self.session.query_sample_rate(self.config.sample_rate)
-    }
-
-    /// Inject a test slot handle without starting the audio session.
-    #[cfg(test)]
-    pub(crate) fn inject_test_slot(&self, slot_id: SlotId, shared_state: Arc<SharedPlayerState>) {
-        let (cmd_tx, _cmd_rx) = HeapRb::<PlayerCmd>::new(SLOT_CMD_RINGBUF_CAPACITY).split();
-        self.active_slots.lock_sync().push(slot_id);
-        self.slot_registry.lock_sync().insert(
-            slot_id,
-            SlotHandle {
-                cmd_tx,
-                eq: SharedEq::new(0),
-                shared_state,
-            },
-        );
     }
 }
 
