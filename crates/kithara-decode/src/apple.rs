@@ -86,6 +86,7 @@ const kAudioFileStreamProperty_ReadyToProducePackets: AudioFileStreamPropertyID 
 const kAudioFileStreamProperty_DataFormat: AudioFileStreamPropertyID = 0x64666d74; // 'dfmt'
 const kAudioFileStreamProperty_MagicCookieData: AudioFileStreamPropertyID = 0x6d676963; // 'mgic'
 const kAudioFileStreamProperty_DataOffset: AudioFileStreamPropertyID = 0x646f6666; // 'doff'
+const kAudioFileStreamProperty_AudioDataPacketCount: AudioFileStreamPropertyID = 0x70636e74; // 'pcnt'
 
 // AudioFileStream Parse Flags
 const kAudioFileStreamParseFlag_Discontinuity: UInt32 = 1;
@@ -334,6 +335,8 @@ struct StreamParserState {
     packet_buffer: PacketBuffer,
     /// Data offset in stream (where audio data starts).
     data_offset: SInt64,
+    /// Total audio data packet count (from Xing/VBRI header via `AudioFileStream`).
+    audio_data_packet_count: Option<u64>,
     /// True when stream is ready to produce packets.
     ready: bool,
     /// Error from callbacks.
@@ -347,6 +350,7 @@ impl StreamParserState {
             magic_cookie: None,
             packet_buffer: PacketBuffer::new(),
             data_offset: 0,
+            audio_data_packet_count: None,
             ready: false,
             error: None,
         }
@@ -467,13 +471,19 @@ impl AppleInner {
         let file_type = container_to_file_type(container)
             .ok_or_else(|| DecodeError::UnsupportedContainer(container))?;
 
-        // Get source length for seek calculations
-        let source_len = source.seek(SeekFrom::End(0)).ok();
-        if source_len.is_some() {
-            source
-                .seek(SeekFrom::Start(0))
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-        }
+        // Get source length for duration estimation and seek calculations.
+        // Prefer byte_len_handle (Content-Length from HTTP) over seek(End(0))
+        // because streaming sources may have only a fraction downloaded.
+        let source_len = config
+            .byte_len_handle
+            .as_ref()
+            .map(|h| h.load(Ordering::Acquire))
+            .filter(|&len| len > 0)
+            .or_else(|| {
+                let len = source.seek(SeekFrom::End(0)).ok()?;
+                source.seek(SeekFrom::Start(0)).ok()?;
+                Some(len)
+            });
 
         debug!(
             ?container,
@@ -761,7 +771,7 @@ impl AppleInner {
             spec,
             position: Duration::ZERO,
             frame_offset: 0,
-            duration: None,
+            duration: cached_duration,
             metadata: TrackMetadata::default(),
             byte_len_handle,
             pcm_buffer,
@@ -1120,13 +1130,26 @@ impl AppleInner {
         source_len: Option<u64>,
         sample_rate: u32,
     ) -> Option<Duration> {
-        let source_len = source_len?;
         let format = parser_state.format?;
         let frames_per_packet = u64::from(format.mFramesPerPacket);
-        if frames_per_packet == 0 || total_parsed <= data_offset {
+        if frames_per_packet == 0 {
             return None;
         }
 
+        // Prefer exact packet count from AudioFileStream (Xing/VBRI header).
+        if let Some(packet_count) = parser_state.audio_data_packet_count {
+            let total_frames = packet_count * frames_per_packet;
+            let duration_secs = total_frames as f64 / f64::from(sample_rate);
+            if duration_secs > 0.0 {
+                return Some(Duration::from_secs_f64(duration_secs));
+            }
+        }
+
+        // Fallback: estimate from bytes/frames ratio (CBR or VBR without header).
+        let source_len = source_len?;
+        if total_parsed <= data_offset {
+            return None;
+        }
         let packets_parsed = parser_state.packet_buffer.len() as u64;
         if packets_parsed == 0 {
             return None;
@@ -1224,6 +1247,10 @@ impl Drop for AppleInner {
 }
 
 /// `AudioFileStream` property listener callback.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "extern C callback; match arms are independent"
+)]
 extern "C" fn property_listener_callback(
     client_data: *mut c_void,
     audio_file_stream: AudioFileStreamID,
@@ -1298,6 +1325,29 @@ extern "C" fn property_listener_callback(
                     state.magic_cookie = Some(cookie);
                     trace!(size, "Apple decoder callback: magic cookie received");
                 }
+            }
+        }
+        kAudioFileStreamProperty_AudioDataPacketCount => {
+            let mut count: SInt64 = 0;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "size_of result fits in u32"
+            )]
+            let mut size = size_of::<SInt64>() as UInt32;
+
+            // SAFETY: `audio_file_stream` is a valid handle; `count` is a valid mutable SInt64.
+            let status = unsafe {
+                AudioFileStreamGetProperty(
+                    audio_file_stream,
+                    kAudioFileStreamProperty_AudioDataPacketCount,
+                    &mut size,
+                    &mut count as *mut _ as *mut c_void,
+                )
+            };
+
+            if status == noErr && count > 0 {
+                state.audio_data_packet_count = Some(count.cast_unsigned());
+                trace!(count, "Apple decoder callback: audio data packet count");
             }
         }
         kAudioFileStreamProperty_ReadyToProducePackets => {

@@ -1114,11 +1114,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Decode one chunk using the decode loop.
     fn decode_one_step(&mut self) -> DecodeStep {
-        if self.timeline.total_duration().is_none() {
-            let duration = self.session.decoder.duration();
-            if duration.is_some() {
-                self.timeline.set_total_duration(duration);
-            }
+        let decoder_duration = self.session.decoder.duration();
+        let timeline_duration = self.timeline.total_duration();
+        if decoder_duration > timeline_duration {
+            self.timeline.set_total_duration(decoder_duration);
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
         match self.decode_next_chunk() {

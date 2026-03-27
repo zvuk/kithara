@@ -92,6 +92,59 @@ impl MediaInfo {
 }
 
 impl AudioCodec {
+    /// Parse codec from HTTP Content-Type header value.
+    ///
+    /// Examples:
+    /// - `audio/mpeg` -> `Mp3`
+    /// - `audio/aac` -> `AacLc`
+    /// - `audio/flac` -> `Flac`
+    #[must_use]
+    pub fn from_mime(mime: &str) -> Option<Self> {
+        let m = mime.to_lowercase();
+        if m.contains("mp3") || m == "audio/mpeg" {
+            return Some(Self::Mp3);
+        }
+        if m.contains("aac") {
+            return Some(Self::AacLc);
+        }
+        if m.contains("flac") {
+            return Some(Self::Flac);
+        }
+        if m.contains("vorbis") {
+            return Some(Self::Vorbis);
+        }
+        if m.contains("opus") {
+            return Some(Self::Opus);
+        }
+        if m == "audio/ogg" {
+            return Some(Self::Vorbis);
+        }
+        if m == "audio/wav" || m == "audio/wave" || m == "audio/x-wav" {
+            return Some(Self::Pcm);
+        }
+        if m == "audio/mp4" || m == "audio/x-m4a" {
+            return Some(Self::AacLc);
+        }
+        None
+    }
+
+    /// Infer the default container format for this codec.
+    ///
+    /// Used when codec is known (e.g., from Content-Type) but container is not.
+    /// Providing a container lets the decoder use direct reader creation instead
+    /// of probe, avoiding seek-to-end which breaks streaming sources.
+    #[must_use]
+    pub fn default_container(self) -> Option<ContainerFormat> {
+        match self {
+            Self::Mp3 => Some(ContainerFormat::MpegAudio),
+            Self::AacLc | Self::AacHe | Self::AacHeV2 => Some(ContainerFormat::Adts),
+            Self::Flac => Some(ContainerFormat::Flac),
+            Self::Vorbis | Self::Opus => Some(ContainerFormat::Ogg),
+            Self::Pcm => Some(ContainerFormat::Wav),
+            Self::Alac | Self::Adpcm => None,
+        }
+    }
+
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:

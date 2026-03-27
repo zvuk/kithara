@@ -16,6 +16,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{Hls, HlsConfig},
+    net::NetOptions,
     play::{
         PlayerConfig, PlayerImpl, Resource, ResourceConfig, internal::offline::resource_from_reader,
     },
@@ -117,6 +118,8 @@ fn test_app() -> Router {
     Router::new()
         .route("/ok.mp3", get(ok_mp3).head(ok_mp3))
         .route("/gone.mp3", get(unavailable_mp3).head(unavailable_mp3))
+        // Same MP3 served at extensionless path (like zvuk /track/streamhq?id=NNN).
+        .route("/track/stream", get(ok_mp3).head(ok_mp3))
 }
 
 fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
@@ -134,6 +137,10 @@ fn resource_config(url: &url::Url, store: StoreOptions) -> ResourceConfig {
         .unwrap()
         .with_hint("mp3")
         .with_store(store)
+}
+
+fn resource_config_no_hint(url: &url::Url, store: StoreOptions) -> ResourceConfig {
+    ResourceConfig::new(url.as_str()).unwrap().with_store(store)
 }
 
 fn resource_config_with_worker(
@@ -944,4 +951,194 @@ async fn stress_offline_crossfade_no_gaps() {
         "HLS→MP3 repeated: {worst_slow} blocks exceeded budget, \
          max_render={worst_render:?} — sustained blocking during crossfade"
     );
+}
+
+/// Expected duration of test.mp3 (ffprobe: 187.102041s).
+const EXPECTED_DURATION_SECS: f64 = 187.0;
+
+/// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
+/// and report correct duration — with and without extension/hint.
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(15)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+#[case::with_extension("/ok.mp3")]
+#[case::no_extension("/track/stream")]
+async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir: TestTempDir) {
+    let server = TestHttpServer::new(test_app()).await;
+    let url = server.url(path);
+    let store = store_options(&temp_dir, true);
+
+    // No hint — ResourceConfig must extract it from URL or pipeline must probe raw bytes.
+    let config = resource_config_no_hint(&url, store);
+    let mut resource = Resource::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
+
+    // Duration must be close to 187s.
+    let duration = resource.duration();
+    assert!(
+        duration.is_some(),
+        "path={path}: duration must be reported (got None)"
+    );
+    let dur_secs = duration.expect("checked").as_secs_f64();
+    assert!(
+        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path}: expected ~{EXPECTED_DURATION_SECS}s, got {dur_secs:.1}s"
+    );
+
+    // Decode real PCM data — at least 2 seconds.
+    let (samples, position) = {
+        let mut total = 0usize;
+        let mut buf = [0.0f32; 4096];
+        let deadline = Instant::now() + READ_TIMEOUT;
+        loop {
+            let n = resource.read(&mut buf);
+            if n > 0 {
+                total += n;
+            }
+            if resource.position() >= Duration::from_secs(2) {
+                break;
+            }
+            if resource.is_eof() {
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "path={path}: timed out waiting for PCM data"
+            );
+            sleep(Duration::from_millis(5)).await;
+        }
+        (total, resource.position())
+    };
+
+    assert!(samples > 0, "path={path}: must decode PCM samples");
+    assert!(
+        position >= Duration::from_secs(2),
+        "path={path}: must decode at least 2s, got {position:?}"
+    );
+}
+
+/// Live remote streams through `ResourceConfig` — same code path as kithara-app.
+/// No hint, no extension manipulation — exactly what the app does.
+///
+/// Requires internet (silvercomet) and corporate VPN (zvuk).
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(
+        KITHARA_HANG_TIMEOUT_SECS = "10",
+        http_proxy = "",
+        https_proxy = "",
+        HTTP_PROXY = "",
+        HTTPS_PROXY = ""
+    )
+)]
+#[ignore = "requires internet; zvuk URLs require corporate VPN"]
+#[case::silvercomet_mp3("https://stream.silvercomet.top/track.mp3")]
+#[case::silvercomet_hls("https://stream.silvercomet.top/hls/master.m3u8")]
+#[case::zvuk_27390231("https://cdn-edge.zvq.me/track/streamhq?id=27390231")]
+#[case::zvuk_151585912("https://cdn-edge.zvq.me/track/streamhq?id=151585912")]
+#[case::zvuk_125475417("https://cdn-edge.zvq.me/track/streamhq?id=125475417")]
+async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir: TestTempDir) {
+    let store = store_options(&temp_dir, true);
+    let mut net = NetOptions::default();
+    net.request_timeout = Duration::from_secs(25);
+    let config = ResourceConfig::new(url)
+        .expect("valid URL")
+        .with_store(store)
+        .with_net(net);
+
+    let mut resource = Resource::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+
+    // Duration must be reported and > 30s for a real track.
+    let duration = resource.duration();
+    assert!(
+        duration.is_some(),
+        "{url}: duration must be reported (got None)"
+    );
+    let dur_secs = duration.expect("checked").as_secs_f64();
+    assert!(
+        dur_secs > 30.0,
+        "{url}: expected duration > 30s for a real track, got {dur_secs:.1}s"
+    );
+
+    // Decode at least 2 seconds of real PCM.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut samples = 0usize;
+    let mut buf = [0.0f32; 4096];
+    loop {
+        let n = resource.read(&mut buf);
+        if n > 0 {
+            samples += n;
+        }
+        if resource.position() >= Duration::from_secs(2) {
+            break;
+        }
+        if resource.is_eof() {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "{url}: timed out waiting for PCM data (pos={:?}, samples={samples})",
+            resource.position()
+        );
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    assert!(samples > 0, "{url}: must decode PCM samples");
+    assert!(
+        resource.position() >= Duration::from_secs(2),
+        "{url}: must decode at least 2s, got {:?}",
+        resource.position()
+    );
+}
+
+/// Reproduces EXACTLY the app flow: PlayerImpl + prepare_config + Resource::new +
+/// select_item + duration_seconds(). This is what the GUI reads.
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(
+        KITHARA_HANG_TIMEOUT_SECS = "10",
+        http_proxy = "",
+        https_proxy = "",
+        HTTP_PROXY = "",
+        HTTPS_PROXY = ""
+    )
+)]
+#[ignore = "requires internet; zvuk URLs require corporate VPN"]
+#[case::silvercomet_mp3("https://stream.silvercomet.top/track.mp3")]
+#[case::zvuk_125475417("https://cdn-edge.zvq.me/track/streamhq?id=125475417")]
+async fn player_mp3_duration_matches_app_flow(#[case] url: &str, temp_dir: TestTempDir) {
+    let store = store_options(&temp_dir, true);
+
+    let player = PlayerImpl::new(PlayerConfig::default());
+    player.reserve_slots(1);
+
+    let mut config = ResourceConfig::new(url).unwrap().with_store(store);
+    player.prepare_config(&mut config);
+
+    let resource = Resource::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+
+    player.replace_item(0, resource);
+    let _ = player.select_item(0, true);
+
+    sleep(Duration::from_millis(500)).await;
+
+    let dur = player.duration_seconds();
+    eprintln!("{url} duration_seconds={dur:?}");
+    assert!(
+        dur.is_some(),
+        "{url}: player.duration_seconds() must not be None"
+    );
+    let dur_secs = dur.expect("checked");
+    assert!(dur_secs > 30.0, "{url}: expected >30s, got {dur_secs:.1}s");
+
+    player.worker().shutdown();
 }

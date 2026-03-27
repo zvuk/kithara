@@ -155,7 +155,6 @@ mod hls_timeline {
         };
 
         // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
-        // ast-grep-ignore: use inside kithara::test macro body cannot import from outer scope
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =
                 DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config).unwrap();

@@ -85,20 +85,88 @@ async fn mp3_endpoint(req: Request) -> Response {
     serve_mp3_with_range(req)
 }
 
-fn app() -> Router {
-    Router::new().route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
+/// Serve MP3 with real delay between chunks — simulates slow remote server.
+/// Content-Length sent immediately, body drips at ~10KB/50ms.
+async fn throttled_mp3_endpoint(req: Request) -> Response {
+    use futures::stream::unfold;
+    use kithara_platform::time::sleep;
+
+    if req.method() == Method::HEAD {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "audio/mpeg")
+            .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    let chunk_size = 10 * 1024;
+    let chunks: Vec<Bytes> = TEST_MP3_BYTES
+        .chunks(chunk_size)
+        .map(|c| Bytes::copy_from_slice(c))
+        .collect();
+
+    let body_stream = unfold(chunks.into_iter(), |mut iter| async move {
+        let chunk = iter.next()?;
+        sleep(Duration::from_millis(50)).await;
+        Some((Ok::<_, std::io::Error>(chunk), iter))
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+        .body(Body::from_stream(body_stream))
+        .unwrap()
 }
 
+fn app() -> Router {
+    Router::new()
+        .route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
+        // Same MP3 data served at extensionless path (like zvuk /track/streamhq?id=NNN).
+        .route("/track/stream", get(mp3_endpoint).head(mp3_endpoint))
+        // Throttled: Content-Length correct but body arrives in small chunks.
+        .route(
+            "/slow/stream",
+            get(throttled_mp3_endpoint).head(throttled_mp3_endpoint),
+        )
+}
+
+/// Expected duration of test.mp3 (ffprobe: 187.102041s).
+const EXPECTED_DURATION_SECS: f64 = 187.0;
+
 #[kithara::test(tokio)]
-async fn audio_file_ephemeral_mp3_does_not_end_early() {
+#[case::with_extension_and_hint("/test.mp3", Some("mp3"))]
+#[case::with_extension_no_hint("/test.mp3", None)]
+#[case::no_extension_with_hint("/track/stream", Some("mp3"))]
+#[case::no_extension_no_hint("/track/stream", None)]
+async fn audio_file_mp3_decodes_with_duration(#[case] path: &str, #[case] hint: Option<&str>) {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::new(server.url("/test.mp3").into())
+    let file_config = FileConfig::new(server.url(path).into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-    let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut config = AudioConfig::<File>::new(file_config);
+    if let Some(h) = hint {
+        config = config.with_hint(h);
+    }
+    let mut audio = Audio::<Stream<File>>::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("probe failed for path={path} hint={hint:?}: {e}"));
 
+    // Duration must be close to 187s.
+    let duration = audio.duration();
+    assert!(
+        duration.is_some(),
+        "path={path} hint={hint:?}: duration must be reported (got None)"
+    );
+    let dur_secs = duration.expect("checked").as_secs_f64();
+    assert!(
+        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path} hint={hint:?}: expected ~{EXPECTED_DURATION_SECS}s, got {dur_secs:.1}s"
+    );
+
+    // Decode at least 2 seconds of real PCM.
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
@@ -122,6 +190,43 @@ async fn audio_file_ephemeral_mp3_does_not_end_early() {
     assert!(samples_read > 0, "no decoded samples");
     assert!(
         position >= Duration::from_secs(2),
-        "ephemeral playback ended too early: pos={position:?} eof={eof} samples={samples_read}"
+        "path={path} hint={hint:?}: playback ended too early: \
+         pos={position:?} eof={eof} samples={samples_read}"
+    );
+}
+
+/// Duration must be correct IMMEDIATELY after Audio::new — before any
+/// decode calls. This is what the GUI reads to show track length.
+///
+/// Uses throttled server: Content-Length is sent immediately but body
+/// arrives in small chunks, so only a fraction is downloaded when
+/// the decoder initializes. Duration must still reflect the full track.
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[case::throttled_no_hint("/slow/stream", None)]
+#[case::throttled_with_hint("/slow/stream", Some("mp3"))]
+async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Option<&str>) {
+    let server = TestHttpServer::new(app()).await;
+    let temp_dir = TestTempDir::new();
+
+    let file_config = FileConfig::new(server.url(path).into())
+        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
+    let mut config = AudioConfig::<File>::new(file_config);
+    if let Some(h) = hint {
+        config = config.with_hint(h);
+    }
+    let audio = Audio::<Stream<File>>::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("creation failed for path={path} hint={hint:?}: {e}"));
+
+    // Check duration BEFORE any read/decode — this is what the GUI shows.
+    let duration = audio.duration();
+    assert!(
+        duration.is_some(),
+        "path={path} hint={hint:?}: duration must be available immediately (got None)"
+    );
+    let dur_secs = duration.expect("checked").as_secs_f64();
+    assert!(
+        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path} hint={hint:?}: expected ~{EXPECTED_DURATION_SECS}s immediately, got {dur_secs:.1}s"
     );
 }

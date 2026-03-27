@@ -7,7 +7,7 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::Headers;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{ReadOutcome, SourcePhase, StreamError};
+use kithara_stream::{AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
@@ -77,6 +77,8 @@ pub struct FileSource {
     coord: Arc<FileCoord>,
     res: AssetResource,
     bus: EventBus,
+    /// Codec detected from HTTP Content-Type header.
+    content_type_codec: Option<AudioCodec>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
     _backend: Option<kithara_stream::Backend>,
 }
@@ -88,6 +90,7 @@ impl FileSource {
             coord,
             res,
             bus,
+            content_type_codec: None,
             _backend: None,
         }
     }
@@ -103,8 +106,15 @@ impl FileSource {
             coord,
             res,
             bus,
+            content_type_codec: None,
             _backend: Some(backend),
         }
+    }
+
+    /// Set codec detected from HTTP Content-Type header.
+    pub(crate) fn with_content_type_codec(mut self, codec: Option<AudioCodec>) -> Self {
+        self.content_type_codec = codec;
+        self
     }
 }
 
@@ -233,6 +243,11 @@ impl kithara_stream::Source for FileSource {
 
     fn len(&self) -> Option<u64> {
         self.coord.total_bytes().or_else(|| self.res.len())
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        self.content_type_codec
+            .map(|codec| MediaInfo::new(Some(codec), codec.default_container()))
     }
 
     fn demand_range(&self, range: Range<u64>) {

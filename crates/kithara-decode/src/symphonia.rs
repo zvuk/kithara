@@ -129,9 +129,6 @@ struct SymphoniaInner {
 
 impl SymphoniaInner {
     fn refresh_duration(&mut self) {
-        if self.duration.is_some() {
-            return;
-        }
         let Some(track) = self
             .format_reader
             .tracks()
@@ -140,7 +137,15 @@ impl SymphoniaInner {
         else {
             return;
         };
-        self.duration = Self::calculate_duration(track);
+        let fresh = Self::calculate_duration(track);
+        // Update duration when a new (larger) value becomes available.
+        // Streaming sources may report a short initial estimate based on
+        // buffered data; the format reader corrects it as more data arrives.
+        match (self.duration, fresh) {
+            (None, _) => self.duration = fresh,
+            (Some(old), Some(new)) if new > old => self.duration = Some(new),
+            _ => {}
+        }
     }
 
     /// Create a new inner decoder from a Read + Seek source.
@@ -389,8 +394,19 @@ impl SymphoniaInner {
             .make_audio_decoder(&codec_params, &decoder_opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
-        // Calculate duration if available
-        let duration = Self::calculate_duration(&track);
+        // Calculate duration from track metadata.
+        // Fallback: when num_frames is unavailable, try track.duration field.
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "duration in timebase ticks fits i64"
+        )]
+        let duration = Self::calculate_duration(&track).or_else(|| {
+            let dur = track.duration?;
+            let tb = track.time_base?;
+            let time = tb.calc_time(Timestamp::new(dur.get() as i64))?;
+            let (seconds, nanos) = time.parts();
+            Some(Duration::new(seconds.cast_unsigned(), nanos))
+        });
 
         // Extract metadata (will be populated from format_reader later if available)
         let metadata = TrackMetadata::default();
@@ -705,12 +721,16 @@ impl<R: Seek> ReadSeekAdapter<R> {
     }
 
     fn new_inner(mut inner: R, shared_handle: Option<Arc<AtomicU64>>, seek_enabled: bool) -> Self {
+        let has_shared_value = shared_handle
+            .as_ref()
+            .is_some_and(|h| h.load(Ordering::Acquire) > 0);
         let byte_len = shared_handle.unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
         let seek_enabled = Arc::new(AtomicBool::new(seek_enabled));
-        // Probe the byte length and store it. For shared handles, this
-        // overwrites the factory's value with the probed (adapter-local)
-        // value — both are expected to be identical at construction time.
-        if let Some(len) = Self::probe_byte_len(&mut inner) {
+        // Probe byte length from the source. Skip when a shared handle
+        // already carries a non-zero value (e.g. Content-Length from HTTP) —
+        // streaming sources may have only a fraction downloaded, so
+        // seek(End(0)) would return the buffered size, not the total.
+        if !has_shared_value && let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }
         Self {

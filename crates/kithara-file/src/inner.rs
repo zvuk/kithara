@@ -10,7 +10,7 @@ use kithara_net::HttpClient;
 use kithara_storage::{ResourceExt, ResourceStatus};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_stream::Writer;
-use kithara_stream::{Backend, StreamType, Timeline};
+use kithara_stream::{AudioCodec, Backend, StreamType, Timeline};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -102,7 +102,14 @@ impl File {
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
-        let asset_root = asset_root_for_url(&url, config.name.as_deref());
+        // Include query params in asset root so URLs differing only in query
+        // (e.g. ?id=123 vs ?id=456) get distinct cache directories.
+        let name_or_query = config
+            .name
+            .as_deref()
+            .or_else(|| url.query())
+            .filter(|s| !s.is_empty());
+        let asset_root = asset_root_for_url(&url, name_or_query);
         let net_client = HttpClient::new({
             let mut opts = config.net.clone();
             if let Some(ref bus) = config.bus {
@@ -124,8 +131,18 @@ impl File {
             .or_else(|| byte_stream.headers.get("Content-Length"))
             .and_then(|value| value.parse::<u64>().ok());
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let content_type_codec = byte_stream
+            .headers
+            .get("content-type")
+            .or_else(|| byte_stream.headers.get("Content-Type"))
+            .and_then(AudioCodec::from_mime);
+
         #[cfg(target_arch = "wasm32")]
         let expected_len = None;
+
+        #[cfg(target_arch = "wasm32")]
+        let content_type_codec = None;
 
         let mut backend_builder = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
@@ -205,13 +222,15 @@ impl File {
 
             // Create source with shared state and backend for on-demand loading.
             let source =
-                FileSource::with_backend(state.res().clone(), coord, state.bus().clone(), backend);
+                FileSource::with_backend(state.res().clone(), coord, state.bus().clone(), backend)
+                    .with_content_type_codec(content_type_codec);
 
             return Ok(source);
         }
 
         // Fully cached — create source without backend (no downloader needed).
-        let source = FileSource::new(state.res().clone(), coord, state.bus().clone());
+        let source = FileSource::new(state.res().clone(), coord, state.bus().clone())
+            .with_content_type_codec(content_type_codec);
 
         Ok(source)
     }

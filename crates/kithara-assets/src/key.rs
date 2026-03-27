@@ -42,15 +42,20 @@ impl ResourceKey {
         Self::Absolute(path.into())
     }
 
-    /// Extracts the relative path (last path segment) from a URL.
+    /// Extracts a unique relative key from a URL.
+    ///
+    /// Includes query parameters when present so that URLs differing only
+    /// in query (e.g. `?id=123` vs `?id=456`) produce distinct keys.
     #[must_use]
     pub fn from_url(url: &Url) -> Self {
-        let rel_path = url
+        let segment = url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
             .filter(|s| !s.is_empty())
-            .unwrap_or("index")
-            .to_string();
+            .unwrap_or("index");
+        let rel_path = url
+            .query()
+            .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"));
         Self::Relative(rel_path)
     }
 

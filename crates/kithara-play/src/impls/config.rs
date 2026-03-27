@@ -271,7 +271,13 @@ impl ResourceConfig {
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
-                let h = url.path().rsplit('.').next().map(str::to_lowercase);
+                let h = url
+                    .path()
+                    .rsplit_once('/')
+                    .map_or_else(|| url.path(), |(_, file)| file)
+                    .rsplit_once('.')
+                    .map(|(_, ext)| ext.to_lowercase())
+                    .filter(|ext| !ext.is_empty());
                 (FileSrc::Remote(url), h)
             }
             ResourceSrc::Path(path) => {
@@ -567,5 +573,35 @@ mod tests {
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn file_hint_none_for_url_without_extension() {
+        // URL path has no file extension — hint must be None, not garbage.
+        let config =
+            ResourceConfig::new("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
+        let audio_config = config.into_file_config();
+        assert_eq!(
+            audio_config.hint, None,
+            "URL without file extension must produce hint=None"
+        );
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    #[case("https://example.com/song.mp3", Some("mp3"))]
+    #[case("https://example.com/audio.flac", Some("flac"))]
+    #[case("https://example.com/track/stream", None)]
+    #[case("https://example.com/track/streamhq?id=123", None)]
+    #[case("https://example.com/audio", None)]
+    fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
+        let config = ResourceConfig::new(url).unwrap();
+        let audio_config = config.into_file_config();
+        assert_eq!(
+            audio_config.hint.as_deref(),
+            expected,
+            "hint mismatch for URL: {url}"
+        );
     }
 }
