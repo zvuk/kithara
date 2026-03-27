@@ -200,6 +200,16 @@ impl AudioPlayer {
         self.inner.lock_sync().set_default_rate(rate);
     }
 
+    pub fn set_abr_mode(&self, mode: crate::types::FfiAbrMode) {
+        let abr_mode = match mode {
+            crate::types::FfiAbrMode::Auto => kithara::abr::AbrMode::Auto(None),
+            crate::types::FfiAbrMode::Manual { variant_index } => {
+                kithara::abr::AbrMode::Manual(variant_index as usize)
+            }
+        };
+        self.inner.lock_sync().set_abr_mode(abr_mode);
+    }
+
     pub fn rate(&self) -> f32 {
         self.inner.lock_sync().rate()
     }

@@ -166,6 +166,17 @@ impl ItemEventBridge {
                     variants: ffi_variants,
                 });
             }
+            Event::Hls(HlsEvent::AbrModeChanged {
+                mode: kithara::abr::AbrMode::Manual(idx),
+            }) => {
+                observer.on_event(FfiItemEvent::VariantChanged {
+                    variant: crate::types::FfiVariant {
+                        index: *idx as u32,
+                        bandwidth_bps: 0,
+                        name: None,
+                    },
+                });
+            }
             Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
                 observer.on_event(FfiItemEvent::VariantChanged {
                     variant: crate::types::FfiVariant {

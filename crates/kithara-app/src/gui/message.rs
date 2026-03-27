@@ -27,6 +27,8 @@ pub(crate) enum Message {
     TabSelected(Tab),
     /// A track finished loading asynchronously (index, result).
     TrackLoaded(usize, Result<(), String>),
+    /// Switch ABR mode (None = Auto).
+    SetAbrMode(Option<usize>),
     /// Periodic tick from the subscription (100 ms).
     Tick,
     /// Toggle shuffle mode.

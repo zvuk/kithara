@@ -123,15 +123,29 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::SetAbrMode(variant) => {
+            use kithara::abr::AbrMode;
+            state.abr_mode_is_auto = variant.is_none();
+            state
+                .player
+                .set_abr_mode(variant.map_or(AbrMode::Auto(None), AbrMode::Manual));
+            Task::none()
+        }
+
         Message::Tick => {
             let _ = state.player.tick();
             state.blink_counter = state.blink_counter.wrapping_add(1);
 
-            // Sync variant label from background listener.
+            // Sync variant label and ABR variants from background listener.
             if let Ok(label) = state.shared_variant_label.lock()
                 && *label != state.variant_label
             {
                 state.variant_label.clone_from(&label);
+            }
+            if let Ok(sv) = state.shared_abr_variants.lock()
+                && *sv != state.abr_variants
+            {
+                state.abr_variants.clone_from(&sv);
             }
 
             // Sync playback state.

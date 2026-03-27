@@ -246,6 +246,26 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
         col = col.push(text(&state.variant_label).size(CAPTION_FONT).color(p.muted));
     }
 
+    if !state.abr_variants.is_empty() {
+        let mut abr_row = row![].spacing(COMPACT_SPACING);
+        abr_row = abr_row.push(abr_button(
+            "Auto",
+            state.abr_mode_is_auto,
+            p,
+            Message::SetAbrMode(None),
+        ));
+        for (idx, label) in &state.abr_variants {
+            let active = !state.abr_mode_is_auto;
+            abr_row = abr_row.push(abr_button(
+                label,
+                active,
+                p,
+                Message::SetAbrMode(Some(*idx)),
+            ));
+        }
+        col = col.push(abr_row);
+    }
+
     container(col)
         .width(Length::Fill)
         .padding(SECTION_PADDING)
@@ -901,6 +921,15 @@ fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
             },
         }
     }
+}
+
+fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Element<'a, Message> {
+    let text_color = if active { p.bg } else { p.muted };
+    button(text(label.to_string()).size(CAPTION_FONT).color(text_color))
+        .on_press(msg)
+        .padding(Padding::from([2, 6]))
+        .style(ghost_button_style(p))
+        .into()
 }
 
 fn track_subtitle(state: &Kithara) -> String {

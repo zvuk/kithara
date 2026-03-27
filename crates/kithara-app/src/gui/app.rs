@@ -53,6 +53,9 @@ pub(crate) struct Kithara {
     pub(crate) track_name: String,
     pub(crate) variant_label: String,
     pub(crate) shared_variant_label: Arc<Mutex<String>>,
+    pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
+    pub(crate) abr_variants: Vec<(usize, String)>,
+    pub(crate) abr_mode_is_auto: bool,
 
     // UI state.
     pub(crate) active_tab: Tab,
@@ -94,6 +97,9 @@ impl Kithara {
             track_name: String::new(),
             variant_label: String::new(),
             shared_variant_label: Arc::new(Mutex::new(String::new())),
+            shared_abr_variants: Arc::new(Mutex::new(Vec::new())),
+            abr_variants: Vec::new(),
+            abr_mode_is_auto: true,
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
             repeat_enabled: false,
@@ -149,6 +155,7 @@ impl Kithara {
         let params = self.load_params.clone();
         let player = Arc::clone(&self.player);
         let variant_label = Arc::clone(&self.shared_variant_label);
+        let shared_variants = Arc::clone(&self.shared_abr_variants);
         Task::perform(
             async move {
                 let config = params.build_config(index).map_err(|e| format!("{e}"))?;
@@ -174,6 +181,21 @@ impl Kithara {
                                     let text = variant_display_label(&variants, *initial_variant);
                                     if let Ok(mut l) = variant_label.lock() {
                                         *l = text;
+                                    }
+                                    let gui_variants: Vec<(usize, String)> = variants
+                                        .iter()
+                                        .map(|vi| {
+                                            let label = vi.name.clone().unwrap_or_else(|| {
+                                                vi.bandwidth_bps.map_or_else(
+                                                    || format!("v{}", vi.index),
+                                                    |b| format!("{}k", b / 1000),
+                                                )
+                                            });
+                                            (vi.index, label)
+                                        })
+                                        .collect();
+                                    if let Ok(mut sv) = shared_variants.lock() {
+                                        *sv = gui_variants;
                                     }
                                 }
                                 Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
