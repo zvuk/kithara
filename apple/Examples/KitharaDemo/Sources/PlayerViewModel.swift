@@ -48,25 +48,32 @@ final class PlayerViewModel: ObservableObject {
                 case let .timeChanged(seconds):
                     if !self.isSeeking { self.currentTime = seconds }
                 case let .rateChanged(rate):
+                    print("[KitharaDemo] player rateChanged: \(rate)")
                     self.isPlaying = rate > 0
                 case let .statusChanged(ffiStatus):
+                    print("[KitharaDemo] player statusChanged: \(ffiStatus)")
                     if self.errorMessage == nil {
                         self.status = PlayerStatus(ffi: ffiStatus)
                     }
                 case let .durationChanged(seconds):
+                    print("[KitharaDemo] player durationChanged: \(seconds)s")
                     self.duration = seconds
                 case let .error(message):
+                    print("[KitharaDemo] player error: \(message)")
                     self.errorMessage = message
                     self.status = .failed
                 case .currentItemChanged:
-                    break
+                    print("[KitharaDemo] player currentItemChanged")
                 case let .volumeChanged(vol):
                     self.volume = vol
                 case let .muteChanged(muted):
                     self.isMuted = muted
                 case .itemDidPlayToEnd:
+                    print("[KitharaDemo] player itemDidPlayToEnd (time=\(self.currentTime), duration=\(String(describing: self.duration)))")
                     self.playNext(afterPlaybackEnded: true)
-                case .timeControlStatusChanged, .bufferedDurationChanged:
+                case let .bufferedDurationChanged(seconds):
+                    print("[KitharaDemo] player buffered: \(seconds)s")
+                case .timeControlStatusChanged:
                     break
                 }
             }
@@ -243,12 +250,19 @@ final class PlayerViewModel: ObservableObject {
         itemCancellable = item.eventPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
-                if case let .error(message) = event {
+                switch event {
+                case let .error(message):
+                    print("[KitharaDemo] item error: \(message)")
                     self?.errorMessage = message
                     self?.status = .failed
+                case let .durationChanged(seconds):
+                    print("[KitharaDemo] duration: \(seconds)s")
+                default:
+                    break
                 }
             }
 
+        print("[KitharaDemo] loading: \(track.url)")
         item.load()
 
         do {
@@ -257,6 +271,7 @@ final class PlayerViewModel: ObservableObject {
             currentTrackId = track.id
             player.play()
         } catch {
+            print("[KitharaDemo] insert error: \(error)")
             errorMessage = "\(error)"
             status = .failed
         }

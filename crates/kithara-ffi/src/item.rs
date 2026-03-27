@@ -335,4 +335,30 @@ mod tests {
         let config = item.build_resource_config();
         assert!(config.is_ok());
     }
+
+    #[kithara::test(tokio, timeout(std::time::Duration::from_secs(30)))]
+    #[ignore = "requires internet; zvuk URLs require corporate VPN"]
+    #[case::silvercomet("https://stream.silvercomet.top/track.mp3")]
+    #[case::zvuk("https://cdn-edge.zvq.me/track/streamhq?id=151585912")]
+    async fn ffi_item_load_produces_resource_with_duration(#[case] url: &str) {
+        let item = AudioPlayerItem::new(url.into(), None);
+        item.clone().load();
+        item.wait_for_load().await;
+
+        let resource = item.take_resource();
+        assert!(
+            resource.is_ok(),
+            "{url}: take_resource failed: {:?}",
+            resource.err()
+        );
+        let resource = resource.expect("checked");
+        let duration = resource.duration();
+        eprintln!("{url}: duration={duration:?}");
+        assert!(
+            duration.is_some(),
+            "{url}: duration must be reported (got None)"
+        );
+        let dur_secs = duration.expect("checked").as_secs_f64();
+        assert!(dur_secs > 30.0, "{url}: expected >30s, got {dur_secs:.1}s");
+    }
 }

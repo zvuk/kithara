@@ -8,8 +8,7 @@ options:
 
 packages:
   Kithara:
-    url: https://github.com/zvuk/kithara
-    from: "0.0.1"
+    path: ../../../
 
 targets:
   KitharaDemo:
