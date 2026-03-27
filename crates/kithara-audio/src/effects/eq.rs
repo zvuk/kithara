@@ -48,7 +48,7 @@ const MIN_GAIN_DB: f32 = -24.0;
 const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.001;
 
 /// Lowest frequency for log-spaced EQ bands (Hz).
-const BAND_MIN_FREQ: f32 = 30.0;
+const BAND_MIN_FREQ: f32 = 60.0;
 
 /// Highest frequency for log-spaced EQ bands (Hz).
 const BAND_MAX_FREQ: f32 = 18000.0;
@@ -88,7 +88,7 @@ pub struct EqBandConfig {
     pub kind: FilterKind,
 }
 
-/// Generate logarithmically-spaced EQ bands from 30 Hz to 18 kHz.
+/// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.
 ///
 /// First band is `LowShelf`, last band is `HighShelf`, interior bands are `Peaking`.
 /// Q factor is scaled by `1.4 * sqrt(count / 10)` to provide narrower bands
@@ -402,11 +402,11 @@ mod tests {
         match count {
             0 => assert!(bands.is_empty()),
             1 => {
-                let expected = (30.0f32 * 18000.0).sqrt();
+                let expected = (BAND_MIN_FREQ * BAND_MAX_FREQ).sqrt();
                 assert!((bands[0].frequency - expected).abs() < 1.0);
             }
             10 => {
-                assert!((bands[0].frequency - 30.0).abs() < 1.0);
+                assert!((bands[0].frequency - BAND_MIN_FREQ).abs() < 1.0);
                 assert!((bands[9].frequency - 18000.0).abs() < 1.0);
                 for pair in bands.windows(2) {
                     assert!(pair[1].frequency > pair[0].frequency);
