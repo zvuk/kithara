@@ -13,6 +13,16 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;
 
+/// Cap error messages to avoid dumping binary data into logs.
+fn truncate_error(msg: &str) -> String {
+    const MAX_LEN: usize = 200;
+    if msg.len() <= MAX_LEN {
+        return msg.to_string();
+    }
+    let truncated = &msg[..msg.floor_char_boundary(MAX_LEN)];
+    format!("{truncated}… ({} bytes total)", msg.len())
+}
+
 /// AES initialization vector length in bytes.
 const IV_LEN: usize = 16;
 
@@ -156,7 +166,7 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
     let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
     let hls_master = HlsMasterPlaylist::try_from(input)
-        .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
+        .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
         .into_owned();
 
     let variants = hls_master
@@ -239,7 +249,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
 
     let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
     let hls_media = HlsMediaPlaylist::try_from(input)
-        .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
+        .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
         .into_owned();
 
     // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
