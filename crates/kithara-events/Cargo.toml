@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 dashmap = { workspace = true }
+delegate = { workspace = true }
 derivative = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }

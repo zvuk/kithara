@@ -3984,6 +3984,7 @@ name = "kithara-events"
 version = "0.1.0"
 dependencies = [
  "dashmap",
+ "delegate",
  "derivative",
  "kithara-abr",
  "kithara-decode",

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use delegate::delegate;
 use kithara_platform::tokio::sync::broadcast;
 
 use crate::Event;
@@ -18,25 +19,25 @@ impl EventReceiver {
         Self { rx }
     }
 
-    /// Receive the next event in this scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RecvError::Lagged(n)` if this receiver fell behind, or
-    /// `RecvError::Closed` if the bus was dropped.
-    pub async fn recv(&mut self) -> Result<Event, broadcast::error::RecvError> {
-        self.rx.recv().await
-    }
+    delegate! {
+        to self.rx {
+            /// Receive the next event in this scope.
+            ///
+            /// # Errors
+            ///
+            /// Returns `RecvError::Lagged(n)` if this receiver fell behind, or
+            /// `RecvError::Closed` if the bus was dropped.
+            pub async fn recv(&mut self) -> Result<Event, broadcast::error::RecvError>;
 
-    /// Try to receive the next event in this scope without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TryRecvError::Empty` when no event is available,
-    /// `TryRecvError::Lagged(n)` if this receiver fell behind, or
-    /// `TryRecvError::Closed` if the bus was dropped.
-    pub fn try_recv(&mut self) -> Result<Event, broadcast::error::TryRecvError> {
-        self.rx.try_recv()
+            /// Try to receive the next event without blocking.
+            ///
+            /// # Errors
+            ///
+            /// Returns `TryRecvError::Empty` when no event is available,
+            /// `TryRecvError::Lagged(n)` if fell behind, or
+            /// `TryRecvError::Closed` if the bus was dropped.
+            pub fn try_recv(&mut self) -> Result<Event, broadcast::error::TryRecvError>;
+        }
     }
 }
 
