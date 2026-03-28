@@ -626,11 +626,26 @@ impl HlsDownloader {
                 // Init only for the first segment. Do NOT set init_url for
                 // later segments — a re-download with need_init=true would
                 // inject init data mid-stream, corrupting the decoder.
-                let (actual_init_len, seg_init_url) = if count == 0 {
+                let (mut actual_init_len, mut seg_init_url) = if count == 0 {
                     (init_len, init_url.clone())
                 } else {
                     (0, None)
                 };
+
+                // Preserve init_len from an existing entry — a midstream
+                // ABR switch may have committed this segment with init data
+                // at a non-zero index.
+                {
+                    let segs = segments.lock_sync();
+                    if let Some(existing) = segs.stored_segment(variant, index) {
+                        if existing.init_len > actual_init_len {
+                            actual_init_len = existing.init_len;
+                        }
+                        if actual_init_len > 0 && seg_init_url.is_none() {
+                            seg_init_url = existing.init_url.clone();
+                        }
+                    }
+                }
 
                 let data = SegmentData {
                     init_len: actual_init_len,
