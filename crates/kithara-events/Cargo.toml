@@ -11,6 +11,7 @@ description = "Unified event bus for kithara audio pipeline"
 workspace = true
 
 [dependencies]
+dashmap = { workspace = true }
 derivative = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }

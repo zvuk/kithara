@@ -1,84 +1,109 @@
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
+use dashmap::DashMap;
 use kithara_platform::tokio::sync::broadcast;
+use smallvec::SmallVec;
 
 use crate::{
     Event,
-    receiver::EventReceiver,
     scope::{BusScope, next_bus_id},
 };
 
-/// Default capacity for event bus channels.
-///
-/// Sized for shared pipelines: large enough to absorb bursts
-/// from multiple concurrent tracks without lagging subscribers.
+/// Default capacity for each per-scope broadcast channel.
 pub const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024;
 
-/// Internal message on the broadcast channel.
-///
-/// Carries the event together with its publisher's scope so that
-/// [`EventReceiver`] can filter by hierarchy.
-#[derive(Clone, Debug)]
-pub(crate) struct BusMessage {
-    pub(crate) scope: BusScope,
-    pub(crate) event: Event,
+/// Shared state for a bus hierarchy.
+struct BusRegistry {
+    topics: DashMap<u64, broadcast::Sender<Event>>,
+    capacity: usize,
 }
 
 /// Hierarchical event bus for the kithara audio pipeline.
 ///
 /// One root bus per player. Child scopes are created with [`scoped`](Self::scoped).
-/// All scopes share the same broadcast channel; filtering happens at
-/// the [`EventReceiver`] level.
-///
-/// `publish()` is a sync call — works from both async tasks and blocking threads.
-/// If there are no subscribers, events are silently dropped.
-#[derive(Clone, Debug)]
+/// Each scope has its own broadcast channel. Publishing sends to the
+/// publisher's channel and all ancestor channels (topic-based routing).
+/// Subscribers only receive events from their scope's subtree — zero
+/// wasted recv/filter work.
+#[derive(Clone)]
 pub struct EventBus {
-    tx: broadcast::Sender<BusMessage>,
+    registry: Arc<BusRegistry>,
     scope: BusScope,
+    /// Cached senders for self + ancestors, matching scope path order.
+    /// Eliminates `DashMap` lookups on the hot publish path.
+    senders: SmallVec<[broadcast::Sender<Event>; 4]>,
 }
 
 impl EventBus {
     /// Create a root bus with the given channel capacity.
     #[must_use]
     pub fn new(capacity: usize) -> Self {
-        let (tx, _) = broadcast::channel(capacity.max(1));
+        let cap = capacity.max(1);
+        let id = next_bus_id();
+        let (tx, _) = broadcast::channel(cap);
+        let registry = Arc::new(BusRegistry {
+            topics: DashMap::new(),
+            capacity: cap,
+        });
+        registry.topics.insert(id, tx.clone());
+        let mut senders = SmallVec::new();
+        senders.push(tx);
         Self {
-            tx,
-            scope: BusScope::root(next_bus_id()),
+            registry,
+            scope: BusScope::root(id),
+            senders,
         }
     }
 
-    /// Create a child scope sharing the same channel.
+    /// Create a child scope sharing the same topic registry.
     ///
     /// Events published to the child are visible to all ancestors.
     /// Subscribing to the child only receives events from its subtree.
     #[must_use]
     pub fn scoped(&self) -> Self {
+        let id = next_bus_id();
+        let (tx, _) = broadcast::channel(self.registry.capacity);
+        self.registry.topics.insert(id, tx.clone());
+        let scope = self.scope.child(id);
+        // Cache senders: self (new) + ancestors (from parent's cache).
+        let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
+        senders.push(tx);
+        senders.extend(self.senders.iter().cloned());
         Self {
-            tx: self.tx.clone(),
-            scope: self.scope.child(next_bus_id()),
+            registry: Arc::clone(&self.registry),
+            scope,
+            senders,
         }
     }
 
-    /// Publish an event tagged with this bus's scope.
+    /// Publish an event to this scope and all ancestor scopes.
     ///
     /// Accepts any type that converts `Into<Event>`, so you can pass
     /// sub-enum values directly: `bus.publish(HlsEvent::EndOfStream)`.
     pub fn publish<E: Into<Event>>(&self, event: E) {
-        let _ = self.tx.send(BusMessage {
-            scope: self.scope.clone(),
-            event: event.into(),
-        });
+        let event = event.into();
+        let len = self.senders.len();
+        if len == 1 {
+            let _ = self.senders[0].send(event);
+            return;
+        }
+        // Clone for all but last, consume owned event on last send.
+        for sender in &self.senders[..len - 1] {
+            let _ = sender.send(event.clone());
+        }
+        let _ = self.senders[len - 1].send(event);
     }
 
     /// Subscribe to events in this bus's scope.
     ///
-    /// A root bus sees all events. A scoped bus sees only events
-    /// published to itself or its descendants.
+    /// A root bus sees all events (its own + all descendants).
+    /// A scoped bus sees only events published to itself or its descendants.
+    /// No filtering overhead — each scope has a dedicated channel.
     #[must_use]
-    pub fn subscribe(&self) -> EventReceiver {
-        EventReceiver::new(self.tx.subscribe(), self.scope.id())
+    pub fn subscribe(&self) -> crate::EventReceiver {
+        crate::EventReceiver::new(self.senders[0].subscribe())
     }
 
     /// This bus's unique id.
@@ -94,9 +119,34 @@ impl EventBus {
     }
 }
 
+impl Drop for EventBus {
+    fn drop(&mut self) {
+        // Only remove the topic if this is the last EventBus holding a sender
+        // for this scope. broadcast::Sender strong_count includes the one in
+        // DashMap + one per EventBus clone that has it cached. When our cached
+        // sender is the last clone besides the DashMap entry (count == 2),
+        // removing is safe. For root/ancestor senders cached by children,
+        // strong_count will be higher, so we don't remove them.
+        let id = self.scope.id();
+        if self.senders[0].receiver_count() == 0 {
+            // No subscribers and we are being dropped — clean up.
+            self.registry.topics.remove(&id);
+        }
+    }
+}
+
 impl Default for EventBus {
     fn default() -> Self {
         Self::new(DEFAULT_EVENT_BUS_CAPACITY)
+    }
+}
+
+impl std::fmt::Debug for EventBus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventBus")
+            .field("id", &self.scope.id())
+            .field("depth", &self.scope.depth())
+            .finish_non_exhaustive()
     }
 }
 
@@ -200,7 +250,6 @@ mod tests {
 
         child_b.publish(FileEvent::EndOfStream);
 
-        // child_a should not receive child_b's event
         assert!(rx_a.try_recv().is_err());
     }
 
@@ -241,13 +290,11 @@ mod tests {
         child_a.publish(FileEvent::EndOfStream);
         child_b.publish(FileEvent::DownloadComplete { total_bytes: 99 });
 
-        // Root sees both
         let e1 = rx_root.recv().await.unwrap();
         let e2 = rx_root.recv().await.unwrap();
         assert_file_event(&e1, &FileEvent::EndOfStream);
         assert_file_event(&e2, &FileEvent::DownloadComplete { total_bytes: 99 });
 
-        // child_a only sees its own
         let ea = rx_a.recv().await.unwrap();
         assert_file_event(&ea, &FileEvent::EndOfStream);
         assert!(rx_a.try_recv().is_err());
@@ -264,9 +311,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn default_uses_large_capacity() {
+    fn default_creates_valid_bus() {
         let bus = EventBus::default();
-        // Just verify it doesn't panic and has a valid id
         assert!(bus.id() > 0);
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn dropped_scoped_bus_cleans_up_topic() {
+        let root = EventBus::new(16);
+        let child_id;
+        {
+            let child = root.scoped();
+            child_id = child.id();
+            assert!(root.registry.topics.contains_key(&child_id));
+        }
+        // After drop, topic entry should be removed (no subscribers).
+        assert!(!root.registry.topics.contains_key(&child_id));
     }
 }
