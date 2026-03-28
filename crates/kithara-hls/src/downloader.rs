@@ -24,7 +24,7 @@ use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
     fetch::{DefaultFetchManager, Loader, SegmentMeta},
-    ids::{SegmentIndex, VariantIndex},
+    ids::{SegmentId, SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
     stream_index::{SegmentData, StreamIndex},
 };
@@ -73,8 +73,11 @@ fn classify_layout_transition(
     (is_variant_switch, is_midstream_switch)
 }
 
-fn should_request_init(is_variant_switch: bool, segment_index: SegmentIndex) -> bool {
-    is_variant_switch || segment_index == 0
+fn should_request_init(is_variant_switch: bool, segment: SegmentId) -> bool {
+    match segment {
+        SegmentId::Init | SegmentId::Media(0) => true,
+        SegmentId::Media(_) => is_variant_switch,
+    }
 }
 
 /// Pure I/O executor for HLS segment fetching.
@@ -92,7 +95,7 @@ impl HlsIo {
 /// Plan for downloading a single HLS segment.
 pub(crate) struct HlsPlan {
     pub(crate) variant: VariantIndex,
-    pub(crate) segment_index: SegmentIndex,
+    pub(crate) segment: SegmentId,
     pub(crate) need_init: bool,
     pub(crate) seek_epoch: SeekEpoch,
 }
@@ -103,7 +106,7 @@ pub(crate) struct HlsFetch {
     pub(crate) init_url: Option<Url>,
     pub(crate) media: SegmentMeta,
     pub(crate) media_cached: bool,
-    pub(crate) segment_index: SegmentIndex,
+    pub(crate) segment: SegmentId,
     pub(crate) variant: VariantIndex,
     pub(crate) duration: Duration,
     pub(crate) seek_epoch: SeekEpoch,
@@ -139,10 +142,15 @@ impl DownloaderIo for HlsIo {
                 }
             };
 
+            let seg_idx = plan
+                .segment
+                .media_index()
+                .expect("HlsIo::fetch called with non-Media segment");
+
             let (media_result, (init_url, init_len)) = tokio::join!(
                 self.fetch.load_media_segment_with_source_for_epoch(
                     plan.variant,
-                    plan.segment_index,
+                    seg_idx,
                     plan.seek_epoch,
                 ),
                 init_fut,
@@ -156,7 +164,7 @@ impl DownloaderIo for HlsIo {
                 init_url,
                 media,
                 media_cached,
-                segment_index: plan.segment_index,
+                segment: plan.segment,
                 variant: plan.variant,
                 duration,
                 seek_epoch: plan.seek_epoch,
@@ -276,9 +284,10 @@ impl HlsDownloader {
             return false;
         }
 
+        let seg_idx = fetch.segment.media_index().unwrap_or(0);
         let fetch_offset = self
             .playlist_state
-            .segment_byte_offset(fetch.variant, fetch.segment_index)
+            .segment_byte_offset(fetch.variant, seg_idx)
             .unwrap_or_else(|| self.coord.timeline().download_position());
 
         fetch_offset >= anchor_offset
@@ -660,11 +669,13 @@ impl HlsDownloader {
         _is_variant_switch: bool,
         _is_midstream_switch: bool,
     ) {
+        let seg_idx = dl.segment.media_index().unwrap_or(0);
+
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
         self.bus.publish(HlsEvent::SegmentComplete {
             variant: dl.variant,
-            segment_index: dl.segment_index,
+            segment_index: seg_idx,
             bytes_transferred: dl.media.len,
             cached: dl.media_cached,
             duration: dl.duration,
@@ -678,7 +689,7 @@ impl HlsDownloader {
         let actual_init_len = if fresh_init_len == 0 {
             let segments = self.segments.lock_sync();
             segments
-                .stored_segment(dl.variant, dl.segment_index)
+                .stored_segment(dl.variant, seg_idx)
                 .map_or(0, |existing| existing.init_len)
         } else {
             fresh_init_len
@@ -691,7 +702,7 @@ impl HlsDownloader {
             dl.init_url.or_else(|| {
                 let segments = self.segments.lock_sync();
                 segments
-                    .stored_segment(dl.variant, dl.segment_index)
+                    .stored_segment(dl.variant, seg_idx)
                     .and_then(|existing| existing.init_url.clone())
             })
         } else {
@@ -707,7 +718,7 @@ impl HlsDownloader {
 
         self.segments
             .lock_sync()
-            .commit_segment(dl.variant, dl.segment_index, data);
+            .commit_segment(dl.variant, seg_idx, data);
 
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
@@ -715,7 +726,7 @@ impl HlsDownloader {
         self.coord.timeline().set_download_position(next_download);
 
         self.playlist_state
-            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
+            .reconcile_segment_size(dl.variant, seg_idx, actual_size);
 
         // Sync reconciled sizes back to StreamIndex expected_sizes so that
         // byte offsets for uncommitted segments stay accurate after DRM decrypt.
@@ -1049,7 +1060,7 @@ impl HlsDownloader {
             && (self.force_init_for_seek
                 || should_request_init(
                     self.switch_needs_init(req.variant, req.segment_index, is_variant_switch),
-                    req.segment_index,
+                    SegmentId::Media(req.segment_index),
                 )
                 || self.demand_init_evicted(req.variant, req.segment_index));
         if need_init {
@@ -1058,7 +1069,7 @@ impl HlsDownloader {
 
         HlsPlan {
             variant: req.variant,
-            segment_index: req.segment_index,
+            segment: SegmentId::Media(req.segment_index),
             need_init,
             seek_epoch: req.seek_epoch,
         }
@@ -1297,10 +1308,11 @@ impl HlsDownloader {
                 byte_offset: self.coord.timeline().download_position(),
             });
 
-            let plan_need_init = has_init && should_request_init(need_init, seg_idx);
+            let segment = SegmentId::Media(seg_idx);
+            let plan_need_init = has_init && should_request_init(need_init, segment);
             plans.push(HlsPlan {
                 variant,
-                segment_index: seg_idx,
+                segment,
                 need_init: plan_need_init,
                 seek_epoch,
             });
@@ -1311,8 +1323,12 @@ impl HlsDownloader {
         }
 
         if !plans.is_empty() && plans.len() <= MAX_LOG_PLANS {
-            let first = plans.first().map_or(0, |plan| plan.segment_index);
-            let last = plans.last().map_or(0, |plan| plan.segment_index);
+            let first = plans
+                .first()
+                .map_or(0, |p| p.segment.media_index().unwrap_or(0));
+            let last = plans
+                .last()
+                .map_or(0, |p| p.segment.media_index().unwrap_or(0));
             debug!(
                 variant,
                 current_segment_index = self.current_segment_index(),
@@ -1453,22 +1469,24 @@ impl Downloader for HlsDownloader {
 
     fn commit(&mut self, fetch: HlsFetch) {
         let current_epoch = self.coord.timeline().seek_epoch();
+        let seg_idx = fetch.segment.media_index().unwrap_or(0);
+
         if is_stale_epoch(fetch.seek_epoch, current_epoch) {
             trace!(
                 fetch_epoch = fetch.seek_epoch,
                 current_epoch,
                 variant = fetch.variant,
-                segment_index = fetch.segment_index,
+                segment_index = seg_idx,
                 "dropping stale fetch before commit"
             );
             self.bus.publish(HlsEvent::StaleFetchDropped {
                 seek_epoch: fetch.seek_epoch,
                 current_epoch,
                 variant: fetch.variant,
-                segment_index: fetch.segment_index,
+                segment_index: seg_idx,
             });
             self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: fetch.segment_index,
+                segment_index: seg_idx,
                 variant: fetch.variant,
                 seek_epoch: fetch.seek_epoch,
             });
@@ -1479,12 +1497,12 @@ impl Downloader for HlsDownloader {
         if self.is_stale_cross_codec_fetch(&fetch) {
             debug!(
                 variant = fetch.variant,
-                segment_index = fetch.segment_index,
+                segment_index = seg_idx,
                 current_variant = self.abr.get_current_variant_index(),
                 "dropping stale cross-codec fetch after switched anchor"
             );
             self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: fetch.segment_index,
+                segment_index: seg_idx,
                 variant: fetch.variant,
                 seek_epoch: fetch.seek_epoch,
             });
@@ -1492,15 +1510,15 @@ impl Downloader for HlsDownloader {
             return;
         }
 
-        if self.is_below_switch_floor(fetch.variant, fetch.segment_index) {
+        if self.is_below_switch_floor(fetch.variant, seg_idx) {
             debug!(
                 variant = fetch.variant,
-                segment_index = fetch.segment_index,
+                segment_index = seg_idx,
                 floor = self.gap_scan_start_segment(),
                 "dropping fetch below switched-layout floor"
             );
             self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: fetch.segment_index,
+                segment_index: seg_idx,
                 variant: fetch.variant,
                 seek_epoch: fetch.seek_epoch,
             });
@@ -1509,7 +1527,7 @@ impl Downloader for HlsDownloader {
         }
 
         let (is_variant_switch, is_midstream_switch) =
-            self.classify_variant_transition(fetch.variant, fetch.segment_index);
+            self.classify_variant_transition(fetch.variant, seg_idx);
 
         if fetch.init_len > 0 {
             self.sent_init_for_variant.insert(fetch.variant);
@@ -1518,21 +1536,21 @@ impl Downloader for HlsDownloader {
         // Only advance sequential position for the next expected segment.
         // On-demand loads and out-of-order batch results must not jump past gaps --
         // plan() handles skipping loaded segments when building the next batch.
-        if fetch.segment_index == self.current_segment_index() {
-            self.advance_current_segment_index(fetch.segment_index + 1);
+        if seg_idx == self.current_segment_index() {
+            self.advance_current_segment_index(seg_idx + 1);
         }
 
-        if fetch.segment_index <= VERBOSE_SEGMENT_LIMIT {
+        if seg_idx <= VERBOSE_SEGMENT_LIMIT {
             debug!(
                 variant = fetch.variant,
-                segment_index = fetch.segment_index,
+                segment_index = seg_idx,
                 current_segment_index = self.current_segment_index(),
                 "committing fetch"
             );
         }
 
         self.coord.clear_pending_segment_request(SegmentRequest {
-            segment_index: fetch.segment_index,
+            segment_index: seg_idx,
             variant: fetch.variant,
             seek_epoch: fetch.seek_epoch,
         });
@@ -1622,6 +1640,7 @@ mod tests {
         config::HlsConfig,
         coord::SegmentRequest,
         fetch::{DefaultFetchManager, FetchManager, SegmentMeta},
+        ids::SegmentId,
         parsing::{VariantId, VariantStream},
         playlist::{PlaylistAccess, PlaylistState, SegmentState, VariantSizeMap, VariantState},
         source::build_pair,
@@ -2453,7 +2472,7 @@ mod tests {
         };
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].variant, 0);
-        assert_eq!(plans[0].segment_index, 0);
+        assert_eq!(plans[0].segment, SegmentId::Media(0));
         assert!(
             !plans[0].need_init,
             "single-segment init-less playlist must not request synthetic init"
@@ -2498,7 +2517,7 @@ mod tests {
                 container: None,
             },
             media_cached: false,
-            segment_index: 0,
+            segment: SegmentId::Media(0),
             variant: 0,
             duration: Duration::from_millis(10),
             seek_epoch: 0,
@@ -2871,8 +2890,8 @@ mod tests {
             downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
 
         assert_eq!(
-            plans.first().map(|plan| plan.segment_index),
-            Some(2),
+            plans.first().map(|p| p.segment),
+            Some(SegmentId::Media(2)),
             "seek batch must start from the requested segment"
         );
         assert!(
@@ -2910,8 +2929,8 @@ mod tests {
             downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
 
         assert_eq!(
-            plans.first().map(|plan| plan.segment_index),
-            Some(0),
+            plans.first().map(|p| p.segment),
+            Some(SegmentId::Media(0)),
             "initial batch must start from segment zero"
         );
         assert!(
@@ -3007,7 +3026,7 @@ mod tests {
             1,
             "active seek epoch must not launch multiple parallel prefetches"
         );
-        assert_eq!(plans[0].segment_index, 12);
+        assert_eq!(plans[0].segment, SegmentId::Media(12));
         assert_eq!(batch_end, 13);
     }
 
@@ -3131,7 +3150,7 @@ mod tests {
                 container: None,
             },
             media_cached: false,
-            segment_index: 3,
+            segment: SegmentId::Media(3),
             variant: 1,
             duration: Duration::from_millis(1),
             seek_epoch,
@@ -3434,14 +3453,14 @@ mod tests {
 
     #[kithara::test]
     fn should_request_init_for_segment_zero_even_when_variant_is_known() {
-        assert!(should_request_init(false, 0));
-        assert!(!should_request_init(false, 1));
+        assert!(should_request_init(false, SegmentId::Media(0)));
+        assert!(!should_request_init(false, SegmentId::Media(1)));
     }
 
     #[kithara::test]
     fn should_request_init_only_for_segment_zero_or_variant_switch() {
-        assert!(!should_request_init(false, 5));
-        assert!(should_request_init(true, 5));
+        assert!(!should_request_init(false, SegmentId::Media(5)));
+        assert!(should_request_init(true, SegmentId::Media(5)));
     }
 
     #[kithara::test(tokio)]
@@ -3533,7 +3552,7 @@ mod tests {
                 container: None,
             },
             media_cached: false,
-            segment_index: 2,
+            segment: SegmentId::Media(2),
             variant: 0,
             duration: Duration::from_millis(1),
             seek_epoch: 0,
@@ -3639,7 +3658,7 @@ mod tests {
                 container: None,
             },
             media_cached: false,
-            segment_index: 3,
+            segment: SegmentId::Media(3),
             variant: 1,
             duration: Duration::from_millis(1),
             seek_epoch: 0,
@@ -3757,7 +3776,7 @@ mod tests {
                 container: None,
             },
             media_cached: false,
-            segment_index: 0,
+            segment: SegmentId::Media(0),
             variant: 1,
             duration: Duration::from_millis(1),
             seek_epoch: 0,
