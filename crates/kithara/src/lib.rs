@@ -112,7 +112,7 @@ pub mod prelude {
     // Events
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;
-    pub use kithara_events::{AudioEvent, Event, EventBus, FileEvent};
+    pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
     // File (optional)
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};

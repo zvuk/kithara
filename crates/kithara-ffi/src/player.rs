@@ -124,9 +124,10 @@ impl AudioPlayer {
 
         let ffi_pos = after_ffi_index.map_or(queue.len(), |i| i + 1);
 
-        // Inject shared worker, runtime, and key options.
+        // Inject shared bus, worker, runtime, and key options.
         {
             let player = self.inner.lock_sync();
+            *item.bus.lock_sync() = Some(player.bus().scoped());
             *item.worker.lock_sync() = Some(player.worker().clone());
             *item.runtime.lock_sync() = player.runtime().cloned();
         }

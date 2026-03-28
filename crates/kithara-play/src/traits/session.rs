@@ -1,3 +1,4 @@
+pub use kithara_events::{PortDescription, PortType, RouteDescription};
 use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::error::PlayError;
@@ -36,36 +37,6 @@ pub struct SessionOptions {
     pub allow_bluetooth_a2dp: bool,
     pub allow_air_play: bool,
     pub default_to_speaker: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PortType {
-    BuiltInSpeaker,
-    BuiltInReceiver,
-    Headphones,
-    BluetoothA2dp,
-    BluetoothHfp,
-    BluetoothLe,
-    UsbAudio,
-    Hdmi,
-    AirPlay,
-    LineOut,
-    CarAudio,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct PortDescription {
-    pub port_type: PortType,
-    pub name: String,
-    pub uid: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-#[non_exhaustive]
-pub struct RouteDescription {
-    pub outputs: Vec<PortDescription>,
 }
 
 #[cfg_attr(

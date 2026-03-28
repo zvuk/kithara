@@ -6,7 +6,6 @@ use std::{
 use iced::{Subscription, Task, Theme, time as iced_time};
 use kithara::{
     events::EventBus,
-    play::Engine,
     prelude::{Event, HlsEvent, PlayerImpl, Resource},
 };
 use tokio::sync::broadcast::error::RecvError;
@@ -239,22 +238,14 @@ fn variant_display_label(variants: &[kithara::abr::VariantInfo], index: usize) -
 ///
 /// Must be called from within a tokio runtime (iced provides one).
 fn start_event_logging(player: &Arc<PlayerImpl>) {
-    let mut player_rx = player.subscribe();
-    let mut engine_rx = player.engine().subscribe();
+    let mut rx = player.subscribe();
 
     tokio::spawn(async move {
         loop {
-            tokio::select! {
-                result = player_rx.recv() => match result {
-                    Ok(event) => info!("[player] {event:?}"),
-                    Err(RecvError::Lagged(n)) => info!("[player] events lagged: {n}"),
-                    Err(RecvError::Closed) => break,
-                },
-                result = engine_rx.recv() => match result {
-                    Ok(event) => info!("[engine] {event:?}"),
-                    Err(RecvError::Lagged(n)) => info!("[engine] events lagged: {n}"),
-                    Err(RecvError::Closed) => break,
-                },
+            match rx.recv().await {
+                Ok(event) => info!("{event:?}"),
+                Err(RecvError::Lagged(n)) => info!("events lagged: {n}"),
+                Err(RecvError::Closed) => break,
             }
         }
     });

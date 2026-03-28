@@ -9,6 +9,7 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara::play::{PlayerEvent, PlayerImpl};
+use kithara_events::{Event, EventReceiver};
 use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -30,7 +31,7 @@ impl EventBridge {
     /// Spawn background tasks that translate player events into observer
     /// callbacks. Returns a bridge handle; dropping it cancels the tasks.
     pub(crate) fn spawn(
-        rx: broadcast::Receiver<PlayerEvent>,
+        rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
         player: Arc<Mutex<PlayerImpl>>,
         queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
@@ -50,9 +51,9 @@ impl EventBridge {
         }
     }
 
-    /// Task that listens to `PlayerEvent` broadcast channel.
+    /// Task that listens for player events on the shared `EventBus`.
     fn spawn_event_task(
-        mut rx: broadcast::Receiver<PlayerEvent>,
+        mut rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
         player: Arc<Mutex<PlayerImpl>>,
         queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
@@ -64,7 +65,8 @@ impl EventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(pe) => Self::dispatch(&observer, &pe, &player, &queue),
+                            Ok(Event::Player(ref pe)) => Self::dispatch(&observer, pe, &player, &queue),
+                            Ok(_) => {}
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,
                         }

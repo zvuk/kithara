@@ -1,43 +1,28 @@
-use std::{
-    sync::{
-        Arc,
-        mpsc::{self, TryRecvError},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
-    play::{Engine, EngineEvent, PlayerEvent},
+    events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent},
     prelude::PlayerImpl,
 };
-use tokio::{
-    sync::broadcast::{Receiver, error::RecvError},
-    task::{self, JoinHandle},
-};
+use tokio::{sync::broadcast::error::TryRecvError, task};
 
 use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
     controls::{AppController, PlayerControls, TrackLoadParams},
     crossfade::{CrossfadeClock, ProgressLog},
-    events::{UiMsg, format_seconds, is_progress_event, source_note},
+    events::{format_seconds, is_progress_event, source_note},
     playlist::Playlist,
     theme::tui,
 };
 
-const CONTROL_POLL_MS: u64 = 100;
+const CONTROL_POLL_MS: u64 = 50;
 const SEEK_STEP_SECONDS_F64: f64 = 5.0;
 const VOLUME_STEP: f32 = 0.05;
-const MAX_DIGIT_TRACKS: usize = 9;
 const PERCENT_SCALE: f32 = 100.0;
+const MAX_DIGIT_TRACKS: usize = 9;
 
-type RunnerResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
-
-enum ControlOutcome {
-    Continue(Option<String>),
-    SwitchTrack(usize),
-    Quit,
-}
+type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 /// Run the TUI event loop.
 ///
@@ -48,17 +33,13 @@ pub(super) async fn run_tui(
     config: &crate::config::AppConfig,
 ) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();
-    let (ui_tx, ui_rx) = mpsc::channel::<UiMsg>();
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let player = controller.player().clone();
     let load_params = controller.load_params();
     let playlist = Arc::clone(load_params.playlist());
 
-    let forwarders = vec![
-        forward_player_events(player.subscribe(), ui_tx.clone()),
-        forward_engine_events(player.engine().subscribe(), ui_tx.clone()),
-    ];
+    let event_rx = player.subscribe();
+    let bus = player.bus().clone();
 
     // Reserve player slots for all tracks so replace_item works by index.
     player.reserve_slots(playlist.len());
@@ -66,15 +47,15 @@ pub(super) async fn run_tui(
     // Spawn async loading for each track.
     for i in 0..playlist.len() {
         let params = load_params.clone();
-        let tx = ui_tx.clone();
+        let track_bus = bus.clone();
         tokio::spawn(async move {
             let ok = params.load_and_apply(i).await;
             let msg = if ok {
-                UiMsg::Note(format!("loaded #{}", i + 1))
+                format!("loaded #{}", i + 1)
             } else {
-                UiMsg::Note(format!("failed #{}", i + 1))
+                format!("failed #{}", i + 1)
             };
-            let _ = tx.send(msg);
+            track_bus.publish(AppEvent::Note(msg));
         });
     }
 
@@ -83,14 +64,7 @@ pub(super) async fn run_tui(
     let ui_playlist = Arc::clone(&playlist);
     let ui_load_params = load_params.clone();
     let mut ui_handle = task::spawn_blocking(move || {
-        run_ui_loop(
-            &ui_player,
-            &ui_playlist,
-            &ui_load_params,
-            &ui_rx,
-            &stop_rx,
-            palette,
-        )
+        run_ui_loop(&ui_player, &ui_playlist, &ui_load_params, event_rx, palette)
     });
 
     let ui_finished = tokio::select! {
@@ -100,23 +74,17 @@ pub(super) async fn run_tui(
         }
         signal = tokio::signal::ctrl_c() => {
             if signal.is_ok() {
-                let _ = ui_tx.send(UiMsg::Note("ctrl+c received".to_string()));
+                bus.publish(AppEvent::Stop);
             }
             false
         }
     };
 
-    let _ = stop_tx.send(());
     if !ui_finished {
         ui_handle.await??;
     }
 
     controller.pause();
-
-    for forwarder in forwarders {
-        forwarder.abort();
-        let _ = forwarder.await;
-    }
 
     Ok(())
 }
@@ -125,8 +93,7 @@ fn run_ui_loop(
     player: &PlayerImpl,
     playlist: &Arc<Playlist>,
     load_params: &TrackLoadParams,
-    ui_rx: &mpsc::Receiver<UiMsg>,
-    stop_rx: &mpsc::Receiver<()>,
+    mut event_rx: EventReceiver,
     palette: tui::TuiPalette,
 ) -> RunnerResult {
     let track_count = playlist.len();
@@ -146,60 +113,19 @@ fn run_ui_loop(
     let mut tick_error_logged = false;
 
     'ui: loop {
-        match stop_rx.try_recv() {
-            Ok(()) | Err(TryRecvError::Disconnected) => break,
-            Err(TryRecvError::Empty) => {}
-        }
-
+        // Drain all pending events from the shared bus.
         loop {
-            match ui_rx.try_recv() {
-                Ok(msg) => match msg {
-                    UiMsg::Engine(event) => {
-                        if let EngineEvent::MasterVolumeChanged { volume } = event {
-                            ui.dashboard.set_volume(volume);
-                        }
-                        ui.log_line(&format!("engine {event:?}"))?;
+            match event_rx.try_recv() {
+                Ok(event) => {
+                    if handle_event(&event, &mut ui, &mut progress_log)? {
+                        break 'ui;
                     }
-                    UiMsg::Note(note) => {
-                        ui.dashboard.set_note(note.clone());
-                        ui.log_line(&note)?;
-                    }
-                    UiMsg::Player(event) => {
-                        match event {
-                            PlayerEvent::CurrentItemChanged => {
-                                ui.dashboard.set_note("track changed");
-                            }
-                            PlayerEvent::RateChanged { rate } => {
-                                ui.dashboard.set_playing(rate > 0.0);
-                                ui.dashboard.set_note(format!("rate {rate:.2}"));
-                            }
-                            PlayerEvent::StatusChanged { status } => {
-                                ui.dashboard.set_note(format!("status {status:?}"));
-                            }
-                            PlayerEvent::VolumeChanged { volume } => {
-                                ui.dashboard.set_volume(volume);
-                                ui.dashboard
-                                    .set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
-                            }
-                            _ => {}
-                        }
-                        ui.log_line(&format!("player {event:?}"))?;
-                    }
-                    UiMsg::Source { event, source } => {
-                        if let Some(note) = source_note(&source, &event) {
-                            ui.dashboard.set_note(note);
-                        }
-                        if is_progress_event(&event) {
-                            if progress_log.should_emit() {
-                                ui.log_line(&format!("{source} {event:?}"))?;
-                            }
-                        } else {
-                            ui.log_line(&format!("{source} {event:?}"))?;
-                        }
-                    }
-                },
+                }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break 'ui,
+                Err(TryRecvError::Lagged(n)) => {
+                    ui.log_line(&format!("events lagged: {n}"))?;
+                }
+                Err(TryRecvError::Closed) => break 'ui,
             }
         }
 
@@ -287,6 +213,58 @@ fn run_ui_loop(
     }
 
     Ok(())
+}
+
+/// Returns `true` if the UI loop should exit.
+fn handle_event(
+    event: &Event,
+    ui: &mut UiSession,
+    progress_log: &mut ProgressLog,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    match event {
+        Event::App(AppEvent::Stop) => return Ok(true),
+        Event::App(AppEvent::Note(note)) => {
+            ui.dashboard.set_note(note.clone());
+            ui.log_line(note)?;
+        }
+        Event::Player(pe) => {
+            match pe {
+                PlayerEvent::CurrentItemChanged => {
+                    ui.dashboard.set_note("track changed");
+                }
+                PlayerEvent::RateChanged { rate } => {
+                    ui.dashboard.set_playing(*rate > 0.0);
+                    ui.dashboard.set_note(format!("rate {rate:.2}"));
+                }
+                PlayerEvent::StatusChanged { status } => {
+                    ui.dashboard.set_note(format!("status {status:?}"));
+                }
+                PlayerEvent::VolumeChanged { volume } => {
+                    ui.dashboard.set_volume(*volume);
+                    ui.dashboard
+                        .set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
+                }
+                _ => {}
+            }
+            ui.log_line(&format!("player {pe:?}"))?;
+        }
+        Event::Engine(ee) => {
+            if let EngineEvent::MasterVolumeChanged { volume } = ee {
+                ui.dashboard.set_volume(*volume);
+            }
+            ui.log_line(&format!("engine {ee:?}"))?;
+        }
+        Event::Hls(_) | Event::File(_) | Event::Audio(_) => {
+            if let Some(note) = source_note("src", event) {
+                ui.dashboard.set_note(note);
+            }
+            if !is_progress_event(event) || progress_log.should_emit() {
+                ui.log_line(&format!("{event:?}"))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
 }
 
 fn handle_key(
@@ -385,7 +363,6 @@ fn switch_track(
 ) -> RunnerResult {
     let handle = tokio::runtime::Handle::current();
 
-    // Use TrackLoadParams — THE ONLY place for DRM config + resource loading.
     let resource = handle.block_on(load_params.load_resource(index))?;
     player.replace_item(index, resource);
 
@@ -411,48 +388,8 @@ fn switch_track(
     Ok(())
 }
 
-fn forward_player_events(mut rx: Receiver<PlayerEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx.send(UiMsg::Player(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("player events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-}
-
-fn forward_engine_events(mut rx: Receiver<EngineEvent>, tx: mpsc::Sender<UiMsg>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if tx.send(UiMsg::Engine(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(n)) => {
-                    if tx
-                        .send(UiMsg::Note(format!("engine events lagged n={n}")))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
+enum ControlOutcome {
+    Continue(Option<String>),
+    SwitchTrack(usize),
+    Quit,
 }

@@ -1,24 +1,50 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "app")]
+use crate::AppEvent;
 #[cfg(feature = "audio")]
 use crate::AudioEvent;
+#[cfg(feature = "file")]
 use crate::FileEvent;
 #[cfg(feature = "hls")]
 use crate::HlsEvent;
+#[cfg(feature = "player")]
+use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
 
 /// Unified event for the full audio pipeline.
 ///
 /// Hierarchical: each subsystem has its own variant with a sub-enum.
+/// All variants are feature-gated.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Event {
     /// HLS stream event.
     #[cfg(feature = "hls")]
     Hls(HlsEvent),
     /// File stream event.
+    #[cfg(feature = "file")]
     File(FileEvent),
     /// Audio pipeline event.
     #[cfg(feature = "audio")]
     Audio(AudioEvent),
+    /// Player state event.
+    #[cfg(feature = "player")]
+    Player(PlayerEvent),
+    /// Engine lifecycle event.
+    #[cfg(feature = "player")]
+    Engine(EngineEvent),
+    /// Item state event.
+    #[cfg(feature = "player")]
+    Item(ItemEvent),
+    /// Audio session event.
+    #[cfg(feature = "player")]
+    Session(SessionEvent),
+    /// DJ feature event.
+    #[cfg(feature = "player")]
+    Dj(DjEvent),
+    /// Application lifecycle event.
+    #[cfg(feature = "app")]
+    App(AppEvent),
 }
 
 #[cfg(feature = "hls")]
@@ -28,6 +54,7 @@ impl From<HlsEvent> for Event {
     }
 }
 
+#[cfg(feature = "file")]
 impl From<FileEvent> for Event {
     fn from(e: FileEvent) -> Self {
         Self::File(e)
@@ -38,6 +65,48 @@ impl From<FileEvent> for Event {
 impl From<AudioEvent> for Event {
     fn from(e: AudioEvent) -> Self {
         Self::Audio(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<PlayerEvent> for Event {
+    fn from(e: PlayerEvent) -> Self {
+        Self::Player(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<EngineEvent> for Event {
+    fn from(e: EngineEvent) -> Self {
+        Self::Engine(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<ItemEvent> for Event {
+    fn from(e: ItemEvent) -> Self {
+        Self::Item(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<SessionEvent> for Event {
+    fn from(e: SessionEvent) -> Self {
+        Self::Session(e)
+    }
+}
+
+#[cfg(feature = "player")]
+impl From<DjEvent> for Event {
+    fn from(e: DjEvent) -> Self {
+        Self::Dj(e)
+    }
+}
+
+#[cfg(feature = "app")]
+impl From<AppEvent> for Event {
+    fn from(e: AppEvent) -> Self {
+        Self::App(e)
     }
 }
 

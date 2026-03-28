@@ -11,7 +11,10 @@ description = "Unified event bus for kithara audio pipeline"
 workspace = true
 
 [dependencies]
+derivative = { workspace = true }
 kithara-platform = { workspace = true }
+portable-atomic = { workspace = true }
+smallvec = { workspace = true }
 
 kithara-abr = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true }
@@ -20,9 +23,12 @@ kithara-decode = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-default = ["hls", "audio"]
+default = ["file", "hls", "audio", "player", "app"]
+app = []
+file = []
 hls = ["dep:kithara-abr"]
 audio = ["dep:kithara-decode"]
+player = []
 internal = []
 
 [dev-dependencies]

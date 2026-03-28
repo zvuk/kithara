@@ -9,7 +9,7 @@ pub mod engine {
 
     #[must_use]
     pub fn slot_id(value: u64) -> SlotId {
-        SlotId(value)
+        SlotId::new(value)
     }
 }
 

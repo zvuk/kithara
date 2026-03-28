@@ -4,8 +4,7 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-use kithara_events::{Event, EventBus};
-use kithara_platform::tokio::sync::broadcast;
+use kithara_events::EventBus;
 use kithara_stream::Stream;
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
@@ -132,7 +131,7 @@ impl Resource {
     /// Returns a receiver for all events published to the bus,
     /// including audio, file, and HLS events.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
     }
 

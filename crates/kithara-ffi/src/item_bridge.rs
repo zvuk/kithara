@@ -31,7 +31,7 @@ pub(crate) struct ItemEventBridge {
 impl ItemEventBridge {
     /// Spawn a task that translates resource events into item callbacks.
     pub(crate) fn spawn(
-        rx: broadcast::Receiver<Event>,
+        rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         cancel: CancellationToken,
@@ -47,7 +47,7 @@ impl ItemEventBridge {
     }
 
     fn spawn_event_task(
-        mut rx: broadcast::Receiver<Event>,
+        mut rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         cancel: CancellationToken,

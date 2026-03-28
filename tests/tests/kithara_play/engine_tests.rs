@@ -1,10 +1,11 @@
 use std::sync::{Mutex as StdMutex, OnceLock};
 
+use kithara_events::EventBus;
 use kithara_play::internal::engine::*;
 use kithara_test_utils::kithara;
 
 fn make_engine() -> EngineImpl {
-    EngineImpl::new(EngineConfig::default())
+    EngineImpl::new(EngineConfig::default(), EventBus::default())
 }
 
 fn session_ducking_lock() -> &'static StdMutex<()> {
@@ -102,7 +103,7 @@ fn engine_set_master_volume_emits_event() {
     engine.set_master_volume(0.75);
     let event = rx.try_recv().unwrap();
     assert!(
-        matches!(event, EngineEvent::MasterVolumeChanged { volume } if (volume - 0.75).abs() < f32::EPSILON)
+        matches!(event, kithara_events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
     );
 }
 
@@ -142,7 +143,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         sample_rate: 48000,
         ..Default::default()
     };
-    let engine = EngineImpl::new(config);
+    let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
@@ -211,7 +212,7 @@ fn engine_arena_full_error() {
         max_slots: 1,
         ..Default::default()
     };
-    let engine = EngineImpl::new(config);
+    let engine = EngineImpl::new(config, EventBus::default());
     engine.start().unwrap();
 
     let _slot1 = engine.allocate_slot().unwrap();

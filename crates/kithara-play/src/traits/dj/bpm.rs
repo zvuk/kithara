@@ -1,15 +1,8 @@
 use derivative::Derivative;
+pub use kithara_events::BpmInfo;
 use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::{error::PlayError, types::SlotId};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct BpmInfo {
-    pub bpm: f64,
-    pub confidence: f32,
-    pub first_beat_offset: Duration,
-}
 
 #[derive(Clone, Debug, Derivative, PartialEq)]
 #[derivative(Default)]

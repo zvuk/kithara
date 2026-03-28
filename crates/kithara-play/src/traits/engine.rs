@@ -1,8 +1,9 @@
-use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
+use kithara_events::EventReceiver;
+use kithara_platform::{MaybeSend, MaybeSync};
 
 #[rustfmt::skip]
 use crate::traits::dj::crossfade::CrossfadeConfig;
-use crate::{error::PlayError, events::EngineEvent, types::SlotId};
+use crate::{error::PlayError, types::SlotId};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),
@@ -50,5 +51,5 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
 
     // -- events --
 
-    fn subscribe(&self) -> broadcast::Receiver<EngineEvent>;
+    fn subscribe(&self) -> EventReceiver;
 }

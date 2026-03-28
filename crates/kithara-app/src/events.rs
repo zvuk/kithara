@@ -1,16 +1,6 @@
 use std::time::Duration;
 
-use kithara::{
-    play::{EngineEvent, PlayerEvent},
-    prelude::{AudioEvent, Event, FileEvent, HlsEvent},
-};
-
-pub enum UiMsg {
-    Engine(EngineEvent),
-    Note(String),
-    Player(PlayerEvent),
-    Source { event: Event, source: String },
-}
+use kithara::prelude::{AudioEvent, Event, FileEvent, HlsEvent};
 
 #[must_use]
 pub fn is_progress_event(event: &Event) -> bool {

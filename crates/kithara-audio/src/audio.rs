@@ -889,9 +889,7 @@ where
     ///
     /// Returns a receiver for all events published to the bus.
     #[must_use]
-    pub fn events(
-        &self,
-    ) -> kithara_platform::tokio::sync::broadcast::Receiver<kithara_events::Event> {
+    pub fn events(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
     }
 

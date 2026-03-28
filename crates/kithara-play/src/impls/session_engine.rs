@@ -890,7 +890,7 @@ fn allocate_slot(state: &mut SessionState, player_id: PlayerId) -> Result<Reply,
         return Err("player master eq node is not initialised".into());
     };
 
-    let slot_id = SlotId(state.players[idx].next_slot_id);
+    let slot_id = SlotId::new(state.players[idx].next_slot_id);
     state.players[idx].next_slot_id += 1;
 
     let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(PLAYER_CMD_RINGBUF_CAPACITY).split();

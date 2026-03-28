@@ -3963,12 +3963,15 @@ dependencies = [
 name = "kithara-events"
 version = "0.1.0"
 dependencies = [
+ "derivative",
  "kithara-abr",
  "kithara-decode",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "portable-atomic",
+ "smallvec",
  "wasm-bindgen-test",
 ]
 

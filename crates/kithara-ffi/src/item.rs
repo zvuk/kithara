@@ -42,6 +42,8 @@ pub struct AudioPlayerItem {
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     loading: AtomicBool,
     load_notify: Notify,
+    /// Scoped event bus — set by `AudioPlayer` when item is inserted.
+    pub(crate) bus: Mutex<Option<kithara_events::EventBus>>,
     /// Shared audio worker — set by `AudioPlayer` when item is inserted.
     pub(crate) worker: Mutex<Option<kithara::audio::AudioWorkerHandle>>,
     /// Shared runtime — set by `AudioPlayer` when item is inserted.
@@ -75,6 +77,7 @@ impl AudioPlayerItem {
             observer: Mutex::new(None),
             loading: AtomicBool::new(false),
             load_notify: Notify::new(),
+            bus: Mutex::new(None),
             worker: Mutex::new(None),
             runtime: Mutex::new(None),
             key_options: Mutex::new(None),
@@ -234,6 +237,9 @@ impl AudioPlayerItem {
             config = config.with_headers(headers.clone().into());
         }
 
+        if let Some(ref b) = *self.bus.lock_sync() {
+            config.bus = Some(b.clone());
+        }
         if let Some(ref w) = *self.worker.lock_sync() {
             config.worker = Some(w.clone());
         }

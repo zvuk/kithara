@@ -16,10 +16,8 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{
-    Mutex,
-    tokio::{runtime::Handle as RuntimeHandle, sync::broadcast},
-};
+use kithara_events::EventBus;
+use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
@@ -40,9 +38,6 @@ use crate::{
     events::EngineEvent,
     types::{SessionDuckingMode, SlotId},
 };
-
-/// Capacity of the engine event broadcast channel.
-const ENGINE_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Configuration for the audio engine.
 #[derive(Clone, Debug, Derivative, Setters)]
@@ -84,8 +79,8 @@ pub struct EngineImpl {
     /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
 
-    /// Event broadcast channel.
-    events_tx: broadcast::Sender<EngineEvent>,
+    /// Shared event bus (passed from `PlayerImpl`).
+    bus: EventBus,
 
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
@@ -118,8 +113,7 @@ impl EngineImpl {
     /// The engine is created in the *stopped* state. Call [`Engine::start`]
     /// to begin audio processing.
     #[must_use]
-    pub fn new(config: EngineConfig) -> Self {
-        let (events_tx, _) = broadcast::channel(ENGINE_EVENT_CHANNEL_CAPACITY);
+    pub fn new(config: EngineConfig, bus: EventBus) -> Self {
         let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool
@@ -130,7 +124,7 @@ impl EngineImpl {
         Self {
             config,
             active_slots: Mutex::new(Vec::new()),
-            events_tx,
+            bus,
             master_volume: AtomicF32::new(1.0),
             pcm_pool: resolved_pool,
             player_id: Mutex::new(None),
@@ -160,7 +154,7 @@ impl EngineImpl {
     }
 
     fn emit(&self, event: EngineEvent) {
-        let _ = self.events_tx.send(event);
+        self.bus.publish(event);
     }
 
     fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
@@ -416,8 +410,8 @@ impl Engine for EngineImpl {
         false
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
-        self.events_tx.subscribe()
+    fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.bus.subscribe()
     }
 }
 
@@ -450,14 +444,14 @@ mod tests {
 
     #[kithara::test]
     fn engine_creates_worker() {
-        let engine = EngineImpl::new(EngineConfig::default());
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         // Worker accessor should return a valid handle.
         let _w = engine.worker();
     }
 
     #[kithara::test]
     fn engine_worker_is_clonable() {
-        let engine = EngineImpl::new(EngineConfig::default());
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let w1 = engine.worker().clone();
         let w2 = engine.worker().clone();
         // Both clones should be usable (same underlying worker).
@@ -467,7 +461,7 @@ mod tests {
 
     #[kithara::test]
     fn engine_drop_shuts_down_worker() {
-        let engine = EngineImpl::new(EngineConfig::default());
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let worker_clone = engine.worker().clone();
         drop(engine);
         // Worker should be shut down — wake() is harmless on a dead worker.

@@ -123,7 +123,7 @@ pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {
 }
 
 #[must_use]
-pub fn subscribe_source_events(source: &HlsSource) -> broadcast::Receiver<Event> {
+pub fn subscribe_source_events(source: &HlsSource) -> kithara_events::EventReceiver {
     source.bus.subscribe()
 }
 
