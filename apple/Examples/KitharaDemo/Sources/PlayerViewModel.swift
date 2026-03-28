@@ -32,6 +32,7 @@ final class PlayerViewModel: ObservableObject {
     @Published var currentVariantLabel: String?
     @Published private(set) var discoveredVariants: [(index: UInt32, label: String)] = []
     @Published var abrIsAuto = true
+    @Published var selectedVariantIndex: UInt32?
 
     private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
@@ -168,9 +169,11 @@ final class PlayerViewModel: ObservableObject {
         if let idx = variantIndex {
             player.setAbrMode(.manual(index: Int(idx)))
             abrIsAuto = false
+            selectedVariantIndex = idx
         } else {
             player.setAbrMode(.auto)
             abrIsAuto = true
+            selectedVariantIndex = nil
         }
     }
 
@@ -277,6 +280,8 @@ final class PlayerViewModel: ObservableObject {
         status = .unknown
         shouldReloadCurrentTrack = false
         currentVariantLabel = nil
+        selectedVariantIndex = nil
+        abrIsAuto = true
 
         let item = KitharaPlayerItem(url: track.url)
         itemCancellable = item.eventPublisher
@@ -296,9 +301,13 @@ final class PlayerViewModel: ObservableObject {
                         let label = v.name ?? "\(v.bandwidthBps / 1000)k"
                         return (index: v.index, label: label)
                     }
-                case let .variantChanged(variant):
+                case let .variantSelected(variant):
                     let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
-                    print("[KitharaDemo] variant changed: \(label)")
+                    print("[KitharaDemo] variant selected: \(label)")
+                    self?.selectedVariantIndex = variant.index
+                case let .variantApplied(variant):
+                    let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
+                    print("[KitharaDemo] variant applied: \(label)")
                     self?.currentVariantLabel = label
                 default:
                     break

@@ -659,7 +659,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
         Message::SetAbrMode(None),
     ));
     for (idx, label) in &state.abr_variants {
-        let active = !state.abr_mode_is_auto;
+        let active = state.selected_variant == Some(*idx);
         quality_row = quality_row.push(abr_button(
             label,
             active,
@@ -919,7 +919,7 @@ fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
 }
 
 fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Element<'a, Message> {
-    let text_color = if active { p.bg } else { p.muted };
+    let text_color = if active { p.accent } else { p.muted };
     button(text(label.to_string()).size(CAPTION_FONT).color(text_color))
         .on_press(msg)
         .padding(Padding::from([2, 6]))

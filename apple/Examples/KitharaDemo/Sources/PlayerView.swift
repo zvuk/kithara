@@ -346,15 +346,16 @@ struct PlayerView: View {
                 .buttonStyle(.plain)
 
                 ForEach(viewModel.discoveredVariants, id: \.index) { variant in
+                    let isSelected = viewModel.selectedVariantIndex == variant.index
                     Button {
                         viewModel.setAbrMode(variantIndex: variant.index)
                     } label: {
                         Text(variant.label)
-                            .font(.system(size: 12, weight: !viewModel.abrIsAuto ? .bold : .regular))
-                            .foregroundStyle(!viewModel.abrIsAuto ? Color.kitharaBg : .kitharaMuted)
+                            .font(.system(size: 12, weight: isSelected ? .bold : .regular))
+                            .foregroundStyle(isSelected ? Color.kitharaBg : .kitharaMuted)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 5)
-                            .background(!viewModel.abrIsAuto ? Color.kitharaGold : Color.kitharaPanel)
+                            .background(isSelected ? Color.kitharaGold : Color.kitharaPanel)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)

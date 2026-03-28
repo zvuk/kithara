@@ -25,6 +25,8 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
                 state.current_track_index = Some(next_idx);
                 state.track_name = state.playlist.track_name(next_idx);
                 state.variant_label.clear();
+                state.abr_mode_is_auto = true;
+                state.selected_variant = None;
                 state.load_track(next_idx)
             } else {
                 Task::none()
@@ -103,6 +105,8 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             state.current_track_index = Some(idx);
             state.track_name = state.playlist.track_name(idx);
             state.variant_label.clear();
+            state.abr_mode_is_auto = true;
+            state.selected_variant = None;
             state.load_track(idx)
         }
 
@@ -126,6 +130,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         Message::SetAbrMode(variant) => {
             use kithara::abr::AbrMode;
             state.abr_mode_is_auto = variant.is_none();
+            state.selected_variant = variant;
             state
                 .player
                 .set_abr_mode(variant.map_or(AbrMode::Auto(None), AbrMode::Manual));

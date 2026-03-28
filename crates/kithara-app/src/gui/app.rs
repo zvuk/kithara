@@ -55,6 +55,10 @@ pub(crate) struct Kithara {
     pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
     pub(crate) abr_variants: Vec<(usize, String)>,
     pub(crate) abr_mode_is_auto: bool,
+    /// Variant index selected by user in picker (`None` = auto).
+    /// Updated immediately on click. Separate from `variant_label`
+    /// which reflects the actually applied variant from `VariantApplied` event.
+    pub(crate) selected_variant: Option<usize>,
 
     // UI state.
     pub(crate) active_tab: Tab,
@@ -99,6 +103,7 @@ impl Kithara {
             shared_abr_variants: Arc::new(Mutex::new(Vec::new())),
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
+            selected_variant: None,
             active_tab: Tab::Playlist,
             shuffle_enabled: false,
             repeat_enabled: false,

@@ -240,12 +240,29 @@ pub enum FfiPlayerEvent {
 #[derive(Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
 pub enum FfiItemEvent {
-    DurationChanged { seconds: f64 },
-    BufferedDurationChanged { seconds: f64 },
-    StatusChanged { status: FfiItemStatus },
-    VariantsDiscovered { variants: Vec<FfiVariant> },
-    VariantChanged { variant: FfiVariant },
-    Error { error: String },
+    DurationChanged {
+        seconds: f64,
+    },
+    BufferedDurationChanged {
+        seconds: f64,
+    },
+    StatusChanged {
+        status: FfiItemStatus,
+    },
+    VariantsDiscovered {
+        variants: Vec<FfiVariant>,
+    },
+    /// User selected a variant in the picker (may not be applied yet).
+    VariantSelected {
+        variant: FfiVariant,
+    },
+    /// Stream actually switched to a new variant.
+    VariantApplied {
+        variant: FfiVariant,
+    },
+    Error {
+        error: String,
+    },
 }
 
 /// FFI-friendly HLS variant descriptor.
