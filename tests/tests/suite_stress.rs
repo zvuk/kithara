@@ -16,6 +16,7 @@ mod kithara_hls {
     pub(crate) mod fixture;
 
     mod abr_auto_switch;
+    mod abr_mode_switch;
     mod abr_switch_playback;
     mod live_stress_real_stream;
     mod stress_seek_abr;
