@@ -1932,6 +1932,80 @@ mod tests {
         );
     }
 
+    /// RED: `populate_cached_segments` must not destroy init_len on a
+    /// segment that was committed with init data during a midstream switch.
+    ///
+    /// Scenario: downloader commits segment N with init_len > 0 (ABR switch
+    /// point). Later, all segments 0..=N are on disk and a cache rescan
+    /// fires. The rescan assigns init_len only to count == 0 (the first
+    /// segment found), so segment N gets init_len = 0, destroying the
+    /// init data the decoder needs to start from the switch point.
+    #[kithara::test(tokio)]
+    async fn populate_cached_segments_preserves_init_on_non_zero_segment() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            4,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            Arc::clone(&fetch),
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Simulate midstream switch: segment 2 committed with init data.
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                2,
+                SegmentData {
+                    init_len: 44,
+                    media_len: 100,
+                    init_url: Some(
+                        Url::parse("https://example.com/init-0.mp4").expect("valid init URL"),
+                    ),
+                    media_url: Url::parse("https://example.com/seg-0-2.m4s")
+                        .expect("valid segment URL"),
+                },
+            );
+        }
+
+        // Cache rescan: all 4 segments are on disk (simulated).
+        let (count, _) = HlsDownloader::populate_cached_segments_with_open(
+            &downloader.segments,
+            &downloader.coord,
+            playlist_state.as_ref(),
+            0,
+            |_key| {
+                Some(AssetResourceState::Committed {
+                    final_len: Some(100),
+                })
+            },
+        );
+
+        assert_eq!(count, 4, "all segments must be populated");
+
+        // The init_len on segment 2 must survive the rescan.
+        let segments = downloader.segments.lock_sync();
+        let seg2 = segments.stored_segment(0, 2).expect("segment 2 must exist");
+        assert_eq!(
+            seg2.init_len, 44,
+            "populate_cached_segments must preserve init_len on a segment \
+             that was committed with init data during a midstream switch"
+        );
+    }
+
     #[kithara::test(tokio)]
     async fn populate_cached_segments_ignores_active_disk_resource() {
         let cancel = CancellationToken::new();
