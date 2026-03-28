@@ -215,7 +215,16 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let segments = collector.segments();
     let switches = collector.switch_count();
-    info!(total, switches, segments = segments.len(), "test complete");
+
+    let v0 = segments.iter().filter(|s| s.variant == 0).count();
+    let v1 = segments.iter().filter(|s| s.variant == 1).count();
+    info!(
+        switches,
+        total_segments = segments.len(),
+        v0,
+        v1,
+        "VOD test result"
+    );
 
     assert!(total > 0, "expected audio output");
     assert!(switches > 0, "ABR must switch at least once");
@@ -420,5 +429,117 @@ async fn multi_track_shared_abr_with_cache() {
                 if s.cached { "cache" } else { "net" }
             ))
             .collect::<Vec<_>>()
+    );
+}
+
+/// RED: ABR variant switch must NOT re-download segments already covered.
+///
+/// Industry standard: on variant switch, download new variant segments
+/// starting from the switch point forward. Never re-download segments
+/// for time ranges already covered by the previous variant.
+///
+/// With N segments total, the number of unique (variant, segment_index)
+/// network fetches must be ≤ N + small overhead (init segments, 1-2
+/// overlap at switch boundary). Full double-download (2×N) is a bug.
+///
+/// Current behavior: downloader resets cursor to segment 0 on variant
+/// switch, downloading the entire new variant from the start. With ABR
+/// oscillation this produces 2× bandwidth usage.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn abr_switch_must_not_redownload_covered_segments() {
+    let segment_count = 20;
+    let init_segment = Arc::new(create_wav_init_segment());
+    let pcm_data = Arc::new(create_pcm_segments(segment_count));
+
+    let server = kithara_integration_tests::hls_fixture::HlsTestServer::new(
+        kithara_integration_tests::hls_fixture::HlsTestServerConfig {
+            variant_count: 2,
+            segments_per_variant: segment_count,
+            segment_size: D.segment_size,
+            segment_duration_secs: segment_duration_secs(),
+            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            // V0 segments 5+ delayed → forces ABR downswitch to V1
+            delay_rules: vec![DelayRule {
+                variant: Some(0),
+                segment_gte: Some(5),
+                delay_ms: 500,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let url = server.url("/master.m3u8").expect("url");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(64);
+    let collector = EventCollector::new(&bus);
+
+    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        min_switch_interval: Duration::ZERO,
+        down_switch_buffer_secs: 0.0,
+        min_buffer_for_up_switch_secs: 0.0,
+        throughput_safety_factor: 1.0,
+        ..AbrOptions::default()
+    });
+
+    let mut hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_events(bus.clone());
+    hls_config.abr = Some(abr);
+
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_events(bus)
+        .with_media_info(wav_info);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+        .await
+        .expect("read");
+
+    assert!(total > 0, "expected audio output");
+
+    let segments = collector.segments();
+
+    // Count unique network fetches (excluding cache hits).
+    let net_fetches: Vec<_> = segments
+        .iter()
+        .filter(|s| !s.cached)
+        .map(|s| (s.variant, s.segment_index))
+        .collect();
+
+    // Count how many segment positions have BOTH variants downloaded.
+    let mut overlap_count = 0;
+    for seg_idx in 0..segment_count {
+        let has_v0 = net_fetches.iter().any(|(v, s)| *v == 0 && *s == seg_idx);
+        let has_v1 = net_fetches.iter().any(|(v, s)| *v == 1 && *s == seg_idx);
+        if has_v0 && has_v1 {
+            overlap_count += 1;
+        }
+    }
+
+    // Allow small overlap at switch boundary (1-2 segments), but not full double.
+    let max_acceptable_overlap = 3;
+    assert!(
+        overlap_count <= max_acceptable_overlap,
+        "ABR switch must not re-download covered segments. \
+         {overlap_count}/{segment_count} positions have both variants downloaded \
+         (max allowed: {max_acceptable_overlap}). \
+         Net fetches: {}, segments in track: {segment_count}",
+        net_fetches.len(),
     );
 }
