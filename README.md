@@ -95,8 +95,6 @@ just lint-fast
 just lint-full
 ```
 
-The day-to-day workflow for both humans and AI agents lives in [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md). Use [.docs/plans/_template.md](.docs/plans/_template.md) for non-trivial tasks.
-
 ## Environment Setup
 
 Set up both the host environment and the local tooling before relying on the `just` workflow.
@@ -151,6 +149,104 @@ cargo install cargo-semver-checks --locked
 - `critcmp` for benchmark comparison
 - `chromedriver` or another WebDriver binary for browser-based flows
 
+## Building Mobile Libraries
+
+The repository contains two verified mobile build flows:
+
+- Android: `just android-aar` builds the Rust core, generates Kotlin bindings, and exports both release AARs required by consumer apps
+- Apple: `just xcframework` builds the Swift-facing XCFramework consumed by local packages or Xcode projects
+
+### Android AARs
+
+Prerequisites:
+
+- Android NDK installed and `ANDROID_NDK_HOME` exported
+- `cargo-ndk` installed: `cargo install cargo-ndk`
+- Rust Android targets installed:
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+```
+
+Build the Android libraries:
+
+```bash
+just android-aar
+```
+
+What this command does:
+
+1. Builds the Rust JNI libraries in release mode
+2. Generates Kotlin UniFFI bindings
+3. Packages the Android library
+4. Exports both release AARs with stable file names
+
+Output files:
+
+- `android/lib/build/outputs/aar/kithara.aar`
+- `android/lib/build/outputs/aar/rust-tls.aar`
+
+Notes for consumers:
+
+- `kithara.aar` is the main Android library
+- `rust-tls.aar` must be distributed together with `kithara.aar`
+- If you consume the AARs directly from another project, keep both files in the same local artifacts directory and add any remaining app-level dependencies required by your integration
+
+### Apple XCFramework
+
+Prerequisites:
+
+- Xcode and Command Line Tools installed
+- `cargo-swift` installed: `cargo install cargo-swift`
+- Apple Rust targets installed:
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
+```
+
+Build the Apple library:
+
+```bash
+just xcframework
+```
+
+For a faster local iteration build:
+
+```bash
+just xcframework --profile debug
+```
+
+Output directory:
+
+- `apple/KitharaFFIInternal.xcframework`
+
+Expected slices:
+
+- `macos-arm64_x86_64`
+- `ios-arm64`
+- `ios-arm64_x86_64-simulator`
+
+Notes for consumers:
+
+- On Apple Silicon, the simulator slice may still be named `ios-arm64_x86_64-simulator`; this is expected from the standard build flow
+- The verified local development path is to build the XCFramework first, then point the consumer Swift package or Xcode project at this repository via `KITHARA_DIR`
+
+Example local package build against a freshly built XCFramework:
+
+```bash
+KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 swift build
+```
+
+Example Xcode build with the same local dependency setup:
+
+```bash
+KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 \
+xcodebuild -project /absolute/path/to/App.xcodeproj \
+  -scheme MyApp \
+  -destination "generic/platform=iOS Simulator" \
+  build
+```
+
 ## Demo Players
 
 ```bash
@@ -187,10 +283,6 @@ cargo run -p kithara --example player --features file,hls -- [FILE_URL] [HLS_URL
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md) for the local-first task flow.
-
-## Rules
-
-See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
 
 ## Minimum Supported Rust Version (MSRV)
 
