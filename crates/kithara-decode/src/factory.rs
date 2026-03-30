@@ -452,13 +452,13 @@ impl DecoderFactory {
             ..Default::default()
         };
 
+        if Self::probe_codec(&probe_hint).is_err() {
+            return Self::create_with_symphonia_probe(source, config);
+        }
+
         match Self::create(source, &CodecSelector::Probe(probe_hint), config) {
             Ok(decoder) => Ok(decoder),
-            Err(DecodeError::ProbeFailed) => {
-                // Hints alone couldn't determine the codec.
-                // This should not happen: the source is already consumed.
-                Err(DecodeError::ProbeFailed)
-            }
+            Err(DecodeError::ProbeFailed) => Err(DecodeError::ProbeFailed),
             Err(e) => Err(e),
         }
     }
@@ -514,6 +514,11 @@ mod tests {
     use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
+
+    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/test.mp3"
+    ));
 
     #[kithara::test]
     fn test_codec_selector_exact() {
@@ -730,6 +735,20 @@ mod tests {
             DecoderConfig::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[kithara::test]
+    fn test_create_with_probe_without_hint_falls_back_to_symphonia_probe() {
+        let decoder = DecoderFactory::create_with_probe(
+            Cursor::new(TEST_MP3_BYTES.to_vec()),
+            None,
+            DecoderConfig::default(),
+        )
+        .expect("native probe fallback should create MP3 decoder");
+
+        let spec = decoder.spec();
+        assert!(spec.channels > 0);
+        assert!(spec.sample_rate > 0);
     }
 
     #[kithara::test]

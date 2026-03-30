@@ -86,7 +86,9 @@ async fn mp3_endpoint(req: Request) -> Response {
 }
 
 fn app() -> Router {
-    Router::new().route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
+    Router::new()
+        .route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
+        .route("/get-mp3/42", get(mp3_endpoint).head(mp3_endpoint))
 }
 
 #[kithara::test(tokio)]
@@ -123,5 +125,42 @@ async fn audio_file_ephemeral_mp3_does_not_end_early() {
     assert!(
         position >= Duration::from_secs(2),
         "ephemeral playback ended too early: pos={position:?} eof={eof} samples={samples_read}"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
+    let server = TestHttpServer::new(app()).await;
+    let temp_dir = TestTempDir::new();
+
+    let file_config = FileConfig::new(server.url("/get-mp3/42").into())
+        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
+    let config = AudioConfig::<File>::new(file_config);
+    let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
+
+    let (samples_read, position, eof) = spawn_blocking(move || {
+        let mut total = 0usize;
+        let mut buf = [0.0f32; 4096];
+
+        for _ in 0..600 {
+            let n = audio.read(&mut buf);
+            if n == 0 {
+                break;
+            }
+            total += n;
+            if audio.position() >= Duration::from_secs(2) {
+                break;
+            }
+        }
+
+        (total, audio.position(), audio.is_eof())
+    })
+    .await
+    .unwrap();
+
+    assert!(samples_read > 0, "no decoded samples");
+    assert!(
+        position >= Duration::from_secs(2),
+        "extensionless playback ended too early: pos={position:?} eof={eof} samples={samples_read}"
     );
 }
