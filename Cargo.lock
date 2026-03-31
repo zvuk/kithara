@@ -4337,6 +4337,7 @@ name = "kithara-test-utils"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "futures",
  "kithara-platform",
  "kithara-storage",

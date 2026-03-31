@@ -48,7 +48,7 @@ pub fn create_wav<S: signal::SignalFn>(
 }
 
 /// Create a complete WAV file from a finite [`SignalPcm`].
-pub fn create_wav_from_signal<S: signal::SignalFn>(pcm: SignalPcm<S, Finite>) -> Vec<u8> {
+pub fn create_wav_from_signal<S: signal::SignalFn>(pcm: SignalPcm<S>) -> Vec<u8> {
     let sample_rate = pcm.sample_rate();
     let channels = pcm.channels();
 

@@ -2,11 +2,8 @@
 //!
 //! Route families:
 //! - `GET /assets/{path...}` — static test assets
-//! - `GET /signal/sawtooth/{spec}.{ext}` — procedural signal generation
-//! - `GET /stream/{hls_spec}.m3u8` — synthetic HLS master playlist
-//! - `GET /stream/{hls_spec}/v{v}.m3u8` — media playlist
-//! - `GET /stream/{hls_spec}/init/v{v}.mp4` — init segment
-//! - `GET /stream/{hls_spec}/seg/v{v}_{s}.m4s` — media segment
+//! - `GET /signal/{form}/{spec_with_ext}` — procedural signal generation
+//! - `GET /stream/{hls_spec}` — HLS stream generation
 
 use std::env;
 

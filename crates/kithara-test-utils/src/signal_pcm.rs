@@ -71,7 +71,61 @@ pub mod signal {
     }
 }
 
-/// Fixed-length duration measured in frames.
+/// Normalized signal length used by PCM renderers and request parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalLength {
+    /// Finite signal with an exact frame count.
+    Finite { total_frames: usize },
+    /// Unbounded signal with no EOF.
+    Infinite,
+}
+
+impl SignalLength {
+    /// Create from an exact frame count.
+    #[must_use]
+    pub const fn from_frames(total_frames: usize) -> Self {
+        Self::Finite { total_frames }
+    }
+
+    /// Create from a time duration and sample rate.
+    #[must_use]
+    pub fn from_duration(duration: Duration, sample_rate: u32) -> Self {
+        Self::from_frames((duration.as_secs_f64() * sample_rate as f64) as usize)
+    }
+
+    /// Create from an HLS-style segment layout (count, byte size per segment, channels).
+    #[must_use]
+    pub const fn from_segments(segment_count: usize, segment_size: usize, channels: u16) -> Self {
+        let total_bytes = segment_count * segment_size;
+        let bytes_per_frame = channels as usize * size_of::<i16>();
+        let total_frames = total_bytes / bytes_per_frame;
+
+        Self::from_frames(total_frames)
+    }
+
+    /// Total number of frames, or `None` for unbounded signals.
+    #[must_use]
+    pub const fn total_frames(self) -> Option<usize> {
+        match self {
+            Self::Finite { total_frames } => Some(total_frames),
+            Self::Infinite => None,
+        }
+    }
+
+    /// Total PCM byte length, or `None` for unbounded signals.
+    #[must_use]
+    pub const fn total_pcm_byte_len(self, channels: u16) -> Option<usize> {
+        match self {
+            Self::Finite { total_frames } => {
+                total_frames.checked_mul(channels as usize * size_of::<u16>())
+            }
+            Self::Infinite => None,
+        }
+    }
+}
+
+/// Backward-compatible finite length wrapper used by existing tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Finite {
     total_frames: usize,
 }
@@ -85,7 +139,7 @@ impl Finite {
 
     /// Create from a time duration and sample rate.
     #[must_use]
-    pub const fn from_duration(duration: Duration, sample_rate: u32) -> Self {
+    pub fn from_duration(duration: Duration, sample_rate: u32) -> Self {
         Self::new((duration.as_secs_f64() * sample_rate as f64) as usize)
     }
 
@@ -98,28 +152,52 @@ impl Finite {
 
         Self::new(total_frames)
     }
+
+    /// Total number of frames.
+    #[must_use]
+    pub const fn total_frames(self) -> usize {
+        self.total_frames
+    }
 }
 
-/// Unbounded duration marker for infinite signals.
+impl From<Finite> for SignalLength {
+    fn from(value: Finite) -> Self {
+        Self::from_frames(value.total_frames())
+    }
+}
+
+/// Backward-compatible infinite length marker used by existing tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Infinite;
 
+impl From<Infinite> for SignalLength {
+    fn from(_: Infinite) -> Self {
+        Self::Infinite
+    }
+}
+
 /// PCM-first signal renderer used by fixture generators and WAV adapters.
-pub struct SignalPcm<S: signal::SignalFn, F> {
+pub struct SignalPcm<S: signal::SignalFn> {
     signal: S,
     sample_rate: u32,
     channels: u16,
-    duration: F,
+    length: SignalLength,
 }
 
-impl<S: signal::SignalFn, F> SignalPcm<S, F> {
+impl<S: signal::SignalFn> SignalPcm<S> {
     /// Create a new PCM renderer with the given signal, sample rate, channel count, and duration.
     #[must_use]
-    pub const fn new(signal: S, sample_rate: u32, channels: u16, duration: F) -> Self {
+    pub fn new<L: Into<SignalLength>>(
+        signal: S,
+        sample_rate: u32,
+        channels: u16,
+        length: L,
+    ) -> Self {
         Self {
             signal,
             sample_rate,
             channels,
-            duration,
+            length: length.into(),
         }
     }
 
@@ -135,14 +213,41 @@ impl<S: signal::SignalFn, F> SignalPcm<S, F> {
         self.channels
     }
 
+    /// Normalized signal length.
+    #[must_use]
+    pub const fn length(&self) -> SignalLength {
+        self.length
+    }
+
     const fn bytes_per_frame(&self) -> usize {
         self.channels as usize * size_of::<u16>()
     }
-}
 
-impl<S: signal::SignalFn, F> SignalPcm<S, F> {
-    /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset,
-    /// capped at `max_bytes` (pass `usize::MAX` for an infinite signal).
+    /// Total number of audio frames, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_frames(&self) -> Option<usize> {
+        self.length.total_frames()
+    }
+
+    /// Total PCM byte length, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_byte_len(&self) -> Option<usize> {
+        self.length.total_pcm_byte_len(self.channels)
+    }
+
+    /// Total PCM byte length, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_pcm_byte_len(&self) -> Option<usize> {
+        self.total_byte_len()
+    }
+
+    /// Check whether `offset` is past EOF for finite signals.
+    #[must_use]
+    pub fn is_past_eof(&self, offset: usize) -> bool {
+        self.total_byte_len().is_some_and(|total| offset >= total)
+    }
+
+    /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset.
     pub(crate) fn render_pcm(&self, offset: usize, max_bytes: usize, buf: &mut [u8]) -> usize {
         if buf.is_empty() || offset >= max_bytes {
             return 0;
@@ -172,30 +277,12 @@ impl<S: signal::SignalFn, F> SignalPcm<S, F> {
 
         written
     }
-}
-
-impl<S: signal::SignalFn> SignalPcm<S, Finite> {
-    /// Total number of audio frames.
-    #[must_use]
-    pub const fn total_frames(&self) -> usize {
-        self.duration.total_frames
-    }
-
-    /// Total PCM byte length.
-    #[must_use]
-    pub const fn total_byte_len(&self) -> usize {
-        self.total_frames() * self.bytes_per_frame()
-    }
-
-    /// Check whether `offset` is past EOF.
-    #[must_use]
-    pub fn is_past_eof(&self, offset: usize) -> bool {
-        offset >= self.total_byte_len()
-    }
 
     /// Render all PCM data into a `Vec<u8>`.
     pub fn into_vec(self) -> Vec<u8> {
-        let total_bytes = self.total_byte_len();
+        let total_bytes = self
+            .total_byte_len()
+            .expect("rendering a full Vec requires a finite signal length");
         let mut bytes = vec![0u8; total_bytes];
         self.read_pcm_at(0, &mut bytes);
         bytes
@@ -205,41 +292,14 @@ impl<S: signal::SignalFn> SignalPcm<S, Finite> {
     ///
     /// Returns the number of bytes written.
     pub fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
-        self.render_pcm(offset, self.total_byte_len(), buf)
-    }
-}
-
-/// Marker for the length of a [`SignalPcm`] signal.
-///
-/// [`Finite`] is bounded; [`Infinite`] is unbounded.
-pub trait DurationKind: Send + 'static {
-    /// Returns the total PCM byte length for the given bytes-per-frame, or `None` for infinite.
-    fn total_pcm_byte_len(&self, bytes_per_frame: usize) -> Option<usize>;
-}
-
-impl DurationKind for Finite {
-    fn total_pcm_byte_len(&self, bytes_per_frame: usize) -> Option<usize> {
-        Some(self.total_frames * bytes_per_frame)
-    }
-}
-
-impl DurationKind for Infinite {
-    fn total_pcm_byte_len(&self, _bytes_per_frame: usize) -> Option<usize> {
-        None
-    }
-}
-
-impl<S: signal::SignalFn, F: DurationKind> SignalPcm<S, F> {
-    /// Total PCM byte length, or `None` for infinite signals.
-    pub fn total_pcm_byte_len(&self) -> Option<usize> {
-        self.duration.total_pcm_byte_len(self.bytes_per_frame())
+        self.render_pcm(offset, self.total_byte_len().unwrap_or(usize::MAX), buf)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal_pcm::{SignalPcm, signal, signal::SignalFn};
+    use crate::signal_pcm::{SignalLength, SignalPcm, signal, signal::SignalFn};
 
     #[test]
     fn pcm_finite_len() {
@@ -251,7 +311,7 @@ mod tests {
             Finite::from_duration(Duration::from_secs(1), sample_rate),
         );
 
-        assert_eq!(pcm.total_byte_len(), 44100 * 2 * 2);
+        assert_eq!(pcm.total_byte_len(), Some(44100 * 2 * 2));
     }
 
     #[test]
@@ -322,5 +382,15 @@ mod tests {
         src.read_pcm_at(0, &mut buf);
 
         assert_eq!(i16::from_le_bytes(buf), 1000);
+    }
+
+    #[test]
+    fn infinite_signal_has_no_known_len() {
+        let pcm = SignalPcm::new(signal::Silence, 44_100, 2, Infinite);
+
+        assert_eq!(pcm.length(), SignalLength::Infinite);
+        assert_eq!(pcm.total_frames(), None);
+        assert_eq!(pcm.total_byte_len(), None);
+        assert!(!pcm.is_past_eof(usize::MAX));
     }
 }

@@ -31,6 +31,7 @@ pub mod server_url;
 pub mod signal_pcm;
 pub mod signal_source;
 mod signal_source_utils;
+pub(crate) mod signal_spec;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_server;
 pub mod wav;

@@ -1,6 +1,6 @@
 //! On-demand signal generator.
 //!
-//! `SignalPcm<S, F>` is the PCM-first core that creates interleaved samples.
+//! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
 
 use std::{io, io::Error as IoError, ops::Range};
 
@@ -14,27 +14,25 @@ use kithara_stream::{
 
 use crate::{
     memory_source::MemoryCoord,
-    signal_pcm::{DurationKind, SignalPcm, signal},
+    signal_pcm::{SignalPcm, signal},
     wav::WavHeader,
 };
 
 /// WAV-backed `Source` adapter over [`SignalPcm`].
-pub struct SignalSource<S: signal::SignalFn, F: DurationKind> {
-    pcm: SignalPcm<S, F>,
+pub struct SignalSource<S: signal::SignalFn> {
+    pcm: SignalPcm<S>,
     coord: MemoryCoord,
     header: WavHeader,
 }
 
-fn create_header_from_signal<S: signal::SignalFn, F: DurationKind>(
-    pcm: &SignalPcm<S, F>,
-) -> WavHeader {
+fn create_header_from_signal<S: signal::SignalFn>(pcm: &SignalPcm<S>) -> WavHeader {
     WavHeader::new(pcm.sample_rate(), pcm.channels(), pcm.total_pcm_byte_len())
 }
 
-impl<S: signal::SignalFn, F: DurationKind> SignalSource<S, F> {
+impl<S: signal::SignalFn> SignalSource<S> {
     /// Creates a signal source over `SignalPcm`
     #[must_use]
-    pub fn new(pcm: SignalPcm<S, F>) -> Self {
+    pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
             coord: MemoryCoord::default(),
             header: create_header_from_signal(&pcm),
@@ -60,7 +58,7 @@ impl<S: signal::SignalFn, F: DurationKind> SignalSource<S, F> {
 #[error("signal source error")]
 pub struct SignalSourceError;
 
-impl<S: signal::SignalFn, F: DurationKind> Source for SignalSource<S, F> {
+impl<S: signal::SignalFn> Source for SignalSource<S> {
     type Error = SignalSourceError;
     type Topology = ();
     type Layout = ();
@@ -145,18 +143,15 @@ impl<S: signal::SignalFn, F: DurationKind> Source for SignalSource<S, F> {
 }
 
 /// `StreamType` marker for [`SignalSource`].
-pub struct SignalStream<S: signal::SignalFn, F: DurationKind>(
-    std::marker::PhantomData<S>,
-    std::marker::PhantomData<F>,
-);
+pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
-impl<S: signal::SignalFn, F: DurationKind> StreamType for SignalStream<S, F> {
-    type Config = SignalStreamConfig<S, F>;
+impl<S: signal::SignalFn> StreamType for SignalStream<S> {
+    type Config = SignalStreamConfig<S>;
     type Topology = ();
     type Layout = ();
     type Coord = MemoryCoord;
     type Demand = ();
-    type Source = SignalSource<S, F>;
+    type Source = SignalSource<S>;
     type Error = io::Error;
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
@@ -167,12 +162,12 @@ impl<S: signal::SignalFn, F: DurationKind> StreamType for SignalStream<S, F> {
 }
 
 /// Configuration for [`SignalStream`].
-pub struct SignalStreamConfig<S: signal::SignalFn, F: DurationKind> {
+pub struct SignalStreamConfig<S: signal::SignalFn> {
     /// Pre-built source to hand off to the stream.
-    pub source: Option<SignalSource<S, F>>,
+    pub source: Option<SignalSource<S>>,
 }
 
-impl<S: signal::SignalFn, F: DurationKind> Default for SignalStreamConfig<S, F> {
+impl<S: signal::SignalFn> Default for SignalStreamConfig<S> {
     fn default() -> Self {
         Self { source: None }
     }
@@ -180,9 +175,7 @@ impl<S: signal::SignalFn, F: DurationKind> Default for SignalStreamConfig<S, F> 
 
 /// Create a `Stream` from a WAV-backed [`SignalSource`].
 #[must_use]
-pub fn signal_stream<S: signal::SignalFn, F: DurationKind>(
-    source: SignalSource<S, F>,
-) -> Stream<SignalStream<S, F>> {
+pub fn signal_stream<S: signal::SignalFn>(source: SignalSource<S>) -> Stream<SignalStream<S>> {
     let config = SignalStreamConfig {
         source: Some(source),
     };
