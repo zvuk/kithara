@@ -136,6 +136,11 @@ path = "bin/fixture_server.rs"
 test = false
 
 [[bin]]
+name = "unified_server"
+path = "bin/test_server.rs"
+test = false
+
+[[bin]]
 name = "wasm_test_runner"
 path = "bin/wasm_test_runner.rs"
 test = false

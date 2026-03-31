@@ -26,10 +26,13 @@ pub mod http_server;
 mod log_filter;
 pub mod memory_source;
 pub mod rng;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod routes;
 pub mod server_url;
 pub mod signal_pcm;
 pub mod signal_source;
 mod signal_source_utils;
+pub mod test_server;
 pub mod wav;
 
 /// Re-export of `kithara_test_macros::test` under the `kithara` namespace.
@@ -48,4 +51,5 @@ pub use log_filter::rust_log_filter;
 pub use rng::*;
 pub use server_url::join_server_url;
 pub use signal_source_utils::*;
+pub use test_server::run_test_server;
 pub use wav::{create_test_wav, create_wav_exact_bytes};
