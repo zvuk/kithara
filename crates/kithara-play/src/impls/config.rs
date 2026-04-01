@@ -27,6 +27,22 @@ use url::Url;
 
 type RuntimeHandle = runtime::Handle;
 
+#[cfg(feature = "file")]
+fn derive_remote_file_hint(url: &Url) -> Option<String> {
+    url.path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .and_then(derive_extension_hint)
+}
+
+#[cfg(feature = "file")]
+fn derive_extension_hint(segment: &str) -> Option<String> {
+    let (_, extension) = segment.rsplit_once('.')?;
+    if extension.is_empty() || !extension.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(extension.to_lowercase())
+}
+
 /// Source of an audio resource: either a URL or a local file path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResourceSrc {
@@ -269,13 +285,7 @@ impl ResourceConfig {
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
-                let h = url
-                    .path()
-                    .rsplit_once('/')
-                    .map_or_else(|| url.path(), |(_, file)| file)
-                    .rsplit_once('.')
-                    .map(|(_, ext)| ext.to_lowercase())
-                    .filter(|ext| !ext.is_empty());
+                let h = derive_remote_file_hint(&url);
                 (FileSrc::Remote(url), h)
             }
             ResourceSrc::Path(path) => {
@@ -433,6 +443,26 @@ mod tests {
     fn config_source_parsing_url() {
         let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
         assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn config_file_url_derives_extension_hint_from_last_path_segment() {
+        let config = ResourceConfig::new("https://example.com/audio/get-mp3/song.MP3?sign=test")
+            .unwrap()
+            .into_file_config();
+
+        assert_eq!(config.hint.as_deref(), Some("mp3"));
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn config_file_url_without_extension_does_not_derive_hint() {
+        let config = ResourceConfig::new("https://example.com/get-mp3/42?sign=test")
+            .unwrap()
+            .into_file_config();
+
+        assert_eq!(config.hint, None);
     }
 
     #[kithara::test(native)]

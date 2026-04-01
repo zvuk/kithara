@@ -12,14 +12,53 @@ let checksum = "a3e591d8016c43f5658af587e697a000abff1bd9f5ff1152c40b8d9c61b61b9a
 //
 // GitHub (default): https://github.com/zvuk/kithara/releases/download
 // GitLab:           https://gitlab.zvq.me/api/v4/projects/<id>/packages/generic/kithara
-let useLocalBinary = ProcessInfo.processInfo.environment["KITHARA_LOCAL_DEV"] != nil
+let environment = ProcessInfo.processInfo.environment
+let localBinaryRelativePath = "apple/KitharaFFIInternal.xcframework"
+let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let localBinaryAbsolutePath = packageDirectory
+    .appendingPathComponent(localBinaryRelativePath)
+    .path
+let localBinaryExists = FileManager.default.fileExists(atPath: localBinaryAbsolutePath)
+
+func boolOverride(_ value: String?) -> Bool? {
+    guard let value else {
+        return nil
+    }
+
+    switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "1", "true", "yes":
+        return true
+    case "0", "false", "no":
+        return false
+    default:
+        return nil
+    }
+}
+
+let localDevOverride = boolOverride(environment["KITHARA_LOCAL_DEV"])
+let useLocalBinary = localDevOverride ?? localBinaryExists
 
 let binaryTarget: Target
 if useLocalBinary {
-    binaryTarget = .binaryTarget(name: "KitharaFFIInternal", path: "apple/KitharaFFIInternal.xcframework")
+    guard localBinaryExists else {
+        fatalError(
+            """
+            KITHARA_LOCAL_DEV requires a local XCFramework, but the file was not found:
+            \(localBinaryAbsolutePath)
+
+            Build it with:
+            just xcframework
+            """
+        )
+    }
+
+    binaryTarget = .binaryTarget(
+        name: "KitharaFFIInternal",
+        path: localBinaryRelativePath
+    )
 } else {
     let defaultBaseURL = "https://github.com/zvuk/kithara/releases/download"
-    let baseURL = ProcessInfo.processInfo.environment["KITHARA_BINARY_BASE_URL"] ?? defaultBaseURL
+    let baseURL = environment["KITHARA_BINARY_BASE_URL"] ?? defaultBaseURL
     binaryTarget = .binaryTarget(
         name: "KitharaFFIInternal",
         url: "\(baseURL)/v\(version)/KitharaFFIInternal.xcframework.zip",

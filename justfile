@@ -275,8 +275,10 @@ android *ARGS:
 # Build release AAR (includes JNI libs and Kotlin bindings).
 android-aar:
     cargo xtask android build --profile release
-    cd android && ./gradlew :lib:assembleRelease -Pkithara.release=true -x generateKitharaFfi
-    @echo "==> AAR: android/lib/build/outputs/aar/lib-release.aar"
+    cd android && ./gradlew :lib:exportReleaseAars -Pkithara.release=true -x generateKitharaFfi
+    @echo "==> AARs:"
+    @echo "    android/lib/build/outputs/aar/kithara.aar"
+    @echo "    android/lib/build/outputs/aar/rust-tls.aar"
 # --- apple ---
 
 # Build XCFramework for Apple platforms.

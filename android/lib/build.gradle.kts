@@ -1,3 +1,5 @@
+import groovy.json.JsonSlurper
+
 plugins {
     alias(libs.plugins.android.library)
 }
@@ -5,7 +7,51 @@ plugins {
 val repoRoot = rootProject.projectDir.parentFile
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffi/kotlin")
 val generatedJniDir = layout.buildDirectory.dir("generated/jniLibs")
+val releaseAarOutputDir = layout.buildDirectory.dir("outputs/aar")
 val releaseBuild = providers.gradleProperty("kithara.release").map { it == "true" }.orElse(false)
+
+fun cargoExecutable(): String {
+    val configured = providers.environmentVariable("CARGO").orNull
+    if (!configured.isNullOrBlank()) {
+        return configured
+    }
+
+    val homeCargo = File(System.getProperty("user.home"), ".cargo/bin/cargo")
+    if (homeCargo.isFile) {
+        return homeCargo.absolutePath
+    }
+
+    return "cargo"
+}
+
+fun findRustlsPlatformVerifierAar(): File {
+    val metadata = providers.exec {
+        workingDir = repoRoot
+        commandLine(
+            cargoExecutable(),
+            "metadata",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            "aarch64-linux-android",
+            "--manifest-path",
+            repoRoot.resolve("crates/kithara-ffi/Cargo.toml").absolutePath,
+        )
+    }.standardOutput.asText.get()
+
+    val packages = JsonSlurper().parseText(metadata) as Map<*, *>
+    val manifestPath = (packages["packages"] as List<*>)
+        .asSequence()
+        .map { it as Map<*, *> }
+        .first { pkg -> pkg["name"] == "rustls-platform-verifier-android" }["manifest_path"] as String
+
+    return File(
+        File(manifestPath).parentFile,
+        "maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar",
+    )
+}
+
+val rustlsPlatformVerifierAar = findRustlsPlatformVerifierAar()
 
 val generateKitharaFfi by tasks.registering(Exec::class) {
     group = "build"
@@ -57,6 +103,20 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+}
+
+val exportReleaseAars by tasks.registering(Copy::class) {
+    group = "distribution"
+    description = "Copy release AARs with stable file names."
+    dependsOn(tasks.named("assembleRelease"))
+
+    from(layout.buildDirectory.file("outputs/aar/lib-release.aar")) {
+        rename { "kithara.aar" }
+    }
+    from(rustlsPlatformVerifierAar) {
+        rename { "rust-tls.aar" }
+    }
+    into(releaseAarOutputDir)
 }
 
 tasks.named("preBuild") {
