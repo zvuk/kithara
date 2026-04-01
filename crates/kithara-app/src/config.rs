@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub log_directives: Vec<String>,
     /// Color palette for the UI.
     pub palette: Palette,
+    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
+    pub danger_accept_invalid_certs: bool,
 }
 
 impl AppConfig {
@@ -30,6 +32,7 @@ impl AppConfig {
         "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
         "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
         "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/95038745_1/master.m3u8",
     ];
 
     /// Create config with default tracks if none provided.
@@ -51,6 +54,7 @@ impl AppConfig {
             eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),
             palette: Palette::default(),
+            danger_accept_invalid_certs: true,
         }
     }
 }

@@ -118,6 +118,9 @@ pub struct NetOptions {
     /// Called when soft timeout fires. Does not abort the request.
     pub on_slow: Option<Arc<dyn Fn() + Send + Sync>>,
     pub retry_policy: RetryPolicy,
+    /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
+    /// **Security risk** — use only for local development and test servers.
+    pub insecure: bool,
 }
 
 impl std::fmt::Debug for NetOptions {
@@ -128,6 +131,7 @@ impl std::fmt::Debug for NetOptions {
             .field("soft_timeout", &self.soft_timeout)
             .field("on_slow", &self.on_slow.as_ref().map(|_| ".."))
             .field("retry_policy", &self.retry_policy)
+            .field("insecure", &self.insecure)
             .finish()
     }
 }

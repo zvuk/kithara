@@ -12,7 +12,7 @@ use crate::{
     controls::{AppController, PlayerControls, TrackLoadParams},
     crossfade::{CrossfadeClock, ProgressLog},
     events::{format_seconds, is_progress_event, source_note},
-    playlist::Playlist,
+    playlist::{Playlist, TrackStatus},
     theme::tui,
 };
 
@@ -35,7 +35,7 @@ pub(super) async fn run_tui(
     let palette: tui::TuiPalette = config.palette.into();
 
     let player = controller.player().clone();
-    let load_params = controller.load_params();
+    let load_params = controller.load_params(config.danger_accept_invalid_certs);
     let playlist = Arc::clone(load_params.playlist());
 
     let event_rx = player.subscribe();
@@ -363,7 +363,19 @@ fn switch_track(
 ) -> RunnerResult {
     let handle = tokio::runtime::Handle::current();
 
-    let resource = handle.block_on(load_params.load_resource(index))?;
+    let resource = match handle.block_on(load_params.load_resource(index)) {
+        Ok(r) => r,
+        Err(e) => {
+            load_params
+                .playlist()
+                .set_status(index, TrackStatus::Failed);
+            let note = format!("track #{} load failed: {e}", index + 1);
+            tracing::error!(index, %e, "track load failed");
+            ui.dashboard.set_note(&note);
+            ui.log_line(&note)?;
+            return Ok(());
+        }
+    };
     player.replace_item(index, resource);
 
     match player.select_item(index, true) {

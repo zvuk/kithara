@@ -39,7 +39,9 @@ impl HttpClient {
     pub fn new(options: NetOptions) -> Self {
         let builder = Client::builder();
         #[cfg(not(target_arch = "wasm32"))]
-        let builder = builder.pool_max_idle_per_host(options.pool_max_idle_per_host);
+        let builder = builder
+            .pool_max_idle_per_host(options.pool_max_idle_per_host)
+            .danger_accept_invalid_certs(options.insecure);
         let inner = builder.build().expect("failed to build reqwest client");
         Self { inner, options }
     }

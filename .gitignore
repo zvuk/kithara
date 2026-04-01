@@ -85,3 +85,4 @@ android/local.properties
 package-lock.json
 .build
 .swiftpm
+.planning/

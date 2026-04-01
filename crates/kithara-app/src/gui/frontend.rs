@@ -35,12 +35,14 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     palette: gui::GuiPalette,
+    config: AppConfig,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
             palette: config.palette.into(),
+            config: config.clone(),
         })
     }
 
@@ -51,7 +53,7 @@ impl Frontend for GuiFrontend {
 
     fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError> {
         let player = controller.player().clone();
-        let load_params = controller.load_params();
+        let load_params = controller.load_params(self.config.danger_accept_invalid_certs);
         let playlist = Arc::clone(load_params.playlist());
         let palette = self.palette;
 

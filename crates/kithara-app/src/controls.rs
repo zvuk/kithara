@@ -91,10 +91,11 @@ impl AppController {
 
     /// Create a `TrackLoadParams` for async track loading.
     #[must_use]
-    pub fn load_params(&self) -> TrackLoadParams {
+    pub fn load_params(&self, danger_accept_invalid_certs: bool) -> TrackLoadParams {
         TrackLoadParams {
             player: Arc::clone(&self.player),
             playlist: Arc::clone(&self.playlist),
+            danger_accept_invalid_certs,
         }
     }
 }
@@ -107,6 +108,7 @@ impl AppController {
 pub struct TrackLoadParams {
     player: Arc<PlayerImpl>,
     playlist: Arc<Playlist>,
+    danger_accept_invalid_certs: bool,
 }
 
 impl TrackLoadParams {
@@ -142,6 +144,7 @@ impl TrackLoadParams {
             config = config.with_keys(crate::drm::make_key_options());
         }
 
+        config.net.insecure = self.danger_accept_invalid_certs;
         self.player.prepare_config(&mut config);
 
         Ok(config)

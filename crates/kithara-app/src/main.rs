@@ -23,6 +23,11 @@ struct Args {
     #[arg(long, short, default_value = "auto")]
     mode: Mode,
 
+    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
+    /// Enabled by default during testing phase.
+    #[arg(long, default_value_t = true)]
+    insecure: bool,
+
     /// Audio files or URLs to play.
     tracks: Vec<String>,
 }
@@ -66,7 +71,8 @@ fn main() -> AppResult {
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    let config = AppConfig::with_defaults(args.tracks);
+    let mut config = AppConfig::with_defaults(args.tracks);
+    config.danger_accept_invalid_certs = args.insecure;
 
     // Initialize tracing based on mode.
     #[cfg(feature = "tui")]
