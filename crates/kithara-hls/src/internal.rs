@@ -69,6 +69,7 @@ pub fn make_test_source_with_fetch(
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
         _backend: None,
+        last_fallback_key: std::sync::atomic::AtomicU64::new(u64::MAX),
     }
 }
 

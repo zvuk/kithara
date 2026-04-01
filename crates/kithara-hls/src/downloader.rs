@@ -794,8 +794,7 @@ impl HlsDownloader {
             self.download_variant = variant;
         }
 
-        let (cached_count, cached_end_offset) =
-            self.populate_cached_segments_if_needed(variant, is_variant_switch);
+        let (cached_count, cached_end_offset) = self.populate_cached_segments_if_needed(variant);
         self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
 
         Ok((is_variant_switch, is_midstream_switch))
@@ -805,26 +804,23 @@ impl HlsDownloader {
         if !is_midstream_switch {
             return;
         }
-        // Start downloading from segment 0 so the init segment is fetched
-        // first. The decoder needs the full stream starting from offset 0.
-        // Reset to segment 0 instead of the old cursor position — this
-        // ensures the init segment is available when the decoder is created.
-        self.cursor.reopen_fill(0, 0);
+
+        let old_variant = self.download_variant;
+        let num_segments = self.num_segments(old_variant).unwrap_or(0);
+        let cursor_pos = {
+            let state = self.segments.lock_sync();
+            first_missing_segment(&state, old_variant, 0, num_segments).unwrap_or(num_segments)
+        };
+
+        self.cursor.reopen_fill(cursor_pos, cursor_pos);
         self.coord
             .had_midstream_switch
-            .store(false, Ordering::Release);
+            .store(true, Ordering::Release);
         self.coord.clear_segment_requests();
         self.coord.condvar.notify_all();
     }
 
-    fn populate_cached_segments_if_needed(
-        &self,
-        variant: usize,
-        is_variant_switch: bool,
-    ) -> (usize, u64) {
-        if is_variant_switch {
-            return (0, 0);
-        }
+    fn populate_cached_segments_if_needed(&self, variant: usize) -> (usize, u64) {
         Self::populate_cached_segments(
             &self.segments,
             &self.coord,
@@ -854,6 +850,24 @@ impl HlsDownloader {
             self.advance_current_segment_index(cached_count);
         }
         self.sent_init_for_variant.insert(variant);
+
+        // Publish SegmentComplete events for segments discovered by the
+        // cache scan so event consumers (tests, analytics) learn about
+        // cached segments that were not re-downloaded.
+        for seg_idx in 0..cached_count {
+            let bytes = self
+                .segments
+                .lock_sync()
+                .stored_segment(variant, seg_idx)
+                .map_or(0, |s| s.media_len + s.init_len);
+            self.bus.publish(HlsEvent::SegmentComplete {
+                variant,
+                segment_index: seg_idx,
+                bytes_transferred: bytes,
+                cached: true,
+                duration: Duration::ZERO,
+            });
+        }
     }
 
     async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
@@ -1122,11 +1136,20 @@ impl HlsDownloader {
             }
         };
 
+        let old_variant_param = if old_variant != variant {
+            Some(old_variant)
+        } else {
+            None
+        };
+        let is_cross_codec = old_variant_param
+            .is_some_and(|ov| is_cross_codec_switch(&self.playlist_state, ov, variant));
         let (plans, batch_end) = self.build_batch_plans(
             variant,
             num_segments,
             is_variant_switch,
             is_midstream_switch,
+            old_variant_param,
+            is_cross_codec,
         );
 
         if plans.is_empty() {
@@ -1284,6 +1307,8 @@ impl HlsDownloader {
         num_segments: usize,
         is_variant_switch: bool,
         is_midstream_switch: bool,
+        old_variant: Option<usize>,
+        is_cross_codec: bool,
     ) -> (Vec<HlsPlan>, usize) {
         let reader_seg = self.reader_segment_hint(variant);
         let post_seek_probe_only = self.active_seek_epoch > 0
@@ -1313,7 +1338,13 @@ impl HlsDownloader {
                 ));
 
         for seg_idx in self.current_segment_index()..batch_end {
-            if self.should_skip_planned_segment(variant, seg_idx, is_midstream_switch) {
+            if self.should_skip_planned_segment(
+                variant,
+                seg_idx,
+                is_midstream_switch,
+                old_variant,
+                is_cross_codec,
+            ) {
                 continue;
             }
 
@@ -1363,7 +1394,32 @@ impl HlsDownloader {
         variant: usize,
         seg_idx: usize,
         is_midstream_switch: bool,
+        old_variant: Option<usize>,
+        is_cross_codec: bool,
     ) -> bool {
+        // Cross-variant coverage check (COV-01, COV-02, COV-03)
+        if let Some(old_var) = old_variant
+            && !is_cross_codec
+        {
+            let old_data = {
+                let segments = self.segments.lock_sync();
+                if segments.is_segment_loaded(old_var, seg_idx) {
+                    segments
+                        .variant_segments(old_var)
+                        .and_then(|vs| vs.get(seg_idx))
+                        .cloned()
+                } else {
+                    None
+                }
+            };
+            if let Some(data) = old_data
+                && self.segment_resources_available(&data)
+            {
+                self.advance_current_segment_index(seg_idx + 1);
+                return true;
+            }
+        }
+
         let seg_data = {
             let segments = self.segments.lock_sync();
             segments
@@ -2081,6 +2137,177 @@ mod tests {
         assert!(
             segments.lock_sync().find_at_offset(0).is_none(),
             "active disk resource must not be materialized into StreamIndex"
+        );
+    }
+
+    /// RED: `populate_cached_segments_if_needed` must scan disk cache even
+    /// during a variant switch (`is_variant_switch=true`).
+    ///
+    /// Bug C: the wrapper returns `(0, 0)` when `is_variant_switch` is true,
+    /// skipping the cache scan entirely. This test commits a segment to
+    /// disk, then calls the wrapper with `is_variant_switch=true` and
+    /// asserts `cached_count > 0`.
+    #[kithara::test(tokio)]
+    async fn populate_cached_segments_if_needed_scans_on_variant_switch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            2,
+        )]));
+        let variants = parsed_variants(1);
+        let (_temp_dir, fetch) = test_fetch_manager_disk(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            Arc::clone(&fetch),
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Commit segment 0 to disk so the cache scan can find it.
+        let media_url = playlist_state
+            .segment_url(0, 0)
+            .expect("segment URL present");
+        let key = ResourceKey::from_url(&media_url);
+        let resource = fetch
+            .backend()
+            .acquire_resource_with_ctx(&key, None)
+            .expect("acquire resource");
+        resource.write_at(0, &[0xAA; 64]).expect("write bytes");
+        resource.commit(Some(64)).expect("commit resource");
+
+        // With Bug C fixed, the wrapper delegates to the inner function
+        // unconditionally — no early return on variant switch.
+        let (cached_count, _cached_end_offset) = downloader.populate_cached_segments_if_needed(0);
+
+        assert!(
+            cached_count > 0,
+            "populate_cached_segments_if_needed must scan disk cache on variant switch, \
+             but Bug C early return produces cached_count=0"
+        );
+    }
+
+    /// Multi-switch V0->V1->V0: cursor must converge to 5 and
+    /// `download_variant` must be V0 after the back-switch.
+    ///
+    /// Exercises the full component chain:
+    /// `handle_midstream_switch` -> `populate_cached_segments_with_open`
+    /// -> `apply_cached_segment_progress` for each switch step.
+    #[kithara::test(tokio)]
+    async fn multi_switch_v0_v1_v0_cursor_converges() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 5),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 5),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Commit V0 segments 0..5 in StreamIndex.
+        {
+            let mut segments = downloader.segments.lock_sync();
+            for seg_idx in 0..5 {
+                segments.commit_segment(
+                    0,
+                    seg_idx,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(&format!("https://example.com/seg-0-{seg_idx}.m4s"))
+                            .expect("valid URL"),
+                    },
+                );
+            }
+        }
+
+        // --- Switch 1: V0 -> V1 ---
+        // handle_midstream_switch uses old download_variant (V0).
+        // first_missing(V0) = 5 (all V0 committed), cursor = 5.
+        downloader.handle_midstream_switch(true);
+        assert_eq!(
+            downloader.current_segment_index(),
+            5,
+            "after V0->V1 midstream switch, cursor must be at first_missing(V0)=5"
+        );
+
+        downloader.download_variant = 1;
+
+        // V1 has no committed segments: cache scan returns (0, 0).
+        let (cached_count_v1, cached_offset_v1) = HlsDownloader::populate_cached_segments_with_open(
+            &downloader.segments,
+            &downloader.coord,
+            playlist_state.as_ref(),
+            1,
+            |_key| None, // V1 not on disk
+        );
+        assert_eq!(cached_count_v1, 0);
+        downloader.apply_cached_segment_progress(1, cached_count_v1, cached_offset_v1);
+
+        // State after V0->V1: cursor=5, download_variant=1.
+        assert_eq!(downloader.current_segment_index(), 5);
+        assert_eq!(downloader.download_variant, 1);
+
+        // --- Switch 2: V1 -> V0 (back-switch) ---
+        // handle_midstream_switch uses old download_variant (V1).
+        // first_missing(V1) = 0 (V1 has nothing), cursor = 0.
+        downloader.handle_midstream_switch(true);
+        assert_eq!(
+            downloader.current_segment_index(),
+            0,
+            "after V1->V0 midstream switch, cursor must be at first_missing(V1)=0"
+        );
+
+        downloader.download_variant = 0;
+
+        // Cache scan for V0: all 5 segments are committed in StreamIndex.
+        // Use mock that returns Committed for all V0 segments.
+        let (cached_count_v0, cached_offset_v0) = HlsDownloader::populate_cached_segments_with_open(
+            &downloader.segments,
+            &downloader.coord,
+            playlist_state.as_ref(),
+            0,
+            |_key| {
+                Some(AssetResourceState::Committed {
+                    final_len: Some(100),
+                })
+            },
+        );
+        assert_eq!(
+            cached_count_v0, 5,
+            "cache scan must find all 5 committed V0 segments"
+        );
+
+        downloader.apply_cached_segment_progress(0, cached_count_v0, cached_offset_v0);
+
+        // Final state: cursor=5, download_variant=0.
+        assert_eq!(
+            downloader.download_variant, 0,
+            "download_variant must converge to V0 after V0->V1->V0 multi-switch"
+        );
+        assert_eq!(
+            downloader.current_segment_index(),
+            5,
+            "cursor must converge to 5 after V0->V1->V0 multi-switch \
+             (cache scan advances past all committed V0 segments)"
         );
     }
 
@@ -2936,8 +3163,14 @@ mod tests {
         downloader.cursor.reset_fill(5);
         downloader.prefetch_count = 2;
         let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(1, 5);
-        let (plans, _batch_end) =
-            downloader.build_batch_plans(1, 10, is_variant_switch, is_midstream_switch);
+        let (plans, _batch_end) = downloader.build_batch_plans(
+            1,
+            10,
+            is_variant_switch,
+            is_midstream_switch,
+            Some(0),
+            false,
+        );
 
         assert!(
             !plans.is_empty(),
@@ -2976,7 +3209,7 @@ mod tests {
         downloader.reset_for_seek_epoch(1, 0, 2);
         let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 2);
         let (plans, _batch_end) =
-            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch, None, false);
 
         assert_eq!(
             plans.first().map(|p| p.segment),
@@ -3015,7 +3248,7 @@ mod tests {
         downloader.prefetch_count = 2;
         let (is_variant_switch, is_midstream_switch) = downloader.classify_variant_transition(0, 0);
         let (plans, _batch_end) =
-            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch);
+            downloader.build_batch_plans(0, 6, is_variant_switch, is_midstream_switch, None, false);
 
         assert_eq!(
             plans.first().map(|p| p.segment),
@@ -3069,7 +3302,7 @@ mod tests {
         downloader.cursor.reopen_fill(5, 6);
         downloader.prefetch_count = 3;
         downloader.coord.timeline().set_byte_position(500);
-        let (plans, batch_end) = downloader.build_batch_plans(0, 10, false, false);
+        let (plans, batch_end) = downloader.build_batch_plans(0, 10, false, false, None, false);
         assert!(
             plans.is_empty(),
             "post-seek planner must wait for demand-driven resume"
@@ -3109,7 +3342,7 @@ mod tests {
         downloader.cursor.reset_fill(12);
         downloader.prefetch_count = 3;
         downloader.coord.timeline().set_byte_position(8_451_629);
-        let (plans, batch_end) = downloader.build_batch_plans(0, 20, false, false);
+        let (plans, batch_end) = downloader.build_batch_plans(0, 20, false, false, None, false);
         assert_eq!(
             plans.len(),
             1,
@@ -3913,7 +4146,27 @@ mod tests {
             EventBus::new(16),
         );
 
-        downloader.cursor.reset_fill(2);
+        // Commit V0 segments 0 and 1 so first_missing_segment returns Some(2).
+        {
+            let mut segments = downloader.segments.lock_sync();
+            for seg_idx in 0..2 {
+                segments.commit_segment(
+                    0,
+                    seg_idx,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(
+                            &format!("https://example.com/v0-seg-{seg_idx}.m4s",),
+                        )
+                        .expect("valid URL"),
+                    },
+                );
+            }
+        }
+
+        downloader.cursor.reset_fill(4);
 
         downloader.coord.requeue_segment_request(SegmentRequest {
             segment_index: 1,
@@ -3937,11 +4190,200 @@ mod tests {
             "handle_midstream_switch must drain all requests"
         );
 
-        // Cursor resets to 0 so init segment is fetched first.
+        // Cursor advances to first missing segment in old variant (V0 has
+        // segments 0 and 1 committed, so first missing is 2).
+        assert_eq!(
+            downloader.current_segment_index(),
+            2,
+            "midstream switch must advance cursor to first missing segment"
+        );
+
+        assert!(
+            downloader
+                .coord
+                .had_midstream_switch
+                .load(Ordering::Acquire),
+            "had_midstream_switch must be true after handle_midstream_switch(true)"
+        );
+    }
+
+    #[kithara::test]
+    fn cursor_advances_to_first_missing_after_midstream_switch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Commit V0 segments 0 and 1 (segment 2 is missing).
+        {
+            let mut segments = downloader.segments.lock_sync();
+            for seg_idx in 0..2 {
+                segments.commit_segment(
+                    0,
+                    seg_idx,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(
+                            &format!("https://example.com/v0-seg-{seg_idx}.m4s",),
+                        )
+                        .expect("valid URL"),
+                    },
+                );
+            }
+        }
+
+        downloader.handle_midstream_switch(true);
+
+        assert_eq!(
+            downloader.current_segment_index(),
+            2,
+            "midstream switch must advance cursor to first missing segment in old variant"
+        );
+        assert_eq!(
+            downloader.gap_scan_start_segment(),
+            2,
+            "midstream switch must advance floor to first missing segment"
+        );
+    }
+
+    #[kithara::test]
+    fn cursor_falls_back_to_zero_when_no_committed_segments() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // No commits -- V0 has nothing loaded.
+        downloader.handle_midstream_switch(true);
+
         assert_eq!(
             downloader.current_segment_index(),
             0,
-            "midstream switch must reset cursor to segment 0"
+            "midstream switch with no committed segments must fall back to cursor 0"
+        );
+    }
+
+    #[kithara::test]
+    fn cursor_advances_to_num_segments_when_all_loaded() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Commit all 3 V0 segments.
+        {
+            let mut segments = downloader.segments.lock_sync();
+            for seg_idx in 0..3 {
+                segments.commit_segment(
+                    0,
+                    seg_idx,
+                    SegmentData {
+                        init_len: 0,
+                        media_len: 100,
+                        init_url: None,
+                        media_url: Url::parse(
+                            &format!("https://example.com/v0-seg-{seg_idx}.m4s",),
+                        )
+                        .expect("valid URL"),
+                    },
+                );
+            }
+        }
+
+        downloader.handle_midstream_switch(true);
+
+        assert_eq!(
+            downloader.current_segment_index(),
+            3,
+            "midstream switch with all segments loaded must advance cursor to num_segments"
+        );
+    }
+
+    #[kithara::test]
+    fn had_midstream_switch_is_true_after_handle_midstream_switch() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        assert!(
+            !downloader
+                .coord
+                .had_midstream_switch
+                .load(Ordering::Acquire),
+            "had_midstream_switch must be false before call"
+        );
+
+        downloader.handle_midstream_switch(true);
+
+        assert!(
+            downloader
+                .coord
+                .had_midstream_switch
+                .load(Ordering::Acquire),
+            "had_midstream_switch must be true after handle_midstream_switch(true)"
         );
     }
 
@@ -4201,6 +4643,197 @@ mod tests {
         assert!(
             !downloader.segment_loaded_for_demand(0, 1, "test_stale", "test_loaded"),
             "per-variant storage alone must not suppress demand when the segment is not visible in the current layout"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn cross_variant_skip_prevents_redownload_of_committed_segment() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let media_url = Url::parse("https://example.com/seg-0-3.m4s").expect("valid media URL");
+
+        // Write media resource to asset store so segment_resources_available returns true
+        {
+            let media_key = ResourceKey::from_url(&media_url);
+            let media_res = downloader
+                .fetch
+                .backend()
+                .acquire_resource(&media_key)
+                .expect("acquire media resource");
+            media_res
+                .write_at(0, &[0u8; 1000])
+                .expect("write media data");
+            media_res.commit(Some(1000)).expect("commit media");
+        }
+
+        // Commit segment 3 for variant 0 in StreamIndex
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                3,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 1000,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        downloader.cursor.reset_fill(3);
+        let skipped = downloader.should_skip_planned_segment(1, 3, true, Some(0), false);
+
+        assert!(
+            skipped,
+            "cross-variant skip must return true when old variant has the segment committed and resource-available"
+        );
+        assert_eq!(
+            downloader.current_segment_index(),
+            4,
+            "cross-variant skip must advance cursor past the skipped segment"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn cross_codec_switch_bypasses_cross_variant_skip() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::Flac), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let media_url = Url::parse("https://example.com/seg-0-3.m4s").expect("valid media URL");
+
+        // Write media resource to asset store
+        {
+            let media_key = ResourceKey::from_url(&media_url);
+            let media_res = downloader
+                .fetch
+                .backend()
+                .acquire_resource(&media_key)
+                .expect("acquire media resource");
+            media_res
+                .write_at(0, &[0u8; 1000])
+                .expect("write media data");
+            media_res.commit(Some(1000)).expect("commit media");
+        }
+
+        // Commit segment 3 for variant 0 in StreamIndex
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                3,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 1000,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        downloader.cursor.reset_fill(3);
+        let skipped = downloader.should_skip_planned_segment(1, 3, true, Some(0), true);
+
+        assert!(
+            !skipped,
+            "cross-codec switch must bypass cross-variant skip and re-download the segment"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn no_cross_variant_skip_when_old_variant_is_none() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 10),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 10),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let media_url = Url::parse("https://example.com/seg-0-3.m4s").expect("valid media URL");
+
+        // Write media resource to asset store
+        {
+            let media_key = ResourceKey::from_url(&media_url);
+            let media_res = downloader
+                .fetch
+                .backend()
+                .acquire_resource(&media_key)
+                .expect("acquire media resource");
+            media_res
+                .write_at(0, &[0u8; 1000])
+                .expect("write media data");
+            media_res.commit(Some(1000)).expect("commit media");
+        }
+
+        // Commit segment 3 for variant 0 in StreamIndex
+        {
+            let mut segments = downloader.segments.lock_sync();
+            segments.commit_segment(
+                0,
+                3,
+                SegmentData {
+                    init_len: 0,
+                    media_len: 1000,
+                    init_url: None,
+                    media_url,
+                },
+            );
+        }
+
+        downloader.cursor.reset_fill(3);
+        let skipped = downloader.should_skip_planned_segment(1, 3, false, None, false);
+
+        assert!(
+            !skipped,
+            "should_skip_planned_segment must not cross-variant skip when old_variant is None"
         );
     }
 }

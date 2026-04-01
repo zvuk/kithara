@@ -56,6 +56,10 @@ pub struct HlsSource {
     pub(crate) variant_fence: Option<VariantIndex>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
     pub(crate) _backend: Option<kithara_stream::Backend>,
+    /// Dedup key for `wait_range_metadata_fallback` events. Encodes
+    /// `(variant << 48) | offset` so the event fires at most once per
+    /// unique (variant, offset) pair during a spin-wait loop.
+    pub(crate) last_fallback_key: std::sync::atomic::AtomicU64,
 }
 
 const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 25;
@@ -413,18 +417,24 @@ impl HlsSource {
     ) -> SegmentIndex {
         let segment_index = Self::segment_index(resolved);
         match resolved {
-            ResolvedSegment::Committed(_) => trace!(
-                variant = current_variant,
-                segment_index,
-                offset = range_start,
-                "wait_range: committed on-demand segment load"
-            ),
-            ResolvedSegment::Layout(_) => trace!(
-                variant = current_variant,
-                segment_index,
-                offset = range_start,
-                "wait_range: layout on-demand segment load"
-            ),
+            ResolvedSegment::Committed(_) => {
+                self.last_fallback_key.store(u64::MAX, Ordering::Relaxed);
+                trace!(
+                    variant = current_variant,
+                    segment_index,
+                    offset = range_start,
+                    "wait_range: committed on-demand segment load"
+                );
+            }
+            ResolvedSegment::Layout(_) => {
+                self.last_fallback_key.store(u64::MAX, Ordering::Relaxed);
+                trace!(
+                    variant = current_variant,
+                    segment_index,
+                    offset = range_start,
+                    "wait_range: layout on-demand segment load"
+                );
+            }
             ResolvedSegment::Fallback(_) => {
                 let hint_index = self.current_segment_index().unwrap_or(0);
                 trace!(
@@ -433,14 +443,18 @@ impl HlsSource {
                     offset = range_start,
                     "wait_range: metadata miss fallback segment load"
                 );
-                self.bus.publish(HlsEvent::Seek {
-                    stage: "wait_range_metadata_fallback",
-                    seek_epoch,
-                    variant: current_variant,
-                    offset: range_start,
-                    from_segment_index: hint_index,
-                    to_segment_index: segment_index,
-                });
+                let key = ((current_variant as u64) << 48) | (range_start & 0x0000_FFFF_FFFF_FFFF);
+                let prev = self.last_fallback_key.swap(key, Ordering::Relaxed);
+                if prev != key {
+                    self.bus.publish(HlsEvent::Seek {
+                        stage: "wait_range_metadata_fallback",
+                        seek_epoch,
+                        variant: current_variant,
+                        offset: range_start,
+                        from_segment_index: hint_index,
+                        to_segment_index: segment_index,
+                    });
+                }
             }
         }
         segment_index
@@ -1453,6 +1467,7 @@ pub(crate) fn build_pair(
         bus,
         variant_fence: None,
         _backend: None,
+        last_fallback_key: std::sync::atomic::AtomicU64::new(u64::MAX),
     };
 
     (downloader, source)
@@ -2520,5 +2535,33 @@ mod tests {
         let source = build_phase_test_source(1);
 
         assert_eq!(source.phase(), SourcePhase::Waiting);
+    }
+
+    #[kithara::test]
+    fn fallback_seek_event_fires_at_most_once_per_offset() {
+        let source = build_test_source(1);
+        source.coord.stopped.store(false, Ordering::Release);
+        let mut rx = source.bus.subscribe();
+
+        // Call request_on_demand_segment 50 times at offset=0.
+        // Without dedup this would publish 50 Seek events.
+        for _ in 0..50 {
+            let _ = source.request_on_demand_segment(0, 0);
+        }
+
+        // Count Seek events with stage "wait_range_metadata_fallback".
+        let mut fallback_count = 0usize;
+        while let Ok(event) = rx.try_recv() {
+            if let kithara_events::Event::Hls(HlsEvent::Seek { stage, .. }) = event {
+                if stage == "wait_range_metadata_fallback" {
+                    fallback_count += 1;
+                }
+            }
+        }
+
+        assert!(
+            fallback_count <= 1,
+            "fallback seek event must fire at most once per (variant, offset), got {fallback_count}"
+        );
     }
 }

@@ -153,11 +153,18 @@ impl StreamType for Hls {
 
         let fetch_manager = Arc::new(fetch_manager);
 
-        // Determine initial variant
-        let initial_variant = config
-            .abr
-            .as_ref()
-            .map_or(0, AbrController::get_current_variant_index);
+        // Determine initial variant. When a shared ABR controller carries
+        // stale state from a previous stream (e.g., current_variant=1 but
+        // mode=Manual(0)), synchronize before reading the initial variant.
+        // This ensures layout_variant matches the ABR target at startup.
+        let initial_variant = config.abr.as_ref().map_or(0, |abr| {
+            let now = kithara_platform::time::Instant::now();
+            let decision = abr.decide(now);
+            if decision.changed {
+                abr.apply(&decision, now);
+            }
+            abr.get_current_variant_index()
+        });
 
         // Event bus was created earlier (before HttpClient) for soft timeout callback.
 
