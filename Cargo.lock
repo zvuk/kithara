@@ -4022,6 +4022,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-encode"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "kithara-stream",
+ "kithara-workspace-hack",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-events"
 version = "0.1.0"
 dependencies = [
@@ -4403,9 +4414,9 @@ dependencies = [
  "axum",
  "base64",
  "cbc",
- "ffmpeg-next",
  "futures",
  "hex",
+ "kithara-encode",
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",

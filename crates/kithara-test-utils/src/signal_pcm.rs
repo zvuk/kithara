@@ -296,6 +296,25 @@ impl<S: signal::SignalFn> SignalPcm<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: signal::SignalFn + Sync> kithara_encode::PcmSource for SignalPcm<S> {
+    fn sample_rate(&self) -> u32 {
+        Self::sample_rate(self)
+    }
+
+    fn channels(&self) -> u16 {
+        Self::channels(self)
+    }
+
+    fn total_byte_len(&self) -> Option<usize> {
+        Self::total_byte_len(self)
+    }
+
+    fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+        Self::read_pcm_at(self, offset, buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

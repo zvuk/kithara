@@ -41,9 +41,9 @@ use axum::{
     routing::get,
 };
 use futures::stream;
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncoderFactory};
 
 use crate::{
-    audio_encode::encode_signal,
     signal_pcm::{SignalLength, SignalPcm, signal},
     signal_spec::{
         ResolvedSignalSpec, SignalFormat, SignalKind, SignalRequest, parse_signal_request,
@@ -216,12 +216,33 @@ fn build_encoded_response(format: SignalFormat, spec: &ResolvedSignalSpec) -> Re
     }
 }
 
-fn build_encoded_response_for_signal<S: signal::SignalFn>(
+fn build_encoded_response_for_signal<S: signal::SignalFn + Sync>(
     signal: S,
     spec: &ResolvedSignalSpec,
     format: SignalFormat,
 ) -> Response {
-    match encode_signal(signal, spec, format) {
+    let pcm = SignalPcm::new(signal, spec.sample_rate, spec.channels, spec.length);
+    let target = encode_target(format);
+    let encoder = match EncoderFactory::create_bytes(target) {
+        Ok(encoder) => encoder,
+        Err(error) if is_bad_request(&error) => {
+            return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("signal encoding failed: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let request = BytesEncodeRequest {
+        pcm: &pcm,
+        target,
+        bit_rate: None,
+    };
+
+    match encoder.encode_bytes(request) {
         Ok(encoded) => {
             let mut response = encoded.bytes.into_response();
             response.headers_mut().insert(
@@ -231,7 +252,7 @@ fn build_encoded_response_for_signal<S: signal::SignalFn>(
             response
         }
 
-        Err(error) if error.is_bad_request() => {
+        Err(error) if is_bad_request(&error) => {
             (StatusCode::BAD_REQUEST, error.to_string()).into_response()
         }
 
@@ -241,6 +262,23 @@ fn build_encoded_response_for_signal<S: signal::SignalFn>(
         )
             .into_response(),
     }
+}
+
+fn encode_target(format: SignalFormat) -> BytesEncodeTarget {
+    match format {
+        SignalFormat::Wav => unreachable!("WAV uses the dedicated route path"),
+        SignalFormat::Mp3 => BytesEncodeTarget::Mp3,
+        SignalFormat::Flac => BytesEncodeTarget::Flac,
+        SignalFormat::Aac => BytesEncodeTarget::Aac,
+        SignalFormat::M4a => BytesEncodeTarget::M4a,
+    }
+}
+
+fn is_bad_request(error: &EncodeError) -> bool {
+    matches!(
+        error,
+        EncodeError::InvalidInput(_) | EncodeError::InvalidMediaInfo(_)
+    )
 }
 
 fn stream_wav<S: signal::SignalFn>(signal: S, spec: &ResolvedSignalSpec) -> Body {

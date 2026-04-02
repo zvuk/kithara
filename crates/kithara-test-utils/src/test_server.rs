@@ -15,7 +15,10 @@ use url::Url;
 #[cfg(target_arch = "wasm32")]
 use crate::token_store::{TokenRequest, TokenResponse};
 use crate::{
-    fixture_protocol::{DataMode, DelayRule, EncryptionRequest, InitMode},
+    fixture_protocol::{
+        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        PackagedAudioSource, PackagedSignal,
+    },
     hls_spec::HlsSpecError,
     hls_url::{
         HlsSpec, hls_init_path_from_ref, hls_key_path_from_ref, hls_master_path_from_ref,
@@ -233,6 +236,26 @@ impl HlsFixtureBuilder {
         self
     }
 
+    #[must_use]
+    pub fn packaged_audio(mut self, packaged_audio: PackagedAudioRequest) -> Self {
+        self.spec.packaged_audio = Some(packaged_audio);
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_aac_lc(mut self, sample_rate: u32, channels: u16) -> Self {
+        self.spec.packaged_audio = Some(PackagedAudioRequest {
+            codec: kithara_stream::AudioCodec::AacLc,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(128_000),
+            source: PackagedAudioSource::Signal(PackagedSignal::Sawtooth),
+            variant_overrides: Vec::new(),
+        });
+        self
+    }
+
     pub(crate) fn into_spec_with_blob_registrar<F>(self, register_blob: F) -> HlsSpec
     where
         F: Fn(&[u8]) -> String,
@@ -240,7 +263,10 @@ impl HlsFixtureBuilder {
         self.into_spec_inner(Some(&register_blob))
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), expect(dead_code))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by test-only helper paths")
+    )]
     pub(crate) fn into_inline_spec(self) -> HlsSpec {
         self.into_spec_inner::<fn(&[u8]) -> String>(None)
     }

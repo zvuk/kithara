@@ -1,3 +1,6 @@
+//! Packaged HLS orchestration: playlists and segment bytes are built from [`EncodedTrack`]
+//! and fMP4 mux output. This module intentionally does not import `FFmpeg` types.
+
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -8,40 +11,48 @@ use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
+use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest};
+use kithara_stream::MediaInfo;
 
 use crate::{
     fixture_protocol::{create_wav_init_header, generate_segment},
-    hls_spec::{ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode},
+    fmp4::{PackagedVariantData, mux_audio_track},
+    hls_spec::{
+        HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
+        ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
+    },
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_from_signal,
 };
 
 pub(crate) type GeneratedHlsCache = RwLock<HashMap<String, Arc<GeneratedHls>>>;
 
-pub(crate) fn load_hls(cache: &GeneratedHlsCache, spec: ResolvedHlsSpec) -> Arc<GeneratedHls> {
+pub(crate) fn load_hls(
+    cache: &GeneratedHlsCache,
+    spec: ResolvedHlsSpec,
+) -> Result<Arc<GeneratedHls>, HlsSpecError> {
     let cache_key = spec.cache_key().to_owned();
     {
         let cache = cache.read().expect("hls cache poisoned");
         if let Some(existing) = cache.get(&cache_key) {
-            return Arc::clone(existing);
+            return Ok(Arc::clone(existing));
         }
     }
 
-    let generated = Arc::new(GeneratedHls::new(spec));
+    let generated = Arc::new(GeneratedHls::new(spec)?);
     let mut cache = cache.write().expect("hls cache poisoned");
-    Arc::clone(
+    Ok(Arc::clone(
         cache
             .entry(cache_key)
             .or_insert_with(|| Arc::clone(&generated)),
-    )
+    ))
 }
 
 pub(crate) struct GeneratedHls {
     spec: ResolvedHlsSpec,
     master_playlist: String,
     media_playlists: Vec<String>,
-    data_mode: MaterializedDataMode,
-    init_segments: Vec<Arc<Vec<u8>>>,
+    body: MaterializedHlsBody,
 }
 
 enum MaterializedDataMode {
@@ -51,22 +62,30 @@ enum MaterializedDataMode {
     PerVariantBytes(Vec<Arc<Vec<u8>>>),
 }
 
+enum MaterializedHlsBody {
+    Legacy {
+        data_mode: MaterializedDataMode,
+        init_segments: Vec<Arc<Vec<u8>>>,
+    },
+    Packaged {
+        variants: Vec<PackagedVariantData>,
+    },
+}
+
 impl GeneratedHls {
-    fn new(spec: ResolvedHlsSpec) -> Self {
-        let data_mode = materialize_data_mode(&spec);
-        let init_segments = materialize_init_mode(&spec);
-        let master_playlist = build_master_playlist(&spec);
+    fn new(spec: ResolvedHlsSpec) -> Result<Self, HlsSpecError> {
+        let body = materialize_body(&spec)?;
+        let master_playlist = build_master_playlist(&spec, &body);
         let media_playlists = (0..spec.variant_count)
-            .map(|variant| build_media_playlist(&spec, variant))
+            .map(|variant| build_media_playlist(&spec, &body, variant))
             .collect();
 
-        Self {
+        Ok(Self {
             spec,
             master_playlist,
             media_playlists,
-            data_mode,
-            init_segments,
-        }
+            body,
+        })
     }
 
     pub(crate) fn master_playlist(&self, encoded_spec: &str) -> String {
@@ -90,8 +109,29 @@ impl GeneratedHls {
             })
     }
 
+    pub(crate) fn init_content_type(&self) -> Option<&'static str> {
+        match self.body {
+            MaterializedHlsBody::Legacy { .. } => None,
+            MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),
+        }
+    }
+
+    pub(crate) fn segment_content_type(&self) -> Option<&'static str> {
+        match self.body {
+            MaterializedHlsBody::Legacy { .. } => None,
+            MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),
+        }
+    }
+
     pub(crate) fn init_bytes(&self, variant: usize) -> Option<Vec<u8>> {
-        let plaintext = self.init_segments.get(variant)?.as_slice();
+        let plaintext = match &self.body {
+            MaterializedHlsBody::Legacy { init_segments, .. } => {
+                init_segments.get(variant)?.as_slice()
+            }
+            MaterializedHlsBody::Packaged { variants } => {
+                variants.get(variant)?.init_segment.as_slice()
+            }
+        };
         Some(self.encrypt_if_needed(plaintext, 0))
     }
 
@@ -132,21 +172,32 @@ impl GeneratedHls {
             return None;
         }
 
-        let start = segment.checked_mul(self.spec.segment_size)?;
-        match &self.data_mode {
-            MaterializedDataMode::TestPattern => {
-                Some(generate_segment(variant, segment, self.spec.segment_size))
+        match &self.body {
+            MaterializedHlsBody::Legacy { data_mode, .. } => {
+                let start = segment.checked_mul(self.spec.segment_size)?;
+                match data_mode {
+                    MaterializedDataMode::TestPattern => {
+                        Some(generate_segment(variant, segment, self.spec.segment_size))
+                    }
+                    MaterializedDataMode::AbrBinary => {
+                        Some(generate_abr_binary_segment(variant, segment))
+                    }
+                    MaterializedDataMode::SharedBytes(bytes) => {
+                        let end = (start + self.spec.segment_size).min(bytes.len());
+                        Some(bytes.get(start..end).unwrap_or(&[]).to_vec())
+                    }
+                    MaterializedDataMode::PerVariantBytes(per_variant) => {
+                        let bytes = per_variant.get(variant)?;
+                        let end = (start + self.spec.segment_size).min(bytes.len());
+                        Some(bytes.get(start..end).unwrap_or(&[]).to_vec())
+                    }
+                }
             }
-            MaterializedDataMode::AbrBinary => Some(generate_abr_binary_segment(variant, segment)),
-            MaterializedDataMode::SharedBytes(bytes) => {
-                let end = (start + self.spec.segment_size).min(bytes.len());
-                Some(bytes.get(start..end).unwrap_or(&[]).to_vec())
-            }
-            MaterializedDataMode::PerVariantBytes(per_variant) => {
-                let bytes = per_variant.get(variant)?;
-                let end = (start + self.spec.segment_size).min(bytes.len());
-                Some(bytes.get(start..end).unwrap_or(&[]).to_vec())
-            }
+            MaterializedHlsBody::Packaged { variants } => variants
+                .get(variant)?
+                .media_segments
+                .get(segment)
+                .map(|segment| segment.as_slice().to_vec()),
         }
     }
 
@@ -156,6 +207,94 @@ impl GeneratedHls {
         };
         let iv = derive_iv(enc, sequence);
         encrypt_aes128_cbc(data, &enc.key, &iv)
+    }
+}
+
+fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSpecError> {
+    if let Some(packaged) = &spec.packaged_audio {
+        let variants = packaged
+            .variants
+            .iter()
+            .map(|variant| {
+                encode_packaged_variant(packaged, variant)
+                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
+                    .and_then(|track| {
+                        mux_audio_track(&track)
+                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(MaterializedHlsBody::Packaged { variants });
+    }
+
+    Ok(MaterializedHlsBody::Legacy {
+        data_mode: materialize_data_mode(spec),
+        init_segments: materialize_init_mode(spec),
+    })
+}
+
+fn encode_packaged_variant(
+    packaged: &ResolvedPackagedAudioSpec,
+    variant: &ResolvedPackagedVariant,
+) -> Result<EncodedTrack, EncodeError> {
+    let encoder = EncoderFactory::create_packaged(packaged.codec)?;
+    let frame_samples = encoder.packaged_frame_samples(packaged.codec)?;
+    let requested_segment_frames =
+        (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
+    let packets_per_segment = requested_segment_frames.div_ceil(frame_samples).max(1);
+    let total_frames = packets_per_segment
+        .saturating_mul(frame_samples)
+        .saturating_mul(packaged.segments_per_variant);
+
+    let media_info = MediaInfo::default()
+        .with_codec(packaged.codec)
+        .with_container(packaged.container)
+        .with_sample_rate(packaged.sample_rate)
+        .with_channels(packaged.channels);
+    let length = Finite::new(total_frames);
+
+    let encode = |pcm: &dyn kithara_encode::PcmSource| {
+        encoder.encode_packaged(PackagedEncodeRequest {
+            pcm,
+            media_info: media_info.clone(),
+            timescale: packaged.timescale,
+            bit_rate: variant.bit_rate,
+            packets_per_segment,
+        })
+    };
+
+    match variant.signal {
+        ResolvedPackagedSignal::Sawtooth => {
+            let pcm = SignalPcm::new(
+                signal::Sawtooth,
+                packaged.sample_rate,
+                packaged.channels,
+                length,
+            );
+            encode(&pcm)
+        }
+        ResolvedPackagedSignal::SawtoothDescending => {
+            let pcm = SignalPcm::new(
+                signal::SawtoothDescending,
+                packaged.sample_rate,
+                packaged.channels,
+                length,
+            );
+            encode(&pcm)
+        }
+        ResolvedPackagedSignal::Silence => {
+            let pcm = SignalPcm::new(
+                signal::Silence,
+                packaged.sample_rate,
+                packaged.channels,
+                length,
+            );
+            encode(&pcm)
+        }
+        ResolvedPackagedSignal::Pattern(pattern) => {
+            let pcm = SignalPcm::new(pattern, packaged.sample_rate, packaged.channels, length);
+            encode(&pcm)
+        }
     }
 }
 
@@ -190,7 +329,7 @@ fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
                 .map(|variant| {
                     let pattern = patterns
                         .get(variant)
-                        .cloned()
+                        .copied()
                         .unwrap_or(crate::fixture_protocol::PcmPattern::Ascending);
                     Arc::new(
                         SignalPcm::new(
@@ -261,26 +400,59 @@ fn generate_test_init_segment(variant: usize) -> Vec<u8> {
     data
 }
 
-fn build_master_playlist(spec: &ResolvedHlsSpec) -> String {
+fn build_master_playlist(spec: &ResolvedHlsSpec, body: &MaterializedHlsBody) -> String {
     let mut playlist = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
+    if matches!(body, MaterializedHlsBody::Packaged { .. }) {
+        playlist.push_str("#EXT-X-INDEPENDENT-SEGMENTS\n");
+    }
     for (variant, bandwidth) in spec.variant_bandwidths.iter().copied().enumerate() {
-        playlist.push_str(&format!(
-            "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}\n{{spec}}/v{variant}.m3u8\n"
-        ));
+        match body {
+            MaterializedHlsBody::Legacy { .. } => playlist.push_str(&format!(
+                "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}\n{{spec}}/v{variant}.m3u8\n"
+            )),
+            MaterializedHlsBody::Packaged { variants } => {
+                let codecs = variants
+                    .get(variant)
+                    .map_or("mp4a.40.2", |variant| variant.rfc6381_codec.as_ref());
+                playlist.push_str(&format!(
+                    "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\"\n{{spec}}/v{variant}.m3u8\n"
+                ));
+            }
+        }
     }
     playlist
 }
 
-fn build_media_playlist(spec: &ResolvedHlsSpec, variant: usize) -> String {
+fn build_media_playlist(
+    spec: &ResolvedHlsSpec,
+    body: &MaterializedHlsBody,
+    variant: usize,
+) -> String {
+    let target_duration = match body {
+        MaterializedHlsBody::Legacy { .. } => spec.segment_duration_secs.ceil() as u64,
+        MaterializedHlsBody::Packaged { variants } => variants.get(variant).map_or_else(
+            || spec.segment_duration_secs.ceil() as u64,
+            |variant| {
+                variant
+                    .segment_durations_secs
+                    .iter()
+                    .copied()
+                    .fold(0.0_f64, f64::max)
+                    .ceil() as u64
+            },
+        ),
+    };
     let mut playlist = format!(
         "#EXTM3U\n\
          #EXT-X-VERSION:6\n\
          #EXT-X-TARGETDURATION:{}\n\
          #EXT-X-MEDIA-SEQUENCE:0\n\
          #EXT-X-PLAYLIST-TYPE:VOD\n",
-        spec.segment_duration_secs.ceil() as u64,
+        target_duration,
     );
-    if spec.init_mode.is_present_for(variant) {
+    if spec.init_mode.is_present_for(variant)
+        || matches!(body, MaterializedHlsBody::Packaged { .. })
+    {
         playlist.push_str(&format!("#EXT-X-MAP:URI=\"init/v{variant}.mp4\"\n"));
     }
     if let Some(enc) = &spec.encryption {
@@ -290,10 +462,18 @@ fn build_media_playlist(spec: &ResolvedHlsSpec, variant: usize) -> String {
         }
         playlist.push('\n');
     }
-    for segment in 0..spec.segments_per_variant {
+    let segment_durations: Vec<f64> = match body {
+        MaterializedHlsBody::Legacy { .. } => {
+            vec![spec.segment_duration_secs; spec.segments_per_variant]
+        }
+        MaterializedHlsBody::Packaged { variants } => variants
+            .get(variant)
+            .map(|variant| variant.segment_durations_secs.clone())
+            .unwrap_or_default(),
+    };
+    for (segment, duration) in segment_durations.iter().copied().enumerate() {
         playlist.push_str(&format!(
-            "#EXTINF:{:.1},\nseg/v{variant}_{segment}.m4s\n",
-            spec.segment_duration_secs
+            "#EXTINF:{duration:.3},\nseg/v{variant}_{segment}.m4s\n"
         ));
     }
     playlist.push_str("#EXT-X-ENDLIST\n");
@@ -343,7 +523,7 @@ mod tests {
     fn builds_master_and_media_playlist() {
         let spec =
             parse_hls_spec_with(&encode_hls_spec(&HlsSpec::default()), |_| unreachable!()).unwrap();
-        let generated = GeneratedHls::new(spec);
+        let generated = GeneratedHls::new(spec).unwrap();
         assert!(
             generated
                 .master_playlist("{encoded}")
@@ -373,7 +553,7 @@ mod tests {
             |_| unreachable!(),
         )
         .unwrap();
-        let generated = GeneratedHls::new(spec);
+        let generated = GeneratedHls::new(spec).unwrap();
         let bytes = generated.segment_bytes(0, 0).unwrap();
         assert_ne!(bytes, generate_segment(0, 0, 32));
     }

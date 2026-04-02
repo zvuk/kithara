@@ -17,10 +17,10 @@
 
 //! Shared test utilities for the kithara workspace.
 
-#[cfg(not(target_arch = "wasm32"))]
-mod audio_encode;
 pub mod fixture_protocol;
 pub mod fixtures;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fmp4;
 mod hls_blob_store;
 pub mod hls_fixture;
 pub(crate) mod hls_spec;

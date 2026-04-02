@@ -81,7 +81,9 @@ async fn init_segment(
     match resolve_hls_spec(&state, &hls_spec) {
         Ok((fixture, _)) => fixture.init_bytes(variant).map_or_else(
             || StatusCode::NOT_FOUND.into_response(),
-            |bytes| build_range_response(&bytes, &headers, true, false),
+            |bytes| {
+                build_range_response(&bytes, &headers, true, false, fixture.init_content_type())
+            },
         ),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
@@ -104,7 +106,15 @@ async fn media_segment(
             }
             fixture.segment_bytes(variant, segment).map_or_else(
                 || StatusCode::NOT_FOUND.into_response(),
-                |bytes| build_range_response(&bytes, &headers, true, true),
+                |bytes| {
+                    build_range_response(
+                        &bytes,
+                        &headers,
+                        true,
+                        true,
+                        fixture.segment_content_type(),
+                    )
+                },
             )
         }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -127,7 +137,14 @@ async fn media_segment_head(
                 let override_len = fixture
                     .segment_len(variant, segment, true)
                     .unwrap_or(bytes.len());
-                build_range_response_with_len(&bytes, &headers, false, true, Some(override_len))
+                build_range_response_with_len(
+                    &bytes,
+                    &headers,
+                    false,
+                    true,
+                    Some(override_len),
+                    fixture.segment_content_type(),
+                )
             },
         ),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -142,7 +159,7 @@ async fn key(
     match resolve_hls_spec(&state, &hls_spec) {
         Ok((fixture, _)) => fixture.key_bytes().map_or_else(
             || StatusCode::NOT_FOUND.into_response(),
-            |bytes| build_range_response(&bytes, &headers, true, false),
+            |bytes| build_range_response(&bytes, &headers, true, false, None),
         ),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
@@ -176,7 +193,7 @@ fn resolve_hls_spec<'a>(
 
     state
         .parse_hls_spec(spec_ref)
-        .map(|spec| (state.load_hls(spec), spec_ref))
+        .and_then(|spec| state.load_hls(spec).map(|fixture| (fixture, spec_ref)))
 }
 
 fn parse_variant_path(path: &str, suffix: &str) -> Option<usize> {
@@ -207,8 +224,16 @@ fn build_range_response(
     headers: &HeaderMap,
     include_body: bool,
     accept_ranges: bool,
+    content_type: Option<&'static str>,
 ) -> Response<Body> {
-    build_range_response_with_len(data, headers, include_body, accept_ranges, None)
+    build_range_response_with_len(
+        data,
+        headers,
+        include_body,
+        accept_ranges,
+        None,
+        content_type,
+    )
 }
 
 fn build_range_response_with_len(
@@ -217,6 +242,7 @@ fn build_range_response_with_len(
     include_body: bool,
     accept_ranges: bool,
     content_length_override: Option<usize>,
+    content_type: Option<&'static str>,
 ) -> Response<Body> {
     let total = data.len();
     let range = parse_range_header(headers);
@@ -250,6 +276,9 @@ fn build_range_response_with_len(
                 StatusCode::PARTIAL_CONTENT
             })
             .header(header::CONTENT_LENGTH, content_len.to_string());
+        if let Some(content_type) = content_type {
+            builder = builder.header(header::CONTENT_TYPE, content_type);
+        }
         if accept_ranges {
             builder = builder.header(header::ACCEPT_RANGES, "bytes");
         }
@@ -271,6 +300,9 @@ fn build_range_response_with_len(
         header::CONTENT_LENGTH,
         content_length_override.unwrap_or(total).to_string(),
     );
+    if let Some(content_type) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, content_type);
+    }
     if accept_ranges {
         builder = builder.header(header::ACCEPT_RANGES, "bytes");
     }

@@ -4,10 +4,14 @@ use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
+use kithara_stream::{AudioCodec, ContainerFormat, audio_codec_supports_fmp4_packaging};
 use thiserror::Error;
 
 use crate::{
-    fixture_protocol::{DataMode, DelayRule, EncryptionRequest, InitMode, PcmPattern},
+    fixture_protocol::{
+        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
+    },
     hls_url::HlsSpec,
 };
 
@@ -33,6 +37,7 @@ pub(crate) struct ResolvedHlsSpec {
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
     pub(crate) key_data: Option<Arc<Vec<u8>>>,
+    pub(crate) packaged_audio: Option<ResolvedPackagedAudioSpec>,
     cache_key: String,
 }
 
@@ -68,6 +73,32 @@ pub(crate) struct ResolvedEncryption {
     iv_hex: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedPackagedAudioSpec {
+    pub(crate) codec: AudioCodec,
+    pub(crate) container: ContainerFormat,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
+    pub(crate) timescale: u32,
+    pub(crate) segments_per_variant: usize,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) variants: Vec<ResolvedPackagedVariant>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedPackagedVariant {
+    pub(crate) bit_rate: u64,
+    pub(crate) signal: ResolvedPackagedSignal,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ResolvedPackagedSignal {
+    Sawtooth,
+    SawtoothDescending,
+    Silence,
+    Pattern(PcmPattern),
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum HlsSpecError {
     #[error("hls spec is too large")]
@@ -85,6 +116,10 @@ pub(crate) enum HlsSpecError {
     MissingBlob(String),
     #[error("invalid encryption key or iv")]
     InvalidEncryption,
+    #[error("unsupported packaged audio codec `{0:?}`")]
+    UnsupportedPackagedCodec(AudioCodec),
+    #[error("failed to materialize packaged audio: {0}")]
+    PackagedAudio(String),
 }
 
 impl ResolvedHlsSpec {
@@ -139,6 +174,11 @@ where
         .as_ref()
         .map(normalize_encryption)
         .transpose()?;
+    let packaged_audio = spec
+        .packaged_audio
+        .as_ref()
+        .map(|packaged| resolve_packaged_audio(packaged, &spec))
+        .transpose()?;
     let key_data = match (spec.key_hex.as_deref(), spec.key_blob_ref.as_deref()) {
         (Some(_), Some(_)) => {
             return Err(HlsSpecError::InvalidField {
@@ -166,6 +206,7 @@ where
         encryption,
         head_reported_segment_size: spec.head_reported_segment_size,
         key_data,
+        packaged_audio,
         cache_key,
     })
 }
@@ -204,6 +245,15 @@ fn validate_hls_shape(spec: &HlsSpec) -> Result<(), HlsSpecError> {
         return Err(HlsSpecError::InvalidField {
             field: "head_reported_segment_size",
             message: "must be > 0 when provided",
+        });
+    }
+    if spec.packaged_audio.is_some()
+        && (!matches!(spec.data_mode, DataMode::TestPattern)
+            || !matches!(spec.init_mode, InitMode::None))
+    {
+        return Err(HlsSpecError::InvalidField {
+            field: "packaged_audio",
+            message: "requires default data_mode and init_mode",
         });
     }
     Ok(())
@@ -299,6 +349,90 @@ fn validate_pcm_shape(sample_rate: u32, channels: u16) -> Result<(), HlsSpecErro
         });
     }
     Ok(())
+}
+
+fn resolve_packaged_audio(
+    packaged: &PackagedAudioRequest,
+    spec: &HlsSpec,
+) -> Result<ResolvedPackagedAudioSpec, HlsSpecError> {
+    validate_pcm_shape(packaged.sample_rate, packaged.channels)?;
+    if !audio_codec_supports_fmp4_packaging(packaged.codec) {
+        return Err(HlsSpecError::UnsupportedPackagedCodec(packaged.codec));
+    }
+
+    let timescale = packaged.timescale.unwrap_or(packaged.sample_rate);
+    if timescale == 0 {
+        return Err(HlsSpecError::InvalidField {
+            field: "packaged_audio.timescale",
+            message: "must be > 0",
+        });
+    }
+    if matches!(packaged.codec, AudioCodec::AacLc) && timescale != packaged.sample_rate {
+        return Err(HlsSpecError::InvalidField {
+            field: "packaged_audio.timescale",
+            message: "AAC-LC currently requires timescale == sample_rate",
+        });
+    }
+
+    let base_signal = match &packaged.source {
+        PackagedAudioSource::Signal(signal) => resolved_signal(*signal),
+        PackagedAudioSource::PerVariantPcm { .. } => {
+            ResolvedPackagedSignal::Pattern(PcmPattern::Ascending)
+        }
+    };
+    let mut variants = Vec::with_capacity(spec.variant_count);
+    for variant in 0..spec.variant_count {
+        let mut bit_rate = packaged.bit_rate.unwrap_or(128_000);
+        let mut signal = match &packaged.source {
+            PackagedAudioSource::Signal(_) => base_signal,
+            PackagedAudioSource::PerVariantPcm { patterns } => ResolvedPackagedSignal::Pattern(
+                patterns
+                    .get(variant)
+                    .copied()
+                    .unwrap_or(PcmPattern::Ascending),
+            ),
+        };
+        if let Some(override_spec) = packaged
+            .variant_overrides
+            .iter()
+            .find(|override_spec| override_spec.variant == variant)
+        {
+            apply_variant_override(override_spec, &mut bit_rate, &mut signal);
+        }
+        variants.push(ResolvedPackagedVariant { bit_rate, signal });
+    }
+
+    Ok(ResolvedPackagedAudioSpec {
+        codec: packaged.codec,
+        container: ContainerFormat::Fmp4,
+        sample_rate: packaged.sample_rate,
+        channels: packaged.channels,
+        timescale,
+        segments_per_variant: spec.segments_per_variant,
+        segment_duration_secs: spec.segment_duration_secs,
+        variants,
+    })
+}
+
+fn apply_variant_override(
+    override_spec: &PackagedAudioVariantOverride,
+    bit_rate: &mut u64,
+    signal: &mut ResolvedPackagedSignal,
+) {
+    if let Some(override_rate) = override_spec.bit_rate {
+        *bit_rate = override_rate;
+    }
+    if let Some(pattern) = override_spec.pattern {
+        *signal = ResolvedPackagedSignal::Pattern(pattern);
+    }
+}
+
+fn resolved_signal(signal: PackagedSignal) -> ResolvedPackagedSignal {
+    match signal {
+        PackagedSignal::Sawtooth => ResolvedPackagedSignal::Sawtooth,
+        PackagedSignal::SawtoothDescending => ResolvedPackagedSignal::SawtoothDescending,
+        PackagedSignal::Silence => ResolvedPackagedSignal::Silence,
+    }
 }
 
 fn normalize_encryption(enc: &EncryptionRequest) -> Result<ResolvedEncryption, HlsSpecError> {

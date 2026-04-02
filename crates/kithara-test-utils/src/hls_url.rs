@@ -1,7 +1,9 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
-use crate::fixture_protocol::{DataMode, DelayRule, EncryptionRequest, InitMode};
+use crate::fixture_protocol::{
+    DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+};
 
 fn default_variant_count() -> usize {
     1
@@ -118,6 +120,8 @@ pub struct HlsSpec {
     pub key_hex: Option<String>,
     #[serde(rename = "kbr", default, skip_serializing_if = "Option::is_none")]
     pub key_blob_ref: Option<String>,
+    #[serde(rename = "pa", default, skip_serializing_if = "Option::is_none")]
+    pub packaged_audio: Option<PackagedAudioRequest>,
 }
 
 impl Default for HlsSpec {
@@ -135,6 +139,7 @@ impl Default for HlsSpec {
             head_reported_segment_size: None,
             key_hex: None,
             key_blob_ref: None,
+            packaged_audio: None,
         }
     }
 }

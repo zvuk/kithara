@@ -1,0 +1,20 @@
+[package]
+name = "kithara-encode"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Synchronous audio encoding with packaged and byte outputs"
+
+[lints]
+workspace = true
+
+[dependencies]
+kithara-stream = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+ffmpeg-next = { workspace = true }
+tempfile = { workspace = true }

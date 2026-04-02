@@ -56,7 +56,7 @@ impl TestServerState {
 
     pub(crate) fn insert_hls_spec(&self, spec: HlsSpec) -> Result<String, HlsSpecError> {
         let resolved = self.resolve_hls_spec(spec)?;
-        Ok(self.insert_hls(resolved))
+        self.insert_hls(resolved)
     }
 
     pub(crate) fn parse_hls_spec(&self, encoded: &str) -> Result<ResolvedHlsSpec, HlsSpecError> {
@@ -75,13 +75,16 @@ impl TestServerState {
         }
     }
 
-    pub(crate) fn load_hls(&self, spec: ResolvedHlsSpec) -> Arc<GeneratedHls> {
+    pub(crate) fn load_hls(
+        &self,
+        spec: ResolvedHlsSpec,
+    ) -> Result<Arc<GeneratedHls>, HlsSpecError> {
         load_hls(&self.hls_cache, spec)
     }
 
-    fn insert_hls(&self, spec: ResolvedHlsSpec) -> String {
-        let hls = self.load_hls(spec);
-        self.insert(StoredToken::Hls(hls))
+    fn insert_hls(&self, spec: ResolvedHlsSpec) -> Result<String, HlsSpecError> {
+        let hls = self.load_hls(spec)?;
+        Ok(self.insert(StoredToken::Hls(hls)))
     }
 
     fn resolve_hls_blob(&self, key: &str) -> Result<Arc<Vec<u8>>, HlsSpecError> {
