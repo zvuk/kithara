@@ -3,14 +3,14 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
-use std::io::Cursor;
+use std::{fs, io::Cursor, process::Command};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 use kithara_platform::time::Duration;
 use kithara_test_utils::{
-    HlsFixtureBuilder, PackagedTestServer, SignalFormat, SignalSpec, SignalSpecLength,
-    TestServerHelper,
+    HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
+    SignalSpecLength, TestServerHelper, detect_direction, fixture_protocol::PackagedSignal,
 };
 use reqwest::Client;
 
@@ -133,6 +133,84 @@ async fn test_signal_server_encoded_formats_are_decodable(
 #[kithara::test(
     native,
     tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case(SignalFormat::Aac, "aac", "audio/aac")]
+#[case(SignalFormat::Flac, "flac", "audio/flac")]
+async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
+    #[case] format: SignalFormat,
+    #[case] ext: &str,
+    #[case] content_type: &str,
+) {
+    let server = TestServerHelper::new().await;
+    let client = Client::new();
+    let spec = SignalSpec {
+        sample_rate: 44_100,
+        channels: 2,
+        length: SignalSpecLength::Seconds(1.0),
+        format,
+    };
+
+    let response = client
+        .get(server.sawtooth(&spec).await)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("Failed to fetch /signal round-trip fixture: {error}"));
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        content_type
+    );
+
+    let bytes = response.bytes().await.unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes.to_vec()),
+        Some(ext),
+        DecoderConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
+
+    let pcm_spec = decoder.spec();
+    assert_eq!(pcm_spec.sample_rate, 44_100);
+    assert_eq!(pcm_spec.channels, 2);
+
+    let mut total_frames = 0usize;
+    let mut ascending_chunks = 0usize;
+    for chunk_idx in 0..8 {
+        let Some(chunk) = decoder.next_chunk().unwrap_or_else(|error| {
+            panic!("decode chunk {chunk_idx} failed for {format:?}: {error}")
+        }) else {
+            break;
+        };
+        assert_eq!(chunk.spec().sample_rate, 44_100);
+        assert_eq!(chunk.spec().channels, 2);
+        assert_valid_pcm_samples(
+            chunk.samples(),
+            format!("{format:?} chunk {chunk_idx}").as_str(),
+        );
+        total_frames += chunk.frames();
+        if detect_direction(chunk.samples(), chunk.spec().channels as usize)
+            == SignalDirection::Ascending
+        {
+            ascending_chunks += 1;
+        }
+    }
+
+    assert!(
+        total_frames >= 4096,
+        "{format:?} should decode a meaningful amount of PCM, got {total_frames} frames"
+    );
+    assert!(
+        ascending_chunks > 0,
+        "{format:?} round-trip should preserve the sawtooth direction"
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
@@ -213,6 +291,73 @@ async fn test_packaged_test_server_serves_audio_mp4_resources() {
     assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
 }
 
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case::aac("aac", kithara::stream::AudioCodec::AacLc)]
+#[case::flac("flac", kithara::stream::AudioCodec::Flac)]
+async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
+    #[case] label: &str,
+    #[case] codec: kithara::stream::AudioCodec,
+) {
+    let server = TestServerHelper::new().await;
+    let builder = match codec {
+        kithara::stream::AudioCodec::AacLc => HlsFixtureBuilder::new()
+            .variant_count(1)
+            .segments_per_variant(4)
+            .segment_duration_secs(1.0)
+            .packaged_audio_signal_aac_lc(44_100, 2, PackagedSignal::SawtoothDescending),
+        kithara::stream::AudioCodec::Flac => HlsFixtureBuilder::new()
+            .variant_count(1)
+            .segments_per_variant(4)
+            .segment_duration_secs(1.0)
+            .packaged_audio_signal_flac(44_100, 2, PackagedSignal::SawtoothDescending),
+        other => panic!("unsupported packaged codec case: {other:?}"),
+    };
+    let created = server
+        .create_hls(builder)
+        .await
+        .unwrap_or_else(|error| panic!("create packaged {label} fixture: {error}"));
+
+    let client = Client::new();
+    let init = client
+        .get(created.init_url(0))
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("fetch packaged {label} init: {error}"))
+        .bytes()
+        .await
+        .unwrap();
+    let segment = client
+        .get(created.segment_url(0, 0))
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("fetch packaged {label} segment: {error}"))
+        .bytes()
+        .await
+        .unwrap();
+
+    let mut mp4_bytes = Vec::with_capacity(init.len() + segment.len());
+    mp4_bytes.extend_from_slice(&init);
+    mp4_bytes.extend_from_slice(&segment);
+
+    let samples = decode_fragment_with_ffmpeg(&mp4_bytes, &format!("packaged {label}"));
+    assert_valid_pcm_samples(&samples, &format!("packaged {label} decoded PCM"));
+
+    assert!(
+        samples.len() >= 4096,
+        "packaged {label} fragment should decode a meaningful amount of PCM, got {} samples",
+        samples.len()
+    );
+    assert!(
+        contains_direction_window(&samples, 2, SignalDirection::Descending),
+        "packaged {label} fragment should preserve descending sawtooth PCM after round-trip"
+    );
+}
+
 #[kithara::test]
 fn test_embedded_audio_contains_data() {
     let audio = EmbeddedAudio::get();
@@ -236,6 +381,84 @@ fn wav_spec() -> SignalSpec {
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Wav,
     }
+}
+
+fn assert_valid_pcm_samples(samples: &[f32], context: &str) {
+    assert!(
+        !samples.is_empty(),
+        "{context}: decoded PCM chunk must not be empty"
+    );
+    assert!(
+        samples
+            .iter()
+            .all(|sample| sample.is_finite() && sample.abs() <= 1.25),
+        "{context}: decoded PCM contains invalid sample values"
+    );
+    assert!(
+        samples.iter().any(|sample| sample.abs() > 0.01),
+        "{context}: decoded PCM unexpectedly looks silent"
+    );
+}
+
+fn decode_fragment_with_ffmpeg(bytes: &[u8], context: &str) -> Vec<f32> {
+    let temp_dir = tempfile::tempdir().expect("create temp dir for ffmpeg decode");
+    let input_path = temp_dir.path().join("fragment.m4a");
+    fs::write(&input_path, bytes).unwrap_or_else(|error| {
+        panic!("{context}: write temporary MP4 fragment failed: {error}");
+    });
+
+    let output = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input_path.to_str().expect("temp path utf-8"),
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "-",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("{context}: launching ffmpeg failed: {error}"));
+
+    assert!(
+        output.status.success(),
+        "{context}: ffmpeg decode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout.len() % 4,
+        0,
+        "{context}: ffmpeg returned a non-f32le byte stream"
+    );
+
+    output
+        .stdout
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn contains_direction_window(samples: &[f32], channels: usize, expected: SignalDirection) -> bool {
+    let frames = samples.len() / channels;
+    if frames < 16 {
+        return false;
+    }
+
+    let window_frames = 2048.min(frames);
+    let step_frames = (window_frames / 2).max(1);
+    let mut start_frame = 0usize;
+    while start_frame + window_frames <= frames {
+        let start = start_frame * channels;
+        let end = (start_frame + window_frames) * channels;
+        if detect_direction(&samples[start..end], channels) == expected {
+            return true;
+        }
+        start_frame += step_frames;
+    }
+    false
 }
 
 // Note: More comprehensive decode tests will be added when the actual

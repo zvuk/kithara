@@ -58,7 +58,7 @@ fn rfc6381_for_codec_and_container(
 /// Whether the codec is supported for fMP4 packaged-audio generation in test utilities.
 #[must_use]
 pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
-    matches!(codec, AudioCodec::AacLc)
+    matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
 }
 
 #[cfg(test)]
@@ -97,8 +97,9 @@ mod tests {
     }
 
     #[test]
-    fn fmp4_packaging_support_matches_aac_lc() {
+    fn fmp4_packaging_support_matches_supported_audio_codecs() {
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacLc));
+        assert!(audio_codec_supports_fmp4_packaging(AudioCodec::Flac));
         assert!(!audio_codec_supports_fmp4_packaging(AudioCodec::Mp3));
     }
 }

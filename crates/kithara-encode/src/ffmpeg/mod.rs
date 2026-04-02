@@ -2,6 +2,7 @@
 
 pub(crate) mod aac;
 pub(crate) mod bytes;
+pub(crate) mod flac;
 pub(crate) mod pcm;
 
 use std::sync::OnceLock;
@@ -31,6 +32,7 @@ impl InnerEncoder for FfmpegEncoder {
             .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
         match codec {
             AudioCodec::AacLc => aac::AacFFmpegEncoder::encode(&request),
+            AudioCodec::Flac => flac::FlacFFmpegEncoder::encode(&request),
             codec => Err(EncodeError::UnsupportedCodec(codec)),
         }
     }
@@ -38,6 +40,7 @@ impl InnerEncoder for FfmpegEncoder {
     fn packaged_frame_samples(&self, codec: AudioCodec) -> EncodeResult<usize> {
         match codec {
             AudioCodec::AacLc => Ok(aac::AacFFmpegEncoder::frame_samples()),
+            AudioCodec::Flac => Ok(flac::FlacFFmpegEncoder::frame_samples()),
             codec => Err(EncodeError::UnsupportedCodec(codec)),
         }
     }

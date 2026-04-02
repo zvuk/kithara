@@ -235,7 +235,8 @@ fn stsd_box(track: &EncodedTrack, descriptor: &CodecDescriptor) -> Vec<u8> {
         .media_info
         .channels
         .expect("validated in mux_audio_track");
-    let sample_entry = descriptor.sample_entry(sample_rate, channels, track.bit_rate);
+    let sample_entry =
+        descriptor.sample_entry(sample_rate, channels, track.bit_rate, &track.codec_config);
     full_box(*b"stsd", 0, 0, |buf| {
         buf.push_u32(1);
         buf.push_bytes(&sample_entry);
@@ -372,6 +373,40 @@ mod tests {
         }
     }
 
+    fn flac_track() -> EncodedTrack {
+        EncodedTrack {
+            media_info: MediaInfo::default()
+                .with_codec(AudioCodec::Flac)
+                .with_container(ContainerFormat::Fmp4)
+                .with_sample_rate(48_000)
+                .with_channels(2),
+            timescale: 48_000,
+            bit_rate: 512_000,
+            codec_config: vec![
+                0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41, 0x0A, 0xC4, 0x42, 0xF0,
+                0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3, 0xBC, 0x84, 0x8E, 0x7F,
+                0x60, 0x75, 0x8D, 0x3A, 0x77, 0x61,
+            ],
+            packets_per_segment: 2,
+            access_units: vec![
+                EncodedAccessUnit {
+                    bytes: vec![0xFF, 0xF8, 0x69],
+                    pts: 0,
+                    dts: 0,
+                    duration: 4608,
+                    is_sync: true,
+                },
+                EncodedAccessUnit {
+                    bytes: vec![0xFF, 0xF8, 0x6A],
+                    pts: 4608,
+                    dts: 4608,
+                    duration: 4608,
+                    is_sync: true,
+                },
+            ],
+        }
+    }
+
     #[test]
     fn init_segment_contains_ftyp_and_moov() {
         let track = test_track();
@@ -402,5 +437,18 @@ mod tests {
         assert!(
             packaged.segment_durations_secs[1] >= packaged.segment_durations_secs[0] - f64::EPSILON
         );
+    }
+
+    #[test]
+    fn init_segment_contains_flac_sample_entry_and_dfla() {
+        let track = flac_track();
+        let packaged = mux_audio_track(&track).unwrap();
+        let init = packaged.init_segment.as_slice();
+
+        assert!(init.windows(4).any(|window| window == b"fLaC"));
+        assert!(init.windows(4).any(|window| window == b"dfLa"));
+        assert_eq!(packaged.rfc6381_codec.as_ref(), "flac");
+        assert_eq!(packaged.media_segments.len(), 1);
+        assert_eq!(packaged.segment_durations_secs, vec![9216.0 / 48_000.0]);
     }
 }

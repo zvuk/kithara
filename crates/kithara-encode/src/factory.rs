@@ -48,7 +48,7 @@ impl EncoderFactory {
         #[cfg(not(target_arch = "wasm32"))]
         {
             match codec {
-                AudioCodec::AacLc => Ok(Box::new(FfmpegEncoder)),
+                AudioCodec::AacLc | AudioCodec::Flac => Ok(Box::new(FfmpegEncoder)),
                 codec => Err(EncodeError::UnsupportedCodec(codec)),
             }
         }
@@ -107,6 +107,12 @@ mod tests {
     }
 
     #[test]
+    fn frame_samples_match_flac_runtime_contract() {
+        let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac).expect("flac");
+        assert_eq!(frame_samples, 4608);
+    }
+
+    #[test]
     fn frame_samples_reject_unknown_packaged_codec() {
         let error = EncoderFactory::frame_samples(AudioCodec::Mp3).expect_err("unsupported");
         assert!(matches!(
@@ -133,5 +139,15 @@ mod tests {
             .packaged_frame_samples(AudioCodec::AacLc)
             .expect("aac");
         assert_eq!(frame_samples, 1024);
+    }
+
+    #[test]
+    fn create_packaged_supports_flac() {
+        let encoder: Box<dyn InnerEncoder> =
+            EncoderFactory::create_packaged(AudioCodec::Flac).expect("flac encoder");
+        let frame_samples = encoder
+            .packaged_frame_samples(AudioCodec::Flac)
+            .expect("flac");
+        assert_eq!(frame_samples, 4608);
     }
 }

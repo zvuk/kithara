@@ -290,6 +290,49 @@ impl HlsFixtureBuilder {
         self
     }
 
+    #[must_use]
+    pub fn packaged_audio_flac(self, sample_rate: u32, channels: u16) -> Self {
+        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sawtooth)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_flac(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: kithara_stream::AudioCodec::Flac,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(512_000),
+            source: PackagedAudioSource::Signal(signal),
+            variant_overrides: Vec::new(),
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_per_variant_pcm_flac(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        patterns: Vec<PcmPattern>,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: kithara_stream::AudioCodec::Flac,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(512_000),
+            source: PackagedAudioSource::PerVariantPcm { patterns },
+            variant_overrides: Vec::new(),
+        });
+        self
+    }
+
     pub(crate) fn into_spec_with_blob_registrar<F>(self, register_blob: F) -> HlsSpec
     where
         F: Fn(&[u8]) -> String,
