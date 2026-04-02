@@ -3163,9 +3163,9 @@ dependencies = [
 
 [[package]]
 name = "hotpath-macros"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd884cee056e269e41e1127549458e1c4e309f31897ebbc1416982a74d40a5b5"
+checksum = "4398eddb78466298f1ddcc739abbbd8a942e541d1972c7590bd83de364e626e0"
 dependencies = [
  "proc-macro2",
  "quote",
