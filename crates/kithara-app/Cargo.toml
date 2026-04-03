@@ -18,27 +18,23 @@ kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 thunderdome = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, features = ["apple"] }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
+crossterm = { workspace = true, optional = true }
+iced = { workspace = true, optional = true }
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 obfstr = { workspace = true }
 rand = { workspace = true }
+ratatui = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
-# TUI-only
-ratatui = { workspace = true, optional = true }
-crossterm = { workspace = true, optional = true }
-
-# GUI-only
-iced = { workspace = true, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+[target.'cfg(target_os = "macos")'.dependencies]
+kithara = { workspace = true, features = ["apple"] }
 
 [[bin]]
 name = "kithara"
