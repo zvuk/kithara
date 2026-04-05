@@ -20,7 +20,7 @@ use kithara_platform::{Mutex, time::Duration};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
-    dl::{Downloader, FetchCmd, FetchResult, OnConnectFn, Priority, ThrottleFn},
+    dl::{Downloader, FetchCmd, FetchMethod, FetchResult, OnConnectFn, Priority, ThrottleFn},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -123,13 +123,14 @@ impl FileInner {
         let coord_throttle = Arc::clone(&coord);
         let written_offset = Arc::clone(&offset);
 
-        let on_complete = Box::new(move |result: FetchResult| {
+        let on_complete = Box::new(move |result: &FetchResult| {
             let waker = {
                 let mut state = cb_inner.lock_sync();
-                match result {
+                match *result {
                     FetchResult::Ok {
                         bytes_written,
                         ref headers,
+                        ..
                     } => {
                         let expected = headers
                             .get("content-length")
@@ -170,7 +171,7 @@ impl FileInner {
                         }
                         state.phase = FilePhase::Complete;
                     }
-                    FetchResult::Err(e) => {
+                    FetchResult::Err(ref e) => {
                         let partial = written_offset.load(Ordering::Relaxed) > 0;
                         state.phase = FilePhase::Complete;
 
@@ -221,13 +222,14 @@ impl FileInner {
         });
 
         FetchCmd {
+            method: FetchMethod::default(),
             url,
             range: None,
             headers,
             priority: Priority::Normal,
             on_connect,
-            writer,
-            on_complete,
+            writer: Some(writer),
+            on_complete: Some(on_complete),
             throttle,
         }
     }
@@ -271,10 +273,10 @@ impl FileInner {
             })
         };
 
-        let on_complete = Box::new(move |result: FetchResult| {
+        let on_complete = Box::new(move |result: &FetchResult| {
             let waker = {
                 let mut state = cb_inner.lock_sync();
-                if let FetchResult::Err(e) = result {
+                if let FetchResult::Err(ref e) = *result {
                     // Only fail the resource if it's not already committed
                     // (committed means the full download succeeded).
                     if !matches!(state.res.status(), ResourceStatus::Committed { .. }) {
@@ -294,13 +296,14 @@ impl FileInner {
         let range_spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
 
         FetchCmd {
+            method: FetchMethod::default(),
             url,
             range: Some(range_spec),
             headers,
             priority: Priority::High,
             on_connect: None,
-            writer,
-            on_complete,
+            writer: Some(writer),
+            on_complete: Some(on_complete),
             throttle: None,
         }
     }

@@ -3,6 +3,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use futures::{StreamExt, stream::SelectAll};
+use kithara_bufpool::{BytePool, byte_pool};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{
     Mutex,
@@ -13,7 +14,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::cmd::{FetchCmd, FetchResult};
+use super::cmd::{FetchCmd, FetchMethod, FetchResult};
 
 /// Backpressure pause between chunks when throttle returns `true`.
 const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
@@ -42,6 +43,7 @@ struct Inner {
     client: HttpClient,
     cancel: CancellationToken,
     chunk_timeout: Duration,
+    pool: BytePool,
     runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new protocol streams (cold path).
     register_tx: mpsc::UnboundedSender<BoxStream>,
@@ -58,11 +60,13 @@ impl Downloader {
         let (tx, rx) = mpsc::unbounded_channel();
         let chunk_timeout = config.net.request_timeout;
         let runtime = config.runtime;
+        let pool = config.pool.unwrap_or_else(|| byte_pool().clone());
         Self {
             inner: Arc::new(Inner {
                 client: HttpClient::new(config.net),
                 cancel: config.cancel,
                 chunk_timeout,
+                pool,
                 runtime,
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
@@ -84,6 +88,22 @@ impl Downloader {
         let handle_copy = stream.clone();
         let _ = self.inner.register_tx.send(Box::pin(stream));
         super::TrackHandle::new(handle_copy)
+    }
+
+    /// Execute a single [`FetchCmd`] directly and return the result.
+    ///
+    /// Uses the same `HttpClient` and pool as the streaming pipeline.
+    /// Intended for control-plane requests (playlists, DRM keys) where the
+    /// caller needs the result before proceeding.
+    ///
+    /// If `cmd.on_complete` is set, it is called with `&result` before
+    /// the result is returned — both the callback and the caller observe
+    /// the same result.
+    pub async fn execute(&self, cmd: FetchCmd) -> FetchResult {
+        let client = self.inner.client.clone();
+        let chunk_timeout = self.inner.chunk_timeout;
+        let pool = self.inner.pool.clone();
+        Self::execute_one(&client, chunk_timeout, &pool, cmd).await
     }
 
     /// Ensure the download loop is running (lazy spawn on first register).
@@ -154,19 +174,53 @@ impl Downloader {
 
             let client = self.inner.client.clone();
             let chunk_timeout = self.inner.chunk_timeout;
+            let pool = self.inner.pool.clone();
             task::spawn(async move {
-                Self::execute_one(&client, chunk_timeout, cmd).await;
+                Self::execute_one(&client, chunk_timeout, &pool, cmd).await;
             });
 
             hang_tick!();
         }
     }
 
-    /// Execute a single fetch: stream bytes through writer, then fire `on_complete`.
+    /// Execute a single fetch and return the result.
+    ///
+    /// Calls `on_connect`, streams body through `writer`, accumulates body
+    /// for [`FetchMethod::Get`], then calls `on_complete` with `&result`.
     #[expect(clippy::cognitive_complexity)]
-    async fn execute_one(client: &HttpClient, chunk_timeout: Duration, mut cmd: FetchCmd) {
+    async fn execute_one(
+        client: &HttpClient,
+        chunk_timeout: Duration,
+        pool: &BytePool,
+        mut cmd: FetchCmd,
+    ) -> FetchResult {
         let url = cmd.url.clone();
 
+        // HEAD — headers only, no body.
+        if cmd.method == FetchMethod::Head {
+            let result = match client.head(url.clone(), cmd.headers.take()).await {
+                Ok(headers) => {
+                    if let Some(on_connect) = cmd.on_connect.take() {
+                        on_connect(&headers);
+                    }
+                    FetchResult::Ok {
+                        bytes_written: 0,
+                        headers,
+                        body: None,
+                    }
+                }
+                Err(e) => {
+                    debug!(?url, "head failed: {e}");
+                    FetchResult::Err(e)
+                }
+            };
+            if let Some(cb) = cmd.on_complete {
+                cb(&result);
+            }
+            return result;
+        }
+
+        // GET or Stream — both fetch a body stream.
         let stream_result = match cmd.range.take() {
             Some(range) => {
                 client
@@ -180,8 +234,11 @@ impl Downloader {
             Ok(s) => s,
             Err(e) => {
                 debug!(?url, "fetch failed: {e}");
-                (cmd.on_complete)(FetchResult::Err(e));
-                return;
+                let result = FetchResult::Err(e);
+                if let Some(cb) = cmd.on_complete {
+                    cb(&result);
+                }
+                return result;
             }
         };
 
@@ -190,6 +247,13 @@ impl Downloader {
         if let Some(on_connect) = cmd.on_connect.take() {
             on_connect(&response_headers);
         }
+
+        // Get mode: accumulate body into pool buffer.
+        let mut body_buf = if cmd.method == FetchMethod::Get {
+            Some(pool.get())
+        } else {
+            None
+        };
 
         let mut bytes_written: u64 = 0;
 
@@ -200,10 +264,18 @@ impl Downloader {
             };
             match chunk {
                 Some(Ok(data)) => {
-                    if let Err(io_err) = (cmd.writer)(data.as_ref()) {
+                    if let Some(ref mut writer) = cmd.writer
+                        && let Err(io_err) = writer(data.as_ref())
+                    {
                         debug!(?url, bytes_written, "writer error: {io_err}");
-                        (cmd.on_complete)(FetchResult::Err(NetError::Http(io_err.to_string())));
-                        return;
+                        let result = FetchResult::Err(NetError::Http(io_err.to_string()));
+                        if let Some(cb) = cmd.on_complete {
+                            cb(&result);
+                        }
+                        return result;
+                    }
+                    if let Some(ref mut buf) = body_buf {
+                        buf.extend_from_slice(data.as_ref());
                     }
                     bytes_written += data.len() as u64;
 
@@ -216,18 +288,26 @@ impl Downloader {
                 }
                 Some(Err(net_err)) => {
                     debug!(?url, bytes_written, "stream error: {net_err}");
-                    (cmd.on_complete)(FetchResult::Err(net_err));
-                    return;
+                    let result = FetchResult::Err(net_err);
+                    if let Some(cb) = cmd.on_complete {
+                        cb(&result);
+                    }
+                    return result;
                 }
                 None => break, // stream ended or chunk idle timeout
             }
         }
 
         debug!(?url, bytes_written, "fetch complete");
-        (cmd.on_complete)(FetchResult::Ok {
+        let result = FetchResult::Ok {
             bytes_written,
             headers: response_headers,
-        });
+            body: body_buf.map(kithara_bufpool::PooledOwned::into_inner),
+        };
+        if let Some(cb) = cmd.on_complete {
+            cb(&result);
+        }
+        result
     }
 }
 

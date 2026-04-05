@@ -4401,6 +4401,7 @@ dependencies = [
  "derive_setters",
  "futures",
  "hotpath",
+ "kithara-bufpool",
  "kithara-hang-detector",
  "kithara-net",
  "kithara-platform",

@@ -15,7 +15,9 @@ mod handle;
 #[cfg(test)]
 mod tests;
 
-pub use cmd::{FetchCmd, FetchResult, OnCompleteFn, OnConnectFn, Priority, ThrottleFn, WriterFn};
+pub use cmd::{
+    FetchCmd, FetchMethod, FetchResult, OnCompleteFn, OnConnectFn, Priority, ThrottleFn, WriterFn,
+};
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use handle::TrackHandle;

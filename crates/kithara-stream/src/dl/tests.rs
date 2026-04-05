@@ -79,16 +79,17 @@ fn test_url() -> Url {
 
 fn counting_cmd(counter: Arc<AtomicU64>, priority: Priority) -> FetchCmd {
     FetchCmd {
+        method: super::FetchMethod::default(),
         url: test_url(),
         range: None,
         headers: None,
         priority,
         on_connect: None,
-        writer: Box::new(|_| Ok(())),
+        writer: None,
         throttle: None,
-        on_complete: Box::new(move |_result| {
+        on_complete: Some(Box::new(move |_result| {
             counter.fetch_add(1, Ordering::Relaxed);
-        }),
+        })),
     }
 }
 

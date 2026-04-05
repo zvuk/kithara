@@ -85,6 +85,13 @@ impl HttpClient {
         <Self as Net>::get_range(self, url, range, headers).await
     }
 
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
+        <Self as Net>::head(self, url, headers).await
+    }
+
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
