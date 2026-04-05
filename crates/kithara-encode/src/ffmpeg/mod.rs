@@ -7,8 +7,7 @@ pub(crate) mod pcm;
 
 use std::sync::OnceLock;
 
-use ffmpeg::format as av_format;
-use ffmpeg::{codec, filter};
+use ffmpeg::{codec, filter, format as av_format};
 use ffmpeg_next as ffmpeg;
 use kithara_stream::AudioCodec;
 

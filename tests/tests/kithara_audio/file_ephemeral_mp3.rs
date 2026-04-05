@@ -242,7 +242,7 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::new(server.url("/get-mp3/42").into())
+    let file_config = FileConfig::new(server.url("/track/stream").into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
     let config = AudioConfig::<File>::new(file_config);
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();

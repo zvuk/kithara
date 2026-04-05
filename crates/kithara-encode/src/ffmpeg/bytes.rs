@@ -3,16 +3,15 @@ use std::{fs, path::Path};
 use ffmpeg::{codec, format as av_format, media};
 use ffmpeg_next as ffmpeg;
 
-use crate::{
-    BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult, EncodedBytes, PcmSource,
-};
-
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
     },
+};
+use crate::{
+    BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult, EncodedBytes, PcmSource,
 };
 
 struct EncodeTarget {
@@ -232,7 +231,7 @@ fn write_encoded_packets(
 #[cfg(test)]
 mod tests {
     use crate::{
-        test_pcm::SawtoothPcmFixture, BytesEncodeRequest, BytesEncodeTarget, EncoderFactory,
+        BytesEncodeRequest, BytesEncodeTarget, EncoderFactory, test_pcm::SawtoothPcmFixture,
     };
 
     const SAMPLE_RATE: u32 = 48_000;

@@ -119,11 +119,7 @@ fn ftyp_box() -> Vec<u8> {
     })
 }
 
-fn moov_box(
-    track: &EncodedTrack,
-    descriptor: &CodecDescriptor,
-    total_duration: u64,
-) -> Vec<u8> {
+fn moov_box(track: &EncodedTrack, descriptor: &CodecDescriptor, total_duration: u64) -> Vec<u8> {
     mp4_box(*b"moov", |buf| {
         buf.push_bytes(&mvhd_box(track.timescale, total_duration));
         buf.push_bytes(&trak_box(track, descriptor, total_duration));

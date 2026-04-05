@@ -9,9 +9,8 @@
 //! both server (generates data) and client (computes `expected_byte_at`)
 //! share the exact same logic.
 
-use serde::{Deserialize, Serialize};
-
 use kithara_stream::AudioCodec;
+use serde::{Deserialize, Serialize};
 
 use crate::{signal_pcm::signal, wav::create_wav_header};
 

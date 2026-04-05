@@ -214,10 +214,7 @@ impl<T: StreamType> Read for Stream<T> {
                         }
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(
-                                ErrorKind::Interrupted,
-                                "data not ready",
-                            ));
+                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
                         }
                         hang_tick!();
                         yield_now();
@@ -233,10 +230,7 @@ impl<T: StreamType> Read for Stream<T> {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(
-                                ErrorKind::Interrupted,
-                                "data not ready",
-                            ));
+                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
                         }
                         hang_tick!();
                         yield_now();

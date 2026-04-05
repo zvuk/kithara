@@ -5,8 +5,10 @@
 
 use std::{fs, io::Cursor, process::Command};
 
-use kithara::decode::{DecoderConfig, DecoderFactory};
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara::{
+    decode::{DecoderConfig, DecoderFactory},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 use kithara_platform::time::Duration;
 use kithara_test_utils::{

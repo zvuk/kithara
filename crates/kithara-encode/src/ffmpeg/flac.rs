@@ -2,11 +2,6 @@ use ffmpeg::codec;
 use ffmpeg_next as ffmpeg;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
-use crate::{
-    BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult,
-    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
-};
-
 use super::{
     build_direct_filter,
     bytes::encode_bytes_audio,
@@ -15,6 +10,10 @@ use super::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
     },
+};
+use crate::{
+    BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult,
+    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
 /// FLAC encoder using `FFmpeg`.
@@ -284,9 +283,7 @@ mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     use super::{FlacFFmpegEncoder, normalize_flac_codec_config};
-    use crate::{
-        test_pcm::SawtoothPcmFixture, EncoderFactory, PackagedEncodeRequest,
-    };
+    use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;

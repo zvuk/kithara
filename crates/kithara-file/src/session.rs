@@ -126,6 +126,7 @@ impl FileInner {
         let coord_connect = Arc::clone(&coord);
         let inner_connect = Arc::clone(inner);
         let coord_throttle = Arc::clone(&coord);
+        let written_offset = Arc::clone(&offset);
 
         let on_complete = Box::new(move |result: FetchResult| {
             let waker = {
@@ -135,16 +136,12 @@ impl FileInner {
                         bytes_written,
                         ref headers,
                     } => {
-                        let total = headers
+                        let expected = headers
                             .get("content-length")
                             .or_else(|| headers.get("Content-Length"))
                             .and_then(|v| v.parse::<u64>().ok())
                             .unwrap_or(bytes_written);
-                        coord.set_total_bytes(Some(total));
-
-                        if let Err(e) = state.res.commit(Some(bytes_written)) {
-                            debug!(?e, "failed to commit file resource");
-                        }
+                        coord.set_total_bytes(Some(expected));
 
                         if let Some(codec) = headers
                             .get("content-type")
@@ -154,22 +151,43 @@ impl FileInner {
                             state.content_type_codec = Some(codec);
                         }
 
-                        // Discard stale range requests that arrived while
-                        // the full download was in flight — the resource is
-                        // now committed and cannot accept writes.
-                        let _ = state.coord.take_range_request();
-                        state.queue.clear();
+                        if bytes_written >= expected {
+                            // Full download — commit and discard stale requests.
+                            if let Err(e) = state.res.commit(Some(bytes_written)) {
+                                debug!(?e, "failed to commit file resource");
+                            }
+                            let _ = state.coord.take_range_request();
+                            state.queue.clear();
 
-                        bus.publish(FileEvent::DownloadComplete {
-                            total_bytes: bytes_written,
-                        });
+                            bus.publish(FileEvent::DownloadComplete {
+                                total_bytes: bytes_written,
+                            });
+                        } else {
+                            // Partial download (chunk timeout / early close).
+                            // Leave resource Active for on-demand range fills.
+                            debug!(
+                                bytes_written,
+                                expected, "partial download, resource stays active"
+                            );
+                            bus.publish(FileEvent::DownloadError {
+                                error: format!("incomplete: {bytes_written}/{expected} bytes"),
+                            });
+                        }
                         state.phase = FilePhase::Complete;
                     }
                     FetchResult::Err(e) => {
+                        let partial = written_offset.load(Ordering::Relaxed) > 0;
                         state.phase = FilePhase::Complete;
-                        // Mark resource failed — unblocks wait_range condvar
-                        // so the decoder thread doesn't hang forever.
-                        state.res.fail(e.to_string());
+
+                        if partial {
+                            // Partial download (early close) — leave resource
+                            // Active so on-demand range requests can fill gaps.
+                            debug!("partial download, leaving resource active for range requests");
+                        } else {
+                            // No data at all (404, 503, etc.) — fail resource
+                            // to unblock wait_range condvar immediately.
+                            state.res.fail(e.to_string());
+                        }
                         bus.publish(FileEvent::DownloadError {
                             error: e.to_string(),
                         });
@@ -464,12 +482,11 @@ impl kithara_stream::Source for FileSource {
             state.coord.set_read_pos(range.start);
         }
 
-        // Only issue an on-demand Range request when the initial download
-        // has finished. While downloading, data will arrive from the
-        // in-flight full GET — issuing a parallel Range request would
-        // create two concurrent writers to the same resource.
-        let download_done = state.phase == FilePhase::Complete;
-        if download_done && !state.res.contains_range(range.clone()) {
+        // Issue on-demand Range request when data is missing.
+        // The range writer is resilient to committed resources (silently
+        // succeeds), so concurrent writes with the in-flight full GET
+        // are safe — whichever finishes first provides the data.
+        if !state.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,
                 range_end = range.end,
@@ -564,10 +581,7 @@ impl kithara_stream::Source for FileSource {
 
     fn demand_range(&self, range: Range<u64>) {
         let state = self.inner.lock_sync();
-        // Only issue on-demand fetch when the initial download has finished
-        // AND the range is not already available. While downloading, data
-        // arrives from the in-flight full GET.
-        if state.phase != FilePhase::Complete || state.res.contains_range(range.clone()) {
+        if state.res.contains_range(range.clone()) {
             return;
         }
         state.coord.request_range(range);

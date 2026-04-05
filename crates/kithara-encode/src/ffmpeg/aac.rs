@@ -2,17 +2,16 @@ use ffmpeg::codec;
 use ffmpeg_next as ffmpeg;
 use kithara_stream::AudioCodec;
 
-use crate::{
-    EncodeError, EncodeResult,
-    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
-};
-
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
     },
+};
+use crate::{
+    EncodeError, EncodeResult,
+    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
 /// AAC-LC encoder using `FFmpeg` (`libfdk-aac` or built-in AAC).
@@ -204,9 +203,7 @@ mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     use super::AacFFmpegEncoder;
-    use crate::{
-        test_pcm::SawtoothPcmFixture, EncoderFactory, PackagedEncodeRequest,
-    };
+    use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -248,8 +245,7 @@ mod tests {
             assert_eq!(unit.pts, unit.dts, "AAC should not reorder audio packets");
             assert_eq!(
                 unit.duration,
-                u32::try_from(AacFFmpegEncoder::frame_samples())
-                    .expect("AAC frame size fits u32"),
+                u32::try_from(AacFFmpegEncoder::frame_samples()).expect("AAC frame size fits u32"),
                 "AAC-LC packets should use the natural frame duration"
             );
 

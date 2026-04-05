@@ -29,8 +29,7 @@
 //! - length: exactly one of `seconds`, `frames`, `file_bytes`, or `infinite`
 //! - `freq` is required for `/signal/sine/...` and rejected for sawtooth and silence routes
 
-use std::convert::Infallible;
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use axum::{
     Router,

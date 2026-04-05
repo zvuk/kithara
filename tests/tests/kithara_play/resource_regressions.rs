@@ -50,11 +50,9 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
             2,
             PackagedSignal::Sawtooth,
         ),
-        AudioCodec::Flac => builder.packaged_audio_signal_flac(
-            CONTINUITY_SAMPLE_RATE,
-            2,
-            PackagedSignal::Sawtooth,
-        ),
+        AudioCodec::Flac => {
+            builder.packaged_audio_signal_flac(CONTINUITY_SAMPLE_RATE, 2, PackagedSignal::Sawtooth)
+        }
         other => panic!("unsupported packaged single-variant codec: {other:?}"),
     }
 }
@@ -747,7 +745,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let store = StoreOptions::new(temp_dir.path());
 
     let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec).await;
-    let mut progress_rx = progress_audio.decode_events();
+    let mut progress_rx = progress_audio.events();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut total_samples = 0u64;
     let mut buf = [0.0f32; 4096];

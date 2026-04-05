@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use reqwest::Client;
 use thiserror::Error;
 use url::Url;
 
@@ -30,8 +32,6 @@ use crate::{
         hls_media_path_from_ref, hls_segment_path_from_ref,
     },
 };
-#[cfg(target_arch = "wasm32")]
-use reqwest::Client;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -258,17 +258,8 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn packaged_audio_sine_aac_lc(
-        self,
-        sample_rate: u32,
-        channels: u16,
-        freq_hz: f64,
-    ) -> Self {
-        self.packaged_audio_signal_aac_lc(
-            sample_rate,
-            channels,
-            PackagedSignal::Sine { freq_hz },
-        )
+    pub fn packaged_audio_sine_aac_lc(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sine { freq_hz })
     }
 
     #[must_use]
@@ -315,17 +306,8 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn packaged_audio_sine_flac(
-        self,
-        sample_rate: u32,
-        channels: u16,
-        freq_hz: f64,
-    ) -> Self {
-        self.packaged_audio_signal_flac(
-            sample_rate,
-            channels,
-            PackagedSignal::Sine { freq_hz },
-        )
+    pub fn packaged_audio_sine_flac(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sine { freq_hz })
     }
 
     #[must_use]

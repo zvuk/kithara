@@ -180,7 +180,7 @@ async fn vod_manual_switch_affects_future_segments() {
     )
     .await;
 
-    let url = server.url("/master.m3u8").expect("url");
+    let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
     let bus = EventBus::new(64);
@@ -299,8 +299,8 @@ async fn multi_track_shared_abr_with_cache() {
     let server1 = make_server(vec![3_000_000, 1_000_000]).await;
     let server2 = make_server(vec![3_000_000, 1_000_000]).await;
 
-    let url1 = server1.url("/master.m3u8").expect("url1");
-    let url2 = server2.url("/master.m3u8").expect("url2");
+    let url1 = server1.url("/master.m3u8");
+    let url2 = server2.url("/master.m3u8");
 
     let temp_dir = TestTempDir::new();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -478,7 +478,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     )
     .await;
 
-    let url = server.url("/master.m3u8").expect("url");
+    let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
     let bus = EventBus::new(64);
