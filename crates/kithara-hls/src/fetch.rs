@@ -945,6 +945,10 @@ mod tests {
             .with_master_url(test_master_url())
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "signature must match NetMock::stream callback shape"
+    )]
     fn counting_segment_stream(
         _mock: &Unimock,
         url: Url,
@@ -958,6 +962,10 @@ mod tests {
         Ok(ByteStream::without_headers(Box::pin(stream)))
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "signature must match NetMock::stream callback shape"
+    )]
     fn slow_counting_segment_stream(
         _mock: &Unimock,
         url: Url,
@@ -971,6 +979,10 @@ mod tests {
         Ok(ByteStream::without_headers(Box::pin(stream)))
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "signature must match NetMock::stream callback shape in tests"
+    )]
     fn drm_segment_stream(
         _mock: &Unimock,
         url: Url,
@@ -1232,6 +1244,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "std Mutex guard serializes concurrent tests sharing SEGMENT_STREAM_CALLS"
+    )]
     #[kithara::test(tokio)]
     async fn concurrent_reload_of_evicted_media_segment_shares_single_network_fetch() {
         let _guard = SEGMENT_STREAM_TEST_LOCK
@@ -1294,6 +1310,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "std Mutex guard serializes concurrent tests sharing SEGMENT_STREAM_CALLS"
+    )]
     #[kithara::test(tokio)]
     async fn concurrent_reload_across_seek_epochs_shares_single_network_fetch() {
         let _guard = SEGMENT_STREAM_TEST_LOCK
@@ -1356,6 +1376,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "std Mutex guard serializes concurrent tests sharing DRM stream state"
+    )]
     #[kithara::test(tokio)]
     async fn start_fetch_disk_drm_reopens_committed_bytes_after_cache_eviction() {
         let _guard = SEGMENT_STREAM_TEST_LOCK
@@ -1438,6 +1462,10 @@ mod tests {
         assert_eq!(buf, plaintext);
     }
 
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "std Mutex guard serializes concurrent tests sharing DRM stream state"
+    )]
     #[kithara::test(tokio)]
     async fn start_fetch_disk_drm_reopens_multiple_committed_segments_after_eviction() {
         let _guard = SEGMENT_STREAM_TEST_LOCK
@@ -1470,7 +1498,7 @@ mod tests {
             let mut streams = drm_streams().lock().expect("DRM stream map lock");
             streams.clear();
             for index in 0..4 {
-                let iv = [0x17u8.wrapping_add(index as u8); 16];
+                let iv = [0x17u8.wrapping_add(u8::try_from(index).expect("index < 4")); 16];
                 let plaintext: Vec<u8> = (0u8..=u8::MAX)
                     .cycle()
                     .skip(index * 17)
@@ -1491,6 +1519,7 @@ mod tests {
                     iv,
                 ));
             }
+            drop(streams);
         }
 
         for (url, plaintext, iv) in &expected {
@@ -1516,7 +1545,7 @@ mod tests {
             };
             res.commit(Some(total)).expect("commit segment");
             assert!(
-                total as usize >= plaintext.len(),
+                total >= plaintext.len() as u64,
                 "encrypted bytes must cover plaintext + padding"
             );
         }
