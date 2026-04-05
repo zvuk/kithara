@@ -837,7 +837,7 @@ mod tests {
                 let ms = position.as_millis() as u64;
                 self.seek_log
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(ms);
                 Ok(())
             }
@@ -934,7 +934,9 @@ mod tests {
 
         processor.drain_commands();
 
-        let seek_log = seek_log.lock().unwrap_or_else(|err| err.into_inner());
+        let seek_log = seek_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // FadeIn skips seek(0.0) because position is already at 0.
         // Only the last seek epoch passes → 30000ms.
         // Seeks with stale epochs (1, 2) are dropped.

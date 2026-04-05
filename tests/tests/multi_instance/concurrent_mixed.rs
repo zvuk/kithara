@@ -171,7 +171,8 @@ async fn mixed_two_file_two_hls() {
     let wav_data = generate_wav_data();
     let file_server = TestServerHelper::new().await;
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
@@ -274,7 +275,8 @@ async fn mixed_four_file_four_hls() {
     let wav_data = generate_wav_data();
     let file_server = TestServerHelper::new().await;
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();

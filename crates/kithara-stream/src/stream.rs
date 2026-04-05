@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration};
+use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
 
 use crate::{
@@ -25,6 +25,9 @@ use crate::{
     source::{ReadOutcome, Source, VariantChangeError},
     topology::Topology,
 };
+
+/// Timeout for seek `wait_range` calls before returning an error.
+const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Defines a stream type and how to create it.
 ///
@@ -103,7 +106,7 @@ impl<T: StreamType> Stream<T> {
         let source = T::create(config).await?;
         // Yield so background tasks (Downloader loop) spawned during
         // create() get a chance to start on current-thread runtimes.
-        kithara_platform::tokio::task::yield_now().await;
+        task::yield_now().await;
         Ok(Self { source })
     }
 
@@ -283,7 +286,7 @@ impl<T: StreamType> Seek for Stream<T> {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 if self.source.len().is_none() {
-                    let _ = self.source.wait_range(0..1, Duration::from_secs(10));
+                    let _ = self.source.wait_range(0..1, SEEK_WAIT_TIMEOUT);
                 }
                 let Some(len) = self.source.len() else {
                     return Err(IoError::new(
@@ -307,7 +310,7 @@ impl<T: StreamType> Seek for Stream<T> {
 
         let _ = self
             .source
-            .wait_range(new_pos..new_pos.saturating_add(1), Duration::from_secs(10));
+            .wait_range(new_pos..new_pos.saturating_add(1), SEEK_WAIT_TIMEOUT);
 
         if let Some(len) = self.source.len()
             && new_pos > len

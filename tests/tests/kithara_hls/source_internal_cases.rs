@@ -2157,7 +2157,7 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
 /// Background task pushes entries at 10000+ that do NOT cover the waited
 /// range.  `range_ready=false` throughout.
 /// Expected: budget check returns `Err(HlsError::Timeout)` after the
-/// wait_range timeout expires.
+/// `wait_range` timeout expires.
 #[kithara::test(
     tokio,
     browser,

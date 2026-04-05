@@ -43,7 +43,7 @@ fn stress_seeks_preserve_timeline_integrity() {
             panic!("seek #{i} to {seek_secs:.4}s failed: {e}");
         });
 
-        let expected_frame = (seek_secs * D.sample_rate as f64) as u64;
+        let expected_frame = (seek_secs * f64::from(D.sample_rate)) as u64;
 
         // Read a burst of chunks and verify consistency
         let mut prev_frame_end: Option<u64> = None;
@@ -74,13 +74,10 @@ fn stress_seeks_preserve_timeline_integrity() {
             }
 
             // Timestamp matches frame_offset / sample_rate
-            let expected_ts =
-                Duration::from_secs_f64(meta.frame_offset as f64 / meta.spec.sample_rate as f64);
-            let ts_diff = if meta.timestamp > expected_ts {
-                meta.timestamp - expected_ts
-            } else {
-                expected_ts - meta.timestamp
-            };
+            let expected_ts = Duration::from_secs_f64(
+                meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
+            );
+            let ts_diff = meta.timestamp.abs_diff(expected_ts);
             assert!(
                 ts_diff < Duration::from_millis(1),
                 "seek #{i}, burst #{j}: timestamp drift {ts_diff:?}"

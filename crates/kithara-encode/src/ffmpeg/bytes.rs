@@ -1,6 +1,14 @@
 use std::{fs, path::Path};
 
-use ffmpeg::{codec, format as av_format, media};
+use ffmpeg::{
+    ChannelLayout, Dictionary, Error as FfmpegError, Packet,
+    codec::{
+        context::Context as CodecContext, encoder::Audio as AudioEncoder, flag::Flags as CodecFlags,
+    },
+    encoder::find as find_encoder,
+    format::{self as av_format, flag::Flags as FormatFlags},
+    media::Type as MediaType,
+};
 use ffmpeg_next as ffmpeg;
 
 use super::{
@@ -13,6 +21,8 @@ use super::{
 use crate::{
     BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult, EncodedBytes, PcmSource,
 };
+
+const DIRECT_PCM_CHUNK_FRAMES: usize = 1024;
 
 struct EncodeTarget {
     ext: &'static str,
@@ -103,7 +113,7 @@ fn encode_direct_pcm(
 
     octx.write_header()?;
 
-    pump_pcm_frames(pcm, 1024, |audio_frame| {
+    pump_pcm_frames(pcm, DIRECT_PCM_CHUNK_FRAMES, |audio_frame| {
         send_frame_to_filter(&mut encoder.filter, audio_frame)?;
         encoder.receive_and_process_filtered_frames(&mut octx)
     })?;
@@ -120,7 +130,7 @@ fn encode_direct_pcm(
 
 struct DirectEncoder {
     filter: ffmpeg::filter::Graph,
-    encoder: codec::encoder::Audio,
+    encoder: AudioEncoder,
 }
 
 impl DirectEncoder {
@@ -131,8 +141,8 @@ impl DirectEncoder {
         sample_rate: u32,
         channels: u16,
     ) -> Result<Self, EncodeError> {
-        let codec_id = octx.format().codec(output_path, media::Type::Audio);
-        let output_codec = ffmpeg::encoder::find(codec_id)
+        let codec_id = octx.format().codec(output_path, MediaType::Audio);
+        let output_codec = find_encoder(codec_id)
             .ok_or_else(|| {
                 EncodeError::backend_message(format!(
                     "no output codec is registered for `{}`",
@@ -146,24 +156,21 @@ impl DirectEncoder {
                     target.ext
                 ))
             })?;
-        let global_header = octx
-            .format()
-            .flags()
-            .contains(av_format::flag::Flags::GLOBAL_HEADER);
+        let global_header = octx.format().flags().contains(FormatFlags::GLOBAL_HEADER);
 
         let mut output = octx.add_stream(output_codec)?;
-        let context = codec::context::Context::from_parameters(output.parameters())?;
+        let context = CodecContext::from_parameters(output.parameters())?;
         let mut encoder = context.encoder().audio()?;
 
-        let input_channel_layout = ffmpeg::ChannelLayout::default(i32::from(channels));
+        let input_channel_layout = ChannelLayout::default(i32::from(channels));
         let channel_layout = output_codec
             .channel_layouts()
-            .map_or(ffmpeg::channel_layout::ChannelLayout::STEREO, |layouts| {
+            .map_or(ChannelLayout::STEREO, |layouts| {
                 layouts.best(input_channel_layout.channels())
             });
 
         if global_header {
-            encoder.set_flags(codec::flag::Flags::GLOBAL_HEADER);
+            encoder.set_flags(CodecFlags::GLOBAL_HEADER);
         }
 
         encoder.set_rate(sample_rate as i32);
@@ -171,9 +178,9 @@ impl DirectEncoder {
         encoder.set_format(
             output_codec
                 .formats()
-                .ok_or(ffmpeg::Error::InvalidData)?
+                .ok_or(FfmpegError::InvalidData)?
                 .next()
-                .ok_or(ffmpeg::Error::InvalidData)?,
+                .ok_or(FfmpegError::InvalidData)?,
         );
         if let Some(bit_rate) = target.bit_rate {
             encoder.set_bit_rate(bit_rate);
@@ -182,7 +189,7 @@ impl DirectEncoder {
         encoder.set_time_base((1, sample_rate as i32));
         output.set_time_base((1, sample_rate as i32));
 
-        let mut options = ffmpeg::Dictionary::new();
+        let mut options = Dictionary::new();
         for (key, value) in target.option_pairs {
             options.set(key, value);
         }
@@ -197,7 +204,7 @@ impl DirectEncoder {
     fn receive_and_process_filtered_frames(
         &mut self,
         octx: &mut av_format::context::Output,
-    ) -> Result<(), ffmpeg::Error> {
+    ) -> Result<(), FfmpegError> {
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
             write_encoded_packets(encoder, octx)
         })
@@ -206,17 +213,17 @@ impl DirectEncoder {
     fn receive_and_process_encoded_packets(
         &mut self,
         octx: &mut av_format::context::Output,
-    ) -> Result<(), ffmpeg::Error> {
+    ) -> Result<(), FfmpegError> {
         write_encoded_packets(&mut self.encoder, octx)
     }
 }
 
 fn write_encoded_packets(
-    encoder: &mut codec::encoder::Audio,
+    encoder: &mut AudioEncoder,
     octx: &mut av_format::context::Output,
-) -> Result<(), ffmpeg::Error> {
-    let mut encoded = ffmpeg::Packet::empty();
-    let stream_time_base = octx.stream(0).ok_or(ffmpeg::Error::Bug)?.time_base();
+) -> Result<(), FfmpegError> {
+    let mut encoded = Packet::empty();
+    let stream_time_base = octx.stream(0).ok_or(FfmpegError::Bug)?.time_base();
     while encoder.receive_packet(&mut encoded).is_ok() {
         if encoded.size() > 0 {
             encoded.set_stream(0);

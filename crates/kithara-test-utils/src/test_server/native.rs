@@ -8,7 +8,7 @@ use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{assets, signal, stream},
-    signal_spec,
+    signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::TestServerState,
@@ -100,9 +100,9 @@ impl TestServerHelper {
             .strip_prefix(&prefix)
             .expect("signal path must match kind prefix");
         let internal_kind =
-            signal_spec::SignalKind::try_from(kind.path_segment()).expect("valid signal route");
-        let request = signal_spec::parse_signal_request(internal_kind, spec_with_ext)
-            .expect("valid signal spec");
+            InternalSignalKind::try_from(kind.path_segment()).expect("valid signal route");
+        let request =
+            parse_signal_request(internal_kind, spec_with_ext).expect("valid signal spec");
         let token = self.state.insert_signal(request);
         self.url(&format!(
             "/signal/{}/{}.{}",

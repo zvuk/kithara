@@ -10,7 +10,7 @@
 //!
 //! Phases:
 //! 1. **Warmup**: read until ABR switch from V0→V1
-//! 2. **Stress**: 2000 random seeks — verify read() always produces data
+//! 2. **Stress**: 2000 random seeks — verify `read()` always produces data
 //! 3. **Reset**: seek to 0 → read the entire track beginning to end,
 //!    verify saw-tooth continuity on every frame
 
@@ -45,7 +45,7 @@ const STRESS_SEEK_ITERATIONS: usize = 2000;
 const MAX_ZERO_READS: usize = 50;
 
 /// Read with retry: keeps trying until data arrives or stuck.
-/// Returns (samples_read, retries_needed).
+/// Returns (`samples_read`, `retries_needed`).
 fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize) {
     for retry in 0..MAX_ZERO_READS {
         let n = audio.read(buf);
@@ -103,7 +103,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         .into_vec(),
     );
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
     let total_secs = segment_duration * SEGMENT_COUNT as f64;
 
     info!(
@@ -180,7 +181,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
 
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
-        let chunk_samples = (0.05 * spec.sample_rate as f64 * channels as f64) as usize;
+        let chunk_samples = (0.05 * f64::from(spec.sample_rate) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 

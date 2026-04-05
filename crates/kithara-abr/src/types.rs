@@ -3,6 +3,10 @@ use std::fmt;
 use derivative::Derivative;
 use kithara_platform::time::{Duration, Instant};
 
+/// Threshold separating Manual (below) from Auto (at or above) in the packed
+/// `usize` representation of [`AbrMode`].
+const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
+
 /// ABR mode selection.
 #[derive(Clone, Copy, Debug, Derivative, PartialEq, Eq)]
 #[derivative(Default)]
@@ -20,12 +24,12 @@ impl From<AbrMode> for usize {
     fn from(mode: AbrMode) -> Self {
         match mode {
             AbrMode::Manual(v) => {
-                debug_assert!(v < Self::MAX / 2, "variant index too large");
+                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
                 v
             }
             AbrMode::Auto(None) => Self::MAX,
             AbrMode::Auto(Some(v)) => {
-                debug_assert!(v < Self::MAX / 2, "variant index too large");
+                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
                 Self::MAX - 1 - v
             }
         }
@@ -36,7 +40,7 @@ impl From<usize> for AbrMode {
     fn from(val: usize) -> Self {
         if val == usize::MAX {
             Self::Auto(None)
-        } else if val >= usize::MAX / 2 {
+        } else if val >= ABR_MODE_AUTO_THRESHOLD {
             Self::Auto(Some(usize::MAX - 1 - val))
         } else {
             Self::Manual(val)

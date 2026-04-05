@@ -10,6 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use kithara::{
+    abr::AbrMode,
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
     play::{PlayerConfig, PlayerImpl},
@@ -203,9 +204,9 @@ impl AudioPlayer {
 
     pub fn set_abr_mode(&self, mode: crate::types::FfiAbrMode) {
         let abr_mode = match mode {
-            crate::types::FfiAbrMode::Auto => kithara::abr::AbrMode::Auto(None),
+            crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
             crate::types::FfiAbrMode::Manual { variant_index } => {
-                kithara::abr::AbrMode::Manual(variant_index as usize)
+                AbrMode::Manual(variant_index as usize)
             }
         };
         self.inner.lock_sync().set_abr_mode(abr_mode);

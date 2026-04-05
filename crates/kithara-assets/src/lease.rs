@@ -577,7 +577,7 @@ mod tests {
         LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
     }
 
-    /// Bypass test: empty asset_root → capabilities lack LEASE.
+    /// Bypass test: empty `asset_root` → capabilities lack LEASE.
     fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
         LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())

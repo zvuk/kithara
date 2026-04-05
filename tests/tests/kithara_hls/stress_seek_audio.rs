@@ -1,6 +1,6 @@
 //! Stress test: 1000 random seek+read cycles on `Audio<Stream<Hls>>` (20 MB WAV over HLS).
 //!
-//! Generates a deterministic WAV with a saw-tooth pattern (period = 65_536 frames),
+//! Generates a deterministic WAV with a saw-tooth pattern (period = `65_536` frames),
 //! serves it as HLS segments via [`HlsTestServer`], creates `Audio<Stream<Hls>>`,
 //! and performs 1000 random time-based seeks with three-level PCM verification:
 //!
@@ -40,7 +40,7 @@ fn expected_duration_secs() -> f64 {
     let header_size = 44usize;
     let bytes_per_frame = D.channels as usize * 2;
     let frame_count = (TOTAL_BYTES - header_size) / bytes_per_frame;
-    frame_count as f64 / D.sample_rate as f64
+    frame_count as f64 / f64::from(D.sample_rate)
 }
 
 // Stress Test
@@ -79,7 +79,8 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     );
 
     // Step 2: Spawn HLS server with custom WAV data
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
         segment_size: D.segment_size,
@@ -140,7 +141,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         // Compute chunk size: ~50ms of audio
         let chunk_duration_secs = 0.05;
         let chunk_samples =
-            (chunk_duration_secs * spec.sample_rate as f64 * spec.channels as f64) as usize;
+            (chunk_duration_secs * f64::from(spec.sample_rate) * f64::from(spec.channels)) as usize;
         info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
@@ -241,7 +242,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             // boundary BEFORE the target, so the actual position can be
             // up to 1151 frames earlier. Tolerance of 1200 covers this
             // while still detecting gross seek errors (>27ms at 44.1 kHz).
-            let expected_frame_idx = (pos_secs * spec.sample_rate as f64).round() as usize;
+            let expected_frame_idx = (pos_secs * f64::from(spec.sample_rate)).round() as usize;
             let expected_phase = expected_frame_idx % SawWav::SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);

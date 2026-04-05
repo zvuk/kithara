@@ -103,7 +103,7 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
     let chunk_size = 10 * 1024;
     let chunks: Vec<Bytes> = TEST_MP3_BYTES
         .chunks(chunk_size)
-        .map(|c| Bytes::copy_from_slice(c))
+        .map(Bytes::copy_from_slice)
         .collect();
 
     let body_stream = unfold(chunks.into_iter(), |mut iter| async move {
@@ -201,7 +201,7 @@ async fn audio_file_mp3_decodes_with_duration(
     );
 }
 
-/// Duration must be correct IMMEDIATELY after Audio::new — before any
+/// Duration must be correct IMMEDIATELY after `Audio::new` — before any
 /// decode calls. This is what the GUI reads to show track length.
 ///
 /// Uses throttled server: Content-Length is sent immediately but body

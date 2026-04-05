@@ -900,10 +900,8 @@ async fn live_stress_real_stream_seek_read_cache(
             };
             chunks_read = chunks_read.saturating_add(1);
             if read_idx == 0
-                && let (Some(expected), Some(actual)) = (
-                    expected_variant,
-                    chunk.meta.variant_index.map(|v| v as usize),
-                )
+                && let (Some(expected), Some(actual)) =
+                    (expected_variant, chunk.meta.variant_index.map(|v| v))
             {
                 variant_match_checks = variant_match_checks.saturating_add(1);
                 if expected == actual {

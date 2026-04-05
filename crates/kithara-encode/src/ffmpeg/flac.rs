@@ -1,4 +1,11 @@
-use ffmpeg::codec;
+use ffmpeg::{
+    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
+    codec::{
+        Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
+        flag::Flags as CodecFlags,
+    },
+    encoder::find as find_encoder,
+};
 use ffmpeg_next as ffmpeg;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
@@ -16,13 +23,20 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
+const FLAC_FRAME_SAMPLES: usize = 4608;
+const FLAC_STREAMINFO_LEN: usize = 34;
+const FLAC_METADATA_HEADER_LEN: usize = 4;
+const FLAC_MIN_METADATA_BLOCK_LEN: usize = FLAC_METADATA_HEADER_LEN + FLAC_STREAMINFO_LEN;
+const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
+const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
+
 /// FLAC encoder using `FFmpeg`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FlacFFmpegEncoder;
 
 impl FlacFFmpegEncoder {
     pub(crate) const fn frame_samples() -> usize {
-        4608
+        FLAC_FRAME_SAMPLES
     }
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
@@ -84,10 +98,10 @@ impl FlacFFmpegEncoder {
 
 struct PacketCollectingEncoder {
     filter: ffmpeg::filter::Graph,
-    encoder: codec::encoder::Audio,
+    encoder: AudioEncoder,
     codec_config: Vec<u8>,
-    encoder_time_base: ffmpeg::Rational,
-    target_time_base: ffmpeg::Rational,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
     timestamp_origin: Option<i64>,
     units: Vec<EncodedAccessUnit>,
 }
@@ -99,33 +113,33 @@ impl PacketCollectingEncoder {
         timescale: u32,
         codec_config: Vec<u8>,
     ) -> EncodeResult<Self> {
-        let output_codec = ffmpeg::encoder::find(codec::Id::FLAC)
+        let output_codec = find_encoder(Id::FLAC)
             .ok_or(EncodeError::UnsupportedCodec(AudioCodec::Flac))?
             .audio()
             .map_err(|_| EncodeError::UnsupportedCodec(AudioCodec::Flac))?;
-        let context = codec::context::Context::new();
+        let context = CodecContext::new();
         let mut encoder = context.encoder().audio()?;
 
-        let input_channel_layout = ffmpeg::ChannelLayout::default(i32::from(channels));
+        let input_channel_layout = ChannelLayout::default(i32::from(channels));
         let channel_layout = output_codec
             .channel_layouts()
-            .map_or(ffmpeg::channel_layout::ChannelLayout::STEREO, |layouts| {
+            .map_or(ChannelLayout::STEREO, |layouts| {
                 layouts.best(input_channel_layout.channels())
             });
 
-        encoder.set_flags(codec::flag::Flags::GLOBAL_HEADER);
+        encoder.set_flags(CodecFlags::GLOBAL_HEADER);
         encoder.set_rate(sample_rate as i32);
         encoder.set_channel_layout(channel_layout);
         encoder.set_format(
             output_codec
                 .formats()
-                .ok_or(ffmpeg::Error::InvalidData)?
+                .ok_or(FfmpegError::InvalidData)?
                 .next()
-                .ok_or(ffmpeg::Error::InvalidData)?,
+                .ok_or(FfmpegError::InvalidData)?,
         );
         encoder.set_time_base((1, sample_rate as i32));
 
-        let mut options = ffmpeg::Dictionary::new();
+        let mut options = Dictionary::new();
         options.set("compression_level", "5");
         let encoder = encoder.open_as_with(output_codec, options)?;
         let filter = build_direct_filter(&encoder, sample_rate, channels)?;
@@ -134,14 +148,14 @@ impl PacketCollectingEncoder {
             filter,
             encoder,
             codec_config,
-            encoder_time_base: ffmpeg::Rational(1, sample_rate as i32),
-            target_time_base: ffmpeg::Rational(1, timescale as i32),
+            encoder_time_base: Rational(1, sample_rate as i32),
+            target_time_base: Rational(1, timescale as i32),
             timestamp_origin: None,
             units: Vec::new(),
         })
     }
 
-    fn receive_and_collect_filtered_frames(&mut self) -> Result<(), ffmpeg::Error> {
+    fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
         let timestamp_origin = &mut self.timestamp_origin;
@@ -183,7 +197,7 @@ fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>
 }
 
 fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
-    if raw.len() == 34 {
+    if raw.len() == FLAC_STREAMINFO_LEN {
         return Ok(raw.to_vec());
     }
     if let Some(stream_info) = parse_flac_metadata_block(raw) {
@@ -207,18 +221,16 @@ fn extract_stream_info_from_flac_bytes(raw: &[u8]) -> EncodeResult<Vec<u8>> {
         EncodeError::InvalidInput("FLAC bytes are missing the `fLaC` marker".to_owned())
     })?;
 
-    while remaining.len() >= 4 {
-        let block_len = (usize::from(remaining[1]) << 16)
-            | (usize::from(remaining[2]) << 8)
-            | usize::from(remaining[3]);
-        if remaining.len() < 4 + block_len {
+    while remaining.len() >= FLAC_METADATA_HEADER_LEN {
+        let block_len = parse_block_body_len(remaining);
+        if remaining.len() < FLAC_METADATA_HEADER_LEN + block_len {
             break;
         }
-        if remaining[0] & 0x7F == 0 {
-            return normalize_flac_codec_config(&remaining[..4 + block_len]);
+        if remaining[0] & FLAC_BLOCK_TYPE_MASK == 0 {
+            return normalize_flac_codec_config(&remaining[..FLAC_METADATA_HEADER_LEN + block_len]);
         }
-        let is_last = remaining[0] & 0x80 != 0;
-        remaining = &remaining[4 + block_len..];
+        let is_last = remaining[0] & FLAC_LAST_BLOCK_FLAG != 0;
+        remaining = &remaining[FLAC_METADATA_HEADER_LEN + block_len..];
         if is_last {
             break;
         }
@@ -229,33 +241,44 @@ fn extract_stream_info_from_flac_bytes(raw: &[u8]) -> EncodeResult<Vec<u8>> {
     ))
 }
 
+fn parse_block_body_len(header: &[u8]) -> usize {
+    const HI_SHIFT: usize = 16;
+    const MID_SHIFT: usize = 8;
+    const HI: usize = 1;
+    const MID: usize = 2;
+    const LO: usize = 3;
+    (usize::from(header[HI]) << HI_SHIFT)
+        | (usize::from(header[MID]) << MID_SHIFT)
+        | usize::from(header[LO])
+}
+
 fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
-    if raw.len() < 38 {
+    if raw.len() < FLAC_MIN_METADATA_BLOCK_LEN {
         return None;
     }
-    if raw[0] & 0x7F != 0 {
+    if raw[0] & FLAC_BLOCK_TYPE_MASK != 0 {
         return None;
     }
-    let block_len = (usize::from(raw[1]) << 16) | (usize::from(raw[2]) << 8) | usize::from(raw[3]);
-    if block_len != 34 || raw.len() < 4 + block_len {
+    let block_len = parse_block_body_len(raw);
+    if block_len != FLAC_STREAMINFO_LEN || raw.len() < FLAC_METADATA_HEADER_LEN + block_len {
         return None;
     }
-    Some(&raw[4..4 + block_len])
+    Some(&raw[FLAC_METADATA_HEADER_LEN..FLAC_METADATA_HEADER_LEN + block_len])
 }
 
 fn collect_encoded_packets(
-    encoder: &mut codec::encoder::Audio,
-    encoder_time_base: ffmpeg::Rational,
-    target_time_base: ffmpeg::Rational,
+    encoder: &mut AudioEncoder,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
     timestamp_origin: &mut Option<i64>,
     units: &mut Vec<EncodedAccessUnit>,
 ) {
-    let mut encoded = ffmpeg::Packet::empty();
+    let mut encoded = Packet::empty();
     while encoder.receive_packet(&mut encoded).is_ok() {
         if encoded.size() == 0 {
             continue;
         }
-        let mut packet = ffmpeg::Packet::copy(encoded.data().unwrap_or(&[]));
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
         packet.set_pts(encoded.pts());
         packet.set_dts(encoded.dts());
         packet.set_duration(encoded.duration());

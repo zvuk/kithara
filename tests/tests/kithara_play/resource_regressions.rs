@@ -894,7 +894,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 ///
 /// Tests MP3→HLS, HLS→MP3, MP3→MP3 transitions with offline render.
 /// Measures per-block render time and silence gaps.
-/// Every render() call must be complete within the audio block budget
+/// Every `render()` call must be complete within the audio block budget
 /// (~11.6ms at 512 frames / 44100Hz), and no silence gaps > 1 block
 /// are allowed during crossfade.
 #[kithara::test(
@@ -907,7 +907,7 @@ async fn stress_offline_crossfade_no_gaps() {
 
     const BLOCK: usize = 512;
     const SR: u32 = 44100;
-    let block_budget = Duration::from_secs_f64(BLOCK as f64 / SR as f64);
+    let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
     let hls_server = open_audio_hls_server().await;
     let store = store_options(&temp_dir(), true);
@@ -1028,7 +1028,7 @@ async fn stress_offline_crossfade_no_gaps() {
             "{}: silence gap {} blocks ({:.1}ms) — audio underrun during crossfade",
             s.label,
             s.max_silence_run,
-            s.max_silence_run as f64 * BLOCK as f64 / SR as f64 * 1000.0,
+            f64::from(s.max_silence_run) * BLOCK as f64 / f64::from(SR) * 1000.0,
         );
         assert!(
             s.slow_renders <= 1,
@@ -1195,8 +1195,8 @@ async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir:
     );
 }
 
-/// Reproduces EXACTLY the app flow: PlayerImpl + prepare_config + Resource::new +
-/// select_item + duration_seconds(). This is what the GUI reads.
+/// Reproduces EXACTLY the app flow: `PlayerImpl` + `prepare_config` + `Resource::new` +
+/// `select_item` + `duration_seconds()`. This is what the GUI reads.
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(30)),

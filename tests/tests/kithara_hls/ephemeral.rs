@@ -3,7 +3,7 @@
 //!
 //! Two levels of verification:
 //! 1. **Structural**: `AssetStoreBuilder::ephemeral(true)` creates resources with
-//!    `path() == None` (MemResource), while disk creates `path() == Some(_)` (MmapResource).
+//!    `path() == None` (`MemResource`), while disk creates `path() == Some(_)` (`MmapResource`).
 //! 2. **Pipeline**: `Audio<Stream<Hls>>` with `ephemeral: true` produces valid audio
 //!    and leaves the temp directory empty (no files created on disk).
 
@@ -84,7 +84,7 @@ const D: SawWav = SawWav::DEFAULT;
 #[cfg(not(target_arch = "wasm32"))]
 const _: usize = SawWav::SAW_PERIOD;
 /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
-/// MemResources which would make `wait_range()` block forever.
+/// `MemResources` which would make `wait_range()` block forever.
 #[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 3;
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,7 +124,8 @@ async fn ephemeral_pipeline_no_disk_writes() {
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
     // Spawn HLS server
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
         segment_size: D.segment_size,

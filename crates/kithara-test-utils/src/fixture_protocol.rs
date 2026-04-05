@@ -18,7 +18,7 @@ use crate::{signal_pcm::signal, wav::create_wav_header};
 /// `derive(Serialize)` on the enum).
 mod serde_audio_codec {
     use kithara_stream::AudioCodec;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
 
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -59,9 +59,7 @@ mod serde_audio_codec {
             "alac" => Ok(AudioCodec::Alac),
             "pcm" => Ok(AudioCodec::Pcm),
             "adpcm" => Ok(AudioCodec::Adpcm),
-            _ => Err(serde::de::Error::custom(format!(
-                "unknown audio codec string: {s}"
-            ))),
+            _ => Err(DeError::custom(format!("unknown audio codec string: {s}"))),
         }
     }
 }

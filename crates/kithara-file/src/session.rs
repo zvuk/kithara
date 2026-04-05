@@ -2,6 +2,7 @@
 
 use std::{
     collections::VecDeque,
+    io::Error as IoError,
     ops::Range,
     pin::Pin,
     sync::{
@@ -16,7 +17,7 @@ use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, RangeSpec};
 use kithara_platform::{Mutex, time::Duration};
-use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
     dl::{Downloader, FetchCmd, FetchResult, OnConnectFn, Priority, ThrottleFn},
@@ -27,9 +28,7 @@ use url::Url;
 
 use crate::{coord::FileCoord, error::SourceError};
 
-// ---------------------------------------------------------------------------
 // FileStreamState — creation helper (unchanged API)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
@@ -51,9 +50,7 @@ impl FileStreamState {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FSM phase
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePhase {
@@ -65,9 +62,7 @@ pub(crate) enum FilePhase {
     Complete,
 }
 
-// ---------------------------------------------------------------------------
 // Shared inner state
-// ---------------------------------------------------------------------------
 
 pub(crate) struct FileInner {
     pub(crate) phase: FilePhase,
@@ -116,7 +111,7 @@ impl FileInner {
             Box::new(move |chunk: &[u8]| {
                 let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                 res.write_at(pos, chunk)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    .map_err(|e| IoError::other(e.to_string()))?;
                 coord.set_download_pos(pos + chunk.len() as u64);
                 Ok(())
             })
@@ -266,13 +261,10 @@ impl FileInner {
                         // If the resource was committed (full download finished
                         // while this range request was in flight), silently
                         // succeed — data is already available.
-                        if matches!(
-                            res.status(),
-                            kithara_storage::ResourceStatus::Committed { .. }
-                        ) {
+                        if matches!(res.status(), ResourceStatus::Committed { .. }) {
                             Ok(())
                         } else {
-                            Err(std::io::Error::other(e.to_string()))
+                            Err(IoError::other(e.to_string()))
                         }
                     }
                 }
@@ -285,10 +277,7 @@ impl FileInner {
                 if let FetchResult::Err(e) = result {
                     // Only fail the resource if it's not already committed
                     // (committed means the full download succeeded).
-                    if !matches!(
-                        state.res.status(),
-                        kithara_storage::ResourceStatus::Committed { .. }
-                    ) {
+                    if !matches!(state.res.status(), ResourceStatus::Committed { .. }) {
                         state.res.fail(e.to_string());
                         bus.publish(FileEvent::DownloadError {
                             error: e.to_string(),
@@ -317,9 +306,7 @@ impl FileInner {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FileSource — implements Source (sync) + Stream<Item = FetchCmd> (async)
-// ---------------------------------------------------------------------------
 
 /// File source: sync Read+Seek access AND async download command stream.
 ///
@@ -401,9 +388,7 @@ impl FileSource {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Stream<Item = FetchCmd> — yields download commands for the Downloader
-// ---------------------------------------------------------------------------
 
 impl Stream for FileSource {
     type Item = FetchCmd;
@@ -439,9 +424,7 @@ impl Stream for FileSource {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Source trait — sync Read+Seek for decoder thread
-// ---------------------------------------------------------------------------
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
@@ -597,7 +580,7 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_events::Event;
-    use kithara_platform::time::{Duration, sleep, timeout};
+    use kithara_platform::time::Duration;
     use kithara_stream::{ReadOutcome, Source, Timeline};
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
@@ -819,7 +802,7 @@ mod tests {
 
     #[kithara::test]
     fn file_source_phase_parameterless_ready_when_current_byte_is_available() {
-        let data = vec![0xABu8; 64];
+        let data = [0xABu8; 64];
         let res = create_committed_resource(&data[..16]);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
@@ -831,7 +814,7 @@ mod tests {
 
     #[kithara::test]
     fn file_source_phase_parameterless_waiting_when_current_byte_is_missing() {
-        let data = vec![0xABu8; 64];
+        let data = [0xABu8; 64];
         let res = create_committed_resource(&data[..16]);
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);

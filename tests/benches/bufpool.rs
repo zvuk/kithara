@@ -100,7 +100,7 @@ fn bench_cross_shard_steal(c: &mut Criterion) {
                 seed.resize(4 * 1024, 1);
                 internal::put(&pool, seed, donor);
             },
-            |_| {
+            |()| {
                 let buf = pool.get();
                 black_box(buf.len());
             },

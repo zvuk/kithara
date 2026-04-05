@@ -2003,13 +2003,13 @@ mod tests {
         );
     }
 
-    /// RED: `populate_cached_segments` must not destroy init_len on a
+    /// RED: `populate_cached_segments` must not destroy `init_len` on a
     /// segment that was committed with init data during a midstream switch.
     ///
-    /// Scenario: downloader commits segment N with init_len > 0 (ABR switch
+    /// Scenario: downloader commits segment N with `init_len` > 0 (ABR switch
     /// point). Later, all segments 0..=N are on disk and a cache rescan
-    /// fires. The rescan assigns init_len only to count == 0 (the first
-    /// segment found), so segment N gets init_len = 0, destroying the
+    /// fires. The rescan assigns `init_len` only to count == 0 (the first
+    /// segment found), so segment N gets `init_len` = 0, destroying the
     /// init data the decoder needs to start from the switch point.
     #[kithara::test(tokio)]
     async fn populate_cached_segments_preserves_init_on_non_zero_segment() {
@@ -2239,7 +2239,7 @@ mod tests {
             }
         }
 
-        // --- Switch 1: V0 -> V1 ---
+        // Switch 1: V0 -> V1
         // handle_midstream_switch uses old download_variant (V0).
         // first_missing(V0) = 5 (all V0 committed), cursor = 5.
         downloader.handle_midstream_switch(true);
@@ -2266,7 +2266,7 @@ mod tests {
         assert_eq!(downloader.current_segment_index(), 5);
         assert_eq!(downloader.download_variant, 1);
 
-        // --- Switch 2: V1 -> V0 (back-switch) ---
+        // Switch 2: V1 -> V0 (back-switch)
         // handle_midstream_switch uses old download_variant (V1).
         // first_missing(V1) = 0 (V1 has nothing), cursor = 0.
         downloader.handle_midstream_switch(true);

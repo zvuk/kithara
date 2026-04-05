@@ -14,6 +14,7 @@ use kithara_assets::{
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
+use kithara_platform::time::Instant;
 use kithara_stream::{Backend, StreamContext, StreamType, Timeline};
 
 use crate::{
@@ -158,7 +159,7 @@ impl StreamType for Hls {
         // mode=Manual(0)), synchronize before reading the initial variant.
         // This ensures layout_variant matches the ABR target at startup.
         let initial_variant = config.abr.as_ref().map_or(0, |abr| {
-            let now = kithara_platform::time::Instant::now();
+            let now = Instant::now();
             let decision = abr.decide(now);
             if decision.changed {
                 abr.apply(&decision, now);

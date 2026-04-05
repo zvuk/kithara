@@ -60,7 +60,7 @@ fn create_pcm_segments() -> Vec<u8> {
 ///
 /// Also verifies that `content_duration` from fast initial segments (< 10ms)
 /// is accumulated for buffer level tracking, which is required for up-switch
-/// decisions (min_buffer_for_up_switch_secs check).
+/// decisions (`min_buffer_for_up_switch_secs` check).
 #[kithara::test(
     native,
     tokio,
@@ -72,7 +72,8 @@ async fn abr_auto_switch_during_playback() {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,

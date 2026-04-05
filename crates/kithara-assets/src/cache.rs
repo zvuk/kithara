@@ -524,7 +524,7 @@ mod tests {
         CachedAssets::new(disk, capacity, None)
     }
 
-    /// Bypass test: empty asset_root → capabilities lack CACHE.
+    /// Bypass test: empty `asset_root` → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
         CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)

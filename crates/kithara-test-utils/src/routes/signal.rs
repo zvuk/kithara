@@ -35,7 +35,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{StatusCode, header, header::HeaderValue},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -179,10 +179,9 @@ fn build_wav_response_for_signal<S: signal::SignalFn>(
         SignalLength::Finite { .. } => render_wav(signal, spec).into_response(),
         SignalLength::Infinite => stream_wav(signal, spec).into_response(),
     };
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("audio/wav"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
     response
 }
 
@@ -246,7 +245,7 @@ fn build_encoded_response_for_signal<S: signal::SignalFn + Sync>(
             let mut response = encoded.bytes.into_response();
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
-                header::HeaderValue::from_static(encoded.content_type),
+                HeaderValue::from_static(encoded.content_type),
             );
             response
         }

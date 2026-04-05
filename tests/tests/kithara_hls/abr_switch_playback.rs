@@ -315,7 +315,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 /// Stream must continue producing chunks after seek sequence.
 ///
 /// Regression for app3.log: DRM track plays to 23.97s with seeks,
-/// then stops producing chunks → recv_outcome_blocking hang.
+/// then stops producing chunks → `recv_outcome_blocking` hang.
 ///
 /// Parameterized: path × ABR mode to isolate DRM vs HLS vs no-ABR.
 #[kithara::test(
@@ -468,7 +468,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 /// Seek after decode-to-EOF in mmap (non-ephemeral) DRM mode must produce samples.
 ///
 /// Regression: after ABR switch + full decode to EOF, random seeks land on
-/// segments whose byte offsets are no longer visible in the StreamIndex layout,
+/// segments whose byte offsets are no longer visible in the `StreamIndex` layout,
 /// causing `read_at` to return Retry forever.
 #[kithara::test(
     tokio,
@@ -610,9 +610,9 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
 
 /// ABR must be frozen during seek and resume afterwards.
 ///
-/// Invariant: variant must not change between seek() and the first post-seek
+/// Invariant: variant must not change between `seek()` and the first post-seek
 /// chunk. After playback resumes, ABR must still work (variant changes again).
-/// Uses chunk metadata (variant_index) instead of broadcast events to avoid
+/// Uses chunk metadata (`variant_index`) instead of broadcast events to avoid
 /// broadcast lag issues.
 #[kithara::test(
     tokio,

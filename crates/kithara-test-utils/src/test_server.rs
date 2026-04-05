@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use kithara_stream::AudioCodec;
 #[cfg(target_arch = "wasm32")]
 use reqwest::Client;
 use thiserror::Error;
@@ -270,7 +271,7 @@ impl HlsFixtureBuilder {
         signal: PackagedSignal,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::AacLc,
+            codec: AudioCodec::AacLc,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -289,7 +290,7 @@ impl HlsFixtureBuilder {
         patterns: Vec<PcmPattern>,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::AacLc,
+            codec: AudioCodec::AacLc,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -318,7 +319,7 @@ impl HlsFixtureBuilder {
         signal: PackagedSignal,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::Flac,
+            codec: AudioCodec::Flac,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -337,7 +338,7 @@ impl HlsFixtureBuilder {
         patterns: Vec<PcmPattern>,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::Flac,
+            codec: AudioCodec::Flac,
             sample_rate,
             channels,
             timescale: Some(sample_rate),

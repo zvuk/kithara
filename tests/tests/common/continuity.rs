@@ -27,7 +27,7 @@ pub(crate) struct OutputGapStats {
 impl OutputGapStats {
     #[must_use]
     pub(crate) fn block_duration_for(block_frames: usize, sample_rate: u32) -> Duration {
-        Duration::from_secs_f64(block_frames as f64 / sample_rate as f64)
+        Duration::from_secs_f64(block_frames as f64 / f64::from(sample_rate))
     }
 
     #[must_use]
@@ -38,7 +38,8 @@ impl OutputGapStats {
 
 impl fmt::Display for OutputGapStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let silence_ms = self.max_silence_run as f64 * self.block_budget().as_secs_f64() * 1000.0;
+        let silence_ms =
+            f64::from(self.max_silence_run) * self.block_budget().as_secs_f64() * 1000.0;
         write!(
             f,
             "{}: {} blocks, silence={} ({:.1}ms) max_render={:?} slow={}",

@@ -9,7 +9,7 @@ use std::{
 };
 
 use kithara::{
-    abr::AbrMode,
+    abr::{AbrController, AbrMode, AbrOptions},
     play::{Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -260,9 +260,9 @@ impl AudioPlayerItem {
             if let Some(ref ctrl) = config.abr {
                 ctrl.set_mode(abr_mode);
             } else {
-                config.abr = Some(kithara::abr::AbrController::new(kithara::abr::AbrOptions {
+                config.abr = Some(AbrController::new(AbrOptions {
                     mode: abr_mode,
-                    ..kithara::abr::AbrOptions::default()
+                    ..AbrOptions::default()
                 }));
             }
         }

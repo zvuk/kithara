@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use kithara::abr::AbrMode;
 use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
@@ -167,7 +168,7 @@ impl ItemEventBridge {
                 });
             }
             Event::Hls(HlsEvent::AbrModeChanged {
-                mode: kithara::abr::AbrMode::Manual(idx),
+                mode: AbrMode::Manual(idx),
             }) => {
                 observer.on_event(FfiItemEvent::VariantSelected {
                     variant: crate::types::FfiVariant {

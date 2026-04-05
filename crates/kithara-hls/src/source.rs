@@ -8,7 +8,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -59,8 +59,14 @@ pub struct HlsSource {
     /// Dedup key for `wait_range_metadata_fallback` events. Encodes
     /// `(variant << 48) | offset` so the event fires at most once per
     /// unique (variant, offset) pair during a spin-wait loop.
-    pub(crate) last_fallback_key: std::sync::atomic::AtomicU64,
+    pub(crate) last_fallback_key: AtomicU64,
 }
+
+/// Bit shift to pack the variant index into the high bits of a u64 dedup key.
+const FALLBACK_KEY_VARIANT_SHIFT: u64 = 48;
+
+/// Mask for the offset portion of a u64 fallback dedup key (lower 48 bits).
+const FALLBACK_KEY_OFFSET_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 25;
 /// Condvar sleep per spin in `wait_range`. Kept short so the audio worker
@@ -443,7 +449,8 @@ impl HlsSource {
                     offset = range_start,
                     "wait_range: metadata miss fallback segment load"
                 );
-                let key = ((current_variant as u64) << 48) | (range_start & 0x0000_FFFF_FFFF_FFFF);
+                let key = ((current_variant as u64) << FALLBACK_KEY_VARIANT_SHIFT)
+                    | (range_start & FALLBACK_KEY_OFFSET_MASK);
                 let prev = self.last_fallback_key.swap(key, Ordering::Relaxed);
                 if prev != key {
                     self.bus.publish(HlsEvent::Seek {
@@ -1467,7 +1474,7 @@ pub(crate) fn build_pair(
         bus,
         variant_fence: None,
         _backend: None,
-        last_fallback_key: std::sync::atomic::AtomicU64::new(u64::MAX),
+        last_fallback_key: AtomicU64::new(u64::MAX),
     };
 
     (downloader, source)
@@ -1479,7 +1486,7 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::DecryptContext;
-    use kithara_events::EventBus;
+    use kithara_events::{Event, EventBus};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
@@ -2552,10 +2559,10 @@ mod tests {
         // Count Seek events with stage "wait_range_metadata_fallback".
         let mut fallback_count = 0usize;
         while let Ok(event) = rx.try_recv() {
-            if let kithara_events::Event::Hls(HlsEvent::Seek { stage, .. }) = event {
-                if stage == "wait_range_metadata_fallback" {
-                    fallback_count += 1;
-                }
+            if let Event::Hls(HlsEvent::Seek { stage, .. }) = event
+                && stage == "wait_range_metadata_fallback"
+            {
+                fallback_count += 1;
             }
         }
 

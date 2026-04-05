@@ -58,10 +58,10 @@ fn create_pcm_segments(segment_count: usize) -> Vec<u8> {
 }
 
 fn segment_duration_secs() -> f64 {
-    D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0)
+    D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
 }
 
-/// Record of a SegmentComplete event.
+/// Record of a `SegmentComplete` event.
 #[derive(Clone, Debug)]
 struct SegmentRecord {
     variant: usize,
@@ -69,7 +69,7 @@ struct SegmentRecord {
     cached: bool,
 }
 
-/// Collect SegmentComplete and VariantApplied events from a bus.
+/// Collect `SegmentComplete` and `VariantApplied` events from a bus.
 struct EventCollector {
     segments: Arc<Mutex<Vec<SegmentRecord>>>,
     switch_count: Arc<AtomicUsize>,
@@ -145,7 +145,7 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
 /// - V0 = 5 Mbps (delayed after segment 5 → ABR downswitch trigger)
 /// - V1 = 1 Mbps (fast)
 /// - Start Auto(0) → first segments download as V0
-/// - V0 delay triggers ABR downswitch → VariantApplied to V1
+/// - V0 delay triggers ABR downswitch → `VariantApplied` to V1
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
 #[kithara::test(
@@ -438,7 +438,7 @@ async fn multi_track_shared_abr_with_cache() {
 /// starting from the switch point forward. Never re-download segments
 /// for time ranges already covered by the previous variant.
 ///
-/// With N segments total, the number of unique (variant, segment_index)
+/// With N segments total, the number of unique (variant, `segment_index`)
 /// network fetches must be ≤ N + small overhead (init segments, 1-2
 /// overlap at switch boundary). Full double-download (2×N) is a bug.
 ///

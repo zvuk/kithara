@@ -1,4 +1,5 @@
 use iced::Task;
+use kithara::abr::AbrMode;
 use tracing::error;
 
 use super::{app::Kithara, message::Message};
@@ -128,7 +129,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::SetAbrMode(variant) => {
-            use kithara::abr::AbrMode;
             state.abr_mode_is_auto = variant.is_none();
             state.selected_variant = variant;
             state

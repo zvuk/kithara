@@ -11,15 +11,22 @@ use std::{
 };
 
 use futures::Stream;
-use kithara_platform::Mutex;
+use kithara_platform::{
+    Mutex,
+    time::Duration,
+    tokio::time::{Sleep, sleep as tokio_sleep},
+};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{Downloader, DownloaderConfig, FetchCmd, FetchResult, Priority};
+use super::{Downloader, DownloaderConfig, FetchCmd, Priority};
 
-// ---------------------------------------------------------------------------
+const POLL_MS: u64 = 50;
+const SETTLE_MS: u64 = 100;
+const COMPLETE_MS: u64 = 500;
+const CMD_COUNT: usize = 3;
+
 // Test helpers
-// ---------------------------------------------------------------------------
 
 /// Minimal protocol stream — shared state + waker, same pattern real protocols use.
 #[derive(Clone)]
@@ -85,13 +92,11 @@ fn counting_cmd(counter: Arc<AtomicU64>, priority: Priority) -> FetchCmd {
     }
 }
 
-fn sleep(ms: u64) -> kithara_platform::tokio::time::Sleep {
-    kithara_platform::tokio::time::sleep(kithara_platform::time::Duration::from_millis(ms))
+fn sleep(ms: u64) -> Sleep {
+    tokio_sleep(Duration::from_millis(ms))
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[kithara_test_macros::test(tokio)]
 async fn empty_stream_completes() {
@@ -101,7 +106,7 @@ async fn empty_stream_completes() {
     let dl = Downloader::new(DownloaderConfig::default());
     let _handle = dl.register(stream);
 
-    sleep(100).await;
+    sleep(SETTLE_MS).await;
 }
 
 #[kithara_test_macros::test(tokio)]
@@ -113,7 +118,7 @@ async fn cancel_stops_loop() {
     let _handle = dl.register(stream);
 
     cancel.cancel();
-    sleep(100).await;
+    sleep(SETTLE_MS).await;
 }
 
 #[kithara_test_macros::test(tokio)]
@@ -123,7 +128,7 @@ async fn on_complete_fires_for_all_commands() {
 
     {
         let mut state = inner.lock_sync();
-        for _ in 0..3 {
+        for _ in 0..CMD_COUNT {
             state
                 .queue
                 .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
@@ -134,7 +139,7 @@ async fn on_complete_fires_for_all_commands() {
     let dl = Downloader::new(DownloaderConfig::default());
     let _handle = dl.register(stream);
 
-    sleep(500).await;
+    sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 3);
 }
 
@@ -146,7 +151,7 @@ async fn waker_push_after_spawn() {
     let dl = Downloader::new(DownloaderConfig::default());
     let _handle = dl.register(stream);
 
-    sleep(50).await;
+    sleep(POLL_MS).await;
 
     {
         let mut state = inner.lock_sync();
@@ -159,7 +164,7 @@ async fn waker_push_after_spawn() {
         }
     }
 
-    sleep(500).await;
+    sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 1);
 }
 
@@ -186,7 +191,7 @@ async fn multiple_streams_polled() {
     let _h1 = dl.register(a);
     let _h2 = dl.register(b);
 
-    sleep(500).await;
+    sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 2);
 }
 
@@ -205,7 +210,7 @@ async fn register_after_first() {
     let dl = Downloader::new(DownloaderConfig::default());
     let _h1 = dl.register(first);
 
-    sleep(50).await;
+    sleep(POLL_MS).await;
 
     // Register a second stream after the loop is running.
     let (second, inner_second) = TestStream::new();
@@ -226,6 +231,6 @@ async fn register_after_first() {
         }
     }
 
-    sleep(500).await;
+    sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 2);
 }
