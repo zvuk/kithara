@@ -174,6 +174,9 @@ pub trait Source: Send + 'static {
     }
 
     /// Total length if known.
+    ///
+    /// Streaming sources may block briefly until the HTTP response headers
+    /// arrive (Content-Length discovery).
     fn len(&self) -> Option<u64>;
 
     /// Get media info if available.

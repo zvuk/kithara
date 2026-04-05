@@ -1,122 +1,429 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::Arc};
+use std::{
+    collections::VecDeque,
+    ops::Range,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::{Context, Poll, Waker},
+};
 
+use futures::Stream;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::Headers;
-use kithara_platform::time::Duration;
+use kithara_net::{Headers, RangeSpec};
+use kithara_platform::{Mutex, time::Duration};
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError};
+use kithara_stream::{
+    AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
+    dl::{Downloader, FetchCmd, FetchResult, OnConnectFn, Priority, ThrottleFn},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
 
 use crate::{coord::FileCoord, error::SourceError};
 
+// ---------------------------------------------------------------------------
+// FileStreamState — creation helper (unchanged API)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
-    pub(crate) url: Url,
-    pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
-    pub(crate) headers: Option<Headers>,
 }
 
 impl FileStreamState {
     pub(crate) fn create(
         assets: &Arc<AssetStore>,
-        url: Url,
-        cancel: CancellationToken,
+        url: &Url,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
-        headers: Option<Headers>,
-    ) -> Result<Arc<Self>, SourceError> {
-        let key = ResourceKey::from_url(&url);
+    ) -> Result<Self, SourceError> {
+        let key = ResourceKey::from_url(url);
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
-
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
-
-        Ok(Arc::new(Self {
-            url,
-            cancel,
-            res,
-            bus,
-            headers,
-        }))
-    }
-
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
-    }
-
-    pub(crate) fn res(&self) -> &AssetResource {
-        &self.res
-    }
-
-    pub(crate) fn bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    pub(crate) fn headers(&self) -> Option<&Headers> {
-        self.headers.as_ref()
-    }
-
-    pub(crate) fn cancel(&self) -> &CancellationToken {
-        &self.cancel
+        Ok(Self { res, bus })
     }
 }
 
-/// File source implementing Source trait (sync).
+// ---------------------------------------------------------------------------
+// FSM phase
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilePhase {
+    /// Ready to yield the initial full-file download command.
+    Init,
+    /// Download in progress — waiting for `on_complete`.
+    Downloading,
+    /// File fully downloaded (or local).
+    Complete,
+}
+
+// ---------------------------------------------------------------------------
+// Shared inner state
+// ---------------------------------------------------------------------------
+
+pub(crate) struct FileInner {
+    pub(crate) phase: FilePhase,
+    pub(crate) queue: VecDeque<FetchCmd>,
+    pub(crate) waker: Option<Waker>,
+
+    // Resources
+    pub(crate) coord: Arc<FileCoord>,
+    pub(crate) res: AssetResource,
+    pub(crate) bus: EventBus,
+    pub(crate) cancel: CancellationToken,
+
+    // Request params (for building on-demand FetchCmd)
+    pub(crate) url: Url,
+    pub(crate) headers: Option<Headers>,
+
+    /// Codec discovered from HTTP Content-Type (set by `on_connect`).
+    pub(crate) content_type_codec: Option<AudioCodec>,
+}
+
+impl FileInner {
+    fn take_waker(&mut self) -> Option<Waker> {
+        self.waker.take()
+    }
+
+    /// Build a `FetchCmd` for the full file download (streaming GET).
+    fn build_full_download_cmd(
+        inner: &Arc<Mutex<Self>>,
+        look_ahead_bytes: Option<u64>,
+    ) -> FetchCmd {
+        let state = inner.lock_sync();
+        let url = state.url.clone();
+        let headers = state.headers.clone();
+        let res = state.res.clone();
+        let coord = Arc::clone(&state.coord);
+        let bus = state.bus.clone();
+        let cb_inner = Arc::clone(inner);
+        drop(state);
+
+        let offset = Arc::new(AtomicU64::new(0));
+
+        let writer = {
+            let res = res.clone();
+            let coord = Arc::clone(&coord);
+            let offset = Arc::clone(&offset);
+            Box::new(move |chunk: &[u8]| {
+                let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                res.write_at(pos, chunk)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                coord.set_download_pos(pos + chunk.len() as u64);
+                Ok(())
+            })
+        };
+
+        // Clone coord/inner for closures before on_complete moves the originals.
+        let coord_connect = Arc::clone(&coord);
+        let inner_connect = Arc::clone(inner);
+        let coord_throttle = Arc::clone(&coord);
+
+        let on_complete = Box::new(move |result: FetchResult| {
+            let waker = {
+                let mut state = cb_inner.lock_sync();
+                match result {
+                    FetchResult::Ok {
+                        bytes_written,
+                        ref headers,
+                    } => {
+                        let total = headers
+                            .get("content-length")
+                            .or_else(|| headers.get("Content-Length"))
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(bytes_written);
+                        coord.set_total_bytes(Some(total));
+
+                        if let Err(e) = state.res.commit(Some(bytes_written)) {
+                            debug!(?e, "failed to commit file resource");
+                        }
+
+                        if let Some(codec) = headers
+                            .get("content-type")
+                            .or_else(|| headers.get("Content-Type"))
+                            .and_then(AudioCodec::from_mime)
+                        {
+                            state.content_type_codec = Some(codec);
+                        }
+
+                        // Discard stale range requests that arrived while
+                        // the full download was in flight — the resource is
+                        // now committed and cannot accept writes.
+                        let _ = state.coord.take_range_request();
+                        state.queue.clear();
+
+                        bus.publish(FileEvent::DownloadComplete {
+                            total_bytes: bytes_written,
+                        });
+                        state.phase = FilePhase::Complete;
+                    }
+                    FetchResult::Err(e) => {
+                        state.phase = FilePhase::Complete;
+                        // Mark resource failed — unblocks wait_range condvar
+                        // so the decoder thread doesn't hang forever.
+                        state.res.fail(e.to_string());
+                        bus.publish(FileEvent::DownloadError {
+                            error: e.to_string(),
+                        });
+                    }
+                }
+                state.take_waker()
+            };
+            if let Some(w) = waker {
+                w.wake();
+            }
+        });
+
+        let on_connect: Option<OnConnectFn> = Some(Box::new(move |headers: &Headers| {
+            let len = headers
+                .get("content-length")
+                .or_else(|| headers.get("Content-Length"))
+                .and_then(|v| v.parse::<u64>().ok());
+            if let Some(len) = len {
+                coord_connect.set_total_bytes(Some(len));
+            }
+            if let Some(codec) = headers
+                .get("content-type")
+                .or_else(|| headers.get("Content-Type"))
+                .and_then(AudioCodec::from_mime)
+            {
+                inner_connect.lock_sync().content_type_codec = Some(codec);
+            }
+        }));
+
+        let throttle: Option<ThrottleFn> = look_ahead_bytes.map(|limit| {
+            Box::new(move || {
+                let dl = coord_throttle.timeline().download_position();
+                let rd = coord_throttle.read_pos();
+                dl > 0 && dl.saturating_sub(rd) > limit
+            }) as ThrottleFn
+        });
+
+        FetchCmd {
+            url,
+            range: None,
+            headers,
+            priority: Priority::Normal,
+            on_connect,
+            writer,
+            on_complete,
+            throttle,
+        }
+    }
+
+    /// Build a `FetchCmd` for an on-demand range request (seek).
+    fn build_range_cmd(inner: &Arc<Mutex<Self>>, range: Range<u64>) -> FetchCmd {
+        let state = inner.lock_sync();
+        let url = state.url.clone();
+        let headers = state.headers.clone();
+        let res = state.res.clone();
+        let coord = Arc::clone(&state.coord);
+        let bus = state.bus.clone();
+        let cb_inner = Arc::clone(inner);
+        drop(state);
+
+        let write_start = range.start;
+        let offset = Arc::new(AtomicU64::new(write_start));
+
+        let writer = {
+            let res = res.clone();
+            let coord = Arc::clone(&coord);
+            let offset = Arc::clone(&offset);
+            Box::new(move |chunk: &[u8]| {
+                let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                match res.write_at(pos, chunk) {
+                    Ok(()) => {
+                        coord.set_download_pos(pos + chunk.len() as u64);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        // If the resource was committed (full download finished
+                        // while this range request was in flight), silently
+                        // succeed — data is already available.
+                        if matches!(
+                            res.status(),
+                            kithara_storage::ResourceStatus::Committed { .. }
+                        ) {
+                            Ok(())
+                        } else {
+                            Err(std::io::Error::other(e.to_string()))
+                        }
+                    }
+                }
+            })
+        };
+
+        let on_complete = Box::new(move |result: FetchResult| {
+            let waker = {
+                let mut state = cb_inner.lock_sync();
+                if let FetchResult::Err(e) = result {
+                    // Only fail the resource if it's not already committed
+                    // (committed means the full download succeeded).
+                    if !matches!(
+                        state.res.status(),
+                        kithara_storage::ResourceStatus::Committed { .. }
+                    ) {
+                        state.res.fail(e.to_string());
+                        bus.publish(FileEvent::DownloadError {
+                            error: e.to_string(),
+                        });
+                    }
+                }
+                state.take_waker()
+            };
+            if let Some(w) = waker {
+                w.wake();
+            }
+        });
+
+        let range_spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
+
+        FetchCmd {
+            url,
+            range: Some(range_spec),
+            headers,
+            priority: Priority::High,
+            on_connect: None,
+            writer,
+            on_complete,
+            throttle: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FileSource — implements Source (sync) + Stream<Item = FetchCmd> (async)
+// ---------------------------------------------------------------------------
+
+/// File source: sync Read+Seek access AND async download command stream.
 ///
-/// Wraps storage resource with progress tracking and event emission.
-/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
-/// downloader lifecycle: when this source is dropped, the backend is dropped,
-/// cancelling the downloader task automatically.
+/// Created via [`File::create()`](crate::File). When shared with a
+/// [`Downloader`](kithara_stream::dl::Downloader), clone the source
+/// (cheap Arc clone) and register the clone.
+#[derive(Clone)]
 pub struct FileSource {
+    inner: Arc<Mutex<FileInner>>,
+    /// Shared coordination (outside Mutex for borrow-free access).
     coord: Arc<FileCoord>,
-    res: AssetResource,
-    bus: EventBus,
     /// Codec detected from HTTP Content-Type header.
     content_type_codec: Option<AudioCodec>,
-    /// Downloader backend. Dropped with this source, cancelling the downloader.
-    _backend: Option<kithara_stream::Backend>,
+    /// Keep Downloader alive for the lifetime of this source.
+    _downloader: Option<Downloader>,
 }
 
 impl FileSource {
-    /// Create new file source (no on-demand support — for local files).
-    pub(crate) fn new(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> Self {
+    /// Create a source for a local/cached file (no downloads needed).
+    pub(crate) fn local(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> Self {
         Self {
+            inner: Arc::new(Mutex::new(FileInner {
+                phase: FilePhase::Complete,
+                queue: VecDeque::new(),
+                waker: None,
+                coord: Arc::clone(&coord),
+                res,
+                bus,
+                cancel: CancellationToken::new(),
+                url: Url::parse("file:///local").expect("valid url"),
+                headers: None,
+                content_type_codec: None,
+            })),
             coord,
-            res,
-            bus,
             content_type_codec: None,
-            _backend: None,
+            _downloader: None,
         }
     }
 
-    /// Create new file source with backend (for remote files).
-    pub(crate) fn with_backend(
+    /// Create a source for a remote file that needs downloading.
+    pub(crate) fn remote(
         res: AssetResource,
         coord: Arc<FileCoord>,
         bus: EventBus,
-        backend: kithara_stream::Backend,
+        cancel: CancellationToken,
+        url: Url,
+        headers: Option<Headers>,
+        look_ahead_bytes: Option<u64>,
     ) -> Self {
-        Self {
-            coord,
+        let inner = Arc::new(Mutex::new(FileInner {
+            phase: FilePhase::Init,
+            queue: VecDeque::new(),
+            waker: None,
+            coord: Arc::clone(&coord),
             res,
             bus,
+            cancel,
+            url,
+            headers,
             content_type_codec: None,
-            _backend: Some(backend),
+        }));
+
+        // Enqueue the initial full-file download command.
+        let cmd = FileInner::build_full_download_cmd(&inner, look_ahead_bytes);
+        inner.lock_sync().queue.push_back(cmd);
+
+        Self {
+            inner,
+            coord,
+            content_type_codec: None,
+            _downloader: None,
         }
     }
 
-    /// Set codec detected from HTTP Content-Type header.
-    pub(crate) fn with_content_type_codec(mut self, codec: Option<AudioCodec>) -> Self {
-        self.content_type_codec = codec;
+    /// Keep the downloader alive for the lifetime of this source.
+    pub(crate) fn with_downloader(mut self, dl: Downloader) -> Self {
+        self._downloader = Some(dl);
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// Stream<Item = FetchCmd> — yields download commands for the Downloader
+// ---------------------------------------------------------------------------
+
+impl Stream for FileSource {
+    type Item = FetchCmd;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<FetchCmd>> {
+        let mut state = self.inner.lock_sync();
+        state.waker = Some(cx.waker().clone());
+        if let Some(range) = state.coord.take_range_request()
+            && !state.res.contains_range(range.clone())
+        {
+            state.queue.clear();
+            drop(state);
+            let cmd = FileInner::build_range_cmd(&self.inner, range);
+            return Poll::Ready(Some(cmd));
+        }
+
+        if let Some(cmd) = state.queue.pop_front() {
+            if state.phase == FilePhase::Init {
+                state.phase = FilePhase::Downloading;
+            }
+            drop(state);
+            return Poll::Ready(Some(cmd));
+        }
+
+        let cancelled = state.cancel.is_cancelled();
+        drop(state);
+
+        if cancelled {
+            return Poll::Ready(None);
+        }
+
+        Poll::Pending
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source trait — sync Read+Seek for decoder thread
+// ---------------------------------------------------------------------------
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
@@ -145,8 +452,6 @@ impl kithara_stream::Source for FileSource {
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         let _ = timeout;
 
-        // Fast-path via shared FSM: check for seek, EOF, or already-ready data
-        // before touching downloader state or blocking on the resource.
         match self.phase_at(range.clone()) {
             SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             SourcePhase::Eof => return Ok(WaitOutcome::Eof),
@@ -154,59 +459,57 @@ impl kithara_stream::Source for FileSource {
             _ => {}
         }
 
-        // Update read position so downloader knows where reader needs data.
-        // This prevents backpressure deadlock when symphonia seeks ahead
-        // (e.g., SeekFrom::End) while downloader is still near the beginning.
-        if range.start > self.coord.read_pos() {
-            self.coord.set_read_pos(range.start);
+        let state = self.inner.lock_sync();
+        if range.start > state.coord.read_pos() {
+            state.coord.set_read_pos(range.start);
         }
 
-        // If shared state exists, check if on-demand download is needed
-        // BEFORE calling res.wait_range() — the resource blocks indefinitely
-        // for Active resources when data is not available.
-        //
-        // Uses non-blocking contains_range() to detect two cases:
-        // 1. Forward seek: data not yet downloaded
-        // 2. Backward seek: data evicted by ring buffer wrap-around
-        //    (WASM MemResource). Without re-download, wait_range() spins
-        //    forever because evicted data is removed from the available set.
-        //
-        // No Committed guard — ring buffer resources lose data after commit
-        // when capacity < total, so contains_range() is the only reliable check.
-        if !self.res.contains_range(range.clone()) {
+        // Only issue an on-demand Range request when the initial download
+        // has finished. While downloading, data will arrive from the
+        // in-flight full GET — issuing a parallel Range request would
+        // create two concurrent writers to the same resource.
+        let download_done = state.phase == FilePhase::Complete;
+        if download_done && !state.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,
                 range_end = range.end,
                 "file_source::wait_range requesting on-demand download"
             );
-            self.coord.request_range(range.clone());
+            state.coord.request_range(range.clone());
+            if let Some(ref w) = state.waker {
+                w.wake_by_ref();
+            }
         }
 
-        // Wait on the resource. If on-demand was requested, the downloader
-        // will write data via write_at, which notifies the resource's condvar
-        // and unblocks this call.
-        self.res
-            .wait_range(range)
+        let res = state.res.clone();
+        drop(state);
+
+        res.wait_range(range)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
     fn phase(&self) -> SourcePhase {
-        let timeline = self.coord.timeline();
-        let pos = timeline.byte_position();
+        let pos = self.coord.timeline().byte_position();
         self.phase_at(pos..pos.saturating_add(1))
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let timeline = self.coord.timeline();
+        let state = self.inner.lock_sync();
+        let contains = state.res.contains_range(range.clone());
+        let res_len = state.res.len();
+        drop(state);
+
+        if contains {
+            return SourcePhase::Ready;
+        }
+
         let past_eof = self
             .coord
             .total_bytes()
-            .or_else(|| self.res.len())
+            .or(res_len)
             .is_some_and(|total| total > 0 && range.start >= total);
-        if self.res.contains_range(range) {
-            return SourcePhase::Ready;
-        }
-        if timeline.is_flushing() {
+
+        if self.coord.timeline().is_flushing() {
             return SourcePhase::Seeking;
         }
         if past_eof {
@@ -221,41 +524,56 @@ impl kithara_stream::Source for FileSource {
         offset: u64,
         buf: &mut [u8],
     ) -> kithara_stream::StreamResult<ReadOutcome, SourceError> {
-        let n = self
+        let state = self.inner.lock_sync();
+        let n = state
             .res
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
 
-        if n > 0 {
-            let new_pos = offset.saturating_add(n as u64);
-            let total = self.coord.total_bytes().or_else(|| self.res.len());
-
-            self.bus.publish(FileEvent::ByteProgress {
-                position: new_pos,
-                total,
-            });
-
-            trace!(offset, bytes = n, "FileSource read complete");
+        if n == 0 {
+            return Ok(ReadOutcome::Data(0));
         }
+
+        let res_len = state.res.len();
+        let bus = state.bus.clone();
+        drop(state);
+
+        let new_pos = offset.saturating_add(n as u64);
+        let total = self.coord.total_bytes().or(res_len);
+        bus.publish(FileEvent::ByteProgress {
+            position: new_pos,
+            total,
+        });
+        trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Data(n))
     }
 
     fn len(&self) -> Option<u64> {
-        self.coord.total_bytes().or_else(|| self.res.len())
+        self.coord
+            .total_bytes()
+            .or_else(|| self.inner.lock_sync().res.len())
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        // Pass only codec, not container. Container forces `new_direct`
-        // (seek disabled during init) which can hang on streaming sources
-        // where the worker blocks waiting for data. Without container,
-        // the probe path with seek enabled is used instead.
-        self.content_type_codec
-            .map(|codec| MediaInfo::new(Some(codec), None))
+        let codec = self
+            .content_type_codec
+            .or(self.inner.lock_sync().content_type_codec);
+        codec.map(|c| MediaInfo::new(Some(c), None))
     }
 
     fn demand_range(&self, range: Range<u64>) {
-        self.coord.request_range(range);
+        let state = self.inner.lock_sync();
+        // Only issue on-demand fetch when the initial download has finished
+        // AND the range is not already available. While downloading, data
+        // arrives from the in-flight full GET.
+        if state.phase != FilePhase::Complete || state.res.contains_range(range.clone()) {
+            return;
+        }
+        state.coord.request_range(range);
+        if let Some(ref w) = state.waker {
+            w.wake_by_ref();
+        }
     }
 }
 
@@ -271,12 +589,13 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
     fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
         Arc::new(FileCoord::new(timeline))
     }
 
     fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
-        FileSource::new(res, coord, bus)
+        FileSource::local(res, coord, bus)
     }
 
     // FileCoord
@@ -285,7 +604,7 @@ mod tests {
     fn test_file_coord_initial_state() {
         let coord = FileCoord::new(Timeline::new());
         assert_eq!(coord.read_pos(), 0);
-        assert_eq!(coord.download_pos(), 0);
+        assert_eq!(coord.timeline().download_position(), 0);
     }
 
     #[kithara::test]
@@ -296,30 +615,13 @@ mod tests {
         if read_pos {
             coord.set_read_pos(value);
             assert_eq!(coord.read_pos(), value);
-            assert_eq!(coord.download_pos(), 0);
+            assert_eq!(coord.timeline().download_position(), 0);
         } else {
             coord.set_download_pos(value);
-            assert_eq!(coord.download_pos(), value);
+            assert_eq!(coord.timeline().download_position(), value);
             assert_eq!(coord.timeline().download_position(), value);
             assert_eq!(coord.read_pos(), 0);
         }
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_file_coord_signal_reader_advanced() {
-        let coord = Arc::new(FileCoord::new(Timeline::new()));
-
-        let notified = coord.notified_reader_advance();
-        let notified_coord = Arc::clone(&coord);
-        timeout(Duration::from_secs(2), async move {
-            sleep(Duration::from_millis(10)).await;
-            notified_coord.set_read_pos(42);
-            notified.await;
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(coord.read_pos(), 42);
     }
 
     // Demand slot
@@ -360,7 +662,6 @@ mod tests {
 
     // FileSource
 
-    /// Helper: create a committed `AssetResource` backed by a file with `data`.
     fn create_committed_resource(data: &[u8]) -> AssetResource {
         let store = AssetStoreBuilder::new()
             .ephemeral(true)
@@ -398,7 +699,6 @@ mod tests {
             "read_at must not advance the reader cursor outside Stream::read"
         );
 
-        // Read from an offset.
         let mut buf2 = [0u8; 7];
         assert_eq!(
             Source::read_at(&mut source, 6, &mut buf2).unwrap(),
@@ -446,11 +746,8 @@ mod tests {
         coord.set_total_bytes(Some(12345));
         let source = make_source(res, coord, bus);
 
-        // len() should return the explicit value provided at construction.
         assert_eq!(Source::len(&source), Some(12345));
     }
-
-    // SourcePhase integration tests
 
     #[kithara::test]
     fn file_source_phase_ready_when_range_present() {
@@ -461,7 +758,7 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        assert_eq!(source.phase_at(0..5), SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -471,14 +768,12 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.set_total_bytes(Some(100)); // larger than actual data
+        coord.set_total_bytes(Some(100));
         let source = make_source(res, coord, bus);
 
-        // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
-        // Range 50..60 is NOT present — seeking wins.
-        assert_eq!(source.phase_at(50..60), SourcePhase::Seeking,);
+        assert_eq!(source.phase_at(50..60), SourcePhase::Seeking);
     }
 
     #[kithara::test]
@@ -491,11 +786,9 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
-        // Data IS present — Ready wins over Seeking (allows drain).
-        assert_eq!(source.phase_at(0..5), SourcePhase::Ready,);
+        assert_eq!(source.phase_at(0..5), SourcePhase::Ready);
     }
 
     #[kithara::test]
@@ -507,10 +800,8 @@ mod tests {
         coord.set_total_bytes(Some(data.len() as u64));
         let source = make_source(res, coord, bus);
 
-        assert_eq!(source.phase_at(100..110), SourcePhase::Eof,);
+        assert_eq!(source.phase_at(100..110), SourcePhase::Eof);
     }
-
-    // Parameterless phase() tests
 
     #[kithara::test]
     fn file_source_phase_parameterless_ready_when_current_byte_is_available() {
@@ -544,7 +835,6 @@ mod tests {
         let coord = make_coord(Timeline::new());
         let bus = EventBus::new(16);
         coord.set_total_bytes(Some(data.len() as u64));
-        // Move position to end-of-file.
         coord.timeline().set_byte_position(data.len() as u64);
         let source = make_source(res, coord, bus);
 
@@ -558,13 +848,11 @@ mod tests {
         let timeline = Timeline::new();
         let coord = make_coord(timeline.clone());
         let bus = EventBus::new(16);
-        coord.set_total_bytes(Some(100)); // larger than data
+        coord.set_total_bytes(Some(100));
         let mut source = make_source(res, coord, bus);
 
-        // Initiate seek to make timeline flushing.
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
-        // Range 50..60 is NOT present, so Seeking phase fires (not Ready).
         let result = Source::wait_range(&mut source, 50..60, Duration::from_secs(1));
         assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
     }
@@ -580,11 +868,7 @@ mod tests {
 
         Source::demand_range(&source, 512..513);
 
-        assert_eq!(
-            coord.take_range_request(),
-            Some(512..513),
-            "post-seek WaitingForSource must wake the file downloader via demand_range"
-        );
+        assert_eq!(coord.take_range_request(), Some(512..513));
     }
 
     #[kithara::test]
@@ -603,11 +887,7 @@ mod tests {
             ReadOutcome::Data(2)
         );
 
-        assert_eq!(
-            coord.read_pos(),
-            0,
-            "FileSource read_at must not commit the reader cursor outside Stream::read"
-        );
+        assert_eq!(coord.read_pos(), 0);
         assert_eq!(Source::timeline(&source).byte_position(), 0);
 
         coord.set_read_pos(5);

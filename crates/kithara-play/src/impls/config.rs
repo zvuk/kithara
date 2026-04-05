@@ -297,9 +297,12 @@ impl ResourceConfig {
             }
         };
 
+        let dl = kithara_stream::dl::Downloader::new(
+            kithara_stream::dl::DownloaderConfig::default().with_net(self.net),
+        );
         let mut file_config = FileConfig::new(file_src)
             .with_store(self.store)
-            .with_net(self.net);
+            .with_downloader(dl);
 
         if let Some(bytes) = self.look_ahead_bytes {
             file_config = file_config.with_look_ahead_bytes(bytes);
@@ -319,8 +322,6 @@ impl ResourceConfig {
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
-        file_config.runtime = self.runtime.clone();
-
         let mut config = AudioConfig::<kithara_file::File>::new(file_config);
 
         // Apply audio settings from ResourceConfig.

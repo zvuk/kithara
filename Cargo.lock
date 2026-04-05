@@ -4416,6 +4416,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "unimock",
+ "url",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",

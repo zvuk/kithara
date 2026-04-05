@@ -101,6 +101,9 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
+        // Yield so background tasks (Downloader loop) spawned during
+        // create() get a chance to start on current-thread runtimes.
+        kithara_platform::tokio::task::yield_now().await;
         Ok(Self { source })
     }
 
@@ -280,10 +283,14 @@ impl<T: StreamType> Seek for Stream<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let timeline = self.source.timeline();
         let current = timeline.byte_position();
+
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => i128::from(p),
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
+                if self.source.len().is_none() {
+                    let _ = self.source.wait_range(0..1, Duration::from_secs(10));
+                }
                 let Some(len) = self.source.len() else {
                     return Err(IoError::new(
                         ErrorKind::Unsupported,
@@ -302,8 +309,11 @@ impl<T: StreamType> Seek for Stream<T> {
         }
 
         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        // new_pos is verified non-negative above; i128 to u64 is safe after bounds check
         let new_pos = new_pos as u64;
+
+        let _ = self
+            .source
+            .wait_range(new_pos..new_pos.saturating_add(1), Duration::from_secs(10));
 
         if let Some(len) = self.source.len()
             && new_pos > len

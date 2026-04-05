@@ -179,10 +179,20 @@ async fn file_stream_closes_early_seek_still_works() {
     let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, _server) = setup_server(file_data).await;
 
+    let dl = kithara::stream::dl::Downloader::new(
+        kithara::stream::dl::DownloaderConfig::default()
+            .with_net(kithara_net::NetOptions {
+                request_timeout: Duration::from_secs(1),
+                ..Default::default()
+            })
+            .with_cancel(cancel_token.clone()),
+    );
+
     let config = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(clean_temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_look_ahead_bytes(256_000);
+        .with_look_ahead_bytes(256_000)
+        .with_downloader(dl);
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 

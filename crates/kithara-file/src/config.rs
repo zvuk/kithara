@@ -4,8 +4,8 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
-use kithara_net::{Headers, NetOptions};
-use kithara_platform::tokio as platform_tokio;
+use kithara_net::Headers;
+use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -59,24 +59,17 @@ pub struct FileConfig {
     pub name: Option<String>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
-    /// Network configuration.
-    pub net: NetOptions,
     /// File source (remote URL or local path).
     #[derivative(Default(
         value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
     ))]
     pub src: FileSrc,
-    /// Shared tokio runtime handle for the downloader.
-    ///
-    /// When provided, the downloader runs as an async task on this runtime
-    /// instead of spawning a dedicated OS thread. When `None`, the downloader
-    /// auto-detects: reuses a multi-thread runtime if available, otherwise
-    /// falls back to a dedicated thread.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub runtime: Option<platform_tokio::runtime::Handle>,
     /// Storage configuration.
     pub store: StoreOptions,
+    /// Shared downloader (created lazily if not provided).
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub downloader: Option<Downloader>,
 }
 
 impl FileConfig {
@@ -92,6 +85,16 @@ impl FileConfig {
     /// Set name for cache disambiguation.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Set shared downloader.
+    ///
+    /// When not provided, a private downloader is created and spawned
+    /// during [`StreamType::create`](kithara_stream::StreamType::create).
+    #[must_use]
+    pub fn with_downloader(mut self, dl: Downloader) -> Self {
+        self.downloader = Some(dl);
         self
     }
 }
@@ -126,14 +129,6 @@ mod tests {
     fn test_with_store() {
         let store = StoreOptions::default();
         let config = FileConfig::new(test_src()).with_store(store);
-
-        assert!(config.bus.is_none());
-    }
-
-    #[kithara::test]
-    fn test_with_net() {
-        let net = NetOptions::default();
-        let config = FileConfig::new(test_src()).with_net(net);
 
         assert!(config.bus.is_none());
     }
@@ -179,13 +174,11 @@ mod tests {
     #[kithara::test]
     fn test_builder_chain() {
         let store = StoreOptions::default();
-        let net = NetOptions::default();
         let cancel = CancellationToken::new();
         let bus = EventBus::new(32);
 
         let config = FileConfig::new(test_src())
             .with_store(store)
-            .with_net(net)
             .with_cancel(cancel.clone())
             .with_events(bus);
 

@@ -10,7 +10,7 @@ use std::{
 
 use kithara_platform::tokio as platform_tokio;
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
-use platform_tokio::sync::{Notify, futures};
+use platform_tokio::sync::Notify;
 
 pub struct FileCoord {
     demand: DemandSlot<Range<u64>>,
@@ -47,11 +47,6 @@ impl FileCoord {
         self.reader_advanced.notify_one();
     }
 
-    #[must_use]
-    pub(crate) fn download_pos(&self) -> u64 {
-        self.timeline.download_position()
-    }
-
     pub(crate) fn set_download_pos(&self, value: u64) {
         self.timeline.set_download_position(value);
     }
@@ -86,14 +81,6 @@ impl FileCoord {
 
     pub(crate) fn take_range_request(&self) -> Option<Range<u64>> {
         self.demand.take()
-    }
-
-    pub(crate) fn notified_reader_advance(&self) -> futures::Notified<'_> {
-        self.reader_advanced.notified()
-    }
-
-    pub(crate) fn notified_downloader_wake(&self) -> futures::Notified<'_> {
-        self.downloader_wake.notified()
     }
 }
 

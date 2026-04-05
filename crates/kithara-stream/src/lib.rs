@@ -15,6 +15,7 @@ mod context;
 mod coordination;
 mod cursor;
 mod demand;
+pub mod dl;
 mod downloader;
 mod error;
 mod fetch;
