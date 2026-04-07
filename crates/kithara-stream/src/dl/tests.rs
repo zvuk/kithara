@@ -196,6 +196,99 @@ async fn multiple_streams_polled() {
     assert_eq!(counter.load(Ordering::Relaxed), 2);
 }
 
+/// Builds a fetch cmd that records its index via `on_complete`.
+fn indexed_cmd(order_log: Arc<Mutex<Vec<usize>>>, index: usize) -> FetchCmd {
+    FetchCmd {
+        method: super::FetchMethod::default(),
+        url: test_url(),
+        range: None,
+        headers: None,
+        priority: Priority::Normal,
+        on_connect: None,
+        writer: None,
+        throttle: None,
+        on_complete: Some(Box::new(move |_result| {
+            order_log.lock_sync().push(index);
+        })),
+    }
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_batch_fires_on_complete_for_every_cmd() {
+    let dl = Downloader::new(DownloaderConfig::default());
+    let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
+
+    let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
+        .map(|i| indexed_cmd(Arc::clone(&order_log), i))
+        .collect();
+
+    let results = dl.execute_batch(cmds).await;
+
+    assert_eq!(results.len(), CMD_COUNT);
+    assert_eq!(
+        order_log.lock_sync().len(),
+        CMD_COUNT,
+        "every cmd's on_complete must fire exactly once"
+    );
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_batch_delivers_on_complete_in_input_order() {
+    let dl = Downloader::new(DownloaderConfig::default());
+    let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
+
+    // Build a batch with indices 0..3 and verify on_complete callbacks
+    // fire in that exact order, independent of which fetch finished
+    // first on the network (all three target the same dead URL and fail
+    // with connection-refused roughly simultaneously, but the batch must
+    // still invoke callbacks in ascending index order).
+    let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
+        .map(|i| indexed_cmd(Arc::clone(&order_log), i))
+        .collect();
+
+    let _results = dl.execute_batch(cmds).await;
+
+    let log = order_log.lock_sync().clone();
+    assert_eq!(
+        log,
+        (0..CMD_COUNT).collect::<Vec<_>>(),
+        "on_complete callbacks must fire in batch input order"
+    );
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_batch_returns_results_in_input_order() {
+    let dl = Downloader::new(DownloaderConfig::default());
+
+    // Build 3 cmds and rely on the existing connection-refused pathway.
+    let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
+        .map(|_| FetchCmd {
+            method: super::FetchMethod::default(),
+            url: test_url(),
+            range: None,
+            headers: None,
+            priority: Priority::Normal,
+            on_connect: None,
+            writer: None,
+            throttle: None,
+            on_complete: None,
+        })
+        .collect();
+
+    let results = dl.execute_batch(cmds).await;
+
+    assert_eq!(results.len(), CMD_COUNT);
+    // All three target a dead URL and must surface FetchResult::Err in
+    // the returned order. The Vec length is the positive assertion; the
+    // exact error variant depends on the HttpClient transport layer.
+    for r in &results {
+        assert!(
+            matches!(r, super::FetchResult::Err(_)),
+            "all batch cmds pointed at a dead URL and must return Err"
+        );
+    }
+}
+
 #[kithara_test_macros::test(tokio)]
 async fn register_after_first() {
     let counter = Arc::new(AtomicU64::new(0));

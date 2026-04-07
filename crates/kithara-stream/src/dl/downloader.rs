@@ -106,6 +106,61 @@ impl Downloader {
         Self::execute_one(&client, chunk_timeout, &pool, cmd).await
     }
 
+    /// Execute a batch of [`FetchCmd`] concurrently and return all results.
+    ///
+    /// Runs all commands in parallel via `join_all` using the same
+    /// `HttpClient` and pool as the streaming pipeline. Intended for
+    /// batched control-plane requests (e.g. HEAD size-map queries for all
+    /// segments at once) and for HLS plan loop dispatch where a set of
+    /// segment fetches should run concurrently but deliver `on_complete`
+    /// callbacks in a deterministic order so that downstream state
+    /// transitions (commit, layout update) are applied in batch-index
+    /// order regardless of network completion order.
+    ///
+    /// Ordering guarantees:
+    /// - **Network fetches**: run concurrently; completion order is
+    ///   determined by network timing.
+    /// - **`on_complete` callbacks**: fired in input order (index 0 first,
+    ///   then index 1, etc.), after **all** fetches in the batch have
+    ///   finished. A slow fetch at index 0 delays the callbacks for
+    ///   indices 1..N until index 0 finishes.
+    /// - **Returned `Vec<FetchResult>`**: preserves input order of `cmds`.
+    pub async fn execute_batch(&self, cmds: Vec<FetchCmd>) -> Vec<FetchResult> {
+        let client = self.inner.client.clone();
+        let chunk_timeout = self.inner.chunk_timeout;
+        let pool = self.inner.pool.clone();
+
+        // Strip on_completes so we can fire them in input order after all
+        // fetches finish. The fetch itself runs without on_complete.
+        let mut on_completes: Vec<Option<super::cmd::OnCompleteFn>> =
+            Vec::with_capacity(cmds.len());
+        let mut stripped: Vec<FetchCmd> = Vec::with_capacity(cmds.len());
+        for mut cmd in cmds {
+            on_completes.push(cmd.on_complete.take());
+            stripped.push(cmd);
+        }
+
+        // Run all fetches concurrently (without firing on_complete).
+        let futs: Vec<_> = stripped
+            .into_iter()
+            .map(|cmd| {
+                let client = client.clone();
+                let pool = pool.clone();
+                async move { Self::fetch_only(&client, chunk_timeout, &pool, cmd).await }
+            })
+            .collect();
+        let results = futures::future::join_all(futs).await;
+
+        // Fire on_completes in input order, after all fetches are done.
+        for (result, cb_opt) in results.iter().zip(on_completes.into_iter()) {
+            if let Some(cb) = cb_opt {
+                cb(result);
+            }
+        }
+
+        results
+    }
+
     /// Ensure the download loop is running (lazy spawn on first register).
     fn ensure_spawned(&self) {
         let Some(rx) = self.inner.register_rx.lock_sync().take() else {
@@ -183,12 +238,33 @@ impl Downloader {
         }
     }
 
-    /// Execute a single fetch and return the result.
+    /// Execute a single fetch, calling `on_complete` with `&result` when done.
+    ///
+    /// Convenience wrapper: runs the fetch via [`fetch_only`](Self::fetch_only),
+    /// then invokes `on_complete` (if any) before returning the result.
+    async fn execute_one(
+        client: &HttpClient,
+        chunk_timeout: Duration,
+        pool: &BytePool,
+        mut cmd: FetchCmd,
+    ) -> FetchResult {
+        let on_complete = cmd.on_complete.take();
+        let result = Self::fetch_only(client, chunk_timeout, pool, cmd).await;
+        if let Some(cb) = on_complete {
+            cb(&result);
+        }
+        result
+    }
+
+    /// Execute the fetch without calling `on_complete`.
     ///
     /// Calls `on_connect`, streams body through `writer`, accumulates body
-    /// for [`FetchMethod::Get`], then calls `on_complete` with `&result`.
+    /// for [`FetchMethod::Get`], and returns the result. The caller is
+    /// responsible for invoking `on_complete` (if any) — this split enables
+    /// ordered `on_complete` delivery in batched execution where the caller
+    /// wants to fire callbacks in a deterministic order.
     #[expect(clippy::cognitive_complexity)]
-    async fn execute_one(
+    async fn fetch_only(
         client: &HttpClient,
         chunk_timeout: Duration,
         pool: &BytePool,
@@ -198,7 +274,7 @@ impl Downloader {
 
         // HEAD — headers only, no body.
         if cmd.method == FetchMethod::Head {
-            let result = match client.head(url.clone(), cmd.headers.take()).await {
+            return match client.head(url.clone(), cmd.headers.take()).await {
                 Ok(headers) => {
                     if let Some(on_connect) = cmd.on_connect.take() {
                         on_connect(&headers);
@@ -214,10 +290,6 @@ impl Downloader {
                     FetchResult::Err(e)
                 }
             };
-            if let Some(cb) = cmd.on_complete {
-                cb(&result);
-            }
-            return result;
         }
 
         // GET or Stream — both fetch a body stream.
@@ -234,11 +306,7 @@ impl Downloader {
             Ok(s) => s,
             Err(e) => {
                 debug!(?url, "fetch failed: {e}");
-                let result = FetchResult::Err(e);
-                if let Some(cb) = cmd.on_complete {
-                    cb(&result);
-                }
-                return result;
+                return FetchResult::Err(e);
             }
         };
 
@@ -268,11 +336,7 @@ impl Downloader {
                         && let Err(io_err) = writer(data.as_ref())
                     {
                         debug!(?url, bytes_written, "writer error: {io_err}");
-                        let result = FetchResult::Err(NetError::Http(io_err.to_string()));
-                        if let Some(cb) = cmd.on_complete {
-                            cb(&result);
-                        }
-                        return result;
+                        return FetchResult::Err(NetError::Http(io_err.to_string()));
                     }
                     if let Some(ref mut buf) = body_buf {
                         buf.extend_from_slice(data.as_ref());
@@ -288,26 +352,18 @@ impl Downloader {
                 }
                 Some(Err(net_err)) => {
                     debug!(?url, bytes_written, "stream error: {net_err}");
-                    let result = FetchResult::Err(net_err);
-                    if let Some(cb) = cmd.on_complete {
-                        cb(&result);
-                    }
-                    return result;
+                    return FetchResult::Err(net_err);
                 }
                 None => break, // stream ended or chunk idle timeout
             }
         }
 
         debug!(?url, bytes_written, "fetch complete");
-        let result = FetchResult::Ok {
+        FetchResult::Ok {
             bytes_written,
             headers: response_headers,
             body: body_buf.map(kithara_bufpool::PooledOwned::into_inner),
-        };
-        if let Some(cb) = cmd.on_complete {
-            cb(&result);
         }
-        result
     }
 }
 
