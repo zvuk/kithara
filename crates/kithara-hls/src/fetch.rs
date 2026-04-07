@@ -70,10 +70,16 @@ pub struct SegmentMeta {
 
 /// Result of starting a fetch.
 pub enum FetchResult {
-    /// Already cached, no fetch needed.
-    Cached { bytes: u64 },
-    /// Active fetch in progress via Writer stream.
-    /// Includes the resource so the caller can commit after download completes.
+    /// Resource bytes are in place and committed — caller only takes the
+    /// length. Produced when the resource was already in the cache before
+    /// the call (`was_cached == true`) or when the unified [`Downloader`]
+    /// finished the download and committed the resource inline inside
+    /// [`FetchManager::start_fetch`] (`was_cached == false`).
+    Committed { bytes: u64, was_cached: bool },
+    /// Active fetch in progress via Writer stream — caller must drain the
+    /// writer and commit the resource. Produced only by the legacy
+    /// `self.net.stream` fallback path (kept for test helpers that mock
+    /// `Net` without attaching a `Downloader`).
     Active(Writer, Box<AssetResource<DecryptContext>>),
 }
 
@@ -358,10 +364,22 @@ impl<N: Net> FetchManager<N> {
         }
     }
 
-    /// Start fetching a segment. Returns cached size if already cached.
+    /// Start fetching a segment.
     ///
-    /// When `decrypt_ctx` is `Some`, the resource will be decrypted on commit
-    /// via the `ProcessingAssets` layer (zero-allocation, pool-backed).
+    /// - If the resource is already in the cache, returns
+    ///   `FetchResult::Committed { was_cached: true }`.
+    /// - If a unified [`Downloader`] is attached, drives the fetch through
+    ///   `Downloader::execute(FetchCmd::Stream)` with a writer callback
+    ///   that writes each chunk into the `AssetResource`, commits the
+    ///   resource inline on success, and returns
+    ///   `FetchResult::Committed { was_cached: false }`.
+    /// - Otherwise (test helpers with no Downloader), falls back to
+    ///   `self.net.stream(...)` + legacy `Writer` and returns
+    ///   `FetchResult::Active(writer, res)` so the caller drains manually.
+    ///
+    /// When `decrypt_ctx` is `Some`, the resource is opened with a
+    /// decrypt context; decryption happens on the fly inside
+    /// `AssetResource::write_at` via the `ProcessingAssets` layer.
     pub(crate) async fn start_fetch(
         &self,
         url: &Url,
@@ -371,7 +389,10 @@ impl<N: Net> FetchManager<N> {
         if let AssetResourceState::Committed { final_len } = self.backend.resource_state(&key)? {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit via resource_state");
-            return Ok(FetchResult::Cached { bytes: len });
+            return Ok(FetchResult::Committed {
+                bytes: len,
+                was_cached: true,
+            });
         }
 
         let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
@@ -380,14 +401,77 @@ impl<N: Net> FetchManager<N> {
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok(FetchResult::Cached { bytes: len });
+            return Ok(FetchResult::Committed {
+                bytes: len,
+                was_cached: true,
+            });
         }
 
-        trace!(url = %url, "start_fetch: starting network fetch");
+        if let Some(ref dl) = self.downloader {
+            trace!(url = %url, "start_fetch: downloading via Downloader");
+            let bytes = self.download_stream_via_downloader(dl, url, &res).await?;
+            return Ok(FetchResult::Committed {
+                bytes,
+                was_cached: false,
+            });
+        }
+
+        trace!(url = %url, "start_fetch: starting network fetch (legacy net.stream)");
         let net_stream = self.net.stream(url.clone(), self.headers.clone()).await?;
         let writer = Writer::new(net_stream, res.clone(), self.cancel.clone());
 
         Ok(FetchResult::Active(writer, Box::new(res)))
+    }
+
+    /// Stream a fetch into an `AssetResource` via the unified Downloader.
+    ///
+    /// Issues a `FetchCmd::Stream` whose writer callback writes each chunk
+    /// to the resource at the current sequential offset, then commits the
+    /// resource with the final length. On zero bytes, marks the resource
+    /// as failed and returns a `SegmentNotFound` error — matches the
+    /// existing behaviour of the legacy `Writer` drain loop in the two
+    /// `start_fetch` callers.
+    async fn download_stream_via_downloader(
+        &self,
+        dl: &Downloader,
+        url: &Url,
+        res: &AssetResource<DecryptContext>,
+    ) -> HlsResult<u64> {
+        let res_writer = res.clone();
+        let mut offset: u64 = 0;
+        let writer_cb: kithara_stream::dl::WriterFn = Box::new(move |chunk: &[u8]| {
+            let pos = offset;
+            offset += chunk.len() as u64;
+            res_writer
+                .write_at(pos, chunk)
+                .map_err(std::io::Error::other)
+        });
+        let cmd = FetchCmd {
+            method: FetchMethod::Stream,
+            url: url.clone(),
+            range: None,
+            headers: self.headers.clone(),
+            priority: Priority::Normal,
+            on_connect: None,
+            writer: Some(writer_cb),
+            on_complete: None,
+            throttle: None,
+        };
+        let total = match dl.execute(cmd).await {
+            DlFetchResult::Ok { bytes_written, .. } => bytes_written,
+            DlFetchResult::Err(e) => {
+                res.fail(format!("fetch failed: {e}"));
+                return Err(HlsError::from(e));
+            }
+        };
+        if total == 0 {
+            res.fail(format!("0 bytes downloaded: {url}"));
+            return Err(HlsError::SegmentNotFound(format!(
+                "download yielded 0 bytes for {url}",
+            )));
+        }
+        res.commit(Some(total)).map_err(HlsError::from)?;
+        Ok(res.len().unwrap_or(total))
     }
 
     fn media_segment_cell(&self, key: SegmentFetchKey) -> Arc<OnceCell<SegmentLoad>> {
@@ -566,37 +650,7 @@ impl<N: Net> FetchManager<N> {
             .await?;
 
         let fetch_result = self.start_fetch(&init_url, decrypt_ctx).await?;
-
-        let init_len = match fetch_result {
-            FetchResult::Cached { bytes } => {
-                trace!(variant, bytes, "init segment already cached");
-                bytes
-            }
-            FetchResult::Active(mut writer, res) => {
-                debug!(variant, url = %init_url, "downloading init segment");
-                let mut total = 0u64;
-                while let Some(result) = writer.next().await {
-                    match result {
-                        Ok(WriterItem::ChunkWritten { len, .. }) => total += len as u64,
-                        Ok(WriterItem::StreamEnded { total_bytes }) => {
-                            total = total_bytes;
-                            break;
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                }
-                if total == 0 {
-                    res.fail("init segment: 0 bytes downloaded".to_string());
-                    return Err(HlsError::SegmentNotFound(
-                        "init segment download yielded 0 bytes".to_string(),
-                    ));
-                }
-                res.commit(Some(total)).map_err(HlsError::from)?;
-                let committed_len = res.len().unwrap_or(total);
-                debug!(variant, total, committed_len, "init segment downloaded");
-                committed_len
-            }
-        };
+        let init_len = Self::resolve_fetch_result(fetch_result, "init segment").await?;
 
         Ok(SegmentMeta {
             variant,
@@ -608,6 +662,46 @@ impl<N: Net> FetchManager<N> {
             len: init_len,
             container,
         })
+    }
+
+    /// Collapse a [`FetchResult`] into the committed byte length.
+    ///
+    /// For `Committed`, simply returns the byte count (the length only —
+    /// `was_cached` is discarded). For `Active` (legacy `net.stream`
+    /// fallback), drains the writer, commits the resource, and returns
+    /// the final committed length. On zero bytes, marks the resource
+    /// failed and returns a `SegmentNotFound` error.
+    async fn resolve_fetch_result(result: FetchResult, label: &str) -> HlsResult<u64> {
+        match result {
+            FetchResult::Committed { bytes, .. } => Ok(bytes),
+            FetchResult::Active(mut writer, res) => {
+                let total = Self::drain_legacy_writer(&mut writer).await?;
+                if total == 0 {
+                    res.fail(format!("{label}: 0 bytes downloaded"));
+                    return Err(HlsError::SegmentNotFound(format!(
+                        "{label} download yielded 0 bytes",
+                    )));
+                }
+                res.commit(Some(total)).map_err(HlsError::from)?;
+                Ok(res.len().unwrap_or(total))
+            }
+        }
+    }
+
+    /// Drain a legacy `Writer` and return total bytes written.
+    async fn drain_legacy_writer(writer: &mut Writer) -> HlsResult<u64> {
+        let mut total = 0u64;
+        while let Some(item) = writer.next().await {
+            match item {
+                Ok(WriterItem::ChunkWritten { len, .. }) => total += len as u64,
+                Ok(WriterItem::StreamEnded { total_bytes }) => {
+                    total = total_bytes;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(total)
     }
 
     /// Load init segment with deduplication via `OnceCell`.
@@ -686,7 +780,7 @@ impl<N: Net> FetchManager<N> {
                 let fetch_result = self.start_fetch(&segment_url, decrypt_ctx).await?;
 
                 let (segment_len, cached) = match fetch_result {
-                    FetchResult::Cached { bytes } => (bytes, true),
+                    FetchResult::Committed { bytes, was_cached } => (bytes, was_cached),
                     FetchResult::Active(mut writer, res) => {
                         let mut total = 0u64;
                         while let Some(result) = writer.next().await {
@@ -770,15 +864,37 @@ impl<N: Net> FetchManager<N> {
 
     /// Get Content-Length for a URL using HEAD request.
     ///
-    /// Returns the size in bytes if Content-Length header is present and parseable.
+    /// Routes through the unified [`Downloader`] when attached, falls
+    /// back to `self.net.head` otherwise (test helpers without a
+    /// Downloader). Returns the size in bytes if Content-Length is
+    /// present and parseable.
     ///
     /// # Errors
     /// Returns an error when the request fails, header is missing, or header value cannot be parsed.
     pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
-        let resp = self.net.head(url.clone(), self.headers.clone()).await?;
-        let content_length = resp
+        let headers = self.headers.clone();
+        let resp_headers = if let Some(ref dl) = self.downloader {
+            let cmd = FetchCmd {
+                method: FetchMethod::Head,
+                url: url.clone(),
+                range: None,
+                headers,
+                priority: Priority::Normal,
+                on_connect: None,
+                writer: None,
+                on_complete: None,
+                throttle: None,
+            };
+            match dl.execute(cmd).await {
+                DlFetchResult::Ok { headers, .. } => headers,
+                DlFetchResult::Err(e) => return Err(HlsError::from(e)),
+            }
+        } else {
+            self.net.head(url.clone(), headers).await?
+        };
+        let content_length = resp_headers
             .get("content-length")
-            .or_else(|| resp.get("Content-Length"))
+            .or_else(|| resp_headers.get("Content-Length"))
             .ok_or_else(|| {
                 HlsError::InvalidUrl(format!(
                     "No Content-Length header in HEAD response for {url}",
@@ -1486,7 +1602,7 @@ mod tests {
                 }
                 (total, res)
             }
-            FetchResult::Cached { .. } => panic!("expected active fetch"),
+            FetchResult::Committed { .. } => panic!("expected active fetch"),
         };
         res.commit(Some(total)).expect("commit segment");
 
@@ -1592,7 +1708,7 @@ mod tests {
                     }
                     (total, res)
                 }
-                FetchResult::Cached { .. } => panic!("expected active fetch"),
+                FetchResult::Committed { .. } => panic!("expected active fetch"),
             };
             res.commit(Some(total)).expect("commit segment");
             assert!(
