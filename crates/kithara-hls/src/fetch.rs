@@ -12,7 +12,10 @@ use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_platform::{MaybeSend, MaybeSync, RwLock, tokio, tokio::sync::OnceCell};
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{ContainerFormat, Writer, WriterItem};
+use kithara_stream::{
+    ContainerFormat, Writer, WriterItem,
+    dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
@@ -126,6 +129,12 @@ pub struct FetchManager<N> {
     backend: AssetStore<DecryptContext>,
     key_manager: Option<Arc<crate::keys::KeyManager>>,
     net: N,
+    /// Unified downloader for routing control-plane fetches (playlists,
+    /// DRM keys). When `None`, falls back to [`Net::get_bytes`] via
+    /// `self.net`. Phase 02 commits migrate additional paths (init,
+    /// media, HEAD) onto this field; once all paths are migrated
+    /// `self.net` is removed.
+    downloader: Option<Downloader>,
     cancel: CancellationToken,
     headers: Option<Headers>,
     // Playlist state
@@ -148,6 +157,7 @@ impl<N: Net> FetchManager<N> {
             backend,
             key_manager: None,
             net,
+            downloader: None,
             cancel,
             headers: None,
             master_url: None,
@@ -159,6 +169,18 @@ impl<N: Net> FetchManager<N> {
             media_segments: Arc::new(RwLock::new(HashMap::new())),
             playlist_state: None,
         }
+    }
+
+    /// Set the shared unified downloader.
+    ///
+    /// When set, playlist and DRM-key fetches go through the Downloader
+    /// instead of the internal `self.net` client. Init / media / HEAD
+    /// paths remain on `self.net` until their own phase 02 migration
+    /// commits land.
+    #[must_use]
+    pub fn with_downloader(mut self, downloader: Downloader) -> Self {
+        self.downloader = Some(downloader);
+        self
     }
 
     /// Set master playlist URL (required for Loader functionality).
@@ -280,7 +302,7 @@ impl<N: Net> FetchManager<N> {
         );
 
         let res = self.backend.acquire_resource(&key)?;
-        let bytes = self.net.get_bytes(url.clone(), headers).await?;
+        let bytes = self.fetch_atomic_bytes(url.clone(), headers).await?;
 
         // Best-effort cache write. Multiple concurrent callers may race here:
         // all miss the cache, all fetch from network, first commits the resource,
@@ -305,6 +327,35 @@ impl<N: Net> FetchManager<N> {
         }
 
         Ok(bytes)
+    }
+
+    /// Fetch a small atomic body — routes through the unified
+    /// [`Downloader`] when set, falls back to the internal `Net` client
+    /// otherwise.
+    ///
+    /// Used for control-plane requests (playlists, DRM keys) where the
+    /// full body is wanted as a single `Bytes` buffer. Streaming media
+    /// paths do not use this helper.
+    async fn fetch_atomic_bytes(&self, url: Url, headers: Option<Headers>) -> HlsResult<Bytes> {
+        if let Some(ref dl) = self.downloader {
+            let cmd = FetchCmd {
+                method: FetchMethod::Get,
+                url: url.clone(),
+                range: None,
+                headers,
+                priority: Priority::High,
+                on_connect: None,
+                writer: None,
+                on_complete: None,
+                throttle: None,
+            };
+            match dl.execute(cmd).await {
+                DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
+                DlFetchResult::Err(e) => Err(HlsError::from(e)),
+            }
+        } else {
+            Ok(self.net.get_bytes(url, headers).await?)
+        }
     }
 
     /// Start fetching a segment. Returns cached size if already cached.

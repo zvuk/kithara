@@ -15,7 +15,10 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
 use kithara_platform::time::Instant;
-use kithara_stream::{Backend, StreamContext, StreamType, Timeline};
+use kithara_stream::{
+    Backend, StreamContext, StreamType, Timeline,
+    dl::{Downloader, DownloaderConfig},
+};
 
 use crate::{
     HlsStreamContext,
@@ -84,6 +87,24 @@ impl StreamType for Hls {
             opts
         });
 
+        // Unified downloader — routes control-plane fetches (playlists,
+        // DRM keys) off of `net` and onto the shared Downloader. Use a
+        // child cancel token so dropping the private Downloader on Hls
+        // teardown never propagates back up to the outer `cancel`.
+        // See feedback_cancel_token_drop_in_tests.md for the rationale.
+        let downloader = config.downloader.clone().unwrap_or_else(|| {
+            let mut dl_config = DownloaderConfig::default()
+                .with_net(config.net.clone())
+                .with_cancel(cancel.child_token());
+            if let Some(handle) = config.runtime.clone() {
+                dl_config = dl_config.with_runtime(handle);
+            }
+            if let Some(pool) = config.pool.clone() {
+                dl_config = dl_config.with_pool(pool);
+            }
+            Downloader::new(dl_config)
+        });
+
         // Build DRM process function for ProcessingAssets
         let drm_process_fn: ProcessChunkFn<DecryptContext> =
             Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
@@ -119,6 +140,7 @@ impl StreamType for Hls {
             // We'll set it up after creating the FetchManager.
             Arc::new(
                 FetchManager::new(backend.clone(), net.clone(), cancel.clone())
+                    .with_downloader(downloader.clone())
                     .with_master_url(config.url.clone())
                     .with_base_url(config.base_url.clone())
                     .with_headers(config.headers.clone()),
@@ -128,6 +150,7 @@ impl StreamType for Hls {
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
         let mut fetch_manager = FetchManager::new(backend, net, cancel.clone())
+            .with_downloader(downloader)
             .with_master_url(config.url.clone())
             .with_base_url(config.base_url.clone())
             .with_headers(config.headers.clone())
