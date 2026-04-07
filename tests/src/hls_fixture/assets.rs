@@ -78,14 +78,20 @@ pub fn create_test_net() -> HttpClient {
     HttpClient::new(net_opts)
 }
 
-pub fn test_fetch_manager(assets: &TestAssets, net: HttpClient) -> FetchManager<HttpClient> {
-    FetchManager::new(assets.assets().clone(), net, CancellationToken::new())
+/// Create a private test [`Downloader`] with a fresh cancel token.
+pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
+    kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
 }
 
-pub fn test_fetch_manager_shared(
-    assets: &TestAssets,
-    net: HttpClient,
-) -> Arc<FetchManager<HttpClient>> {
+pub fn test_fetch_manager(assets: &TestAssets, _net: HttpClient) -> FetchManager {
+    FetchManager::new(
+        assets.assets().clone(),
+        create_test_downloader(),
+        CancellationToken::new(),
+    )
+}
+
+pub fn test_fetch_manager_shared(assets: &TestAssets, net: HttpClient) -> Arc<FetchManager> {
     Arc::new(test_fetch_manager(assets, net))
 }
 

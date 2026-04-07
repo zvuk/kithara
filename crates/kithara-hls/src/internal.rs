@@ -12,9 +12,9 @@ pub use kithara_abr::{AbrMode, AbrOptions};
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus};
-use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::tokio::sync::broadcast;
 use kithara_storage::ResourceExt;
+use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio_util::sync::CancellationToken;
 
 use crate::source::build_pair;
@@ -44,8 +44,8 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
         .cancel(cancel.clone())
         .process_fn(passthrough)
         .build();
-    let net = HttpClient::new(NetOptions::default());
-    Arc::new(FetchManager::new(backend, net, cancel))
+    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    Arc::new(FetchManager::new(backend, downloader, cancel))
 }
 
 pub fn make_test_source(

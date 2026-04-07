@@ -17,7 +17,6 @@ use kithara_hls::internal::{
     make_test_source_with_fetch as make_internal_test_source_with_fetch, set_source_variant_fence,
     source_can_cross_variant, source_variant_index_handle, subscribe_source_events,
 };
-use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant, sleep, timeout},
@@ -289,8 +288,10 @@ fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    let net = HttpClient::new(NetOptions::default());
-    Arc::new(FetchManager::new(backend, net, cancel))
+    let downloader = kithara_stream::dl::Downloader::new(
+        kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
+    );
+    Arc::new(FetchManager::new(backend, downloader, cancel))
 }
 
 async fn wait_range_and_take_request(

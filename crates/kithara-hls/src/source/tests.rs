@@ -9,7 +9,6 @@ use std::{
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent};
-use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     Mutex,
     time::Duration,
@@ -36,6 +35,12 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
+fn test_downloader(cancel: &CancellationToken) -> kithara_stream::dl::Downloader {
+    kithara_stream::dl::Downloader::new(
+        kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
+    )
+}
+
 fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
     let noop_drm: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
@@ -47,8 +52,8 @@ fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    let net = HttpClient::new(NetOptions::default());
-    Arc::new(FetchManager::new(backend, net, cancel))
+    let downloader = test_downloader(&cancel);
+    Arc::new(FetchManager::new(backend, downloader, cancel))
 }
 
 fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> Arc<DefaultFetchManager> {
@@ -64,8 +69,8 @@ fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> Arc<De
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    let net = HttpClient::new(NetOptions::default());
-    Arc::new(FetchManager::new(backend, net, cancel))
+    let downloader = test_downloader(&cancel);
+    Arc::new(FetchManager::new(backend, downloader, cancel))
 }
 
 fn parsed_variants(count: usize) -> Vec<VariantStream> {

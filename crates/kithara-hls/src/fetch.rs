@@ -5,15 +5,14 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetResourceState, AssetStore, ResourceKey};
 use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
-use kithara_net::{Headers, HttpClient, Net};
+use kithara_net::Headers;
 use kithara_platform::{MaybeSend, MaybeSync, RwLock, tokio, tokio::sync::OnceCell};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    ContainerFormat, Writer, WriterItem,
+    ContainerFormat,
     dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority},
 };
 use tokio_util::sync::CancellationToken;
@@ -69,18 +68,14 @@ pub struct SegmentMeta {
 }
 
 /// Result of starting a fetch.
-pub enum FetchResult {
-    /// Resource bytes are in place and committed — caller only takes the
-    /// length. Produced when the resource was already in the cache before
-    /// the call (`was_cached == true`) or when the unified [`Downloader`]
-    /// finished the download and committed the resource inline inside
-    /// [`FetchManager::start_fetch`] (`was_cached == false`).
-    Committed { bytes: u64, was_cached: bool },
-    /// Active fetch in progress via Writer stream — caller must drain the
-    /// writer and commit the resource. Produced only by the legacy
-    /// `self.net.stream` fallback path (kept for test helpers that mock
-    /// `Net` without attaching a `Downloader`).
-    Active(Writer, Box<AssetResource<DecryptContext>>),
+///
+/// Every fetch path is now Downloader-driven: either the resource was
+/// already committed in the cache (`was_cached == true`) or the unified
+/// [`Downloader`] completed the download and committed the resource
+/// inline inside [`FetchManager::start_fetch`] (`was_cached == false`).
+pub struct FetchResult {
+    pub bytes: u64,
+    pub was_cached: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -128,19 +123,19 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 
 /// Unified HLS fetch manager.
 ///
-/// Handles low-level network fetch + disk cache, playlist parsing/caching,
-/// and implements `Loader` for segment loading.
+/// Handles disk cache + playlist parsing/caching + segment loading.
+/// Every network fetch is routed through the unified [`Downloader`],
+/// which is the sole `HttpClient` owner in production.
 #[derive(Clone)]
-pub struct FetchManager<N> {
+pub struct FetchManager {
     backend: AssetStore<DecryptContext>,
     key_manager: Option<Arc<crate::keys::KeyManager>>,
-    net: N,
-    /// Unified downloader for routing control-plane fetches (playlists,
-    /// DRM keys). When `None`, falls back to [`Net::get_bytes`] via
-    /// `self.net`. Phase 02 commits migrate additional paths (init,
-    /// media, HEAD) onto this field; once all paths are migrated
-    /// `self.net` is removed.
-    downloader: Option<Downloader>,
+    /// Sole network fetcher — shared `HttpClient` / pool / runtime.
+    downloader: Downloader,
+    #[expect(
+        dead_code,
+        reason = "used by future phase 3 dedicated-thread migration"
+    )]
     cancel: CancellationToken,
     headers: Option<Headers>,
     // Playlist state
@@ -157,13 +152,17 @@ pub struct FetchManager<N> {
     playlist_state: Option<Arc<PlaylistState>>,
 }
 
-impl<N: Net> FetchManager<N> {
-    pub fn new(backend: AssetStore<DecryptContext>, net: N, cancel: CancellationToken) -> Self {
+impl FetchManager {
+    #[must_use]
+    pub fn new(
+        backend: AssetStore<DecryptContext>,
+        downloader: Downloader,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             backend,
             key_manager: None,
-            net,
-            downloader: None,
+            downloader,
             cancel,
             headers: None,
             master_url: None,
@@ -177,31 +176,22 @@ impl<N: Net> FetchManager<N> {
         }
     }
 
-    /// Set the shared unified downloader.
-    ///
-    /// When set, playlist and DRM-key fetches go through the Downloader
-    /// instead of the internal `self.net` client. Init / media / HEAD
-    /// paths remain on `self.net` until their own phase 02 migration
-    /// commits land.
-    #[must_use]
-    pub fn with_downloader(mut self, downloader: Downloader) -> Self {
-        self.downloader = Some(downloader);
-        self
-    }
-
     /// Set master playlist URL (required for Loader functionality).
+    #[must_use]
     pub fn with_master_url(mut self, url: Url) -> Self {
         self.master_url = Some(url);
         self
     }
 
     /// Set base URL override for resolving relative URLs.
+    #[must_use]
     pub fn with_base_url(mut self, url: Option<Url>) -> Self {
         self.base_url = url;
         self
     }
 
     /// Set key manager for DRM decryption.
+    #[must_use]
     pub fn with_key_manager(mut self, km: Arc<crate::keys::KeyManager>) -> Self {
         self.key_manager = Some(km);
         self
@@ -232,6 +222,7 @@ impl<N: Net> FetchManager<N> {
     }
 
     /// Get the parsed playlist state (if set).
+    #[must_use]
     pub fn playlist_state(&self) -> Option<&Arc<PlaylistState>> {
         self.playlist_state.as_ref()
     }
@@ -241,10 +232,12 @@ impl<N: Net> FetchManager<N> {
         self.playlist_state = Some(state);
     }
 
+    #[must_use]
     pub fn asset_root(&self) -> &str {
         self.backend.asset_root()
     }
 
+    #[must_use]
     pub fn backend(&self) -> &AssetStore<DecryptContext> {
         &self.backend
     }
@@ -335,47 +328,38 @@ impl<N: Net> FetchManager<N> {
         Ok(bytes)
     }
 
-    /// Fetch a small atomic body — routes through the unified
-    /// [`Downloader`] when set, falls back to the internal `Net` client
-    /// otherwise.
+    /// Fetch a small atomic body via the unified [`Downloader`].
     ///
     /// Used for control-plane requests (playlists, DRM keys) where the
     /// full body is wanted as a single `Bytes` buffer. Streaming media
-    /// paths do not use this helper.
+    /// paths do not use this helper — they use `start_fetch`.
     async fn fetch_atomic_bytes(&self, url: Url, headers: Option<Headers>) -> HlsResult<Bytes> {
-        if let Some(ref dl) = self.downloader {
-            let cmd = FetchCmd {
-                method: FetchMethod::Get,
-                url: url.clone(),
-                range: None,
-                headers,
-                priority: Priority::High,
-                on_connect: None,
-                writer: None,
-                on_complete: None,
-                throttle: None,
-            };
-            match dl.execute(cmd).await {
-                DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
-                DlFetchResult::Err(e) => Err(HlsError::from(e)),
-            }
-        } else {
-            Ok(self.net.get_bytes(url, headers).await?)
+        let cmd = FetchCmd {
+            method: FetchMethod::Get,
+            url,
+            range: None,
+            headers,
+            priority: Priority::High,
+            on_connect: None,
+            writer: None,
+            on_complete: None,
+            throttle: None,
+        };
+        match self.downloader.execute(cmd).await {
+            DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
+            DlFetchResult::Err(e) => Err(HlsError::from(e)),
         }
     }
 
-    /// Start fetching a segment.
+    /// Start fetching a segment via the unified [`Downloader`].
     ///
     /// - If the resource is already in the cache, returns
-    ///   `FetchResult::Committed { was_cached: true }`.
-    /// - If a unified [`Downloader`] is attached, drives the fetch through
+    ///   `FetchResult { was_cached: true }`.
+    /// - Otherwise drives the fetch through
     ///   `Downloader::execute(FetchCmd::Stream)` with a writer callback
     ///   that writes each chunk into the `AssetResource`, commits the
     ///   resource inline on success, and returns
-    ///   `FetchResult::Committed { was_cached: false }`.
-    /// - Otherwise (test helpers with no Downloader), falls back to
-    ///   `self.net.stream(...)` + legacy `Writer` and returns
-    ///   `FetchResult::Active(writer, res)` so the caller drains manually.
+    ///   `FetchResult { was_cached: false }`.
     ///
     /// When `decrypt_ctx` is `Some`, the resource is opened with a
     /// decrypt context; decryption happens on the fly inside
@@ -389,7 +373,7 @@ impl<N: Net> FetchManager<N> {
         if let AssetResourceState::Committed { final_len } = self.backend.resource_state(&key)? {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit via resource_state");
-            return Ok(FetchResult::Committed {
+            return Ok(FetchResult {
                 bytes: len,
                 was_cached: true,
             });
@@ -401,26 +385,18 @@ impl<N: Net> FetchManager<N> {
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok(FetchResult::Committed {
+            return Ok(FetchResult {
                 bytes: len,
                 was_cached: true,
             });
         }
 
-        if let Some(ref dl) = self.downloader {
-            trace!(url = %url, "start_fetch: downloading via Downloader");
-            let bytes = self.download_stream_via_downloader(dl, url, &res).await?;
-            return Ok(FetchResult::Committed {
-                bytes,
-                was_cached: false,
-            });
-        }
-
-        trace!(url = %url, "start_fetch: starting network fetch (legacy net.stream)");
-        let net_stream = self.net.stream(url.clone(), self.headers.clone()).await?;
-        let writer = Writer::new(net_stream, res.clone(), self.cancel.clone());
-
-        Ok(FetchResult::Active(writer, Box::new(res)))
+        trace!(url = %url, "start_fetch: downloading via Downloader");
+        let bytes = self.download_stream_via_downloader(url, &res).await?;
+        Ok(FetchResult {
+            bytes,
+            was_cached: false,
+        })
     }
 
     /// Stream a fetch into an `AssetResource` via the unified Downloader.
@@ -428,12 +404,9 @@ impl<N: Net> FetchManager<N> {
     /// Issues a `FetchCmd::Stream` whose writer callback writes each chunk
     /// to the resource at the current sequential offset, then commits the
     /// resource with the final length. On zero bytes, marks the resource
-    /// as failed and returns a `SegmentNotFound` error — matches the
-    /// existing behaviour of the legacy `Writer` drain loop in the two
-    /// `start_fetch` callers.
+    /// as failed and returns a `SegmentNotFound` error.
     async fn download_stream_via_downloader(
         &self,
-        dl: &Downloader,
         url: &Url,
         res: &AssetResource<DecryptContext>,
     ) -> HlsResult<u64> {
@@ -457,7 +430,7 @@ impl<N: Net> FetchManager<N> {
             on_complete: None,
             throttle: None,
         };
-        let total = match dl.execute(cmd).await {
+        let total = match self.downloader.execute(cmd).await {
             DlFetchResult::Ok { bytes_written, .. } => bytes_written,
             DlFetchResult::Err(e) => {
                 res.fail(format!("fetch failed: {e}"));
@@ -539,6 +512,7 @@ impl<N: Net> FetchManager<N> {
         Ok(playlist.clone())
     }
 
+    #[must_use]
     pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
         self.master.get().map(|m| m.variants.clone())
     }
@@ -649,8 +623,9 @@ impl<N: Net> FetchManager<N> {
             .resolve_decrypt_context(init_segment.key.as_ref(), &init_url, 0)
             .await?;
 
-        let fetch_result = self.start_fetch(&init_url, decrypt_ctx).await?;
-        let init_len = Self::resolve_fetch_result(fetch_result, "init segment").await?;
+        let FetchResult {
+            bytes: init_len, ..
+        } = self.start_fetch(&init_url, decrypt_ctx).await?;
 
         Ok(SegmentMeta {
             variant,
@@ -662,46 +637,6 @@ impl<N: Net> FetchManager<N> {
             len: init_len,
             container,
         })
-    }
-
-    /// Collapse a [`FetchResult`] into the committed byte length.
-    ///
-    /// For `Committed`, simply returns the byte count (the length only —
-    /// `was_cached` is discarded). For `Active` (legacy `net.stream`
-    /// fallback), drains the writer, commits the resource, and returns
-    /// the final committed length. On zero bytes, marks the resource
-    /// failed and returns a `SegmentNotFound` error.
-    async fn resolve_fetch_result(result: FetchResult, label: &str) -> HlsResult<u64> {
-        match result {
-            FetchResult::Committed { bytes, .. } => Ok(bytes),
-            FetchResult::Active(mut writer, res) => {
-                let total = Self::drain_legacy_writer(&mut writer).await?;
-                if total == 0 {
-                    res.fail(format!("{label}: 0 bytes downloaded"));
-                    return Err(HlsError::SegmentNotFound(format!(
-                        "{label} download yielded 0 bytes",
-                    )));
-                }
-                res.commit(Some(total)).map_err(HlsError::from)?;
-                Ok(res.len().unwrap_or(total))
-            }
-        }
-    }
-
-    /// Drain a legacy `Writer` and return total bytes written.
-    async fn drain_legacy_writer(writer: &mut Writer) -> HlsResult<u64> {
-        let mut total = 0u64;
-        while let Some(item) = writer.next().await {
-            match item {
-                Ok(WriterItem::ChunkWritten { len, .. }) => total += len as u64,
-                Ok(WriterItem::StreamEnded { total_bytes }) => {
-                    total = total_bytes;
-                    break;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(total)
     }
 
     /// Load init segment with deduplication via `OnceCell`.
@@ -777,39 +712,12 @@ impl<N: Net> FetchManager<N> {
 
         let load = cell
             .get_or_try_init(|| async {
-                let fetch_result = self.start_fetch(&segment_url, decrypt_ctx).await?;
+                let FetchResult {
+                    bytes: segment_len,
+                    was_cached: cached,
+                } = self.start_fetch(&segment_url, decrypt_ctx).await?;
 
-                let (segment_len, cached) = match fetch_result {
-                    FetchResult::Committed { bytes, was_cached } => (bytes, was_cached),
-                    FetchResult::Active(mut writer, res) => {
-                        let mut total = 0u64;
-                        while let Some(result) = writer.next().await {
-                            match result {
-                                Ok(WriterItem::ChunkWritten { len, .. }) => {
-                                    total += len as u64;
-                                }
-                                Ok(WriterItem::StreamEnded { total_bytes }) => {
-                                    total = total_bytes;
-                                    break;
-                                }
-                                Err(e) => return Err(e.into()),
-                            }
-                        }
-                        if total == 0 {
-                            res.fail("segment: 0 bytes downloaded".to_string());
-                            return Err(HlsError::SegmentNotFound(format!(
-                                "segment {segment_index} download yielded 0 bytes",
-                            )));
-                        }
-                        let committed_len = {
-                            res.commit(Some(total)).map_err(HlsError::from)?;
-                            res.len().unwrap_or(total)
-                        };
-                        (committed_len, false)
-                    }
-                };
-
-                Ok(SegmentLoad {
+                Ok::<_, HlsError>(SegmentLoad {
                     cached,
                     meta: SegmentMeta {
                         variant,
@@ -862,35 +770,27 @@ impl<N: Net> FetchManager<N> {
         Ok((media_url, playlist))
     }
 
-    /// Get Content-Length for a URL using HEAD request.
-    ///
-    /// Routes through the unified [`Downloader`] when attached, falls
-    /// back to `self.net.head` otherwise (test helpers without a
-    /// Downloader). Returns the size in bytes if Content-Length is
+    /// Get Content-Length for a URL using HEAD request via the unified
+    /// [`Downloader`]. Returns the size in bytes if Content-Length is
     /// present and parseable.
     ///
     /// # Errors
     /// Returns an error when the request fails, header is missing, or header value cannot be parsed.
     pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
-        let headers = self.headers.clone();
-        let resp_headers = if let Some(ref dl) = self.downloader {
-            let cmd = FetchCmd {
-                method: FetchMethod::Head,
-                url: url.clone(),
-                range: None,
-                headers,
-                priority: Priority::Normal,
-                on_connect: None,
-                writer: None,
-                on_complete: None,
-                throttle: None,
-            };
-            match dl.execute(cmd).await {
-                DlFetchResult::Ok { headers, .. } => headers,
-                DlFetchResult::Err(e) => return Err(HlsError::from(e)),
-            }
-        } else {
-            self.net.head(url.clone(), headers).await?
+        let cmd = FetchCmd {
+            method: FetchMethod::Head,
+            url: url.clone(),
+            range: None,
+            headers: self.headers.clone(),
+            priority: Priority::Normal,
+            on_connect: None,
+            writer: None,
+            on_complete: None,
+            throttle: None,
+        };
+        let resp_headers = match self.downloader.execute(cmd).await {
+            DlFetchResult::Ok { headers, .. } => headers,
+            DlFetchResult::Err(e) => return Err(HlsError::from(e)),
         };
         let content_length = resp_headers
             .get("content-length")
@@ -909,11 +809,12 @@ impl<N: Net> FetchManager<N> {
     }
 }
 
-pub type DefaultFetchManager = FetchManager<HttpClient>;
+/// Legacy alias kept for migration — `FetchManager` is no longer generic.
+pub type DefaultFetchManager = FetchManager;
 
 // Loader impl for FetchManager
 
-impl<N: Net> Loader for FetchManager<N> {
+impl Loader for FetchManager {
     async fn load_media_segment(
         &self,
         variant: usize,
@@ -954,778 +855,5 @@ impl<N: Net> Loader for FetchManager<N> {
 
         let (_media_url, playlist) = self.load_media_playlist(variant).await?;
         Ok(playlist.segments.len())
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod tests {
-    use std::{
-        collections::HashMap,
-        num::NonZeroUsize,
-        path::Path,
-        sync::{
-            Arc, Mutex as StdMutex, OnceLock,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
-
-    use aes::Aes128;
-    use bytes::Bytes;
-    use cbc::{
-        Encryptor,
-        cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
-    };
-    use futures::stream;
-    use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn};
-    use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-    use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
-    use kithara_test_utils::kithara;
-    use tempfile::TempDir;
-    use tokio::{task::yield_now as task_yield_now, time::sleep as tokio_sleep};
-    use tokio_util::sync::CancellationToken;
-    use unimock::{MockFn, Unimock, matching};
-    use url::Url;
-
-    use super::*;
-
-    /// Build a test backend with DRM process function.
-    fn test_backend(asset_root: &str, root_dir: &Path) -> AssetStore<DecryptContext> {
-        let drm_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-                aes128_cbc_process_chunk(input, output, ctx, is_last)
-            });
-        AssetStoreBuilder::new()
-            .process_fn(drm_fn)
-            .asset_root(Some(asset_root))
-            .root_dir(root_dir)
-            .build()
-    }
-
-    fn test_backend_ephemeral(asset_root: &str) -> AssetStore<DecryptContext> {
-        let drm_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-                aes128_cbc_process_chunk(input, output, ctx, is_last)
-            });
-        AssetStoreBuilder::new()
-            .process_fn(drm_fn)
-            .asset_root(Some(asset_root))
-            .ephemeral(true)
-            .cache_capacity(NonZeroUsize::new(2).expect("non-zero"))
-            .build()
-    }
-
-    fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
-        let encryptor = Encryptor::<Aes128>::new(key.into(), iv.into());
-        let padded_len = plaintext.len() + (16 - plaintext.len() % 16);
-        let mut buf = vec![0u8; padded_len];
-        buf[..plaintext.len()].copy_from_slice(plaintext);
-        let ct = encryptor
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-            .expect("encrypt_padded_mut failed");
-        ct.to_vec()
-    }
-
-    const MASTER_SINGLE_VARIANT_PLAYLIST: &str = "#EXTM3U\n\
-         #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
-         v0.m3u8\n";
-    const V0_SINGLE_SEGMENT_PLAYLIST: &str = "#EXTM3U\n\
-         #EXT-X-TARGETDURATION:4\n\
-         #EXT-X-MEDIA-SEQUENCE:0\n\
-         #EXT-X-PLAYLIST-TYPE:VOD\n\
-         #EXTINF:4.0,\n\
-         seg0.ts\n\
-         #EXT-X-ENDLIST\n";
-
-    static SEGMENT_STREAM_CALLS: AtomicUsize = AtomicUsize::new(0);
-    static SEGMENT_STREAM_TEST_LOCK: StdMutex<()> = StdMutex::new(());
-    static DRM_STREAMS: OnceLock<StdMutex<HashMap<String, Vec<Bytes>>>> = OnceLock::new();
-
-    type StreamAnswer =
-        dyn Fn(&Unimock, Url, Option<Headers>) -> Result<ByteStream, NetError> + Send + Sync;
-
-    fn drm_streams() -> &'static StdMutex<HashMap<String, Vec<Bytes>>> {
-        DRM_STREAMS.get_or_init(|| StdMutex::new(HashMap::new()))
-    }
-
-    #[derive(Clone, Copy)]
-    enum FetchKind {
-        Key,
-        Playlist,
-    }
-
-    fn test_master_url() -> Url {
-        Url::parse("http://test.com/master.m3u8").expect("valid master URL")
-    }
-
-    fn test_url(raw: &str) -> Url {
-        Url::parse(raw).expect("valid test URL")
-    }
-
-    fn test_fetch_manager_with_get_bytes_response(
-        response: Result<Bytes, NetError>,
-    ) -> (TempDir, FetchManager<Unimock>) {
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(response),
-        );
-        test_fetch_manager(mock_net)
-    }
-
-    fn test_fetch_manager(mock_net: Unimock) -> (TempDir, FetchManager<Unimock>) {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new());
-        (temp_dir, fetch)
-    }
-
-    fn partial_fetch_manager(
-        stream_answer: &'static StreamAnswer,
-    ) -> (TempDir, FetchManager<Unimock>) {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("partial-test", temp_dir.path());
-        let mock_net = Unimock::new((
-            NetMock::get_bytes.stub(|each| {
-                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        MASTER_SINGLE_VARIANT_PLAYLIST.as_bytes(),
-                    )));
-                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        V0_SINGLE_SEGMENT_PLAYLIST.as_bytes(),
-                    )));
-            }),
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(stream_answer),
-        ));
-        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
-            .with_master_url(test_master_url());
-        (temp_dir, fetch)
-    }
-
-    fn ephemeral_fetch_manager(mock_net: Unimock) -> FetchManager<Unimock> {
-        let backend = test_backend_ephemeral("ephemeral-test");
-        FetchManager::new(backend, mock_net, CancellationToken::new())
-            .with_master_url(test_master_url())
-    }
-
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "signature must match NetMock::stream callback shape"
-    )]
-    fn counting_segment_stream(
-        _mock: &Unimock,
-        url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
-        let stream = stream::once(async move {
-            task_yield_now().await;
-            Ok(Bytes::from(format!("payload:{url}")))
-        });
-        Ok(ByteStream::without_headers(Box::pin(stream)))
-    }
-
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "signature must match NetMock::stream callback shape"
-    )]
-    fn slow_counting_segment_stream(
-        _mock: &Unimock,
-        url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        SEGMENT_STREAM_CALLS.fetch_add(1, Ordering::SeqCst);
-        let stream = stream::once(async move {
-            tokio_sleep(Duration::from_millis(25)).await;
-            Ok(Bytes::from(format!("payload:{url}")))
-        });
-        Ok(ByteStream::without_headers(Box::pin(stream)))
-    }
-
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "signature must match NetMock::stream callback shape in tests"
-    )]
-    fn drm_segment_stream(
-        _mock: &Unimock,
-        url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        if url.host_str().is_none() {
-            return Err(NetError::Unimplemented);
-        }
-        let chunks = drm_streams()
-            .lock()
-            .expect("DRM stream map lock")
-            .get(url.path())
-            .cloned()
-            .expect("DRM stream chunks must be initialized before stream()")
-            .clone()
-            .into_iter()
-            .map(Ok);
-        Ok(ByteStream::without_headers(Box::pin(stream::iter(chunks))))
-    }
-
-    // FetchManager tests
-
-    #[kithara::test(tokio)]
-    #[case(FetchKind::Playlist)]
-    #[case(FetchKind::Key)]
-    async fn test_fetch_with_mock_net(#[case] kind: FetchKind) {
-        let (url, rel_path, expected) = match kind {
-            FetchKind::Playlist => (
-                test_url("http://example.com/playlist.m3u8"),
-                "playlist.m3u8",
-                Bytes::from_static(b"#EXTM3U\n#EXT-X-VERSION:6\n"),
-            ),
-            FetchKind::Key => (
-                test_url("http://example.com/key.bin"),
-                "key.bin",
-                Bytes::from_static(&[0u8; 16]),
-            ),
-        };
-        let (_temp_dir, fetch_manager) =
-            test_fetch_manager_with_get_bytes_response(Ok(expected.clone()));
-        let result: HlsResult<Bytes> = match kind {
-            FetchKind::Playlist => fetch_manager.fetch_playlist(&url, rel_path).await,
-            FetchKind::Key => fetch_manager.fetch_key(&url, rel_path, None).await,
-        };
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), expected);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_fetch_playlist_uses_cache() {
-        let url = test_url("http://example.com/playlist.m3u8");
-        let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
-
-        let (_temp_dir, fetch_manager) =
-            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from_static(playlist_content)));
-
-        let result1: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "playlist.m3u8").await;
-        assert!(result1.is_ok());
-
-        let result2: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "playlist.m3u8").await;
-        assert!(result2.is_ok());
-        assert_eq!(result1.unwrap(), result2.unwrap());
-    }
-
-    #[kithara::test(tokio)]
-    #[case(FetchKind::Playlist)]
-    #[case(FetchKind::Key)]
-    async fn test_fetch_with_network_error(#[case] kind: FetchKind) {
-        let (url, rel_path) = match kind {
-            FetchKind::Playlist => (
-                test_url("http://example.com/playlist.m3u8"),
-                "playlist.m3u8",
-            ),
-            FetchKind::Key => (test_url("http://example.com/key.bin"), "key.bin"),
-        };
-        let (_temp_dir, fetch_manager) =
-            test_fetch_manager_with_get_bytes_response(Err(NetError::Timeout));
-        let result: HlsResult<Bytes> = match kind {
-            FetchKind::Playlist => fetch_manager.fetch_playlist(&url, rel_path).await,
-            FetchKind::Key => fetch_manager.fetch_key(&url, rel_path, None).await,
-        };
-
-        assert!(result.is_err());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_matcher_url_path_matching() {
-        let master_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
-        let media_content = b"#EXTINF:4.0\nseg0.bin\n";
-
-        let mock_net = Unimock::new(NetMock::get_bytes.stub(|each| {
-            each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                .returns(Ok(Bytes::from_static(master_content)));
-            each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                .returns(Ok(Bytes::from_static(media_content)));
-        }));
-        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
-
-        let master_url = test_url("http://example.com/master.m3u8");
-        let master: HlsResult<Bytes> = fetch_manager
-            .fetch_playlist(&master_url, "master.m3u8")
-            .await;
-        assert!(master.is_ok());
-
-        let media_url = test_url("http://example.com/v0.m3u8");
-        let media: HlsResult<Bytes> = fetch_manager.fetch_playlist(&media_url, "v0.m3u8").await;
-        assert!(media.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_matcher_url_domain_matching() {
-        let content = b"test content";
-
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!((url, _) if url.host_str() == Some("cdn1.example.com")))
-                .returns(Ok(Bytes::from_static(content))),
-        );
-        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
-
-        let url = test_url("http://cdn1.example.com/file.m3u8");
-        let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_matcher_headers_matching() {
-        let key_content = vec![0u8; 16];
-
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!((_, headers) if headers.as_ref().is_some_and(|h| h.get("Authorization").is_some())))
-                .returns(Ok(Bytes::from(key_content))),
-        );
-        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
-
-        let url = test_url("http://example.com/key.bin");
-        let mut headers_map = HashMap::new();
-        headers_map.insert("Authorization".to_string(), "Bearer token".to_string());
-        let headers = Some(Headers::from(headers_map));
-
-        let result: HlsResult<Bytes> = fetch_manager.fetch_key(&url, "key.bin", headers).await;
-
-        assert!(result.is_ok());
-    }
-
-    // Loader tests
-
-    fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
-        SegmentMeta {
-            variant,
-            segment_type: SegmentType::Media(segment_index),
-            sequence: segment_index as u64,
-            url: Url::parse(&format!(
-                "http://test.com/v{}/seg{}.ts",
-                variant, segment_index
-            ))
-            .expect("valid URL"),
-            duration: Some(Duration::from_secs(4)),
-            key: None,
-            len,
-            container: Some(ContainerFormat::MpegTs),
-        }
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_mock_loader_basic() {
-        let loader = Unimock::new((
-            LoaderMock::num_variants
-                .some_call(matching!())
-                .returns(3_usize),
-            LoaderMock::load_media_segment
-                .some_call(matching!(0, 5))
-                .answers(&|_, variant, idx| Ok(create_test_meta(variant, idx, 200_000))),
-            LoaderMock::num_segments
-                .some_call(matching!(0))
-                .returns(Ok(100_usize)),
-        ));
-
-        assert_eq!(loader.num_variants(), 3);
-        assert_eq!(loader.num_segments(0).await.unwrap(), 100);
-
-        let meta = loader.load_media_segment(0, 5).await.unwrap();
-        assert_eq!(meta.variant, 0);
-        assert_eq!(meta.segment_type.media_index(), Some(5));
-        assert_eq!(meta.len, 200_000);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_mock_loader_multi_variant() {
-        let loader = Unimock::new(
-            LoaderMock::load_media_segment
-                .each_call(matching!(_, _))
-                .answers(&|_, variant, idx| {
-                    Ok(create_test_meta(
-                        variant,
-                        idx,
-                        200_000 + variant as u64 * 50_000,
-                    ))
-                }),
-        );
-
-        let meta0 = loader.load_media_segment(0, 1).await.unwrap();
-        let meta1 = loader.load_media_segment(1, 1).await.unwrap();
-        let meta2 = loader.load_media_segment(2, 1).await.unwrap();
-
-        assert_eq!(meta0.len, 200_000);
-        assert_eq!(meta1.len, 250_000);
-        assert_eq!(meta2.len, 300_000);
-    }
-
-    // Partial segment tests
-
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "signature must match NetMock::stream callback shape in tests"
-    )]
-    fn stream_with_timeout(
-        _mock: &Unimock,
-        url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        if url.host_str().is_none() {
-            return Err(NetError::Unimplemented);
-        }
-        let stream = stream::iter(vec![
-            Ok(Bytes::from(vec![0xFF; 1000])),
-            Err(NetError::Timeout),
-        ]);
-        Ok(ByteStream::without_headers(Box::pin(stream)))
-    }
-
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "signature must match NetMock::stream callback shape in tests"
-    )]
-    fn empty_stream(
-        _mock: &Unimock,
-        url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        if url.host_str().is_none() {
-            return Err(NetError::Unimplemented);
-        }
-        let stream = stream::empty::<Result<Bytes, NetError>>();
-        Ok(ByteStream::without_headers(Box::pin(stream)))
-    }
-
-    #[kithara::test(tokio)]
-    #[case(&stream_with_timeout)]
-    #[case(&empty_stream)]
-    async fn test_load_media_segment_invalid_stream_returns_err(
-        #[case] stream_answer: &'static StreamAnswer,
-    ) {
-        let (_temp_dir, fetch) = partial_fetch_manager(stream_answer);
-        let result = fetch.load_media_segment(0, 0).await;
-        assert!(result.is_err());
-    }
-
-    #[expect(
-        clippy::await_holding_lock,
-        reason = "std Mutex guard serializes concurrent tests sharing SEGMENT_STREAM_CALLS"
-    )]
-    #[kithara::test(tokio)]
-    async fn concurrent_reload_of_evicted_media_segment_shares_single_network_fetch() {
-        let _guard = SEGMENT_STREAM_TEST_LOCK
-            .lock()
-            .expect("segment stream test lock");
-        SEGMENT_STREAM_CALLS.store(0, Ordering::SeqCst);
-        let mock_net = Unimock::new((
-            NetMock::get_bytes.stub(|each| {
-                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        MASTER_SINGLE_VARIANT_PLAYLIST.as_bytes(),
-                    )));
-                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        V0_SINGLE_SEGMENT_PLAYLIST.as_bytes(),
-                    )));
-            }),
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(&slow_counting_segment_stream),
-        ));
-
-        let fetch = ephemeral_fetch_manager(mock_net);
-        let seg0 = test_url("http://test.com/seg0.ts");
-
-        let (meta, cached) = fetch.load_media_segment_with_source(0, 0).await.unwrap();
-        assert!(!cached);
-        assert_eq!(meta.url, seg0);
-        assert_eq!(SEGMENT_STREAM_CALLS.load(Ordering::SeqCst), 1);
-
-        for i in 0..16 {
-            let key = ResourceKey::new(format!("evict-{i}.m4s"));
-            let res = fetch.backend().acquire_resource(&key).unwrap();
-            res.write_at(0, b"x").unwrap();
-            res.commit(Some(1)).unwrap();
-        }
-
-        assert!(
-            matches!(
-                fetch
-                    .backend()
-                    .resource_state(&ResourceKey::from_url(&seg0))
-                    .unwrap(),
-                AssetResourceState::Missing
-            ),
-            "ephemeral resource must be evicted before re-download"
-        );
-
-        let (left, right) = tokio::join!(
-            fetch.load_media_segment_with_source(0, 0),
-            fetch.load_media_segment_with_source(0, 0)
-        );
-
-        assert!(left.is_ok(), "left={left:?}");
-        assert!(right.is_ok(), "right={right:?}");
-        assert_eq!(
-            SEGMENT_STREAM_CALLS.load(Ordering::SeqCst),
-            2,
-            "concurrent re-download must issue exactly one additional network fetch"
-        );
-    }
-
-    #[expect(
-        clippy::await_holding_lock,
-        reason = "std Mutex guard serializes concurrent tests sharing SEGMENT_STREAM_CALLS"
-    )]
-    #[kithara::test(tokio)]
-    async fn concurrent_reload_across_seek_epochs_shares_single_network_fetch() {
-        let _guard = SEGMENT_STREAM_TEST_LOCK
-            .lock()
-            .expect("segment stream test lock");
-        SEGMENT_STREAM_CALLS.store(0, Ordering::SeqCst);
-        let mock_net = Unimock::new((
-            NetMock::get_bytes.stub(|each| {
-                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        MASTER_SINGLE_VARIANT_PLAYLIST.as_bytes(),
-                    )));
-                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                    .returns(Ok(Bytes::from_static(
-                        V0_SINGLE_SEGMENT_PLAYLIST.as_bytes(),
-                    )));
-            }),
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(&counting_segment_stream),
-        ));
-
-        let fetch = ephemeral_fetch_manager(mock_net);
-        let seg0 = test_url("http://test.com/seg0.ts");
-
-        let (meta, cached) = fetch.load_media_segment_with_source(0, 0).await.unwrap();
-        assert!(!cached);
-        assert_eq!(meta.url, seg0);
-        assert_eq!(SEGMENT_STREAM_CALLS.load(Ordering::SeqCst), 1);
-
-        for i in 0..16 {
-            let key = ResourceKey::new(format!("evict-{i}.m4s"));
-            let res = fetch.backend().acquire_resource(&key).unwrap();
-            res.write_at(0, b"x").unwrap();
-            res.commit(Some(1)).unwrap();
-        }
-
-        assert!(
-            matches!(
-                fetch
-                    .backend()
-                    .resource_state(&ResourceKey::from_url(&seg0))
-                    .unwrap(),
-                AssetResourceState::Missing
-            ),
-            "ephemeral resource must be evicted before re-download"
-        );
-
-        let (left, right) = tokio::join!(
-            fetch.load_media_segment_with_source_for_epoch(0, 0, 1),
-            fetch.load_media_segment_with_source_for_epoch(0, 0, 2)
-        );
-
-        assert!(left.is_ok(), "left={left:?}");
-        assert!(right.is_ok(), "right={right:?}");
-        assert_eq!(
-            SEGMENT_STREAM_CALLS.load(Ordering::SeqCst),
-            2,
-            "cross-epoch re-download must still issue exactly one additional network fetch"
-        );
-    }
-
-    #[expect(
-        clippy::await_holding_lock,
-        reason = "std Mutex guard serializes concurrent tests sharing DRM stream state"
-    )]
-    #[kithara::test(tokio)]
-    async fn start_fetch_disk_drm_reopens_committed_bytes_after_cache_eviction() {
-        let _guard = SEGMENT_STREAM_TEST_LOCK
-            .lock()
-            .expect("segment stream test lock");
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let drm_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-                aes128_cbc_process_chunk(input, output, ctx, is_last)
-            });
-        let backend = AssetStoreBuilder::new()
-            .process_fn(drm_fn)
-            .asset_root(Some("disk-drm-reopen"))
-            .root_dir(temp_dir.path())
-            .cache_capacity(NonZeroUsize::new(1).expect("non-zero"))
-            .build();
-
-        let key = [0x41u8; 16];
-        let iv = [0x17u8; 16];
-        let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        drm_streams().lock().expect("DRM stream map lock").insert(
-            "/seg0.ts".to_string(),
-            vec![
-                Bytes::copy_from_slice(&ciphertext[..128 * 1024]),
-                Bytes::copy_from_slice(&ciphertext[128 * 1024..320 * 1024]),
-                Bytes::copy_from_slice(&ciphertext[320 * 1024..]),
-            ],
-        );
-        let mock_net = Unimock::new(
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(&drm_segment_stream),
-        );
-        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new());
-        let seg0 = test_url("http://test.com/seg0.ts");
-
-        let (total, res) = match fetch
-            .start_fetch(&seg0, Some(DecryptContext::new(key, iv)))
-            .await
-            .expect("start fetch")
-        {
-            FetchResult::Active(mut writer, res) => {
-                let mut total = 0u64;
-                while let Some(item) = writer.next().await {
-                    match item.expect("writer item") {
-                        WriterItem::ChunkWritten { len, .. } => total += len as u64,
-                        WriterItem::StreamEnded { total_bytes } => {
-                            total = total_bytes;
-                            break;
-                        }
-                    }
-                }
-                (total, res)
-            }
-            FetchResult::Committed { .. } => panic!("expected active fetch"),
-        };
-        res.commit(Some(total)).expect("commit segment");
-
-        let other_plaintext = b"other-segment";
-        let other_ciphertext = encrypt_aes128_cbc(other_plaintext, &key, &iv);
-        let other_key = ResourceKey::new("other.m4s");
-        let other = fetch
-            .backend()
-            .acquire_resource_with_ctx(&other_key, Some(DecryptContext::new(key, iv)))
-            .expect("acquire other resource");
-        other.write_at(0, &other_ciphertext).expect("write other");
-        other
-            .commit(Some(other_ciphertext.len() as u64))
-            .expect("commit other");
-
-        let reopened = fetch
-            .backend()
-            .open_resource(&ResourceKey::from_url(&seg0))
-            .expect("reopen resource");
-        let mut buf = vec![0u8; plaintext.len()];
-        let read = reopened.read_at(0, &mut buf).expect("read reopened");
-
-        assert_eq!(read, plaintext.len());
-        assert_eq!(buf, plaintext);
-    }
-
-    #[expect(
-        clippy::await_holding_lock,
-        reason = "std Mutex guard serializes concurrent tests sharing DRM stream state"
-    )]
-    #[kithara::test(tokio)]
-    async fn start_fetch_disk_drm_reopens_multiple_committed_segments_after_eviction() {
-        let _guard = SEGMENT_STREAM_TEST_LOCK
-            .lock()
-            .expect("segment stream test lock");
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let drm_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-                aes128_cbc_process_chunk(input, output, ctx, is_last)
-            });
-        let backend = AssetStoreBuilder::new()
-            .process_fn(drm_fn)
-            .asset_root(Some("disk-drm-multi"))
-            .root_dir(temp_dir.path())
-            .cache_capacity(NonZeroUsize::new(1).expect("non-zero"))
-            .build();
-        let fetch = FetchManager::new(
-            backend,
-            Unimock::new(
-                NetMock::stream
-                    .some_call(matching!((url, _) if url.path().starts_with("/seg")))
-                    .answers(&drm_segment_stream),
-            ),
-            CancellationToken::new(),
-        );
-
-        let key = [0x41u8; 16];
-        let mut expected = Vec::new();
-        {
-            let mut streams = drm_streams().lock().expect("DRM stream map lock");
-            streams.clear();
-            for index in 0..4 {
-                let iv = [0x17u8.wrapping_add(u8::try_from(index).expect("index < 4")); 16];
-                let plaintext: Vec<u8> = (0u8..=u8::MAX)
-                    .cycle()
-                    .skip(index * 17)
-                    .take(256 * 1024 + 37 + index * 1024)
-                    .collect();
-                let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-                streams.insert(
-                    format!("/seg{index}.ts"),
-                    vec![
-                        Bytes::copy_from_slice(&ciphertext[..64 * 1024]),
-                        Bytes::copy_from_slice(&ciphertext[64 * 1024..160 * 1024]),
-                        Bytes::copy_from_slice(&ciphertext[160 * 1024..]),
-                    ],
-                );
-                expected.push((
-                    test_url(&format!("http://test.com/seg{index}.ts")),
-                    plaintext,
-                    iv,
-                ));
-            }
-            drop(streams);
-        }
-
-        for (url, plaintext, iv) in &expected {
-            let (total, res) = match fetch
-                .start_fetch(url, Some(DecryptContext::new(key, *iv)))
-                .await
-                .expect("start fetch")
-            {
-                FetchResult::Active(mut writer, res) => {
-                    let mut total = 0u64;
-                    while let Some(item) = writer.next().await {
-                        match item.expect("writer item") {
-                            WriterItem::ChunkWritten { len, .. } => total += len as u64,
-                            WriterItem::StreamEnded { total_bytes } => {
-                                total = total_bytes;
-                                break;
-                            }
-                        }
-                    }
-                    (total, res)
-                }
-                FetchResult::Committed { .. } => panic!("expected active fetch"),
-            };
-            res.commit(Some(total)).expect("commit segment");
-            assert!(
-                total >= plaintext.len() as u64,
-                "encrypted bytes must cover plaintext + padding"
-            );
-        }
-
-        for (url, plaintext, _) in &expected {
-            let reopened = fetch
-                .backend()
-                .open_resource(&ResourceKey::from_url(url))
-                .expect("reopen resource");
-            let mut buf = vec![0u8; plaintext.len()];
-            let read = reopened.read_at(0, &mut buf).expect("read reopened");
-            assert_eq!(read, plaintext.len(), "url={url}");
-            assert_eq!(buf, *plaintext, "url={url}");
-        }
     }
 }
