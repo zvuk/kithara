@@ -161,6 +161,48 @@ impl Downloader {
         results
     }
 
+    /// Execute a batch synchronously — blocks the caller thread until all
+    /// commands complete.
+    ///
+    /// Bridges from non-async contexts (e.g. a dedicated OS thread running
+    /// a legacy HLS plan loop) to the async download pool. The batch runs
+    /// on the downloader's tokio runtime (either the one supplied via
+    /// [`DownloaderConfig::with_runtime`](super::DownloaderConfig::with_runtime)
+    /// or the one the caller is already inside), and the blocking wait is
+    /// implemented via a `std::sync::mpsc` channel so it works from any
+    /// OS thread — no tokio runtime is required on the calling thread.
+    ///
+    /// Same ordering guarantees as [`execute_batch`](Self::execute_batch):
+    /// fetches run concurrently, `on_complete` callbacks fire in input
+    /// order after all fetches finish, and the returned `Vec<FetchResult>`
+    /// preserves input order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no tokio runtime handle is available — either explicitly
+    /// provided via [`DownloaderConfig`] or implicitly from the calling
+    /// thread. Callers on pure std threads must construct the downloader
+    /// with a runtime handle.
+    #[must_use]
+    pub fn execute_batch_blocking(&self, cmds: Vec<FetchCmd>) -> Vec<FetchResult> {
+        let handle = self
+            .inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok())
+            .expect("no tokio runtime available for execute_batch_blocking");
+        let this = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        handle.spawn(async move {
+            let results = this.execute_batch(cmds).await;
+            // Receiver may have been dropped if the caller thread was
+            // cancelled — ignore the send failure in that case.
+            let _ = tx.send(results);
+        });
+        rx.recv()
+            .expect("downloader task dropped sender without sending results")
+    }
+
     /// Ensure the download loop is running (lazy spawn on first register).
     fn ensure_spawned(&self) {
         let Some(rx) = self.inner.register_rx.lock_sync().take() else {

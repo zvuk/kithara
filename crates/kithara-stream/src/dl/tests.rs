@@ -328,3 +328,65 @@ async fn register_after_first() {
     sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 2);
 }
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_batch_blocking_from_worker_thread_returns_ordered_results() {
+    // execute_batch_blocking is designed to be called from a non-async
+    // OS thread (the upcoming HLS plan loop). Use with_runtime to inject
+    // the current async runtime handle, then dispatch the blocking call
+    // from std::thread::spawn so rx.recv() blocks on a real std thread.
+    let dl = Downloader::new(
+        DownloaderConfig::default()
+            .with_runtime(kithara_platform::tokio::runtime::Handle::current()),
+    );
+
+    let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
+        .map(|i| indexed_cmd(Arc::clone(&order_log), i))
+        .collect();
+
+    let dl_clone = dl.clone();
+    let thread_handle = std::thread::spawn(move || dl_clone.execute_batch_blocking(cmds));
+
+    let results = kithara_platform::tokio::task::spawn_blocking(move || {
+        thread_handle.join().expect("worker thread panicked")
+    })
+    .await
+    .expect("spawn_blocking join failed");
+
+    assert_eq!(results.len(), CMD_COUNT);
+    assert_eq!(
+        order_log.lock_sync().clone(),
+        (0..CMD_COUNT).collect::<Vec<_>>(),
+        "blocking batch must deliver on_complete in batch input order"
+    );
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_batch_blocking_fires_every_on_complete() {
+    let dl = Downloader::new(
+        DownloaderConfig::default()
+            .with_runtime(kithara_platform::tokio::runtime::Handle::current()),
+    );
+    let counter = Arc::new(AtomicU64::new(0));
+
+    let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
+        .map(|_| counting_cmd(Arc::clone(&counter), Priority::Normal))
+        .collect();
+
+    let dl_clone = dl.clone();
+    let thread_handle = std::thread::spawn(move || dl_clone.execute_batch_blocking(cmds));
+
+    let results = kithara_platform::tokio::task::spawn_blocking(move || {
+        thread_handle.join().expect("worker thread panicked")
+    })
+    .await
+    .expect("spawn_blocking join failed");
+
+    assert_eq!(results.len(), CMD_COUNT);
+    assert_eq!(
+        counter.load(Ordering::Relaxed),
+        CMD_COUNT as u64,
+        "blocking batch must fire every on_complete exactly once"
+    );
+}
