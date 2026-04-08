@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_events::HlsEvent;
+use kithara_platform::tokio::sync::Notify;
 use tracing::{debug, trace};
 
 use super::{
@@ -62,6 +63,20 @@ impl HlsScheduler {
     pub(crate) fn demand_signal_future(&self) -> impl Future<Output = ()> + Send + 'static + use<> {
         let coord = Arc::clone(&self.coord);
         async move { coord.notified_reader_advanced().await }
+    }
+
+    /// Clone the demand-notify [`Arc<Notify>`] from the coord.
+    ///
+    /// Used by components that need an owned `'static` wake primitive
+    /// independent of `&self` — e.g. a future `Stream<Item = FetchCmd>`
+    /// adapter that stores the notify alongside its own state and calls
+    /// `notified()` from inside its `poll_next` context. The existing
+    /// worker loop keeps using [`wait_ready_future`](Self::wait_ready_future)
+    /// / [`demand_signal_future`](Self::demand_signal_future) unchanged.
+    #[must_use]
+    #[expect(dead_code, reason = "Phase 4c.0.3 prep — Stream adapter will use this")]
+    pub(crate) fn demand_notify(&self) -> Arc<Notify> {
+        self.coord.demand_notify()
     }
 
     /// Commit a completed fetch (stale-check, classify, and apply to the

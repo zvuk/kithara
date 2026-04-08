@@ -27,7 +27,12 @@ pub struct HlsCoord {
     pub cancel: CancellationToken,
     pub condvar: Condvar,
     pub had_midstream_switch: AtomicBool,
-    pub reader_advanced: Notify,
+    /// `Arc<Notify>` so the handle can be cloned out to components that
+    /// need an owned `'static` wake primitive (e.g. a future
+    /// `Stream<Item = FetchCmd>` adapter that registers the notify in
+    /// its own `poll_next` context). All existing `.notify_one()` and
+    /// `.notified()` calls continue to work via `Deref` to [`Notify`].
+    pub reader_advanced: Arc<Notify>,
     pub stopped: AtomicBool,
     timeline: Timeline,
     demand: DemandSlot<SegmentRequest>,
@@ -45,11 +50,23 @@ impl HlsCoord {
             cancel,
             condvar: Condvar::new(),
             had_midstream_switch: AtomicBool::new(false),
-            reader_advanced: Notify::new(),
+            reader_advanced: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             timeline,
             demand: DemandSlot::new(),
         }
+    }
+
+    /// Clone the `reader_advanced` notify handle.
+    ///
+    /// Used by components that need an owned `Arc<Notify>` — typically
+    /// long-lived futures / streams that store the handle and call
+    /// `notified()` from inside their own `poll_next`. Existing worker
+    /// code that only needs to observe the notify can keep using
+    /// `self.coord.reader_advanced.notified()` directly.
+    #[must_use]
+    pub(crate) fn demand_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.reader_advanced)
     }
 
     pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {
