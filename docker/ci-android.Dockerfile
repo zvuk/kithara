@@ -15,6 +15,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cargo install cargo-ndk --locked \
  && rustup target add \
     aarch64-linux-android \
-    armv7-linux-androideabi \
     x86_64-linux-android \
  && rm -rf /usr/local/cargo/registry /usr/local/cargo/git

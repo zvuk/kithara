@@ -2,6 +2,7 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
 import com.kithara.ffi.PlayerObserver
@@ -29,7 +30,7 @@ import kotlinx.coroutines.flow.update
  * ```
  */
 class KitharaPlayer() {
-    private val inner: FfiAudioPlayer = FfiAudioPlayer()
+    private val inner: FfiAudioPlayer = FfiAudioPlayer(FfiPlayerConfig(eqBandCount = 10u))
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())

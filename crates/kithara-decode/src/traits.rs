@@ -36,7 +36,8 @@ pub(crate) trait CodecType: Send + 'static {
     #[cfg_attr(
         not(any(
             test,
-            all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+            all(feature = "apple", any(target_os = "macos", target_os = "ios")),
+            all(feature = "android", target_os = "android")
         )),
         expect(dead_code, reason = "used by apple backend and tests")
     )]
@@ -91,7 +92,7 @@ pub(crate) trait AudioDecoder: Send + 'static {
 
     /// Input source type for decoder construction.
     ///
-    /// Typically `Box<dyn DecoderInput>` for concrete implementations.
+    /// Typically, `Box<dyn DecoderInput>` for concrete implementations.
     type Source: Read + Seek + Send + Sync + 'static;
 
     /// Create a new decoder from a source.

@@ -40,7 +40,7 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 <tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 <tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
-<tr><td>Android MediaCodec</td><td>Stub backend (returns unsupported)</td><td>Android</td></tr>
+<tr><td>Android MediaCodec</td><td>Runtime hardware path for AAC family, MP3, FLAC with recoverable fallback to Symphonia</td><td>Android</td></tr>
 </table>
 
 ## Initialization Paths
@@ -60,7 +60,7 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <table>
 <tr><th>Feature</th><th>Effect</th></tr>
 <tr><td><code>apple</code></td><td>Enables Apple AudioToolbox hardware decoder</td></tr>
-<tr><td><code>android</code></td><td>Enables Android MediaCodec stub backend</td></tr>
+<tr><td><code>android</code></td><td>Enables Android MediaCodec hardware backend and fallback plumbing</td></tr>
 <tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
 <tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
 </table>

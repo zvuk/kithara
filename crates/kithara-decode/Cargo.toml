@@ -27,6 +27,10 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+ndk-context = { workspace = true }
+
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath"]

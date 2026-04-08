@@ -15,7 +15,7 @@
 
 Android library providing Kithara audio engine bindings. Queue-based playback API with seek, adaptive bitrate support, and reactive state via Kotlin `StateFlow`.
 
-Built on top of the Rust core via UniFFI-generated bindings, distributed as a Gradle module with JNI libraries for `arm64-v8a`, `armeabi-v7a`, and `x86_64`.
+Built on top of the Rust core via UniFFI-generated bindings, distributed as a Gradle module with JNI libraries for `arm64-v8a` and `x86_64`.
 
 ## Installation
 
@@ -35,7 +35,7 @@ Before the first Android Studio sync, build the JNI libraries and Kotlin UniFFI 
 - Rust targets for Android:
 
 ```bash
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add aarch64-linux-android x86_64-linux-android
 ```
 
 **Build JNI libraries and generate Kotlin UniFFI bindings:**
@@ -181,6 +181,11 @@ val item = KitharaPlayerItem(
 | **com.kithara.ffi** | Auto-generated UniFFI bindings — not intended for direct use |
 | **libkithara_ffi.so** | Native shared library built from the Rust crate |
 
+On Android, `libkithara_ffi.so` contains both decode paths:
+
+- `MediaCodec` hardware backend for the supported v1 matrix above.
+- Symphonia software fallback for every unsupported or rejected combination.
+
 ## Demo App
 
 A minimal Android demo player is included in [`example`](example). Plays audio from a URL or a local file picked from device storage, with play/pause, stop controls, and reactive status display.
@@ -202,7 +207,6 @@ just android-aar
 
 Output: `android/lib/build/outputs/aar/lib-release.aar` with JNI slices for:
 - `arm64-v8a`
-- `armeabi-v7a`
 - `x86_64`
 
 ## License
