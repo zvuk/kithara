@@ -563,44 +563,6 @@ impl FetchManager {
         self.load_media_segment_with_source_for_epoch(variant, segment_index, 0)
             .await
     }
-
-    /// Get Content-Length for a URL using HEAD request via the unified
-    /// [`Downloader`]. Returns the size in bytes if Content-Length is
-    /// present and parseable.
-    ///
-    /// # Errors
-    /// Returns an error when the request fails, header is missing, or header value cannot be parsed.
-    pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
-        let cmd = FetchCmd {
-            method: FetchMethod::Head,
-            url: url.clone(),
-            range: None,
-            headers: self.headers.clone(),
-            priority: Priority::Normal,
-            on_connect: None,
-            writer: None,
-            on_complete: None,
-            throttle: None,
-        };
-        let resp_headers = match self.downloader.execute(cmd).await {
-            DlFetchResult::Ok { headers, .. } => headers,
-            DlFetchResult::Err(e) => return Err(HlsError::from(e)),
-        };
-        let content_length = resp_headers
-            .get("content-length")
-            .or_else(|| resp_headers.get("Content-Length"))
-            .ok_or_else(|| {
-                HlsError::InvalidUrl(format!(
-                    "No Content-Length header in HEAD response for {url}",
-                ))
-            })?;
-
-        content_length.parse::<u64>().map_err(|e| {
-            HlsError::InvalidUrl(format!(
-                "Invalid Content-Length '{content_length}' for {url}: {e}",
-            ))
-        })
-    }
 }
 
 /// Legacy alias kept for migration — `FetchManager` is no longer generic.

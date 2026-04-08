@@ -126,8 +126,14 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
     source
 }
 
@@ -165,8 +171,14 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
     source
 }
 
@@ -620,8 +632,14 @@ fn demand_range_queues_request_for_unloaded_offset() {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
 
     source.demand_range(150..151);
 
@@ -656,8 +674,14 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
 
     source.playlist_state.set_size_map(
         0,
@@ -844,8 +868,14 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, mut source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, mut source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
 
     source.segments.lock_sync().commit_segment(
         0,
@@ -911,8 +941,14 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let (_downloader, mut source) =
-        build_pair(fetch, &parsed, &config, playlist_state, EventBus::new(16));
+    let (_downloader, mut source) = build_pair(
+        fetch,
+        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(16),
+    );
 
     let mut segments = Vec::new();
     for index in 0..4 {

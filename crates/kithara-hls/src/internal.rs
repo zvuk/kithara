@@ -118,7 +118,9 @@ pub fn build_source(
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> HlsSource {
-    let (_downloader, source) = build_pair(fetch, variants, config, playlist_state, bus);
+    let downloader = Downloader::new(DownloaderConfig::default());
+    let (_downloader, source) =
+        build_pair(fetch, downloader, variants, config, playlist_state, bus);
     source
 }
 

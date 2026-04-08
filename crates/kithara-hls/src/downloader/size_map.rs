@@ -11,13 +11,14 @@ use crate::{
     coord::HlsCoord,
     fetch::DefaultFetchManager,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
+    size_probe::SizeMapProbe,
     stream_index::{SegmentData, StreamIndex},
 };
 
 impl HlsDownloader {
     pub(super) async fn calculate_size_map(
         playlist_state: &PlaylistState,
-        fetch: &Arc<DefaultFetchManager>,
+        size_probe: &SizeMapProbe,
         variant: usize,
     ) -> Result<(), HlsError> {
         if playlist_state.has_size_map(variant) {
@@ -28,7 +29,7 @@ impl HlsDownloader {
         let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
 
         let init_size = if let Some(ref url) = init_url {
-            fetch.get_content_length(url).await.unwrap_or(0)
+            size_probe.get_content_length(url).await.unwrap_or(0)
         } else {
             0
         };
@@ -38,7 +39,7 @@ impl HlsDownloader {
             .collect();
         let media_futs: Vec<_> = media_urls
             .iter()
-            .map(|url| fetch.get_content_length(url))
+            .map(|url| size_probe.get_content_length(url))
             .collect();
         let media_lengths = join_all(media_futs).await;
 

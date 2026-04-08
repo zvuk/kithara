@@ -231,6 +231,7 @@ impl HlsSource {
 /// Build an `HlsDownloader` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
+    downloader_handle: kithara_stream::dl::Downloader,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,
@@ -278,9 +279,12 @@ pub(crate) fn build_pair(
         None
     };
 
+    let size_probe =
+        crate::size_probe::SizeMapProbe::new(downloader_handle, config.headers.clone());
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
         fetch: Arc::clone(&fetch),
+        size_probe,
         playlist_state: Arc::clone(&playlist_state),
         cursor: DownloadCursor::fill(0),
         force_init_for_seek: false,

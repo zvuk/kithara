@@ -340,7 +340,7 @@ impl HlsDownloader {
 
         if !self.playlist_state.has_size_map(variant)
             && let Err(e) =
-                Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await
+                Self::calculate_size_map(&self.playlist_state, &self.size_probe, variant).await
         {
             debug!(?e, variant, "failed to calculate variant size map");
         }

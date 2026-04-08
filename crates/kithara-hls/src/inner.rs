@@ -139,7 +139,7 @@ impl StreamType for Hls {
         ));
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
-        let mut fetch_manager = FetchManager::new(backend, downloader, cancel.clone())
+        let mut fetch_manager = FetchManager::new(backend, downloader.clone(), cancel.clone())
             .with_master_url(config.url.clone())
             .with_base_url(config.base_url.clone())
             .with_headers(config.headers.clone())
@@ -193,8 +193,10 @@ impl StreamType for Hls {
             .playlist_state()
             .cloned()
             .ok_or_else(|| HlsError::PlaylistParse("playlist state not initialized".to_string()))?;
+        let dl_handle_for_build = downloader.clone();
         let (downloader, mut source) = build_pair(
             Arc::clone(&fetch_manager),
+            dl_handle_for_build,
             &master.variants,
             &config,
             playlist_state,

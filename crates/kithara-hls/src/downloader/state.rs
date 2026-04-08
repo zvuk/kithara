@@ -22,6 +22,7 @@ use crate::{
     fetch::DefaultFetchManager,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
+    size_probe::SizeMapProbe,
     stream_index::{SegmentData, StreamIndex},
 };
 
@@ -29,6 +30,8 @@ use crate::{
 pub(crate) struct HlsDownloader {
     pub(crate) active_seek_epoch: SeekEpoch,
     pub(crate) fetch: Arc<DefaultFetchManager>,
+    /// HEAD-probe helper for size-map building.
+    pub(crate) size_probe: SizeMapProbe,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
     pub(crate) force_init_for_seek: bool,
