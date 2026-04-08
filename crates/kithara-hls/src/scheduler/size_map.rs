@@ -69,7 +69,6 @@ impl HlsScheduler {
         playlist_state.set_size_map(
             variant,
             VariantSizeMap {
-                init_size,
                 segment_sizes,
                 offsets,
                 total: cumulative,

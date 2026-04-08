@@ -180,7 +180,6 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            init_size: 0,
             segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
@@ -217,7 +216,6 @@ fn set_variant_size_map(state: &PlaylistState, variant: usize, segment_sizes: &[
     state.set_size_map(
         variant,
         VariantSizeMap {
-            init_size: 0,
             segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
@@ -642,7 +640,6 @@ fn demand_range_queues_request_for_unloaded_offset() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            init_size: 0,
             segment_sizes: vec![100, 100, 100],
             offsets: vec![0, 100, 200],
             total: 300,
@@ -710,7 +707,6 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     source.playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            init_size: 25,
             segment_sizes: vec![100, 100, 100],
             offsets: vec![0, 100, 200],
             total: 300,
@@ -880,7 +876,6 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            init_size: 0,
             segment_sizes: vec![100, 100, 100],
             offsets: vec![0, 100, 200],
             total: 300,

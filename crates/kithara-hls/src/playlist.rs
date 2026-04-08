@@ -31,12 +31,12 @@ pub struct SegmentState {
 /// Per-variant size information (from HEAD requests or download).
 ///
 /// Uses a 0-based offset model: the first segment starts at offset 0 and
-/// includes init data. `segment_sizes[0]` = `init_size` + `media_len_0`.
+/// includes init data, so `segment_sizes[0]` already folds the init
+/// size into the segment-0 total.
 #[derive(Debug, Clone)]
 pub struct VariantSizeMap {
-    /// Size of the init segment in bytes.
-    pub init_size: u64,
-    /// Per-segment total sizes in bytes. `segment_sizes[0]` includes `init_size`.
+    /// Per-segment total sizes in bytes. `segment_sizes[0]` includes the
+    /// init segment size for fMP4 variants.
     pub segment_sizes: Vec<u64>,
     /// Cumulative byte offsets. `offsets[0]` = 0, `offsets[i]` = sum of `segment_sizes[0..i]`.
     pub offsets: Vec<u64>,
@@ -232,7 +232,6 @@ impl PlaylistState {
 // PlaylistAccess trait
 
 /// Read-only access to parsed playlist data.
-#[cfg_attr(test, unimock::unimock(api = PlaylistAccessMock))]
 pub(crate) trait PlaylistAccess: Send + Sync {
     /// Number of variants in the master playlist.
     fn num_variants(&self) -> usize;
@@ -467,7 +466,6 @@ mod tests {
             cumulative += total;
         }
         VariantSizeMap {
-            init_size,
             segment_sizes,
             offsets,
             total: cumulative,

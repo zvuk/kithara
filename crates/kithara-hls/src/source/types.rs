@@ -79,8 +79,4 @@ impl ReadSegment {
             media_url: seg_ref.data.media_url.clone(),
         }
     }
-
-    pub(crate) fn end_offset(&self) -> u64 {
-        self.byte_offset + self.init_len + self.media_len
-    }
 }

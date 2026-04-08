@@ -233,7 +233,6 @@ fn make_variant_state(id: usize, count: usize) -> VariantState {
 fn uniform_size_map(segments: usize, segment_size: u64) -> VariantSizeMap {
     let offsets: Vec<u64> = (0..segments).map(|i| i as u64 * segment_size).collect();
     VariantSizeMap {
-        init_size: 0,
         segment_sizes: vec![segment_size; segments],
         offsets,
         total: segments as u64 * segment_size,
