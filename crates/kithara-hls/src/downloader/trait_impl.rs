@@ -1,16 +1,22 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::{
+    future::Future,
+    sync::{Arc, atomic::Ordering},
+};
 
 use kithara_events::HlsEvent;
-use kithara_platform::BoxFuture;
-use kithara_stream::{Downloader, PlanOutcome};
+use kithara_stream::PlanOutcome;
 use tracing::{debug, trace};
 
 use super::{
     helpers::is_stale_epoch,
-    io::{HlsFetch, HlsIo, HlsPlan},
+    plan::HlsPlan,
     state::{HlsDownloader, VERBOSE_SEGMENT_LIMIT},
 };
-use crate::{HlsError, coord::SegmentRequest};
+use crate::{
+    coord::SegmentRequest,
+    fetch::SegmentMeta,
+    ids::{SegmentId, VariantIndex},
+};
 
 impl Drop for HlsDownloader {
     fn drop(&mut self) {
@@ -19,25 +25,49 @@ impl Drop for HlsDownloader {
     }
 }
 
-impl Downloader for HlsDownloader {
-    type Plan = HlsPlan;
-    type Fetch = HlsFetch;
-    type Error = HlsError;
-    type Io = HlsIo;
+/// Result of downloading a single HLS segment.
+pub(crate) struct HlsFetch {
+    pub(crate) init_len: u64,
+    pub(crate) init_url: Option<url::Url>,
+    pub(crate) media: SegmentMeta,
+    pub(crate) media_cached: bool,
+    pub(crate) segment: SegmentId,
+    pub(crate) variant: VariantIndex,
+    pub(crate) duration: std::time::Duration,
+    pub(crate) seek_epoch: kithara_events::SeekEpoch,
+}
 
-    fn io(&self) -> &Self::Io {
-        &self.io
+impl HlsDownloader {
+    /// Check for on-demand requests (e.g. seek) without blocking.
+    pub(crate) async fn poll_demand_next(&mut self) -> Option<HlsPlan> {
+        self.poll_demand_impl().await
     }
 
-    fn poll_demand(&mut self) -> BoxFuture<'_, Option<HlsPlan>> {
-        Box::pin(async move { self.poll_demand_impl().await })
+    /// Plan the next work batch.
+    pub(crate) async fn plan_next(&mut self) -> PlanOutcome<HlsPlan> {
+        self.plan_impl().await
     }
 
-    fn plan(&mut self) -> BoxFuture<'_, PlanOutcome<HlsPlan>> {
-        Box::pin(async move { self.plan_impl().await })
+    /// Wait until the throttle condition clears (reader advances enough).
+    pub(crate) async fn wait_ready_future(&self) {
+        if self.coord.timeline().is_flushing() || !self.should_throttle() {
+            return;
+        }
+        self.coord.notified_reader_advanced().await;
     }
 
-    fn commit(&mut self, fetch: HlsFetch) {
+    /// Return a future that resolves when the reader signals forward
+    /// progress — used by the worker to wait for demand wakes in idle
+    /// state. Cloned [`Arc<HlsCoord>`] so the future is `'static` and
+    /// can be composed in `tokio::select!` alongside other borrows.
+    pub(crate) fn demand_signal_future(&self) -> impl Future<Output = ()> + Send + 'static + use<> {
+        let coord = Arc::clone(&self.coord);
+        async move { coord.notified_reader_advanced().await }
+    }
+
+    /// Commit a completed fetch (stale-check, classify, and apply to the
+    /// shared [`StreamIndex`]). Replaces the deleted `Downloader::commit`.
+    pub(crate) fn commit_fetch(&mut self, fetch: HlsFetch) {
         let current_epoch = self.coord.timeline().seek_epoch();
         let seg_idx = fetch.segment.media_index().unwrap_or(0);
 
@@ -124,7 +154,9 @@ impl Downloader for HlsDownloader {
         self.commit_segment(fetch, is_variant_switch, is_midstream_switch);
     }
 
-    fn should_throttle(&self) -> bool {
+    /// Whether the downloader should pause because it is too far ahead
+    /// of the reader (byte-based or segment-based backpressure).
+    pub(crate) fn should_throttle(&self) -> bool {
         if self.coord.timeline().is_flushing() {
             return false;
         }
@@ -154,21 +186,5 @@ impl Downloader for HlsDownloader {
         }
 
         false
-    }
-
-    fn wait_ready(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            if self.coord.timeline().is_flushing() || !self.should_throttle() {
-                return;
-            }
-            self.coord.notified_reader_advanced().await;
-        })
-    }
-
-    fn demand_signal(&self) -> BoxFuture<'static, ()> {
-        let coord = Arc::clone(&self.coord);
-        Box::pin(async move {
-            coord.notified_reader_advanced().await;
-        })
     }
 }

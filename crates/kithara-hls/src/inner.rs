@@ -15,7 +15,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::time::Instant;
 use kithara_stream::{
-    Backend, StreamContext, StreamType, Timeline,
+    StreamContext, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
 };
 
@@ -30,6 +30,7 @@ use crate::{
     playlist::PlaylistState,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
+    worker::spawn_hls_worker,
 };
 
 /// Marker type for HLS streaming.
@@ -209,10 +210,16 @@ impl StreamType for Hls {
             .expect("HLS invalidation target lock poisoned") =
             Some((Arc::clone(&source.segments), Arc::clone(&source.coord)));
 
-        // Spawn downloader on a dedicated thread.
-        // Backend is stored in HlsSource — dropping the source cancels the downloader.
-        let backend = Backend::new(downloader, &cancel, config.runtime.clone());
-        source.set_backend(backend);
+        // Spawn the download worker (async task or dedicated thread).
+        // The WorkerGuard is stored in HlsSource — dropping the source
+        // cancels the worker via its child cancel token.
+        let guard = spawn_hls_worker(
+            downloader,
+            Arc::clone(&fetch_manager),
+            &cancel,
+            config.runtime.clone(),
+        );
+        source.set_worker(guard);
 
         Ok(source)
     }

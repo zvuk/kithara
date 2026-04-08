@@ -3,13 +3,13 @@ use std::sync::atomic::Ordering;
 use kithara_events::HlsEvent;
 use tracing::debug;
 
-use super::{helpers::first_missing_segment, state::HlsDownloader};
+use super::{helpers::first_missing_segment, state::HlsDownloader, trait_impl::HlsFetch};
 use crate::{playlist::PlaylistAccess, stream_index::SegmentData};
 
 impl HlsDownloader {
     pub(super) fn commit_segment(
         &mut self,
-        dl: super::io::HlsFetch,
+        dl: HlsFetch,
         _is_variant_switch: bool,
         _is_midstream_switch: bool,
     ) {

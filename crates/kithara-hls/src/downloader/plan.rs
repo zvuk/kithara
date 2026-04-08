@@ -12,10 +12,23 @@ use tracing::{debug, trace};
 
 use super::{
     helpers::{first_missing_segment, is_cross_codec_switch, should_request_init},
-    io::{HlsFetch, HlsPlan},
     state::{HlsDownloader, MAX_LOG_PLANS},
+    trait_impl::HlsFetch,
 };
-use crate::{HlsError, coord::SegmentRequest, ids::SegmentId, playlist::PlaylistAccess};
+use crate::{
+    HlsError,
+    coord::SegmentRequest,
+    ids::{SegmentId, VariantIndex},
+    playlist::PlaylistAccess,
+};
+
+/// Plan descriptor for a single HLS segment download.
+pub(crate) struct HlsPlan {
+    pub(crate) variant: VariantIndex,
+    pub(crate) segment: SegmentId,
+    pub(crate) need_init: bool,
+    pub(crate) seek_epoch: SeekEpoch,
+}
 
 impl HlsDownloader {
     pub(super) async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {

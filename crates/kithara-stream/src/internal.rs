@@ -1,12 +1,11 @@
 #![forbid(unsafe_code)]
 
 pub use crate::{
-    backend::Backend,
+    PlanOutcome,
     context::{NullStreamContext, StreamContext},
     coordination::TransferCoordination,
     cursor::DownloadCursor,
     demand::DemandSlot,
-    downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult},
     error::{StreamError, StreamResult},
     fetch::{EpochValidator, Fetch},
     layout::LayoutIndex,

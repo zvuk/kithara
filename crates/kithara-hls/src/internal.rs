@@ -71,7 +71,7 @@ pub fn make_test_source_with_fetch(
         playlist_state,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
-        _backend: None,
+        _worker: None,
         last_fallback_key: AtomicU64::new(u64::MAX),
     }
 }

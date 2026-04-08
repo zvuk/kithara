@@ -19,18 +19,18 @@ use super::types::ReadSegment;
 use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
-    downloader::{HlsDownloader, HlsIo},
+    downloader::HlsDownloader,
     fetch::DefaultFetchManager,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
     stream_index::{SegmentData, StreamIndex},
+    worker::WorkerGuard,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
 ///
-/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
-/// downloader lifecycle: when this source is dropped, the backend is dropped,
-/// cancelling the downloader task automatically.
+/// Holds an optional [`WorkerGuard`] that cancels+joins the background
+/// download worker when the source is dropped.
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) fetch: Arc<DefaultFetchManager>,
@@ -39,8 +39,8 @@ pub struct HlsSource {
     pub(crate) bus: EventBus,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     pub(crate) variant_fence: Option<VariantIndex>,
-    /// Downloader backend. Dropped with this source, cancelling the downloader.
-    pub(crate) _backend: Option<kithara_stream::Backend>,
+    /// Worker guard. Dropped with this source, cancelling the worker.
+    pub(crate) _worker: Option<WorkerGuard>,
     /// Dedup key for `wait_range_metadata_fallback` events. Encodes
     /// `(variant << 48) | offset` so the event fires at most once per
     /// unique (variant, offset) pair during a spin-wait loop.
@@ -48,9 +48,9 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    /// Set the backend (called after downloader is spawned).
-    pub(crate) fn set_backend(&mut self, backend: kithara_stream::Backend) {
-        self._backend = Some(backend);
+    /// Set the worker guard (called after the worker is spawned).
+    pub(crate) fn set_worker(&mut self, guard: WorkerGuard) {
+        self._worker = Some(guard);
     }
 
     /// Current variant for source operations (read, seek, demand).
@@ -280,7 +280,6 @@ pub(crate) fn build_pair(
 
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
-        io: HlsIo::new(Arc::clone(&fetch)),
         fetch: Arc::clone(&fetch),
         playlist_state: Arc::clone(&playlist_state),
         cursor: DownloadCursor::fill(0),
@@ -303,7 +302,7 @@ pub(crate) fn build_pair(
         playlist_state,
         bus,
         variant_fence: None,
-        _backend: None,
+        _worker: None,
         last_fallback_key: AtomicU64::new(u64::MAX),
     };
 

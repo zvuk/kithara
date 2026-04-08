@@ -14,7 +14,7 @@ use tracing::debug;
 
 use super::{
     helpers::{classify_layout_transition, first_missing_segment, is_cross_codec_switch},
-    io::{HlsFetch, HlsIo},
+    trait_impl::HlsFetch,
 };
 use crate::{
     HlsError,
@@ -28,7 +28,6 @@ use crate::{
 /// HLS downloader: fetches segments and maintains ABR state.
 pub(crate) struct HlsDownloader {
     pub(crate) active_seek_epoch: SeekEpoch,
-    pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
