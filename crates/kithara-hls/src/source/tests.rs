@@ -1010,7 +1010,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
 // Source::phase() trait method tests
 
 /// Build source for phase tests — resets `stopped` flag that
-/// `HlsDownloader::drop` sets when the downloader half is discarded.
+/// `HlsScheduler::drop` sets when the downloader half is discarded.
 fn build_phase_test_source(num_variants: usize) -> HlsSource {
     let source = build_test_source(num_variants);
     source.coord.stopped.store(false, Ordering::Release);

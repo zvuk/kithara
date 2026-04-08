@@ -44,15 +44,14 @@ pub mod internal;
 
 mod context;
 mod coord;
-mod downloader;
 mod ids;
 mod inner;
 pub(crate) mod loading;
 mod parsing;
 pub(crate) mod playlist;
+pub(crate) mod scheduler;
 mod source;
 pub(crate) mod stream_index;
-mod worker;
 
 // Public API re-exports
 

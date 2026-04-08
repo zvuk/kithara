@@ -1,7 +1,7 @@
-//! HLS download worker — drives the [`HlsDownloader`] plan loop.
+//! HLS download worker — drives the [`HlsScheduler`] plan loop.
 //!
 //! Ported from the generic `kithara_stream::backend::Backend::run_downloader`
-//! with the trait machinery replaced by direct calls into [`HlsDownloader`]
+//! with the trait machinery replaced by direct calls into [`HlsScheduler`]
 //! and a local [`fetch_plan`] helper that replaces the old `HlsIo` indirection.
 //!
 //! Responsibilities (identical to the deleted Backend):
@@ -26,11 +26,8 @@ use kithara_stream::PlanOutcome;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::{
-    HlsError,
-    downloader::{HlsDownloader, HlsFetch, HlsPlan},
-    loading::SegmentLoader,
-};
+use super::{HlsFetch, HlsPlan, HlsScheduler};
+use crate::{HlsError, loading::SegmentLoader};
 
 /// Default yield interval (iterations between `yield_now` calls).
 const DEFAULT_YIELD_INTERVAL: usize = 8;
@@ -94,7 +91,7 @@ impl Drop for WorkerGuard {
 /// 3. Otherwise → dedicated OS thread with its own current-thread runtime
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_hls_worker(
-    downloader: HlsDownloader,
+    downloader: HlsScheduler,
     loader: Arc<SegmentLoader>,
     cancel: &CancellationToken,
     runtime: Option<tokio::runtime::Handle>,
@@ -134,7 +131,7 @@ pub(crate) fn spawn_hls_worker(
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn_hls_worker(
-    downloader: HlsDownloader,
+    downloader: HlsScheduler,
     loader: Arc<SegmentLoader>,
     cancel: &CancellationToken,
     _runtime: Option<tokio::runtime::Handle>,
@@ -157,7 +154,7 @@ enum LoopControl {
 
 #[kithara_hang_detector::hang_watchdog]
 async fn run_hls_worker(
-    mut dl: HlsDownloader,
+    mut dl: HlsScheduler,
     loader: Arc<SegmentLoader>,
     cancel: CancellationToken,
 ) {
@@ -239,7 +236,7 @@ async fn run_hls_worker(
 }
 
 async fn wait_while_throttled(
-    dl: &mut HlsDownloader,
+    dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
 ) -> Result<bool, ()> {
@@ -288,7 +285,7 @@ async fn wait_while_throttled(
 }
 
 async fn drain_demand_requests(
-    dl: &mut HlsDownloader,
+    dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
 ) -> Result<bool, ()> {
@@ -308,7 +305,7 @@ async fn drain_demand_requests(
 }
 
 async fn plan_next(
-    dl: &mut HlsDownloader,
+    dl: &mut HlsScheduler,
     cancel: &CancellationToken,
 ) -> Result<PlanOutcome<HlsPlan>, ()> {
     tokio::select! {
@@ -321,7 +318,7 @@ async fn plan_next(
     }
 }
 
-async fn handle_idle(dl: &mut HlsDownloader, cancel: &CancellationToken) -> LoopControl {
+async fn handle_idle(dl: &mut HlsScheduler, cancel: &CancellationToken) -> LoopControl {
     tokio::select! {
         biased;
         () = cancel.cancelled() => LoopControl::Exit,
@@ -335,7 +332,7 @@ async fn handle_idle(dl: &mut HlsDownloader, cancel: &CancellationToken) -> Loop
 
 #[kithara_hang_detector::hang_watchdog]
 async fn handle_batch(
-    dl: &mut HlsDownloader,
+    dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
     plans: Vec<HlsPlan>,
@@ -400,7 +397,7 @@ async fn handle_batch(
     LoopControl::Continue { made_progress }
 }
 
-async fn try_poll_demand(dl: &mut HlsDownloader, cancel: &CancellationToken) -> Option<HlsPlan> {
+async fn try_poll_demand(dl: &mut HlsScheduler, cancel: &CancellationToken) -> Option<HlsPlan> {
     tokio::select! {
         biased;
         () = cancel.cancelled() => None,
@@ -409,7 +406,7 @@ async fn try_poll_demand(dl: &mut HlsDownloader, cancel: &CancellationToken) -> 
 }
 
 async fn fetch_and_commit_demand(
-    dl: &mut HlsDownloader,
+    dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     plan: HlsPlan,
     cancel: &CancellationToken,

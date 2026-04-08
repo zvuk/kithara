@@ -27,9 +27,9 @@ use crate::{
     loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
     playlist::PlaylistState,
+    scheduler::worker::spawn_hls_worker,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
-    worker::spawn_hls_worker,
 };
 
 /// Marker type for HLS streaming.
@@ -192,7 +192,7 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        // Create HlsDownloader + HlsSource pair
+        // Create HlsScheduler + HlsSource pair
         let (hls_downloader, mut source) = build_pair(
             backend,
             downloader.clone(),

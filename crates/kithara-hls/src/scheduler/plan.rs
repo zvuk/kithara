@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 
 use super::{
     helpers::{first_missing_segment, is_cross_codec_switch, should_request_init},
-    state::{HlsDownloader, MAX_LOG_PLANS},
+    state::{HlsScheduler, MAX_LOG_PLANS},
     trait_impl::HlsFetch,
 };
 use crate::{
@@ -30,7 +30,7 @@ pub(crate) struct HlsPlan {
     pub(crate) seek_epoch: SeekEpoch,
 }
 
-impl HlsDownloader {
+impl HlsScheduler {
     pub(super) async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
         if self.coord.timeline().is_flushing() {
             task_yield_now().await;

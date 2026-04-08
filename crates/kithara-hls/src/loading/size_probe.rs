@@ -4,7 +4,7 @@
 //!
 //! Owns the [`Downloader`] handle + base headers needed to issue
 //! `Content-Length` HEAD probes for HLS segments. Used by
-//! [`crate::downloader::HlsDownloader::calculate_size_map`].
+//! [`crate::scheduler::HlsScheduler::calculate_size_map`].
 
 use kithara_net::Headers;
 use kithara_stream::dl::{

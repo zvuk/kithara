@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// HLS downloader: fetches segments and maintains ABR state.
-pub(crate) struct HlsDownloader {
+pub(crate) struct HlsScheduler {
     pub(crate) active_seek_epoch: SeekEpoch,
     /// Direct disk-cache access — no `FetchManager` wrapper.
     pub(crate) backend: AssetStore<DecryptContext>,
@@ -61,7 +61,7 @@ pub(super) const MAX_LOG_PLANS: usize = 4;
 /// Maximum initial segment index for verbose logging.
 pub(super) const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
-impl HlsDownloader {
+impl HlsScheduler {
     pub(super) fn layout_variant(&self) -> VariantIndex {
         self.segments.lock_sync().layout_variant()
     }

@@ -10,7 +10,7 @@ use tracing::{debug, trace};
 use super::{
     helpers::is_stale_epoch,
     plan::HlsPlan,
-    state::{HlsDownloader, VERBOSE_SEGMENT_LIMIT},
+    state::{HlsScheduler, VERBOSE_SEGMENT_LIMIT},
 };
 use crate::{
     coord::SegmentRequest,
@@ -18,7 +18,7 @@ use crate::{
     loading::SegmentMeta,
 };
 
-impl Drop for HlsDownloader {
+impl Drop for HlsScheduler {
     fn drop(&mut self) {
         self.coord.stopped.store(true, Ordering::Release);
         self.coord.condvar.notify_all();
@@ -37,7 +37,7 @@ pub(crate) struct HlsFetch {
     pub(crate) seek_epoch: kithara_events::SeekEpoch,
 }
 
-impl HlsDownloader {
+impl HlsScheduler {
     /// Check for on-demand requests (e.g. seek) without blocking.
     pub(crate) async fn poll_demand_next(&mut self) -> Option<HlsPlan> {
         self.poll_demand_impl().await

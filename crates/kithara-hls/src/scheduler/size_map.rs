@@ -6,7 +6,7 @@ use kithara_drm::DecryptContext;
 use kithara_platform::Mutex;
 use tracing::debug;
 
-use super::state::HlsDownloader;
+use super::state::HlsScheduler;
 use crate::{
     HlsError,
     coord::HlsCoord,
@@ -15,7 +15,7 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
-impl HlsDownloader {
+impl HlsScheduler {
     pub(super) async fn calculate_size_map(
         playlist_state: &PlaylistState,
         size_probe: &SizeMapProbe,

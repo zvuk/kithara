@@ -20,11 +20,10 @@ use super::types::ReadSegment;
 use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
-    downloader::HlsDownloader,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
+    scheduler::{HlsScheduler, worker::WorkerGuard},
     stream_index::{SegmentData, StreamIndex},
-    worker::WorkerGuard,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
@@ -230,7 +229,7 @@ impl HlsSource {
     }
 }
 
-/// Build an `HlsDownloader` + `HlsSource` pair from config.
+/// Build an `HlsScheduler` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
     downloader_handle: kithara_stream::dl::Downloader,
@@ -238,7 +237,7 @@ pub(crate) fn build_pair(
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
-) -> (HlsDownloader, HlsSource) {
+) -> (HlsScheduler, HlsSource) {
     let abr_variants: Vec<Variant> = variants
         .iter()
         .map(|v| Variant {
@@ -282,7 +281,7 @@ pub(crate) fn build_pair(
     };
 
     let size_probe = crate::loading::SizeMapProbe::new(downloader_handle, config.headers.clone());
-    let downloader = HlsDownloader {
+    let downloader = HlsScheduler {
         active_seek_epoch: 0,
         backend: backend.clone(),
         size_probe,
