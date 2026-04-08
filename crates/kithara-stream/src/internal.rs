@@ -10,5 +10,4 @@ pub use crate::{
     source::{Source, SourceSeekAnchor},
     stream::{Stream, StreamType},
     timeline::Timeline,
-    writer::{Writer, WriterError, WriterItem},
 };

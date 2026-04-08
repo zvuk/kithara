@@ -4,8 +4,8 @@
 //!
 //! ## Design goals
 //! - `Reader`: sync `Read + Seek` via direct Source calls
-//! - `Writer`: async HTTP download as `Stream` trait
-//! - `dl::Downloader`: unified download orchestrator
+//! - `dl::Downloader`: unified download orchestrator (owns `HttpClient`,
+//!   dispatches `FetchCmd` with per-chunk writer callbacks)
 
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
@@ -21,7 +21,6 @@ mod media_rfc6381;
 mod source;
 mod stream;
 mod timeline;
-mod writer;
 
 #[cfg(feature = "internal")]
 pub mod internal;
@@ -39,4 +38,3 @@ pub use media_rfc6381::audio_codec_supports_fmp4_packaging;
 pub use source::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, VariantChangeError};
 pub use stream::{Stream, StreamType};
 pub use timeline::Timeline;
-pub use writer::{Writer, WriterError, WriterItem};
