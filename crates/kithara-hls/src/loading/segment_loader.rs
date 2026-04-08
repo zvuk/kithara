@@ -66,16 +66,6 @@ pub struct SegmentMeta {
     pub container: Option<ContainerFormat>,
 }
 
-/// Result of starting a fetch.
-///
-/// Either the resource was already committed in the cache
-/// (`was_cached == true`) or the unified [`Downloader`] completed
-/// the download and committed the resource inline.
-pub struct FetchResult {
-    pub bytes: u64,
-    pub was_cached: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SegmentFetchKey {
     decrypt_ctx: Option<DecryptContext>,
@@ -137,13 +127,13 @@ impl SegmentLoader {
 
     /// Start fetching a segment via the unified [`Downloader`].
     ///
-    /// - If the resource is already in the cache, returns
-    ///   `FetchResult { was_cached: true }`.
-    /// - Otherwise drives the fetch through
+    /// Returns `(bytes, was_cached)`:
+    /// - `was_cached == true` — resource was already committed in the
+    ///   disk cache; no network round-trip occurred.
+    /// - `was_cached == false` — fetch went through
     ///   `Downloader::execute(FetchCmd::Stream)` with a writer callback
-    ///   that writes each chunk into the `AssetResource`, commits the
-    ///   resource inline on success, and returns
-    ///   `FetchResult { was_cached: false }`.
+    ///   that writes each chunk into the `AssetResource` and commits
+    ///   the resource inline on success.
     ///
     /// When `decrypt_ctx` is `Some`, the resource is opened with a
     /// decrypt context; decryption happens on the fly inside
@@ -155,15 +145,12 @@ impl SegmentLoader {
         &self,
         url: &Url,
         decrypt_ctx: Option<DecryptContext>,
-    ) -> HlsResult<FetchResult> {
+    ) -> HlsResult<(u64, bool)> {
         let key = ResourceKey::from_url(url);
         if let AssetResourceState::Committed { final_len } = self.backend.resource_state(&key)? {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit via resource_state");
-            return Ok(FetchResult {
-                bytes: len,
-                was_cached: true,
-            });
+            return Ok((len, true));
         }
 
         let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
@@ -172,18 +159,12 @@ impl SegmentLoader {
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok(FetchResult {
-                bytes: len,
-                was_cached: true,
-            });
+            return Ok((len, true));
         }
 
         trace!(url = %url, "start_fetch: downloading via Downloader");
         let bytes = self.download_stream_via_downloader(url, &res).await?;
-        Ok(FetchResult {
-            bytes,
-            was_cached: false,
-        })
+        Ok((bytes, false))
     }
 
     /// Stream a fetch into an `AssetResource` via the unified Downloader.
@@ -321,9 +302,7 @@ impl SegmentLoader {
             .resolve_decrypt_context(init_segment.key.as_ref(), &init_url, 0)
             .await?;
 
-        let FetchResult {
-            bytes: init_len, ..
-        } = self.start_fetch(&init_url, decrypt_ctx).await?;
+        let (init_len, _was_cached) = self.start_fetch(&init_url, decrypt_ctx).await?;
 
         Ok(SegmentMeta {
             variant,
@@ -414,10 +393,7 @@ impl SegmentLoader {
 
         let load = cell
             .get_or_try_init(|| async {
-                let FetchResult {
-                    bytes: segment_len,
-                    was_cached: cached,
-                } = self.start_fetch(&segment_url, decrypt_ctx).await?;
+                let (segment_len, cached) = self.start_fetch(&segment_url, decrypt_ctx).await?;
 
                 Ok::<_, HlsError>(SegmentLoad {
                     cached,

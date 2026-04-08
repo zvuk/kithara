@@ -25,5 +25,5 @@ pub(crate) mod size_probe;
 
 pub use keys::KeyManager;
 pub use playlist_cache::PlaylistCache;
-pub use segment_loader::{FetchResult, SegmentLoader, SegmentMeta, SegmentType};
+pub use segment_loader::{SegmentLoader, SegmentMeta, SegmentType};
 pub(crate) use size_probe::SizeMapProbe;
