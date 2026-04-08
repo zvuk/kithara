@@ -371,10 +371,7 @@ async fn handle_batch(
                 break;
             };
             match result {
-                Ok(fetch) => {
-                    dl.commit_fetch(fetch);
-                    made_progress = true;
-                }
+                Ok(fetch) => dl.enqueue_commit(fetch),
                 Err(e) => debug!(?e, "batch fetch error"),
             }
             next_commit += 1;
@@ -386,6 +383,16 @@ async fn handle_batch(
             // and the demand's get_or_try_init blocks waiting for the
             // batch future that is not being polled. Demand is processed
             // at the top of the main loop via drain_demand_requests().
+        }
+
+        // Drain all enqueued commits in FIFO order inside the same loop
+        // iteration — this preserves the legacy "commit as soon as the
+        // next expected result is available" behavior but routes every
+        // commit through the shared queue so Phase 4c can later feed
+        // commits from an async `on_complete` callback without changing
+        // commit_fetch semantics.
+        if dl.drain_commits() {
+            made_progress = true;
         }
     }
 
@@ -417,7 +424,8 @@ async fn fetch_and_commit_demand(
 
     match result {
         Ok(fetch) => {
-            dl.commit_fetch(fetch);
+            dl.enqueue_commit(fetch);
+            dl.drain_commits();
             Ok(true)
         }
         Err(e) => {

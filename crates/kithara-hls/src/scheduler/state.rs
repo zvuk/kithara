@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     sync::{Arc, atomic::Ordering},
 };
 
@@ -52,6 +52,13 @@ pub(crate) struct HlsScheduler {
     /// classification instead of shared `layout_variant` to avoid racing
     /// with the decoder thread.
     pub(crate) download_variant: VariantIndex,
+    /// Queue of fetch results waiting to be committed. Workers enqueue
+    /// completed fetches via [`Self::enqueue_commit`] and drain them via
+    /// [`Self::drain_commits`]. Current callers drain synchronously in
+    /// the same loop iteration; Phase 4c will extend this so async
+    /// `on_complete` callbacks (from a `Stream<FetchCmd>` adapter) can
+    /// push commit entries from a different context.
+    pub(crate) commit_queue: VecDeque<HlsFetch>,
 }
 
 /// Maximum number of plans to log at debug level.
@@ -61,6 +68,30 @@ pub(super) const MAX_LOG_PLANS: usize = 4;
 pub(super) const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
 impl HlsScheduler {
+    /// Push a fetch result onto the commit queue for later draining.
+    ///
+    /// Callers enqueue fetches that have completed successfully; each
+    /// queued fetch is committed in FIFO order when [`drain_commits`] is
+    /// invoked. Order within a batch is the responsibility of the
+    /// caller (e.g. `handle_batch` enqueues in plan order).
+    ///
+    /// [`drain_commits`]: Self::drain_commits
+    pub(crate) fn enqueue_commit(&mut self, fetch: HlsFetch) {
+        self.commit_queue.push_back(fetch);
+    }
+
+    /// Drain the commit queue — runs `commit_fetch` for every queued
+    /// entry in FIFO order. Returns `true` if any commits were drained
+    /// (so callers can track "made progress" for the worker loop).
+    pub(crate) fn drain_commits(&mut self) -> bool {
+        let mut drained = false;
+        while let Some(fetch) = self.commit_queue.pop_front() {
+            self.commit_fetch(fetch);
+            drained = true;
+        }
+        drained
+    }
+
     pub(super) fn layout_variant(&self) -> VariantIndex {
         self.segments.lock_sync().layout_variant()
     }

@@ -290,6 +290,7 @@ pub(crate) fn build_pair(
         look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
         download_variant: initial_variant,
+        commit_queue: std::collections::VecDeque::new(),
     };
 
     let source = HlsSource {
