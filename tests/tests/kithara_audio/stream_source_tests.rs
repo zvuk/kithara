@@ -110,13 +110,8 @@ impl TestSource {
 
 impl Source for TestSource {
     type Error = io::Error;
-    type Topology = ();
     type Coord = TestCoord;
     type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -264,7 +259,6 @@ struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
-    type Topology = ();
     type Coord = TestCoord;
     type Demand = ();
     type Source = TestSource;

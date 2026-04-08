@@ -49,13 +49,8 @@ impl MemorySource {
 
 impl Source for MemorySource {
     type Error = MemorySourceError;
-    type Topology = ();
     type Coord = MemoryCoord;
     type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -141,7 +136,6 @@ impl StreamType for MemStream {
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
-    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| IoError::other("no source"))
@@ -163,7 +157,6 @@ impl StreamType for UnknownLenStream {
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
-    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config.source.ok_or_else(|| IoError::other("no source"))

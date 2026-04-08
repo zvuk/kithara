@@ -22,7 +22,6 @@ use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
     coordination::TransferCoordination,
     source::{ReadOutcome, Source, VariantChangeError},
-    topology::Topology,
 };
 
 /// Timeout for seek `wait_range` calls before returning an error.
@@ -37,15 +36,13 @@ const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
-    /// Read-only media structure for this stream type.
-    type Topology: Topology;
     /// Shared runtime coordination between source and downloader.
     type Coord: TransferCoordination<Self::Demand>;
     /// On-demand request type used by the stream-specific coordinator.
     type Demand: Clone + Send + Sync + 'static;
 
     /// Source implementing `Source`.
-    type Source: Source<Topology = Self::Topology, Coord = Self::Coord, Demand = Self::Demand>;
+    type Source: Source<Coord = Self::Coord, Demand = Self::Demand>;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -379,13 +376,8 @@ mod tests {
 
     impl Source for ScriptSource {
         type Error = io::Error;
-        type Topology = ();
         type Coord = TestCoord;
         type Demand = ();
-
-        fn topology(&self) -> &Self::Topology {
-            &()
-        }
 
         fn coord(&self) -> &Self::Coord {
             &self.coord
@@ -444,7 +436,6 @@ mod tests {
         type Error = io::Error;
         type Events = ();
         type Source = ScriptSource;
-        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(IoError::other("not used in unit tests"))
@@ -460,7 +451,6 @@ mod tests {
         type Error = io::Error;
         type Events = ();
         type Source = SeekDuringWaitSource;
-        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(IoError::other("not used in unit tests"))
@@ -474,13 +464,8 @@ mod tests {
 
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
-        type Topology = ();
         type Coord = TestCoord;
         type Demand = ();
-
-        fn topology(&self) -> &Self::Topology {
-            &()
-        }
 
         fn coord(&self) -> &Self::Coord {
             &self.coord

@@ -5,7 +5,7 @@
 //! resolution. The `PlaylistAccess` trait provides a testable read interface.
 
 use kithara_platform::{RwLock, time::Duration};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SourceSeekAnchor, Topology};
+use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
 use crate::{
@@ -213,6 +213,20 @@ impl PlaylistState {
             })
             .max()
     }
+
+    /// Number of variants in the master playlist.
+    #[must_use]
+    pub fn num_variants(&self) -> usize {
+        self.variants.len()
+    }
+
+    /// Number of segments in a variant's media playlist.
+    #[must_use]
+    pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        Some(state.segments.len())
+    }
 }
 
 // PlaylistAccess trait
@@ -387,46 +401,6 @@ impl PlaylistAccess for PlaylistState {
         let tail = state.segments.last()?;
         let tail_start = elapsed.saturating_sub(tail.duration);
         Some((tail.index, tail_start, elapsed))
-    }
-}
-
-impl Topology for PlaylistState {
-    fn num_variants(&self) -> usize {
-        PlaylistAccess::num_variants(self)
-    }
-
-    fn num_segments(&self, variant: usize) -> Option<usize> {
-        PlaylistAccess::num_segments(self, variant)
-    }
-
-    fn media_info(&self, variant: usize) -> Option<MediaInfo> {
-        let codec = self.variant_codec(variant);
-        let container = self.variant_container(variant);
-        let variant = u32::try_from(variant).ok()?;
-        Some(MediaInfo::new(codec, container).with_variant_index(variant))
-    }
-
-    fn seek_anchor(&self, variant: usize, target: Duration) -> Option<SourceSeekAnchor> {
-        let (segment_index, segment_start, segment_end) =
-            self.find_seek_point_for_time(variant, target)?;
-        let byte_offset = self.segment_byte_offset(variant, segment_index)?;
-        #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
-        let segment_index = segment_index as u32;
-        Some(SourceSeekAnchor {
-            byte_offset,
-            segment_start,
-            segment_end: Some(segment_end),
-            segment_index: Some(segment_index),
-            variant_index: Some(variant),
-        })
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.track_duration()
-    }
-
-    fn total_len(&self, variant: usize) -> Option<u64> {
-        self.total_variant_size(variant)
     }
 }
 

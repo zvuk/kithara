@@ -122,13 +122,8 @@ impl TransferCoordination<()> for ScriptCoord {
 
 impl Source for ScriptSource {
     type Error = io::Error;
-    type Topology = ();
     type Coord = ScriptCoord;
     type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -176,7 +171,6 @@ impl StreamType for DummyType {
     type Error = io::Error;
     type Events = ();
     type Source = ScriptSource;
-    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         Ok(config)

@@ -31,7 +31,6 @@ impl StreamType for File {
     type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;
-    type Topology = ();
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()

@@ -12,6 +12,5 @@ pub use crate::{
     source::{Source, SourceSeekAnchor},
     stream::{Stream, StreamType},
     timeline::Timeline,
-    topology::Topology,
     writer::{Writer, WriterError, WriterItem},
 };

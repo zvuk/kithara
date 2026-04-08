@@ -22,7 +22,6 @@ mod media_rfc6381;
 mod source;
 mod stream;
 mod timeline;
-mod topology;
 mod writer;
 
 #[cfg(feature = "internal")]
@@ -42,7 +41,6 @@ pub use media_rfc6381::{MediaInfoRfc6381Ext, audio_codec_supports_fmp4_packaging
 pub use source::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, VariantChangeError};
 pub use stream::{Stream, StreamType};
 pub use timeline::Timeline;
-pub use topology::Topology;
 pub use writer::{Writer, WriterError, WriterItem};
 
 /// Plan outcome type — kept for HLS compatibility until Phase 4.

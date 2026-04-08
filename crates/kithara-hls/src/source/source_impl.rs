@@ -36,13 +36,8 @@ fn wait_range_hang_timeout(timeout: Duration) -> Duration {
 
 impl Source for HlsSource {
     type Error = HlsError;
-    type Topology = Arc<PlaylistState>;
     type Coord = Arc<HlsCoord>;
     type Demand = SegmentRequest;
-
-    fn topology(&self) -> &Self::Topology {
-        &self.playlist_state
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord

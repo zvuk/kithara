@@ -429,13 +429,8 @@ impl Stream for FileSource {
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
-    type Topology = ();
     type Coord = Arc<FileCoord>;
     type Demand = Range<u64>;
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord

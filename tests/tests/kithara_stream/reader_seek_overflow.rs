@@ -101,13 +101,8 @@ impl MockSource {
 
 impl Source for MockSource {
     type Error = io::Error;
-    type Topology = ();
     type Coord = MockCoord;
     type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -149,7 +144,6 @@ struct MockStream;
 
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
-    type Topology = ();
     type Coord = MockCoord;
     type Demand = ();
     type Source = MockSource;

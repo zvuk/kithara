@@ -63,7 +63,6 @@ impl StreamType for Hls {
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;
-    type Topology = Arc<PlaylistState>;
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()

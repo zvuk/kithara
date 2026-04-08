@@ -14,10 +14,7 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{
-    Timeline, coordination::TransferCoordination, error::StreamResult, media::MediaInfo,
-    topology::Topology,
-};
+use crate::{Timeline, coordination::TransferCoordination, error::StreamResult, media::MediaInfo};
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -100,7 +97,6 @@ pub struct SourceSeekAnchor {
     unimock(
         api = SourceMock,
         type Error = std::io::Error;
-        type Topology = ();
         type Coord = ();
         type Demand = ();
     )
@@ -109,15 +105,10 @@ pub struct SourceSeekAnchor {
 pub trait Source: Send + 'static {
     /// Error type.
     type Error: StdError + Send + Sync + 'static;
-    /// Read-only media structure for this source.
-    type Topology: Topology;
     /// Shared runtime coordination between source and downloader.
     type Coord: TransferCoordination<Self::Demand>;
     /// On-demand request type used by the source-specific coordinator.
     type Demand: Clone + Send + Sync + 'static;
-
-    /// Read-only media structure for this source.
-    fn topology(&self) -> &Self::Topology;
 
     /// Shared runtime coordination for this source.
     fn coord(&self) -> &Self::Coord;
@@ -331,7 +322,6 @@ mod tests {
         }
         impl Source for ReadySource {
             type Error = std::io::Error;
-            type Topology = ();
             type Coord = TestCoord;
             type Demand = ();
             fn wait_range(
@@ -353,10 +343,6 @@ mod tests {
             }
             fn len(&self) -> Option<u64> {
                 Some(100)
-            }
-
-            fn topology(&self) -> &Self::Topology {
-                &()
             }
 
             fn coord(&self) -> &Self::Coord {

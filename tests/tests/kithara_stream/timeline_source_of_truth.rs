@@ -55,13 +55,8 @@ impl TimelineSource {
 
 impl Source for TimelineSource {
     type Error = io::Error;
-    type Topology = ();
     type Coord = TimelineCoord;
     type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -107,7 +102,6 @@ struct TimelineStream;
 
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
-    type Topology = ();
     type Coord = TimelineCoord;
     type Demand = ();
     type Source = TimelineSource;
