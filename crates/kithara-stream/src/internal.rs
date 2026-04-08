@@ -5,7 +5,6 @@ pub use crate::{
     coordination::TransferCoordination,
     demand::DemandSlot,
     error::{StreamError, StreamResult},
-    fetch::{EpochValidator, Fetch},
     media::{AudioCodec, ContainerFormat, MediaInfo},
     source::{Source, SourceSeekAnchor},
     stream::{Stream, StreamType},

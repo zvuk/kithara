@@ -55,7 +55,10 @@ pub mod internal;
 // Public API exports
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
-pub use pipeline::config::AudioConfig;
+pub use pipeline::{
+    config::AudioConfig,
+    fetch::{EpochValidator, Fetch},
+};
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};
 pub use worker::{handle::AudioWorkerHandle, types::ServiceClass};

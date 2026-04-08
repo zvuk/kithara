@@ -1,7 +1,8 @@
 //! Fetch result with epoch tracking for seek invalidation.
 //!
-//! Used by both async (Backend) and sync (decode) workers
-//! to deliver data with epoch-based stale chunk detection.
+//! Carries a decoded PCM chunk (or any `C`) from the audio source worker
+//! to the consumer with an epoch tag so stale chunks emitted before a
+//! seek can be discarded.
 
 /// Fetch result from a worker source.
 #[derive(Debug, Clone)]
@@ -76,9 +77,7 @@ impl Default for EpochValidator {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::*;
 

@@ -7,7 +7,9 @@
 use std::time::Duration;
 
 use kithara_decode::{DecodeError, InnerDecoder};
-use kithara_stream::{Fetch, MediaInfo, SourcePhase, SourceSeekAnchor};
+use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
+
+use crate::pipeline::fetch::Fetch;
 
 // TrackState — worker-side FSM
 

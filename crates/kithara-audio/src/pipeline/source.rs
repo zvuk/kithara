@@ -16,10 +16,10 @@ use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
-use kithara_stream::{
-    Fetch, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
-};
+use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
+
+use crate::pipeline::fetch::Fetch;
 
 /// Nanoseconds per second for frame/duration conversion.
 const NANOS_PER_SEC: u128 = 1_000_000_000;
