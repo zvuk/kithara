@@ -14,8 +14,8 @@ use super::{
 };
 use crate::{
     coord::SegmentRequest,
-    fetch::SegmentMeta,
     ids::{SegmentId, VariantIndex},
+    loading::SegmentMeta,
 };
 
 impl Drop for HlsDownloader {
