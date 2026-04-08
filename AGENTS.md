@@ -189,7 +189,8 @@ Risks or follow-ups:
 
 ## Working Rules
 
-- Start from a task packet, even if you have to synthesize it from the user prompt or issue.
+- Start from a task packet when the task is non-trivial, shared, or likely to benefit from explicit coordination.
+- Small single-owner tasks with a clear boundary can proceed directly without a task packet or GSD ceremony.
 - Treat a non-trivial task packet as incomplete until `Constraints`, `Non-goals`, and `Validation scope` are filled in.
 - Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
 - Read only the repo docs and crate READMEs that match the owned paths.

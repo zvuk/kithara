@@ -1,5 +1,5 @@
 # Entry Rule
 
-- Start with `AGENTS.md` for the repo-wide contract.
-- Use `.docs/workflow/rust-ai.md` for task setup, split, handoff, and integration.
+- Follow the canonical repo guidance in `AGENTS.md`.
+- Use `.docs/workflow/rust-ai.md` only when the task needs planning, split execution, or handoff structure.
 - Keep tool-specific files thin and do not invent Claude-only repo rules or task packet shapes.
