@@ -38,6 +38,7 @@ uniffi = { workspace = true, optional = true, features = ["cli"] }
 default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
+android = ["kithara/android"]
 
 [dev-dependencies]
 futures = { workspace = true }

@@ -27,46 +27,14 @@ use derivative::Derivative;
 use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, StreamContext};
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use crate::apple::{AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 use crate::{
     error::{DecodeError, DecodeResult},
+    hardware::{BoxedSource, HardwareBackend, PlatformBackend, hardware_accepts},
     symphonia::{
         Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
     },
     traits::{Alac, AudioDecoder, CodecType, InnerDecoder},
 };
-
-/// Capability description for a platform-specific hardware decoder backend.
-///
-/// Each backend (Apple `AudioToolbox`, Android `MediaCodec`, etc.) implements
-/// this trait so the factory can query codec/container support uniformly.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-pub(crate) trait HardwareBackend {
-    /// Whether this backend can decode `codec`.
-    fn supports_codec(codec: AudioCodec) -> bool;
-
-    /// Whether this backend can reliably seek within `container`.
-    ///
-    /// Frame-based formats (MP3, ADTS-AAC, raw FLAC) have self-delimiting
-    /// sync patterns that allow byte-level seeking.  Structured containers
-    /// (fMP4, MPEG-TS) need atom-boundary awareness the backend may lack.
-    fn can_seek_container(container: ContainerFormat) -> bool;
-
-    /// Infer the most likely container for `codec` when metadata doesn't
-    /// supply one (e.g. codec known from file extension only).
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat>;
-
-    /// Create a decoder for the given codec/container pair.
-    fn create<R>(
-        source: R,
-        config: &DecoderConfig,
-        codec: AudioCodec,
-        container: Option<ContainerFormat>,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static;
-}
 
 /// Selector for choosing how to detect/specify the codec.
 #[derive(Debug, Clone)]
@@ -83,7 +51,7 @@ pub(crate) enum CodecSelector {
 /// Hints for codec probing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProbeHint {
-    /// Known codec (highest priority).
+    /// Known codec (the highest priority).
     pub codec: Option<AudioCodec>,
     /// Container format hint.
     pub container: Option<ContainerFormat>,
@@ -106,7 +74,7 @@ pub struct DecoderConfig {
     pub gapless: bool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     ///
-    /// Used when container format is not specified, as a hint for auto-detection.
+    /// Used when the container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
@@ -121,9 +89,9 @@ pub struct DecoderConfig {
 /// Factory for creating decoders with runtime backend selection.
 ///
 /// Supports multiple backends with automatic fallback:
-/// - Apple `AudioToolbox` (macOS/iOS) when `apple` feature enabled
-/// - Android `MediaCodec` (Android) when `android` feature enabled
-/// - Symphonia (software, all platforms) as default fallback
+/// - Apple `AudioToolbox` (macOS/iOS) when the ` apple ` feature is enabled
+/// - Android `MediaCodec` (Android) when the ` android ` feature is enabled
+/// - Symphonia (software, all platforms) as a default fallback
 pub struct DecoderFactory;
 
 impl DecoderFactory {
@@ -156,6 +124,25 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        let source: BoxedSource = Box::new(source);
+        Self::create_with_backend::<PlatformBackend>(source, selector, config)
+    }
+
+    fn create_with_backend<B: HardwareBackend>(
+        source: BoxedSource,
+        selector: &CodecSelector,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>> {
+        let config = DecoderConfig {
+            prefer_hardware: config.prefer_hardware,
+            byte_len_handle: config.byte_len_handle,
+            gapless: config.gapless,
+            hint: config.hint,
+            stream_ctx: config.stream_ctx,
+            epoch: config.epoch,
+            pcm_pool: config.pcm_pool,
+        };
+
         // Determine codec and container from selector
         let (codec, container) = match *selector {
             CodecSelector::Exact(c) => (c, None),
@@ -172,22 +159,56 @@ impl DecoderFactory {
 
         // Try hardware decoder when preferred.  Each backend declares its own
         // codec + container capabilities via `HardwareBackend`.
-        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
         if config.prefer_hardware
-            && let Some(resolved) = Self::hardware_accepts::<AppleBackend>(codec, container)
+            && let Some(resolved) = hardware_accepts::<B>(codec, container)
         {
-            return AppleBackend::create(source, &config, codec, Some(resolved));
+            tracing::info!(
+                ?codec,
+                requested_container = ?container,
+                resolved_container = ?resolved,
+                "Attempting hardware decoder"
+            );
+            return match B::try_create(source, &config, codec, Some(resolved)) {
+                Ok(decoder) => {
+                    tracing::info!(
+                        ?codec,
+                        requested_container = ?container,
+                        resolved_container = ?resolved,
+                        "Hardware decoder created successfully"
+                    );
+                    Ok(decoder)
+                }
+                Err(recoverable) => {
+                    tracing::warn!(
+                        error = ?recoverable.error,
+                        ?codec,
+                        requested_container = ?container,
+                        resolved_container = ?resolved,
+                        "Hardware decoder creation failed; falling back to Symphonia"
+                    );
+                    Self::create_symphonia_from_boxed(recoverable.source, codec, container, &config)
+                }
+            };
         }
 
+        Self::create_symphonia_from_boxed(source, codec, container, &config)
+    }
+
+    fn create_symphonia_from_boxed(
+        source: BoxedSource,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+        config: &DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>> {
         // Build Symphonia config from DecoderConfig
         // If container is specified, Symphonia creates reader directly (no probe).
-        // If container is None, Symphonia falls back to probe with hint.
+        // If container is None, Symphonia falls back to probe with the hint.
         tracing::debug!(?container, hint = ?config.hint, "Using Symphonia decoder");
 
         let symphonia_config = SymphoniaConfig {
             verify: false,
             gapless: config.gapless,
-            byte_len_handle: config.byte_len_handle,
+            byte_len_handle: config.byte_len_handle.clone(),
             container,
             hint: config.hint.clone(),
             stream_ctx: config.stream_ctx.clone(),
@@ -197,26 +218,6 @@ impl DecoderFactory {
         };
 
         Self::create_symphonia_decoder(source, codec, symphonia_config)
-    }
-
-    /// Check whether a hardware backend accepts this codec/container pair.
-    ///
-    /// Returns the resolved container (possibly inferred from codec) when the
-    /// backend can handle it.  Returns `None` when the backend should be
-    /// skipped — the caller keeps `source` and falls through to Symphonia.
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn hardware_accepts<B: HardwareBackend>(
-        codec: AudioCodec,
-        container: Option<ContainerFormat>,
-    ) -> Option<ContainerFormat> {
-        if !B::supports_codec(codec) {
-            return None;
-        }
-        let resolved = container.or_else(|| B::default_container_for_codec(codec))?;
-        if !B::can_seek_container(resolved) {
-            return None;
-        }
-        Some(resolved)
     }
 
     /// Probe codec from hints.
@@ -243,10 +244,16 @@ impl DecoderFactory {
         }
 
         // Priority 3: MIME type mapping
-        if let Some(ref mime) = hint.mime
-            && let Some(codec) = AudioCodec::from_mime(mime)
-        {
-            return Ok(codec);
+        if let Some(ref mime) = hint.mime {
+            if let Some(codec) = AudioCodec::from_mime(mime) {
+                return Ok(codec);
+            }
+
+            if let Some(container) = Self::container_from_mime(mime)
+                && let Some(codec) = Self::codec_from_container(container)
+            {
+                return Ok(codec);
+            }
         }
 
         // Priority 4: Container format hint (can suggest likely codec)
@@ -273,6 +280,33 @@ impl DecoderFactory {
         }
     }
 
+    fn container_from_extension(ext: &str) -> Option<ContainerFormat> {
+        match ext.to_lowercase().as_str() {
+            "mp3" => Some(ContainerFormat::MpegAudio),
+            "aac" => Some(ContainerFormat::Adts),
+            "m4a" | "mp4" => Some(ContainerFormat::Fmp4),
+            "flac" => Some(ContainerFormat::Flac),
+            "ogg" | "oga" => Some(ContainerFormat::Ogg),
+            "wav" | "wave" => Some(ContainerFormat::Wav),
+            "caf" => Some(ContainerFormat::Caf),
+            _ => None,
+        }
+    }
+
+    fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
+        let mime = mime.to_lowercase();
+
+        match mime.as_str() {
+            "audio/mpeg" => Some(ContainerFormat::MpegAudio),
+            "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
+            "audio/flac" => Some(ContainerFormat::Flac),
+            "audio/ogg" => Some(ContainerFormat::Ogg),
+            "audio/wav" | "audio/wave" | "audio/x-wav" => Some(ContainerFormat::Wav),
+            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Fmp4),
+            _ => None,
+        }
+    }
+
     /// Infer likely codec from container format.
     fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
         match container {
@@ -289,21 +323,17 @@ impl DecoderFactory {
     }
 
     /// Create a Symphonia decoder for the given codec.
-    fn create_symphonia_decoder<R>(
-        source: R,
+    fn create_symphonia_decoder(
+        source: BoxedSource,
         codec: AudioCodec,
         config: SymphoniaConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
+    ) -> DecodeResult<Box<dyn InnerDecoder>> {
         /// PCM codec marker for WAV files.
         struct Pcm;
         impl CodecType for Pcm {
             const CODEC: AudioCodec = AudioCodec::Pcm;
         }
 
-        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
         match codec {
             AudioCodec::Mp3 => {
                 let decoder = SymphoniaMp3::create(source, config)?;
@@ -333,10 +363,10 @@ impl DecoderFactory {
         }
     }
 
-    /// Create decoder for seek-time recreation with metadata-first strategy.
+    /// Create a decoder for seek-time recreation with a metadata-first strategy.
     ///
     /// First tries `create_from_media_info`. If that fails, retries with
-    /// native Symphonia probing from a fresh source.
+    /// native Symphonia are probing from a fresh source.
     ///
     /// # Errors
     ///
@@ -420,6 +450,7 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
     {
         let probe_hint = ProbeHint {
+            container: hint.and_then(Self::container_from_extension),
             extension: hint.map(String::from),
             ..Default::default()
         };
@@ -479,76 +510,6 @@ impl DecoderFactory {
     }
 }
 
-// Apple AudioToolbox backend
-
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-struct AppleBackend;
-
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-impl HardwareBackend for AppleBackend {
-    fn supports_codec(codec: AudioCodec) -> bool {
-        matches!(
-            codec,
-            AudioCodec::AacLc
-                | AudioCodec::AacHe
-                | AudioCodec::AacHeV2
-                | AudioCodec::Mp3
-                | AudioCodec::Flac
-                | AudioCodec::Alac
-        )
-    }
-
-    fn can_seek_container(container: ContainerFormat) -> bool {
-        // Frame-based formats have self-delimiting sync patterns.
-        // Structured containers (fMP4, MPEG-TS, CAF) require
-        // atom-boundary awareness that AudioFileStream lacks.
-        matches!(
-            container,
-            ContainerFormat::MpegAudio | ContainerFormat::Adts | ContainerFormat::Flac
-        )
-    }
-
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
-        match codec {
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                Some(ContainerFormat::Adts)
-            }
-            AudioCodec::Mp3 => Some(ContainerFormat::MpegAudio),
-            AudioCodec::Flac => Some(ContainerFormat::Flac),
-            AudioCodec::Alac => Some(ContainerFormat::Fmp4),
-            _ => None,
-        }
-    }
-
-    fn create<R>(
-        source: R,
-        config: &DecoderConfig,
-        codec: AudioCodec,
-        container: Option<ContainerFormat>,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let apple_config = AppleConfig {
-            byte_len_handle: config.byte_len_handle.clone(),
-            container,
-            pcm_pool: config.pcm_pool.clone(),
-        };
-
-        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
-
-        match codec {
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                Ok(Box::new(AppleAac::create(source, apple_config)?))
-            }
-            AudioCodec::Mp3 => Ok(Box::new(AppleMp3::create(source, apple_config)?)),
-            AudioCodec::Flac => Ok(Box::new(AppleFlac::create(source, apple_config)?)),
-            AudioCodec::Alac => Ok(Box::new(AppleAlac::create(source, apple_config)?)),
-            _ => Err(DecodeError::UnsupportedCodec(codec)),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -556,11 +517,42 @@ mod tests {
     use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
+    use crate::hardware::{
+        BoxedSource, HardwareBackend, RecoverableHardwareError, recoverable_hardware_error,
+    };
 
     const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../assets/test.mp3"
     ));
+
+    struct FailingHardwareBackend;
+
+    impl HardwareBackend for FailingHardwareBackend {
+        fn supports_codec(codec: AudioCodec) -> bool {
+            codec == AudioCodec::Pcm
+        }
+
+        fn can_seek_container(container: ContainerFormat) -> bool {
+            container == ContainerFormat::Wav
+        }
+
+        fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
+            (codec == AudioCodec::Pcm).then_some(ContainerFormat::Wav)
+        }
+
+        fn try_create(
+            source: BoxedSource,
+            _config: &DecoderConfig,
+            _codec: AudioCodec,
+            _container: Option<ContainerFormat>,
+        ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+            Err(recoverable_hardware_error(
+                source,
+                DecodeError::Backend(Box::new(std::io::Error::other("forced hardware failure"))),
+            ))
+        }
+    }
 
     #[kithara::test]
     fn test_codec_selector_exact() {
@@ -737,6 +729,36 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case("mp3", Some(ContainerFormat::MpegAudio))]
+    #[case("aac", Some(ContainerFormat::Adts))]
+    #[case("m4a", Some(ContainerFormat::Fmp4))]
+    #[case("mp4", Some(ContainerFormat::Fmp4))]
+    #[case("flac", Some(ContainerFormat::Flac))]
+    #[case("wav", Some(ContainerFormat::Wav))]
+    #[case("unknown", None)]
+    fn test_container_from_extension(
+        #[case] extension: &str,
+        #[case] expected: Option<ContainerFormat>,
+    ) {
+        assert_eq!(
+            DecoderFactory::container_from_extension(extension),
+            expected
+        );
+    }
+
+    #[kithara::test]
+    #[case("audio/mpeg", Some(ContainerFormat::MpegAudio))]
+    #[case("audio/aac", Some(ContainerFormat::Adts))]
+    #[case("audio/mp4", Some(ContainerFormat::Fmp4))]
+    #[case("audio/x-m4a", Some(ContainerFormat::Fmp4))]
+    #[case("audio/flac", Some(ContainerFormat::Flac))]
+    #[case("audio/ogg", Some(ContainerFormat::Ogg))]
+    #[case("text/plain", None)]
+    fn test_container_from_mime(#[case] mime: &str, #[case] expected: Option<ContainerFormat>) {
+        assert_eq!(DecoderFactory::container_from_mime(mime), expected);
+    }
+
+    #[kithara::test]
     #[case("text/plain")]
     #[case("")]
     #[case("video/mp4")]
@@ -794,24 +816,42 @@ mod tests {
     }
 
     #[kithara::test]
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn test_prefer_hardware_aac_falls_back_to_symphonia() {
-        // When prefer_hardware is true but Apple decoder fails (not implemented),
-        // should fall back to Symphonia
-        let cursor = Cursor::new(vec![0u8; 100]);
-
+    fn test_recoverable_hardware_failure_falls_back_to_symphonia() {
+        let wav_data = create_test_wav(64, 44_100, 2);
         let config = DecoderConfig {
             prefer_hardware: true,
             ..Default::default()
         };
+        let hint = ProbeHint {
+            codec: Some(AudioCodec::Pcm),
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
 
-        // AAC will try Apple first (fails with "not implemented"),
-        // then fall back to Symphonia (which will also fail with invalid data)
-        let result =
-            DecoderFactory::create(cursor, &CodecSelector::Exact(AudioCodec::AacLc), config);
+        let decoder = DecoderFactory::create_with_backend::<FailingHardwareBackend>(
+            Box::new(Cursor::new(wav_data)),
+            &CodecSelector::Probe(hint),
+            config,
+        )
+        .expect("recoverable hardware failure should fall back to Symphonia");
 
-        // The important thing is it falls back to Symphonia
-        // (would be Backend error if it didn't fall back)
-        assert!(result.is_err());
+        let spec = decoder.spec();
+        assert_eq!(spec.channels, 2);
+        assert_eq!(spec.sample_rate, 44_100);
+    }
+
+    #[kithara::test]
+    fn test_create_with_probe_maps_m4a_to_fmp4_container_hint() {
+        let probe_hint = ProbeHint {
+            extension: Some("m4a".into()),
+            container: DecoderFactory::container_from_extension("m4a"),
+            ..Default::default()
+        };
+
+        assert_eq!(probe_hint.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(
+            DecoderFactory::probe_codec(&probe_hint).expect("m4a should map to AAC"),
+            AudioCodec::AacLc
+        );
     }
 }

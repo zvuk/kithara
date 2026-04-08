@@ -98,7 +98,7 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_buffer_chunks: DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             playback_rate: None,
-            prefer_hardware: cfg!(feature = "apple"),
+            prefer_hardware: cfg!(any(feature = "apple", feature = "android")),
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,

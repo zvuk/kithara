@@ -32,16 +32,13 @@ use std::{
     time::Duration,
 };
 
-/// Trait combining Read and Seek for use as trait object.
-trait ReadSeek: Read + Seek + Send {}
-impl<T: Read + Seek + Send> ReadSeek for T {}
-
 use kithara_bufpool::PcmPool;
 use kithara_stream::ContainerFormat;
 use tracing::{debug, trace, warn};
 
 use crate::{
     error::{DecodeError, DecodeResult},
+    hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
@@ -401,7 +398,7 @@ struct AppleInner {
     /// Converter input state.
     converter_input: Box<ConverterInputState>,
     /// Source reader (supports both Read and Seek).
-    source: Box<dyn ReadSeek>,
+    source: BoxedSource,
     /// Read buffer for feeding parser.
     read_buffer: Vec<u8>,
     /// Audio spec.
@@ -460,16 +457,25 @@ impl AppleInner {
         clippy::cognitive_complexity,
         reason = "FFI initialization sequence is inherently sequential"
     )]
-    fn new<R>(mut source: R, config: &AppleConfig) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + 'static,
-    {
-        let container = config.container.ok_or_else(|| {
-            DecodeError::InvalidData("Container format must be specified for Apple decoder".into())
-        })?;
+    fn try_new(
+        mut source: BoxedSource,
+        config: &AppleConfig,
+    ) -> Result<Self, RecoverableHardwareError> {
+        let Some(container) = config.container else {
+            return Err(recoverable_hardware_error(
+                source,
+                DecodeError::InvalidData(
+                    "Container format must be specified for Apple decoder".into(),
+                ),
+            ));
+        };
 
-        let file_type = container_to_file_type(container)
-            .ok_or_else(|| DecodeError::UnsupportedContainer(container))?;
+        let Some(file_type) = container_to_file_type(container) else {
+            return Err(recoverable_hardware_error(
+                source,
+                DecodeError::UnsupportedContainer(container),
+            ));
+        };
 
         // Get source length for duration estimation and seek calculations.
         // Prefer byte_len_handle (Content-Length from HTTP) over seek(End(0))
@@ -514,10 +520,13 @@ impl AppleInner {
         if status != noErr {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioFileStreamOpen failed");
-            return Err(DecodeError::Backend(Box::new(IoError::new(
-                ErrorKind::InvalidData,
-                format!("AudioFileStreamOpen failed: {}", err_str),
-            ))));
+            return Err(recoverable_hardware_error(
+                source,
+                DecodeError::Backend(Box::new(IoError::new(
+                    ErrorKind::InvalidData,
+                    format!("AudioFileStreamOpen failed: {}", err_str),
+                ))),
+            ));
         }
 
         debug!("Apple decoder: AudioFileStream opened");
@@ -528,9 +537,19 @@ impl AppleInner {
 
         // Parse until we have format info or hit EOF
         loop {
-            let n = source
-                .read(&mut read_buffer)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let n = match source.read(&mut read_buffer) {
+                Ok(n) => n,
+                Err(error) => {
+                    // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
+                    unsafe {
+                        AudioFileStreamClose(stream_parser);
+                    }
+                    return Err(recoverable_hardware_error(
+                        source,
+                        DecodeError::Backend(Box::new(error)),
+                    ));
+                }
+            };
 
             if n == 0 {
                 // EOF before getting format
@@ -538,8 +557,9 @@ impl AppleInner {
                 unsafe {
                     AudioFileStreamClose(stream_parser);
                 }
-                return Err(DecodeError::InvalidData(
-                    "EOF before audio format detected".into(),
+                return Err(recoverable_hardware_error(
+                    source,
+                    DecodeError::InvalidData("EOF before audio format detected".into()),
                 ));
             }
 
@@ -568,10 +588,13 @@ impl AppleInner {
                 }
                 let err_str = os_status_to_string(status);
                 warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
-                return Err(DecodeError::Backend(Box::new(IoError::new(
-                    ErrorKind::InvalidData,
-                    format!("AudioFileStreamParseBytes failed: {}", err_str),
-                ))));
+                return Err(recoverable_hardware_error(
+                    source,
+                    DecodeError::Backend(Box::new(IoError::new(
+                        ErrorKind::InvalidData,
+                        format!("AudioFileStreamParseBytes failed: {}", err_str),
+                    ))),
+                ));
             }
 
             // Check if we have format now
@@ -595,7 +618,10 @@ impl AppleInner {
                 unsafe {
                     AudioFileStreamClose(stream_parser);
                 }
-                return Err(DecodeError::InvalidData(err.clone()));
+                return Err(recoverable_hardware_error(
+                    source,
+                    DecodeError::InvalidData(err.clone()),
+                ));
             }
 
             // Safety limit
@@ -604,19 +630,23 @@ impl AppleInner {
                 unsafe {
                     AudioFileStreamClose(stream_parser);
                 }
-                return Err(DecodeError::InvalidData(
-                    "Could not detect format after 1MB".into(),
+                return Err(recoverable_hardware_error(
+                    source,
+                    DecodeError::InvalidData("Could not detect format after 1MB".into()),
                 ));
             }
         }
 
-        let format = parser_state.format.ok_or_else(|| {
+        let Some(format) = parser_state.format else {
             // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
             unsafe {
                 AudioFileStreamClose(stream_parser);
             }
-            DecodeError::InvalidData("No audio format detected".into())
-        })?;
+            return Err(recoverable_hardware_error(
+                source,
+                DecodeError::InvalidData("No audio format detected".into()),
+            ));
+        };
 
         #[expect(
             clippy::cast_possible_truncation,
@@ -655,10 +685,13 @@ impl AppleInner {
             }
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioConverterNew failed");
-            return Err(DecodeError::Backend(Box::new(IoError::new(
-                ErrorKind::InvalidData,
-                format!("AudioConverterNew failed: {}", err_str),
-            ))));
+            return Err(recoverable_hardware_error(
+                source,
+                DecodeError::Backend(Box::new(IoError::new(
+                    ErrorKind::InvalidData,
+                    format!("AudioConverterNew failed: {}", err_str),
+                ))),
+            ));
         }
 
         debug!("Apple decoder: AudioConverter created");
@@ -766,7 +799,7 @@ impl AppleInner {
             converter,
             parser_state,
             converter_input,
-            source: Box::new(source),
+            source,
             read_buffer,
             spec,
             position: Duration::ZERO,
@@ -1546,7 +1579,7 @@ impl<C: CodecType> AudioDecoder for Apple<C> {
         Self: Sized,
     {
         debug!(codec = ?C::CODEC, "Apple decoder: create called");
-        let inner = AppleInner::new(source, &config)?;
+        let inner = AppleInner::try_new(source, &config).map_err(|error| error.error)?;
         Ok(Self {
             inner,
             _codec: PhantomData,
@@ -1607,6 +1640,45 @@ pub(crate) type AppleFlac = Apple<Flac>;
 
 /// Apple ALAC decoder.
 pub(crate) type AppleAlac = Apple<Alac>;
+
+pub(crate) fn try_create_apple_decoder(
+    codec: kithara_stream::AudioCodec,
+    source: BoxedSource,
+    config: &AppleConfig,
+) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+    match codec {
+        kithara_stream::AudioCodec::AacLc
+        | kithara_stream::AudioCodec::AacHe
+        | kithara_stream::AudioCodec::AacHeV2 => AppleInner::try_new(source, config).map(|inner| {
+            Box::new(Apple::<Aac> {
+                inner,
+                _codec: PhantomData,
+            }) as Box<dyn InnerDecoder>
+        }),
+        kithara_stream::AudioCodec::Mp3 => AppleInner::try_new(source, config).map(|inner| {
+            Box::new(Apple::<Mp3> {
+                inner,
+                _codec: PhantomData,
+            }) as Box<dyn InnerDecoder>
+        }),
+        kithara_stream::AudioCodec::Flac => AppleInner::try_new(source, config).map(|inner| {
+            Box::new(Apple::<Flac> {
+                inner,
+                _codec: PhantomData,
+            }) as Box<dyn InnerDecoder>
+        }),
+        kithara_stream::AudioCodec::Alac => AppleInner::try_new(source, config).map(|inner| {
+            Box::new(Apple::<Alac> {
+                inner,
+                _codec: PhantomData,
+            }) as Box<dyn InnerDecoder>
+        }),
+        _ => Err(recoverable_hardware_error(
+            source,
+            DecodeError::UnsupportedCodec(codec),
+        )),
+    }
+}
 
 #[cfg(test)]
 mod tests {

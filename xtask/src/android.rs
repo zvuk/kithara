@@ -1,17 +1,17 @@
 use std::{fs, path::Path, process::Command};
 
+use crate::BuildProfile;
+use crate::util::{check_rust_target, check_tool};
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-
-use crate::util::{check_rust_target, check_tool};
 
 #[derive(Clone, Copy, Debug, clap::Subcommand)]
 pub(crate) enum AndroidCommand {
     /// Build Android shared libraries and Kotlin bindings.
     Build {
         /// Build profile.
-        #[arg(long, default_value_t = crate::BuildProfile::Release)]
-        profile: crate::BuildProfile,
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
     },
 }
 
@@ -24,7 +24,6 @@ pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
 const ANDROID_API_LEVEL: &str = "26";
 const RUST_TARGETS: &[(&str, &str)] = &[
     ("aarch64-linux-android", "arm64-v8a"),
-    ("armv7-linux-androideabi", "armeabi-v7a"),
     ("x86_64-linux-android", "x86_64"),
 ];
 
@@ -36,7 +35,7 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_build(profile: crate::BuildProfile) -> Result<()> {
+pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
     // 1. Check prerequisites.
     check_tool("cargo", &["ndk", "--help"], "cargo install cargo-ndk")?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;
@@ -75,10 +74,18 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         .args(&ndk_targets)
         .arg("-o")
         .arg(&jni_dir)
-        .args(["build", "-p", "kithara-ffi", "--features", "backend-uniffi"]);
-    if matches!(profile, crate::BuildProfile::Release) {
+        .args([
+            "build",
+            "-p",
+            "kithara-ffi",
+            "--features",
+            "backend-uniffi,android",
+        ]);
+
+    if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");
     }
+
     cmd.current_dir(root);
 
     let status = cmd.status().context("failed to run cargo ndk")?;
@@ -103,7 +110,7 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         "--features",
         "backend-uniffi",
     ]);
-    if matches!(profile, crate::BuildProfile::Release) {
+    if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");
     }
     cmd.args([
