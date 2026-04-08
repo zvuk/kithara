@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use kithara_encode::{EncodedAccessUnit, EncodedTrack};
-use kithara_stream::{AudioCodec, MediaInfoRfc6381Ext};
+use kithara_stream::AudioCodec;
 use thiserror::Error;
 
 use crate::fmp4::{

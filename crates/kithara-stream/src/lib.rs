@@ -37,7 +37,7 @@ pub use demand::DemandSlot;
 pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
-pub use media_rfc6381::{MediaInfoRfc6381Ext, audio_codec_supports_fmp4_packaging};
+pub use media_rfc6381::audio_codec_supports_fmp4_packaging;
 pub use source::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, VariantChangeError};
 pub use stream::{Stream, StreamType};
 pub use timeline::Timeline;

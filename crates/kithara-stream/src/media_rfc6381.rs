@@ -1,19 +1,15 @@
 //! RFC 6381 codec strings for HLS `CODECS` and related descriptors.
 //!
-//! Mapping lives here as an extension on [`MediaInfo`].
+//! Mapping lives alongside [`MediaInfo`] as an inherent method.
 
 use std::borrow::Cow;
 
 use crate::media::{AudioCodec, ContainerFormat, MediaInfo};
 
-/// RFC 6381 codec token for HLS `CODECS` derived from [`MediaInfo`].
-pub trait MediaInfoRfc6381Ext {
+impl MediaInfo {
     /// Returns a codec string such as `mp4a.40.2` when the codec/container pair is known.
-    fn rfc6381_codec(&self) -> Option<Cow<'static, str>>;
-}
-
-impl MediaInfoRfc6381Ext for MediaInfo {
-    fn rfc6381_codec(&self) -> Option<Cow<'static, str>> {
+    #[must_use]
+    pub fn rfc6381_codec(&self) -> Option<Cow<'static, str>> {
         let codec = self.codec?;
         let container = self.container.unwrap_or(ContainerFormat::Fmp4);
         rfc6381_for_codec_and_container(codec, container)
