@@ -4,10 +4,6 @@
     unreachable_pub,
     reason = "many helpers are `pub` so the `internal` feature can re-export them without widening the stable API surface"
 )]
-#![allow(
-    unfulfilled_lint_expectations,
-    reason = "some expect attributes only trigger under specific feature sets"
-)]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
 //!

@@ -83,10 +83,6 @@ impl HlsSource {
         }
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "segments lock must be held for both is_segment_loaded and range_ready_from_segments"
-    )]
     pub(super) fn loaded_segment_ready(
         &self,
         variant: VariantIndex,
@@ -101,10 +97,6 @@ impl HlsSource {
             .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
     }
 
-    #[expect(
-        clippy::result_large_err,
-        reason = "Stream source APIs use StreamResult<_, HlsError> consistently"
-    )]
     pub(super) fn request_on_demand_segment(
         &self,
         range_start: u64,

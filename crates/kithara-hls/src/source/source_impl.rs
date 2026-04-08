@@ -175,10 +175,6 @@ impl Source for HlsSource {
         }
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "segments guard used across multiple checks"
-    )]
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let segments = self.segments.lock_sync();
         if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
