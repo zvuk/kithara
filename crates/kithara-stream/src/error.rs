@@ -6,35 +6,19 @@ use thiserror::Error;
 
 /// Errors produced by `kithara-stream` (generic over source error).
 ///
-/// Notes:
-/// - `Source(E)` is for domain-specific failures (network/storage/etc) surfaced by a concrete
-///   `Source` implementation.
-/// - `ChannelClosed` is returned when the consumer dropped the output stream or the command
-///   channel is no longer available.
-/// - `SeekNotSupported` is for sources that don't implement seek.
-/// - `WriterJoin` is for unexpected writer task join failures (panic/cancellation).
+/// Currently the single variant `Source(E)` wraps a domain-specific
+/// failure surfaced by a concrete `Source` implementation (network,
+/// storage, parsing, DRM, etc.). Additional framework-level variants
+/// were removed in Phase 4b-redo after workspace audit showed zero
+/// production constructors — callers can reintroduce them honestly
+/// if a future flow needs them.
 #[derive(Debug, Error)]
 pub enum StreamError<E>
 where
     E: StdError + Send + Sync + 'static,
 {
-    #[error("seek not supported")]
-    SeekNotSupported,
-
-    #[error("invalid seek position")]
-    InvalidSeek,
-
-    #[error("seek requires known length, but source length is unknown")]
-    UnknownLength,
-
     #[error("source error: {0}")]
     Source(#[source] E),
-
-    #[error("internal channel closed")]
-    ChannelClosed,
-
-    #[error("writer task join error: {0}")]
-    WriterJoin(String),
 }
 
 /// Result type for `kithara-stream` (generic over source error).
@@ -49,16 +33,6 @@ mod tests {
     use std::io::{self, Error as IoError, ErrorKind};
 
     use super::*;
-
-    #[kithara::test(wasm)]
-    #[case::seek_not_supported(StreamError::<io::Error>::SeekNotSupported, "seek not supported")]
-    #[case::invalid_seek(StreamError::<io::Error>::InvalidSeek, "invalid seek position")]
-    #[case::unknown_length(StreamError::<io::Error>::UnknownLength, "seek requires known length, but source length is unknown")]
-    #[case::channel_closed(StreamError::<io::Error>::ChannelClosed, "internal channel closed")]
-    #[case::writer_join(StreamError::<io::Error>::WriterJoin("panic message".into()), "writer task join error: panic message")]
-    fn test_error_display(#[case] error: StreamError<io::Error>, #[case] expected: &str) {
-        assert_eq!(error.to_string(), expected);
-    }
 
     #[kithara::test]
     fn test_source_error_display() {
