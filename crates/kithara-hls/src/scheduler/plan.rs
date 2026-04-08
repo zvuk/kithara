@@ -6,7 +6,6 @@ use std::{
 use kithara_abr::{AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource};
 use kithara_events::{HlsEvent, SeekEpoch};
 use kithara_platform::{time::Instant, tokio};
-use kithara_stream::PlanOutcome;
 use tokio::task::yield_now as task_yield_now;
 use tracing::{debug, trace};
 
@@ -30,8 +29,21 @@ pub(crate) struct HlsPlan {
     pub(crate) seek_epoch: SeekEpoch,
 }
 
+/// Outcome of a single planning pass.
+pub(crate) enum PlanOutcome {
+    /// One or more plans ready to fetch in parallel.
+    Batch(Vec<HlsPlan>),
+    /// No new work this tick, but scheduler is not done.
+    Idle,
+    /// All variants drained — scheduler should exit.
+    Complete,
+    /// Single-step progress (unused by HLS, kept for worker loop contract).
+    #[expect(dead_code, reason = "worker loop handles this variant defensively")]
+    Step,
+}
+
 impl HlsScheduler {
-    pub(super) async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
+    pub(super) async fn plan_impl(&mut self) -> PlanOutcome {
         if self.coord.timeline().is_flushing() {
             task_yield_now().await;
             return PlanOutcome::Idle;

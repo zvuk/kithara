@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 pub use crate::{
-    PlanOutcome,
     context::{NullStreamContext, StreamContext},
     coordination::TransferCoordination,
     cursor::DownloadCursor,

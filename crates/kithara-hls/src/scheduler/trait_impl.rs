@@ -4,12 +4,11 @@ use std::{
 };
 
 use kithara_events::HlsEvent;
-use kithara_stream::PlanOutcome;
 use tracing::{debug, trace};
 
 use super::{
     helpers::is_stale_epoch,
-    plan::HlsPlan,
+    plan::{HlsPlan, PlanOutcome},
     state::{HlsScheduler, VERBOSE_SEGMENT_LIMIT},
 };
 use crate::{
@@ -44,7 +43,7 @@ impl HlsScheduler {
     }
 
     /// Plan the next work batch.
-    pub(crate) async fn plan_next(&mut self) -> PlanOutcome<HlsPlan> {
+    pub(crate) async fn plan_next(&mut self) -> PlanOutcome {
         self.plan_impl().await
     }
 

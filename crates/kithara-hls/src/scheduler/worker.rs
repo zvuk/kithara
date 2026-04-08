@@ -22,11 +22,10 @@ use kithara_platform::{
     tokio,
     tokio::task::yield_now as task_yield_now,
 };
-use kithara_stream::PlanOutcome;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{HlsFetch, HlsPlan, HlsScheduler};
+use super::{HlsFetch, HlsPlan, HlsScheduler, plan::PlanOutcome};
 use crate::{HlsError, loading::SegmentLoader};
 
 /// Default yield interval (iterations between `yield_now` calls).
@@ -304,10 +303,7 @@ async fn drain_demand_requests(
     Ok(made_progress)
 }
 
-async fn plan_next(
-    dl: &mut HlsScheduler,
-    cancel: &CancellationToken,
-) -> Result<PlanOutcome<HlsPlan>, ()> {
+async fn plan_next(dl: &mut HlsScheduler, cancel: &CancellationToken) -> Result<PlanOutcome, ()> {
     tokio::select! {
         biased;
         () = cancel.cancelled() => {

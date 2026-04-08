@@ -42,11 +42,3 @@ pub use source::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, VariantChan
 pub use stream::{Stream, StreamType};
 pub use timeline::Timeline;
 pub use writer::{Writer, WriterError, WriterItem};
-
-/// Plan outcome type — kept for HLS compatibility until Phase 4.
-pub enum PlanOutcome<P> {
-    Batch(Vec<P>),
-    Step,
-    Complete,
-    Idle,
-}
