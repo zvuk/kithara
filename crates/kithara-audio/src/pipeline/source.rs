@@ -517,7 +517,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 warn!(offset, "track failed: decoder recreation failed");
             }
             TrackFailure::SourceCancelled => warn!("track failed: source cancelled"),
-            TrackFailure::SourceStopped => warn!("track failed: source stopped"),
         }
     }
 
@@ -1258,17 +1257,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 };
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         match self.decode_one_step() {
@@ -1313,17 +1306,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 };
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
         let request = applying.request;
         let applied = match applying.mode {
@@ -1376,10 +1363,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         match phase {
             SourcePhase::Cancelled => {
                 self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                return TrackStep::Failed;
-            }
-            SourcePhase::Stopped => {
-                self.state = TrackState::Failed(TrackFailure::SourceStopped);
                 return TrackStep::Failed;
             }
             SourcePhase::Eof => {
@@ -1445,17 +1428,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.submit_demand_for_current_state();
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {

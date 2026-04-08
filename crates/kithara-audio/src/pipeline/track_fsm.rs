@@ -149,8 +149,6 @@ pub(crate) enum TrackFailure {
     RecreateFailed { offset: u64 },
     /// Source was cancelled.
     SourceCancelled,
-    /// Source was stopped.
-    SourceStopped,
 }
 
 /// Holds the decoder and its associated metadata as an atomic unit.
@@ -248,7 +246,7 @@ impl ConsumerPhase {
 ///
 /// Returns `Some(reason)` for wait states (`Waiting`, `WaitingDemand`,
 /// `WaitingMetadata`). Returns `None` for non-wait states (`Ready`, `Eof`,
-/// `Seeking`, `Cancelled`, `Stopped`) — callers handle those separately.
+/// `Seeking`, `Cancelled`) — callers handle those separately.
 pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
     match phase {
         SourcePhase::Waiting => Some(WaitingReason::Waiting),
@@ -393,7 +391,7 @@ mod tests {
         );
         assert_eq!(TrackState::AtEof.phase_tag(), TrackPhaseTag::AtEof);
         assert_eq!(
-            TrackState::Failed(TrackFailure::SourceStopped).phase_tag(),
+            TrackState::Failed(TrackFailure::SourceCancelled).phase_tag(),
             TrackPhaseTag::Failed
         );
     }
@@ -417,7 +415,6 @@ mod tests {
         assert_eq!(map_source_phase(SourcePhase::Eof), None);
         assert_eq!(map_source_phase(SourcePhase::Seeking), None);
         assert_eq!(map_source_phase(SourcePhase::Cancelled), None);
-        assert_eq!(map_source_phase(SourcePhase::Stopped), None);
     }
 
     #[kithara::test]

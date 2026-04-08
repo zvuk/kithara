@@ -32,8 +32,6 @@ pub enum SourcePhase {
     Ready,
     /// Active seek in progress — decoder should be interrupted.
     Seeking,
-    /// Stopped before EOF — terminal unless range is ready (drain).
-    Stopped,
     /// Default: data not yet available, no specific sub-state.
     #[default]
     Waiting,
