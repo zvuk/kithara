@@ -21,6 +21,7 @@ description: Draft project-aligned PR descriptions from the current branch. Use 
 
 ## Output rules
 
+- Write the full PR description in **English**, including section headings that the workflow defines (`Summary`, `Behavior / scope`, etc.), until the user requests it in another language.
 - Keep the description concise and reviewer-oriented.
 - Use the repository source structure and section names.
 - In `Summary`, explain the motivation and meaning of the change in plain reviewer-friendly language as prose, not as a checklist of bullets.
