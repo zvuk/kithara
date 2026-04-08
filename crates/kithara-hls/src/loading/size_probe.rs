@@ -7,9 +7,7 @@
 //! [`crate::scheduler::HlsScheduler::calculate_size_map`].
 
 use kithara_net::Headers;
-use kithara_stream::dl::{
-    Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority,
-};
+use kithara_stream::dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult};
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -43,7 +41,6 @@ impl SizeMapProbe {
             url: url.clone(),
             range: None,
             headers: self.headers.clone(),
-            priority: Priority::Normal,
             on_connect: None,
             writer: None,
             on_complete: None,

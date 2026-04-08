@@ -20,7 +20,7 @@ use kithara_platform::{Mutex, time::Duration};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
-    dl::{Downloader, FetchCmd, FetchMethod, FetchResult, OnConnectFn, Priority, ThrottleFn},
+    dl::{Downloader, FetchCmd, FetchMethod, FetchResult, OnConnectFn, ThrottleFn},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -226,7 +226,6 @@ impl FileInner {
             url,
             range: None,
             headers,
-            priority: Priority::Normal,
             on_connect,
             writer: Some(writer),
             on_complete: Some(on_complete),
@@ -300,7 +299,6 @@ impl FileInner {
             url,
             range: Some(range_spec),
             headers,
-            priority: Priority::High,
             on_connect: None,
             writer: Some(writer),
             on_complete: Some(on_complete),

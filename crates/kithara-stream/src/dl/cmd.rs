@@ -34,19 +34,6 @@ pub enum FetchMethod {
     Head,
 }
 
-/// Priority for download commands.
-///
-/// Downloader sorts ready commands by priority (High first) before executing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Priority {
-    /// Background prefetch.
-    Low = 0,
-    /// Normal sequential download.
-    Normal = 1,
-    /// Seek/demand — highest priority.
-    High = 2,
-}
-
 /// Callback invoked when the HTTP connection is established.
 pub type OnConnectFn = Box<dyn FnOnce(&Headers) + Send>;
 
@@ -84,9 +71,8 @@ pub enum FetchResult {
 /// A single download command yielded by a protocol stream.
 ///
 /// Protocols yield these through their `Stream<Item = FetchCmd>` implementation.
-/// The [`Downloader`](super::Downloader) polls protocol streams, collects ready
-/// commands, sorts by [`priority`](Self::priority), and executes fetches using
-/// its sole [`HttpClient`](kithara_net::HttpClient).
+/// The [`Downloader`](super::Downloader) polls protocol streams and executes
+/// fetches using its sole [`HttpClient`](kithara_net::HttpClient).
 pub struct FetchCmd {
     /// HTTP method and delivery mode (default: [`FetchMethod::Stream`]).
     pub method: FetchMethod,
@@ -96,8 +82,6 @@ pub struct FetchCmd {
     pub range: Option<RangeSpec>,
     /// Additional HTTP headers for this request.
     pub headers: Option<Headers>,
-    /// Download priority for batch ordering.
-    pub priority: Priority,
     /// Called once when the HTTP connection is established, before any body
     /// chunks. Receives response headers (Content-Length, Content-Type, etc.).
     pub on_connect: Option<OnConnectFn>,
@@ -118,7 +102,6 @@ impl std::fmt::Debug for FetchCmd {
             .field("method", &self.method)
             .field("url", &self.url)
             .field("range", &self.range)
-            .field("priority", &self.priority)
             .field("on_connect", &self.on_connect.as_ref().map(|_| ".."))
             .finish_non_exhaustive()
     }

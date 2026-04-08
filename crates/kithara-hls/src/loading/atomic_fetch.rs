@@ -13,9 +13,7 @@ use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{
-    Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority,
-};
+use kithara_stream::dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -108,7 +106,6 @@ async fn download_atomic_bytes(
         url,
         range: None,
         headers,
-        priority: Priority::High,
         on_connect: None,
         writer: None,
         on_complete: None,

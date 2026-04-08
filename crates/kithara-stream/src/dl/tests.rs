@@ -19,7 +19,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{Downloader, DownloaderConfig, FetchCmd, Priority};
+use super::{Downloader, DownloaderConfig, FetchCmd};
 
 const POLL_MS: u64 = 50;
 const SETTLE_MS: u64 = 100;
@@ -77,13 +77,12 @@ fn test_url() -> Url {
     Url::parse("http://127.0.0.1:1/test").expect("valid url")
 }
 
-fn counting_cmd(counter: Arc<AtomicU64>, priority: Priority) -> FetchCmd {
+fn counting_cmd(counter: Arc<AtomicU64>) -> FetchCmd {
     FetchCmd {
         method: super::FetchMethod::default(),
         url: test_url(),
         range: None,
         headers: None,
-        priority,
         on_connect: None,
         writer: None,
         throttle: None,
@@ -130,9 +129,7 @@ async fn on_complete_fires_for_all_commands() {
     {
         let mut state = inner.lock_sync();
         for _ in 0..CMD_COUNT {
-            state
-                .queue
-                .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
+            state.queue.push_back(counting_cmd(Arc::clone(&counter)));
         }
         state.done = true;
     }
@@ -156,9 +153,7 @@ async fn waker_push_after_spawn() {
 
     {
         let mut state = inner.lock_sync();
-        state
-            .queue
-            .push_back(counting_cmd(Arc::clone(&counter), Priority::High));
+        state.queue.push_back(counting_cmd(Arc::clone(&counter)));
         state.done = true;
         if let Some(w) = state.waker.take() {
             w.wake();
@@ -177,14 +172,12 @@ async fn multiple_streams_polled() {
 
     {
         let mut s = inner_a.lock_sync();
-        s.queue
-            .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
+        s.queue.push_back(counting_cmd(Arc::clone(&counter)));
         s.done = true;
     }
     {
         let mut s = inner_b.lock_sync();
-        s.queue
-            .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
+        s.queue.push_back(counting_cmd(Arc::clone(&counter)));
         s.done = true;
     }
 
@@ -203,7 +196,6 @@ fn indexed_cmd(order_log: Arc<Mutex<Vec<usize>>>, index: usize) -> FetchCmd {
         url: test_url(),
         range: None,
         headers: None,
-        priority: Priority::Normal,
         on_connect: None,
         writer: None,
         throttle: None,
@@ -267,7 +259,6 @@ async fn execute_batch_returns_results_in_input_order() {
             url: test_url(),
             range: None,
             headers: None,
-            priority: Priority::Normal,
             on_connect: None,
             writer: None,
             throttle: None,
@@ -296,8 +287,7 @@ async fn register_after_first() {
     let (first, inner_first) = TestStream::new();
     {
         let mut s = inner_first.lock_sync();
-        s.queue
-            .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
+        s.queue.push_back(counting_cmd(Arc::clone(&counter)));
         // Don't set done — keep stream alive for second registration.
     }
 
@@ -310,8 +300,7 @@ async fn register_after_first() {
     let (second, inner_second) = TestStream::new();
     {
         let mut s = inner_second.lock_sync();
-        s.queue
-            .push_back(counting_cmd(Arc::clone(&counter), Priority::Normal));
+        s.queue.push_back(counting_cmd(Arc::clone(&counter)));
         s.done = true;
     }
     let _h2 = dl.register(second);
@@ -371,7 +360,7 @@ async fn execute_batch_blocking_fires_every_on_complete() {
     let counter = Arc::new(AtomicU64::new(0));
 
     let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
-        .map(|_| counting_cmd(Arc::clone(&counter), Priority::Normal))
+        .map(|_| counting_cmd(Arc::clone(&counter)))
         .collect();
 
     let dl_clone = dl.clone();

@@ -16,7 +16,7 @@ use kithara_platform::{RwLock, tokio::sync::OnceCell};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
     ContainerFormat,
-    dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority},
+    dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult},
 };
 use tracing::{debug, trace};
 use url::Url;
@@ -206,7 +206,6 @@ impl SegmentLoader {
             url: url.clone(),
             range: None,
             headers: self.headers.clone(),
-            priority: Priority::Normal,
             on_connect: None,
             writer: Some(writer_cb),
             on_complete: None,
