@@ -1,9 +1,6 @@
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Duration,
-};
+use std::{sync::atomic::Ordering, time::Duration};
 
-use kithara_abr::{AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource};
+use kithara_abr::{AbrDecision, ThroughputSample, ThroughputSampleSource};
 use kithara_events::{HlsEvent, SeekEpoch};
 use kithara_platform::{time::Instant, tokio};
 use tokio::task::yield_now as task_yield_now;
@@ -12,7 +9,6 @@ use tracing::{debug, trace};
 use super::{
     helpers::{first_missing_segment, is_cross_codec_switch, should_request_init},
     state::{HlsScheduler, MAX_LOG_PLANS},
-    trait_impl::HlsFetch,
 };
 use crate::{
     HlsError,

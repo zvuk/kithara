@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use kithara_platform::{
-    Condvar, tokio,
+    Condvar,
     tokio::sync::{Notify, futures::Notified},
 };
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};

@@ -1,11 +1,9 @@
-use std::sync::atomic::Ordering;
-
 use kithara_platform::time::Duration;
 use kithara_stream::SourceSeekAnchor;
 use tracing::{debug, trace};
 
 use super::{core::HlsSource, types::SeekLayout};
-use crate::{HlsError, ids::VariantIndex, playlist::PlaylistAccess};
+use crate::{HlsError, playlist::PlaylistAccess};
 
 impl HlsSource {
     pub(super) fn resolve_seek_anchor(

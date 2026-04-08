@@ -2,12 +2,8 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::{
-    num::NonZeroUsize,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::sync::{Arc, Mutex as StdMutex};
 
-use kithara_abr::AbrController;
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };

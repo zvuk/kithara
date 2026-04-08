@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
 };
 
 use kithara_abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator};
@@ -9,12 +8,12 @@ use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
+use kithara_storage::ResourceExt;
 use tracing::debug;
 
 use super::{
     cursor::DownloadCursor,
-    helpers::{classify_layout_transition, first_missing_segment, is_cross_codec_switch},
+    helpers::{classify_layout_transition, is_cross_codec_switch},
     trait_impl::HlsFetch,
 };
 use crate::{
@@ -240,31 +239,6 @@ impl HlsScheduler {
         self.bus.publish(HlsEvent::DownloadError {
             error: format!("{context}: {error}"),
         });
-    }
-
-    pub(super) fn loaded_segment_offset(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Option<u64> {
-        let segments = self.segments.lock_sync();
-        segments
-            .item_range((variant, segment_index))
-            .map(|r| r.start)
-    }
-
-    pub(super) fn expected_layout_offset(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Option<u64> {
-        let segments = self.segments.lock_sync();
-        if let Some(range) = segments.item_range((variant, segment_index)) {
-            return Some(range.start);
-        }
-        drop(segments);
-        self.playlist_state
-            .segment_byte_offset(variant, segment_index)
     }
 
     pub(super) fn reader_segment_hint(&self, variant: usize) -> usize {

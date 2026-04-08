@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use futures::future::join_all;
 use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;

@@ -1,16 +1,8 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
 #![allow(
-    dead_code,
-    reason = "internal HLS orchestration types are consumed via integration tests and `internal` feature"
-)]
-#![allow(
     unreachable_pub,
-    reason = "public visibility is used for `internal` re-exports without widening stable API"
-)]
-#![allow(
-    unused_imports,
-    reason = "imports differ between feature combinations and test wiring"
+    reason = "many helpers are `pub` so the `internal` feature can re-export them without widening the stable API surface"
 )]
 #![allow(
     unfulfilled_lint_expectations,

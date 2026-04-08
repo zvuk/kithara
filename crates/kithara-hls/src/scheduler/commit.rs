@@ -1,10 +1,9 @@
 use std::sync::atomic::Ordering;
 
 use kithara_events::HlsEvent;
-use tracing::debug;
 
 use super::{helpers::first_missing_segment, state::HlsScheduler, trait_impl::HlsFetch};
-use crate::{playlist::PlaylistAccess, stream_index::SegmentData};
+use crate::stream_index::SegmentData;
 
 impl HlsScheduler {
     pub(super) fn commit_segment(

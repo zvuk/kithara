@@ -24,11 +24,6 @@ mod trait_impl;
 pub(crate) mod worker;
 
 pub(crate) use cursor::DownloadCursor;
-pub(crate) use helpers::{
-    classify_layout_transition, first_missing_segment, is_cross_codec_switch, is_stale_epoch,
-    should_request_init,
-};
 pub(crate) use plan::HlsPlan;
 pub(crate) use state::HlsScheduler;
 pub(crate) use trait_impl::HlsFetch;
-pub(crate) use worker::{WorkerGuard, spawn_hls_worker};

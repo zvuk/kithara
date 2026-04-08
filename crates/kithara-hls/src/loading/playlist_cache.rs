@@ -11,7 +11,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use bytes::Bytes;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;

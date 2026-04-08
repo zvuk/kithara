@@ -5,7 +5,6 @@ use std::{
 
 use kithara_events::HlsEvent;
 use kithara_platform::{
-    Mutex,
     thread::yield_now,
     time::{Duration, Instant},
 };
@@ -18,16 +17,14 @@ use tracing::{debug, trace};
 use super::{
     core::HlsSource,
     types::{
-        DemandRequestOutcome, MetadataMissReason, ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR,
+        DemandRequestOutcome, ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR,
         WAIT_RANGE_MAX_METADATA_MISS_SPINS, WAIT_RANGE_SLEEP_MS,
     },
 };
 use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
-    ids::VariantIndex,
-    playlist::{PlaylistAccess, PlaylistState},
-    stream_index::StreamIndex,
+    playlist::PlaylistAccess,
 };
 
 fn wait_range_hang_timeout(timeout: Duration) -> Duration {

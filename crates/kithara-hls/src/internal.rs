@@ -11,8 +11,7 @@ use std::{
 pub use kithara_abr::{AbrMode, AbrOptions};
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus};
-use kithara_platform::tokio::sync::broadcast;
+use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_storage::ResourceExt;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio_util::sync::CancellationToken;

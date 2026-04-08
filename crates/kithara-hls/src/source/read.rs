@@ -8,7 +8,6 @@ use super::{core::HlsSource, types::ReadSegment};
 use crate::{
     HlsError,
     ids::{SegmentIndex, VariantIndex},
-    playlist::PlaylistAccess,
     stream_index::StreamIndex,
 };
 

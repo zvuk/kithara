@@ -233,12 +233,6 @@ impl PlaylistState {
 
 /// Read-only access to parsed playlist data.
 pub(crate) trait PlaylistAccess: Send + Sync {
-    /// Number of variants in the master playlist.
-    fn num_variants(&self) -> usize;
-
-    /// Number of segments in a variant's media playlist.
-    fn num_segments(&self, variant: VariantIndex) -> Option<usize>;
-
     /// Audio codec for a variant.
     fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec>;
 
@@ -277,16 +271,6 @@ pub(crate) trait PlaylistAccess: Send + Sync {
 }
 
 impl PlaylistAccess for PlaylistState {
-    fn num_variants(&self) -> usize {
-        self.variants.len()
-    }
-
-    fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        Some(state.segments.len())
-    }
-
     fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
@@ -489,13 +473,13 @@ mod tests {
     fn test_playlist_state_basic_access() {
         let state = PlaylistState::new(vec![make_variant(0, 5), make_variant(1, 3)]);
 
-        assert_eq!(PlaylistAccess::num_variants(&state), 2);
-        assert_eq!(PlaylistAccess::num_segments(&state, 0), Some(5));
-        assert_eq!(PlaylistAccess::num_segments(&state, 1), Some(3));
+        assert_eq!(state.num_variants(), 2);
+        assert_eq!(state.num_segments(0), Some(5));
+        assert_eq!(state.num_segments(1), Some(3));
 
         // Out of bounds
-        assert_eq!(PlaylistAccess::num_segments(&state, 2), None);
-        assert_eq!(PlaylistAccess::num_segments(&state, 99), None);
+        assert_eq!(state.num_segments(2), None);
+        assert_eq!(state.num_segments(99), None);
     }
 
     // Test 2: variant info
@@ -739,10 +723,10 @@ mod tests {
         let state = PlaylistState::from_parsed(&variants, &media_playlists);
 
         // Verify variant count
-        assert_eq!(PlaylistAccess::num_variants(&state), 1);
+        assert_eq!(state.num_variants(), 1);
 
         // Verify segment count
-        assert_eq!(PlaylistAccess::num_segments(&state, 0), Some(2));
+        assert_eq!(state.num_segments(0), Some(2));
 
         // Verify codec and container
         assert_eq!(state.variant_codec(0), Some(AudioCodec::AacLc));

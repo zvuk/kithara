@@ -3,27 +3,23 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use kithara_abr::{AbrController, AbrOptions, Variant};
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::{Mutex, time::Duration};
-use kithara_stream::{StreamResult, Timeline};
-use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use kithara_events::EventBus;
+use kithara_platform::Mutex;
+use kithara_stream::Timeline;
 
-use super::types::ReadSegment;
 use crate::{
-    HlsError,
-    coord::{HlsCoord, SegmentRequest},
+    coord::HlsCoord,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
     scheduler::{DownloadCursor, HlsScheduler, worker::WorkerGuard},
-    stream_index::{SegmentData, StreamIndex},
+    stream_index::StreamIndex,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
