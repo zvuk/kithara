@@ -12,7 +12,7 @@ use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Mutex, time::Duration};
-use kithara_stream::{DownloadCursor, StreamResult, Timeline};
+use kithara_stream::{StreamResult, Timeline};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -22,7 +22,7 @@ use crate::{
     coord::{HlsCoord, SegmentRequest},
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
-    scheduler::{HlsScheduler, worker::WorkerGuard},
+    scheduler::{DownloadCursor, HlsScheduler, worker::WorkerGuard},
     stream_index::{SegmentData, StreamIndex},
 };
 

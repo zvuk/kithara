@@ -10,10 +10,10 @@ use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
-use kithara_stream::DownloadCursor;
 use tracing::debug;
 
 use super::{
+    cursor::DownloadCursor,
     helpers::{classify_layout_transition, first_missing_segment, is_cross_codec_switch},
     trait_impl::HlsFetch,
 };

@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
+//! Download cursor — tracks the next segment index the HLS scheduler
+//! should fetch in the current variant.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DownloadCursor<I> {
+pub(crate) enum DownloadCursor<I> {
     Stream { from: I },
     Fill { floor: I, next: I },
     Complete,
@@ -9,12 +12,12 @@ pub enum DownloadCursor<I> {
 
 impl<I: Copy + Ord> DownloadCursor<I> {
     #[must_use]
-    pub fn stream(from: I) -> Self {
+    pub(crate) fn stream(from: I) -> Self {
         Self::Stream { from }
     }
 
     #[must_use]
-    pub fn fill(start: I) -> Self {
+    pub(crate) fn fill(start: I) -> Self {
         Self::Fill {
             floor: start,
             next: start,
@@ -22,7 +25,7 @@ impl<I: Copy + Ord> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub fn fill_from(floor: I, next: I) -> Self {
+    pub(crate) fn fill_from(floor: I, next: I) -> Self {
         Self::Fill {
             floor,
             next: next.max(floor),
@@ -30,12 +33,12 @@ impl<I: Copy + Ord> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub fn complete() -> Self {
+    pub(crate) fn complete() -> Self {
         Self::Complete
     }
 
     #[must_use]
-    pub fn stream_from(&self) -> Option<I> {
+    pub(crate) fn stream_from(&self) -> Option<I> {
         match *self {
             Self::Stream { from } => Some(from),
             Self::Fill { .. } | Self::Complete => None,
@@ -43,7 +46,7 @@ impl<I: Copy + Ord> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub fn fill_floor(&self) -> Option<I> {
+    pub(crate) fn fill_floor(&self) -> Option<I> {
         match *self {
             Self::Fill { floor, next: _ } => Some(floor),
             Self::Stream { .. } | Self::Complete => None,
@@ -51,7 +54,7 @@ impl<I: Copy + Ord> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub fn fill_next(&self) -> Option<I> {
+    pub(crate) fn fill_next(&self) -> Option<I> {
         match *self {
             Self::Fill { floor: _, next } => Some(next),
             Self::Stream { .. } | Self::Complete => None,
@@ -59,37 +62,37 @@ impl<I: Copy + Ord> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub fn is_stream(&self) -> bool {
+    pub(crate) fn is_stream(&self) -> bool {
         matches!(self, Self::Stream { .. })
     }
 
     #[must_use]
-    pub fn is_fill(&self) -> bool {
+    pub(crate) fn is_fill(&self) -> bool {
         matches!(self, Self::Fill { .. })
     }
 
     #[must_use]
-    pub fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         matches!(self, Self::Complete)
     }
 
-    pub fn reset_fill(&mut self, target: I) {
+    pub(crate) fn reset_fill(&mut self, target: I) {
         *self = Self::fill(target);
     }
 
-    pub fn reopen_fill(&mut self, floor: I, next: I) {
+    pub(crate) fn reopen_fill(&mut self, floor: I, next: I) {
         *self = Self::fill_from(floor, next);
     }
 
-    pub fn restart_stream(&mut self, from: I) {
+    pub(crate) fn restart_stream(&mut self, from: I) {
         *self = Self::stream(from);
     }
 
-    pub fn mark_complete(&mut self) {
+    pub(crate) fn mark_complete(&mut self) {
         *self = Self::Complete;
     }
 
-    pub fn advance_fill_to(&mut self, next: I) {
+    pub(crate) fn advance_fill_to(&mut self, next: I) {
         if let Self::Fill {
             floor: _,
             next: current,
@@ -100,7 +103,7 @@ impl<I: Copy + Ord> DownloadCursor<I> {
         }
     }
 
-    pub fn rewind_fill_to(&mut self, next: I) {
+    pub(crate) fn rewind_fill_to(&mut self, next: I) {
         if let Self::Fill {
             floor,
             next: current,
@@ -113,9 +116,7 @@ impl<I: Copy + Ord> DownloadCursor<I> {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::DownloadCursor;
 

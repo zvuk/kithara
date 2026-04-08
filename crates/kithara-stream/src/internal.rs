@@ -3,7 +3,6 @@
 pub use crate::{
     context::{NullStreamContext, StreamContext},
     coordination::TransferCoordination,
-    cursor::DownloadCursor,
     demand::DemandSlot,
     error::{StreamError, StreamResult},
     fetch::{EpochValidator, Fetch},
