@@ -9,8 +9,9 @@
 //! `OnceCell` state lives behind `Arc` so clones see the same cached
 //! playlists.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
@@ -47,7 +48,10 @@ pub struct PlaylistCache {
     /// mutations.
     config: Arc<RwLock<PlaylistConfig>>,
     master: Arc<OnceCell<MasterPlaylist>>,
-    media: Arc<RwLock<HashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>>,
+    /// Per-variant media-playlist `OnceCell` buckets. `DashMap`
+    /// fine-grained locks keep parallel variants out of each other's
+    /// critical sections.
+    media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
     num_variants_cache: Arc<RwLock<Option<usize>>>,
 }
 
@@ -66,7 +70,7 @@ impl PlaylistCache {
             downloader,
             config: Arc::new(RwLock::new(PlaylistConfig::default())),
             master: Arc::new(OnceCell::new()),
-            media: Arc::new(RwLock::new(HashMap::new())),
+            media: Arc::new(DashMap::new()),
             num_variants_cache: Arc::new(RwLock::new(None)),
         }
     }
@@ -131,13 +135,11 @@ impl PlaylistCache {
         url: &Url,
         variant_id: VariantId,
     ) -> HlsResult<MediaPlaylist> {
-        let cell = {
-            let mut guard = self.media.lock_sync_write();
-            guard
-                .entry(variant_id)
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
-        };
+        let cell: Arc<OnceCell<MediaPlaylist>> = self
+            .media
+            .entry(variant_id)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone();
 
         let playlist = cell
             .get_or_try_init(|| async {

@@ -7,12 +7,13 @@
 //! decryption contexts via an optional [`KeyManager`]. No dependency
 //! on `FetchManager` — all the segment loading state lives here.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
+use dashmap::DashMap;
 use kithara_assets::{AssetResource, AssetResourceState, AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_platform::{RwLock, tokio::sync::OnceCell};
+use kithara_platform::tokio::sync::OnceCell;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
 use tracing::{debug, trace};
@@ -61,10 +62,12 @@ pub struct SegmentLoader {
     headers: Option<Headers>,
     cache: PlaylistCache,
     key_manager: Option<Arc<KeyManager>>,
-    // Init segment deduplication: first caller downloads, others wait on OnceCell
-    init_segments: Arc<RwLock<HashMap<usize, Arc<OnceCell<SegmentMeta>>>>>,
+    // Init segment deduplication: first caller downloads, others wait
+    // on OnceCell. `DashMap` provides fine-grained locking so parallel
+    // variants do not serialize on a single `RwLock`.
+    init_segments: Arc<DashMap<usize, Arc<OnceCell<SegmentMeta>>>>,
     // Media segment deduplication for active network fetches only.
-    media_segments: Arc<RwLock<HashMap<SegmentFetchKey, Arc<OnceCell<SegmentLoad>>>>>,
+    media_segments: Arc<DashMap<SegmentFetchKey, Arc<OnceCell<SegmentLoad>>>>,
 }
 
 impl SegmentLoader {
@@ -81,8 +84,8 @@ impl SegmentLoader {
             headers,
             cache,
             key_manager: None,
-            init_segments: Arc::new(RwLock::new(HashMap::new())),
-            media_segments: Arc::new(RwLock::new(HashMap::new())),
+            init_segments: Arc::new(DashMap::new()),
+            media_segments: Arc::new(DashMap::new()),
         }
     }
 
@@ -179,21 +182,15 @@ impl SegmentLoader {
     }
 
     fn media_segment_cell(&self, key: SegmentFetchKey) -> Arc<OnceCell<SegmentLoad>> {
-        let mut guard = self.media_segments.lock_sync_write();
-        guard
+        self.media_segments
             .entry(key)
             .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone()
     }
 
     fn clear_media_segment_cell(&self, key: &SegmentFetchKey, cell: &Arc<OnceCell<SegmentLoad>>) {
-        let mut guard = self.media_segments.lock_sync_write();
-        if guard
-            .get(key)
-            .is_some_and(|current| Arc::ptr_eq(current, cell))
-        {
-            guard.remove(key);
-        }
+        self.media_segments
+            .remove_if(key, |_, current| Arc::ptr_eq(current, cell));
     }
 
     /// Resolve decryption context for a segment.
@@ -282,13 +279,11 @@ impl SegmentLoader {
     /// # Errors
     /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
     pub async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
-        let mut cell = {
-            let mut guard = self.init_segments.lock_sync_write();
-            guard
-                .entry(variant)
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
-        };
+        let mut cell: Arc<OnceCell<SegmentMeta>> = self
+            .init_segments
+            .entry(variant)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone();
 
         // Ephemeral: cached init metadata may outlive the actual resource
         // (evicted from LRU). Verify and re-fetch if needed.
@@ -298,9 +293,7 @@ impl SegmentLoader {
         {
             debug!(variant, url = %meta.url, "init resource evicted, resetting cache");
             let new_cell = Arc::new(OnceCell::new());
-            self.init_segments
-                .lock_sync_write()
-                .insert(variant, Arc::clone(&new_cell));
+            self.init_segments.insert(variant, Arc::clone(&new_cell));
             cell = new_cell;
         }
 

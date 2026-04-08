@@ -20,6 +20,7 @@ kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 bytes = { workspace = true }
+dashmap = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
