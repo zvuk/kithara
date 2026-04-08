@@ -67,7 +67,7 @@ impl HlsScheduler {
     }
 
     pub(super) fn current_segment_index(&self) -> SegmentIndex {
-        self.cursor.fill_next().unwrap_or(0)
+        self.cursor.fill_next()
     }
 
     pub(super) fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
@@ -83,7 +83,7 @@ impl HlsScheduler {
     }
 
     pub(super) fn gap_scan_start_segment(&self) -> SegmentIndex {
-        self.cursor.fill_floor().unwrap_or(0)
+        self.cursor.fill_floor()
     }
 
     pub(super) fn reset_cursor(&mut self, segment_index: SegmentIndex) {

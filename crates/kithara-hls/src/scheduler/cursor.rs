@@ -2,78 +2,45 @@
 
 //! Download cursor — tracks the next segment index the HLS scheduler
 //! should fetch in the current variant.
+//!
+//! The cursor carries a `floor` (the lowest segment index the scheduler
+//! is still responsible for in this download epoch) and a `next` pointer
+//! (the next segment to fetch). `next` is monotonically non-decreasing
+//! within an epoch and is clamped to `>= floor` on rewind.
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DownloadCursor<I> {
-    Stream { from: I },
-    Fill { floor: I, next: I },
-    Complete,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DownloadCursor<I> {
+    floor: I,
+    next: I,
 }
 
 impl<I: Copy + Ord> DownloadCursor<I> {
-    #[must_use]
-    pub(crate) fn stream(from: I) -> Self {
-        Self::Stream { from }
-    }
-
+    /// Cursor starting at `start`, with both floor and next set to it.
     #[must_use]
     pub(crate) fn fill(start: I) -> Self {
-        Self::Fill {
+        Self {
             floor: start,
             next: start,
         }
     }
 
+    /// Cursor with an explicit floor. `next` is clamped to `>= floor`.
     #[must_use]
     pub(crate) fn fill_from(floor: I, next: I) -> Self {
-        Self::Fill {
+        Self {
             floor,
             next: next.max(floor),
         }
     }
 
     #[must_use]
-    pub(crate) fn complete() -> Self {
-        Self::Complete
+    pub(crate) fn fill_floor(&self) -> I {
+        self.floor
     }
 
     #[must_use]
-    pub(crate) fn stream_from(&self) -> Option<I> {
-        match *self {
-            Self::Stream { from } => Some(from),
-            Self::Fill { .. } | Self::Complete => None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn fill_floor(&self) -> Option<I> {
-        match *self {
-            Self::Fill { floor, next: _ } => Some(floor),
-            Self::Stream { .. } | Self::Complete => None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn fill_next(&self) -> Option<I> {
-        match *self {
-            Self::Fill { floor: _, next } => Some(next),
-            Self::Stream { .. } | Self::Complete => None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn is_stream(&self) -> bool {
-        matches!(self, Self::Stream { .. })
-    }
-
-    #[must_use]
-    pub(crate) fn is_fill(&self) -> bool {
-        matches!(self, Self::Fill { .. })
-    }
-
-    #[must_use]
-    pub(crate) fn is_complete(&self) -> bool {
-        matches!(self, Self::Complete)
+    pub(crate) fn fill_next(&self) -> I {
+        self.next
     }
 
     pub(crate) fn reset_fill(&mut self, target: I) {
@@ -84,33 +51,14 @@ impl<I: Copy + Ord> DownloadCursor<I> {
         *self = Self::fill_from(floor, next);
     }
 
-    pub(crate) fn restart_stream(&mut self, from: I) {
-        *self = Self::stream(from);
-    }
-
-    pub(crate) fn mark_complete(&mut self) {
-        *self = Self::Complete;
-    }
-
     pub(crate) fn advance_fill_to(&mut self, next: I) {
-        if let Self::Fill {
-            floor: _,
-            next: current,
-        } = self
-            && next > *current
-        {
-            *current = next;
+        if next > self.next {
+            self.next = next;
         }
     }
 
     pub(crate) fn rewind_fill_to(&mut self, next: I) {
-        if let Self::Fill {
-            floor,
-            next: current,
-        } = self
-        {
-            *current = (*floor).max(next);
-        }
+        self.next = self.floor.max(next);
     }
 }
 
@@ -123,16 +71,16 @@ mod tests {
     #[kithara::test]
     fn fill_from_clamps_next_to_floor() {
         let cursor = DownloadCursor::fill_from(10_u64, 5);
-        assert_eq!(cursor.fill_floor(), Some(10));
-        assert_eq!(cursor.fill_next(), Some(10));
+        assert_eq!(cursor.fill_floor(), 10);
+        assert_eq!(cursor.fill_next(), 10);
     }
 
     #[kithara::test]
     fn rewind_fill_never_goes_below_floor() {
         let mut cursor = DownloadCursor::fill_from(10_u64, 20);
         cursor.rewind_fill_to(5);
-        assert_eq!(cursor.fill_floor(), Some(10));
-        assert_eq!(cursor.fill_next(), Some(10));
+        assert_eq!(cursor.fill_floor(), 10);
+        assert_eq!(cursor.fill_next(), 10);
     }
 
     #[kithara::test]
@@ -140,15 +88,7 @@ mod tests {
         let mut cursor = DownloadCursor::fill(7_usize);
         cursor.advance_fill_to(9);
         cursor.advance_fill_to(8);
-        assert_eq!(cursor.fill_floor(), Some(7));
-        assert_eq!(cursor.fill_next(), Some(9));
-    }
-
-    #[kithara::test]
-    fn restart_stream_replaces_fill_state() {
-        let mut cursor = DownloadCursor::fill_from(4_u64, 8);
-        cursor.restart_stream(12);
-        assert_eq!(cursor.stream_from(), Some(12));
-        assert!(cursor.fill_next().is_none());
+        assert_eq!(cursor.fill_floor(), 7);
+        assert_eq!(cursor.fill_next(), 9);
     }
 }
