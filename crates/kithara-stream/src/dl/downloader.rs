@@ -90,29 +90,47 @@ impl Downloader {
     /// Register a protocol stream as a new track and return its
     /// [`TrackHandle`].
     ///
-    /// `register` is the **only** public way to obtain a [`TrackHandle`].
     /// Each call creates a fresh per-track state (id + cancellation
     /// token) — components that should belong to the **same** track must
     /// share a clone of one handle, not call `register` separately.
     ///
     /// Lazily spawns the download loop on the first call. The protocol
     /// stream is sent into the loop's `SelectAll` set. The returned
-    /// `TrackHandle` exposes [`execute`](TrackHandle::execute) /
-    /// [`execute_batch`](TrackHandle::execute_batch) /
-    /// [`execute_batch_blocking`](TrackHandle::execute_batch_blocking)
-    /// for direct fetches outside the stream loop.
+    /// [`TrackHandle`] exposes [`execute`](TrackHandle::execute) for
+    /// direct fetches outside the stream loop.
     ///
-    /// Protocols that do not need a `Stream<Item = FetchCmd>` (e.g. the
-    /// current HLS path, which drives fetches directly) can pass a
-    /// no-op stream that stays `Pending` until their own cancel token
-    /// fires — the stream then completes and is removed from the
-    /// `SelectAll`.
+    /// Protocols that drive all their fetches directly via
+    /// `TrackHandle::execute()` (e.g. the current HLS path) should use
+    /// [`new_track`](Self::new_track) instead — it creates a handle
+    /// without registering a stream in the `SelectAll` set.
     pub fn register<S>(&self, stream: S) -> TrackHandle
     where
         S: futures::Stream<Item = FetchCmd> + Send + Unpin + 'static,
     {
         self.ensure_spawned();
         let _ = self.inner.register_tx.send(Box::pin(stream));
+        TrackHandle {
+            pool: Arc::clone(&self.inner),
+            state: super::handle::TrackInner::new(&self.inner.cancel),
+        }
+    }
+
+    /// Create a new track without registering a protocol stream.
+    ///
+    /// Use this when a protocol drives all its fetches directly via
+    /// [`TrackHandle::execute`] and has no `Stream<Item = FetchCmd>`
+    /// source of its own. The returned handle has a fresh per-track
+    /// cancellation token and behaves exactly like
+    /// [`register`](Self::register) except that nothing is ever polled
+    /// from a stream inside the downloader loop.
+    ///
+    /// The download loop is still spawned lazily on first call so that
+    /// the per-track cancel is actually observed by [`execute`] callers.
+    ///
+    /// [`execute`]: TrackHandle::execute
+    #[must_use]
+    pub fn new_track(&self) -> TrackHandle {
+        self.ensure_spawned();
         TrackHandle {
             pool: Arc::clone(&self.inner),
             state: super::handle::TrackInner::new(&self.inner.cancel),

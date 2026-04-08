@@ -85,17 +85,15 @@ pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
 }
 
 /// Create a private test [`TrackHandle`] for direct `execute*()` calls
-/// outside the streaming pipeline. Each invocation registers a
-/// `NoopCmdStream` so the loop has something to retire on cancel —
-/// the resulting handle exposes execute*() against the same pool.
+/// outside the streaming pipeline. Uses `Downloader::new_track()` so no
+/// stream is registered — the handle exposes `execute*()` against the
+/// same pool without a noop stream workaround.
 fn create_test_track() -> kithara_stream::dl::TrackHandle {
     let cancel = CancellationToken::new();
     let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
     );
-    dl.register(kithara_hls::internal::NoopCmdStream::new(
-        cancel.child_token(),
-    ))
+    dl.new_track()
 }
 
 /// Build a test [`PlaylistCache`] backed by the supplied

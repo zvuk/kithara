@@ -21,7 +21,7 @@ pub use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    loading::{KeyManager, NoopCmdStream, PlaylistCache, SegmentLoader},
+    loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::{
         MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist, variant_info_from_master,
@@ -51,7 +51,7 @@ fn make_test_loader(
 ) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
     let backend = make_test_backend(cancel);
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-    let track = downloader.register(NoopCmdStream::new(cancel.child_token()));
+    let track = downloader.new_track();
     let cache = PlaylistCache::new(backend.clone(), track.clone());
     let loader = Arc::new(SegmentLoader::new(track, backend.clone(), None, cache));
     (backend, loader)
@@ -130,18 +130,17 @@ pub fn build_source(
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> HlsSource {
-    let cancel = config.cancel.clone().unwrap_or_default();
     // Honour `HlsConfig::with_downloader`: reuse the supplied
     // [`Downloader`] when present, fall back to a private one for
-    // tests that don't bother. Either way we register **once** here
-    // and hand the resulting [`TrackHandle`] (cloned by `build_pair`)
-    // to all sub-components — they share one track id and one
-    // cancellation token.
+    // tests that don't bother. Either way we create **one** per-track
+    // handle here and hand it (cloned by `build_pair`) to all
+    // sub-components — they share one track id and one cancellation
+    // token.
     let downloader = config
         .downloader
         .clone()
         .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
-    let track = downloader.register(NoopCmdStream::new(cancel.child_token()));
+    let track = downloader.new_track();
     let (_downloader, source) = build_pair(backend, track, variants, config, playlist_state, bus);
     source
 }

@@ -20,7 +20,7 @@ use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    loading::{KeyManager, NoopCmdStream, PlaylistCache, SegmentLoader},
+    loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
     playlist::PlaylistState,
     scheduler::worker::spawn_hls_worker,
@@ -125,15 +125,13 @@ impl StreamType for Hls {
         // Per-track handle for the SRP-decomposed HLS sub-systems below.
         // HLS does not yield commands through a `Stream<Item = FetchCmd>`
         // — every fetch is dispatched directly via `track.execute*()`.
-        // We register a `NoopCmdStream` tied to the HLS cancel token
-        // because [`Downloader::register`] is the only public way to
-        // obtain a [`TrackHandle`]. The noop stream stays `Pending`
-        // until the cancel fires, at which point it completes and is
-        // removed from the downloader's `SelectAll` set.
+        // `new_track()` creates the handle without registering a stream,
+        // giving HLS a clean per-track cancel hierarchy without a noop
+        // stream workaround.
         //
         // Each component below clones this handle so they all share the
         // same per-track state (id + cancellation token).
-        let track = downloader.register(NoopCmdStream::new(cancel.child_token()));
+        let track = downloader.new_track();
 
         // Build the small SRP-decomposed HLS sub-systems directly. No
         // FetchManager façade.

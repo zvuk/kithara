@@ -38,9 +38,8 @@ fn test_track(cancel: &CancellationToken) -> kithara_stream::dl::TrackHandle {
     let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
     );
-    // Register a noop stream so the loop has something to remove on
-    // teardown — `execute*()` calls bypass the loop entirely.
-    dl.register(crate::loading::NoopCmdStream::new(cancel.child_token()))
+    // `execute*()` calls bypass the loop entirely, so no stream needed.
+    dl.new_track()
 }
 
 type LoaderPair = (
