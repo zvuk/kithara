@@ -13,7 +13,7 @@ use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult};
+use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -34,7 +34,7 @@ use crate::{HlsError, HlsResult};
 /// access layer reports an error other than a harmless concurrent
 /// commit.
 pub(crate) async fn fetch_atomic_body(
-    downloader: &Downloader,
+    downloader: &TrackHandle,
     backend: &AssetStore<DecryptContext>,
     headers: Option<Headers>,
     url: &Url,
@@ -97,7 +97,7 @@ pub(crate) async fn fetch_atomic_body(
 /// Drive a single `Downloader::execute` call that accumulates the full
 /// body into a `Bytes` buffer.
 async fn download_atomic_bytes(
-    downloader: &Downloader,
+    downloader: &TrackHandle,
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {

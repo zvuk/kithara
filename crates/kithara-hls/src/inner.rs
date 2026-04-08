@@ -24,7 +24,7 @@ use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    loading::{KeyManager, PlaylistCache, SegmentLoader},
+    loading::{KeyManager, NoopCmdStream, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
     playlist::PlaylistState,
     scheduler::worker::spawn_hls_worker,
@@ -126,25 +126,38 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
+        // Per-track handle for the SRP-decomposed HLS sub-systems below.
+        // HLS does not yield commands through a `Stream<Item = FetchCmd>`
+        // — every fetch is dispatched directly via `track.execute*()`.
+        // We register a `NoopCmdStream` tied to the HLS cancel token
+        // because [`Downloader::register`] is the only public way to
+        // obtain a [`TrackHandle`]. The noop stream stays `Pending`
+        // until the cancel fires, at which point it completes and is
+        // removed from the downloader's `SelectAll` set.
+        //
+        // Each component below clones this handle so they all share the
+        // same per-track state (id + cancellation token).
+        let track = downloader.register(NoopCmdStream::new(cancel.child_token()));
+
         // Build the small SRP-decomposed HLS sub-systems directly. No
         // FetchManager façade.
-        let playlist_cache = PlaylistCache::new(backend.clone(), downloader.clone());
+        let playlist_cache = PlaylistCache::new(backend.clone(), track.clone());
         playlist_cache.set_master_url(config.url.clone());
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
-        // KeyManager: own downloader + backend + headers, no FetchManager.
+        // KeyManager: own track + backend + headers, no FetchManager.
         let key_manager = Arc::new(KeyManager::from_options(
-            downloader.clone(),
+            track.clone(),
             backend.clone(),
             config.headers.clone(),
             config.keys.clone(),
         ));
 
-        // SegmentLoader: own downloader + backend + headers, shares
+        // SegmentLoader: own track + backend + headers, shares
         // PlaylistCache for media playlist lookups.
         let mut loader = SegmentLoader::new(
-            downloader.clone(),
+            track.clone(),
             backend.clone(),
             config.headers.clone(),
             playlist_cache.clone(),
@@ -193,7 +206,7 @@ impl StreamType for Hls {
         // Create HlsScheduler + HlsSource pair
         let (hls_downloader, mut source) = build_pair(
             backend,
-            downloader.clone(),
+            track.clone(),
             &master.variants,
             &config,
             Arc::clone(&playlist_state),

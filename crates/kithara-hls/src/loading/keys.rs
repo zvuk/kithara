@@ -13,7 +13,7 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetsError};
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_stream::dl::Downloader;
+use kithara_stream::dl::TrackHandle;
 use thiserror::Error;
 use url::Url;
 
@@ -46,12 +46,12 @@ pub enum KeyError {
 
 /// DRM key fetch + optional processor pipeline.
 ///
-/// Reads through the unified [`Downloader`] and persists key bodies in
+/// Reads through the unified [`TrackHandle`] and persists key bodies in
 /// the supplied [`AssetStore`] via the shared
 /// [`fetch_atomic_body`] helper. No dependency on `FetchManager`.
 #[derive(Clone)]
 pub struct KeyManager {
-    downloader: Downloader,
+    downloader: TrackHandle,
     backend: AssetStore<DecryptContext>,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
@@ -63,7 +63,7 @@ pub struct KeyManager {
 impl KeyManager {
     #[must_use]
     pub fn new(
-        downloader: Downloader,
+        downloader: TrackHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         key_processor: Option<KeyProcessor>,
@@ -83,7 +83,7 @@ impl KeyManager {
     /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
     pub fn from_options(
-        downloader: Downloader,
+        downloader: TrackHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,

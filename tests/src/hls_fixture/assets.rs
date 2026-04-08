@@ -84,16 +84,30 @@ pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
     kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
 }
 
+/// Create a private test [`TrackHandle`] for direct `execute*()` calls
+/// outside the streaming pipeline. Each invocation registers a
+/// `NoopCmdStream` so the loop has something to retire on cancel —
+/// the resulting handle exposes execute*() against the same pool.
+fn create_test_track() -> kithara_stream::dl::TrackHandle {
+    let cancel = CancellationToken::new();
+    let dl = kithara_stream::dl::Downloader::new(
+        kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
+    );
+    dl.register(kithara_hls::internal::NoopCmdStream::new(
+        cancel.child_token(),
+    ))
+}
+
 /// Build a test [`PlaylistCache`] backed by the supplied
-/// [`TestAssets`] + a fresh private [`Downloader`]. Used by
+/// [`TestAssets`] + a fresh private [`TrackHandle`]. Used by
 /// integration tests that drive playlist parsing without going
 /// through the full `Hls::create` flow.
 pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
-    PlaylistCache::new(assets.assets().clone(), create_test_downloader())
+    PlaylistCache::new(assets.assets().clone(), create_test_track())
 }
 
-/// Build a test [`KeyManager`] backed by a fresh [`Downloader`] and the
-/// supplied [`TestAssets`]. Mirrors the production constructor in
+/// Build a test [`KeyManager`] backed by a fresh [`TrackHandle`] and
+/// the supplied [`TestAssets`]. Mirrors the production constructor in
 /// `Hls::create` so integration tests exercise the same wiring.
 pub fn test_key_manager(
     assets: &TestAssets,
@@ -102,7 +116,7 @@ pub fn test_key_manager(
     key_request_headers: Option<HashMap<String, String>>,
 ) -> KeyManager {
     KeyManager::new(
-        create_test_downloader(),
+        create_test_track(),
         assets.assets().clone(),
         None,
         key_processor,

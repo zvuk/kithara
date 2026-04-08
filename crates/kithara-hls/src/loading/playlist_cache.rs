@@ -5,7 +5,7 @@
 //! Owns master/media playlist state, the disk cache for playlist bodies,
 //! and URL resolution helpers. Network traffic routes through the
 //! shared [`crate::atomic_fetch::fetch_atomic_body`] helper, which in
-//! turn drives the unified [`Downloader`]. Clone-friendly — the
+//! turn drives the unified [`TrackHandle`]. Clone-friendly — the
 //! `OnceCell` state lives behind `Arc` so clones see the same cached
 //! playlists.
 
@@ -16,7 +16,7 @@ use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{RwLock, tokio::sync::OnceCell};
-use kithara_stream::dl::Downloader;
+use kithara_stream::dl::TrackHandle;
 use url::Url;
 
 use super::atomic_fetch::fetch_atomic_body;
@@ -42,7 +42,7 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 #[derive(Clone)]
 pub struct PlaylistCache {
     backend: AssetStore<DecryptContext>,
-    downloader: Downloader,
+    downloader: TrackHandle,
     /// Cache-wide config (headers, master URL, base URL override). Held
     /// behind `Arc<RwLock<...>>` so clones see the same builder
     /// mutations.
@@ -61,7 +61,7 @@ struct PlaylistConfig {
 
 impl PlaylistCache {
     #[must_use]
-    pub fn new(backend: AssetStore<DecryptContext>, downloader: Downloader) -> Self {
+    pub fn new(backend: AssetStore<DecryptContext>, downloader: TrackHandle) -> Self {
         Self {
             backend,
             downloader,

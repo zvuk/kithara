@@ -16,7 +16,7 @@ use kithara_platform::{RwLock, tokio::sync::OnceCell};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
     ContainerFormat,
-    dl::{Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult},
+    dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle},
 };
 use tracing::{debug, trace};
 use url::Url;
@@ -85,7 +85,7 @@ type SegmentLoad = (bool, SegmentMeta);
 /// media playlists through a shared [`PlaylistCache`].
 #[derive(Clone)]
 pub struct SegmentLoader {
-    downloader: Downloader,
+    downloader: TrackHandle,
     backend: AssetStore<DecryptContext>,
     headers: Option<Headers>,
     cache: PlaylistCache,
@@ -99,7 +99,7 @@ pub struct SegmentLoader {
 impl SegmentLoader {
     #[must_use]
     pub fn new(
-        downloader: Downloader,
+        downloader: TrackHandle,
         backend: AssetStore<DecryptContext>,
         headers: Option<Headers>,
         cache: PlaylistCache,
@@ -123,13 +123,13 @@ impl SegmentLoader {
         self.headers = headers;
     }
 
-    /// Start fetching a segment via the unified [`Downloader`].
+    /// Start fetching a segment via the unified [`TrackHandle`].
     ///
     /// Returns `(bytes, was_cached)`:
     /// - `was_cached == true` — resource was already committed in the
     ///   disk cache; no network round-trip occurred.
     /// - `was_cached == false` — fetch went through
-    ///   `Downloader::execute(FetchCmd::Stream)` with a writer callback
+    ///   `TrackHandle::execute(FetchCmd::Stream)` with a writer callback
     ///   that writes each chunk into the `AssetResource` and commits
     ///   the resource inline on success.
     ///
@@ -160,12 +160,12 @@ impl SegmentLoader {
             return Ok((len, true));
         }
 
-        trace!(url = %url, "start_fetch: downloading via Downloader");
+        trace!(url = %url, "start_fetch: downloading via TrackHandle");
         let bytes = self.download_stream_via_downloader(url, &res).await?;
         Ok((bytes, false))
     }
 
-    /// Stream a fetch into an `AssetResource` via the unified Downloader.
+    /// Stream a fetch into an `AssetResource` via the unified [`TrackHandle`].
     async fn download_stream_via_downloader(
         &self,
         url: &Url,

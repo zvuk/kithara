@@ -34,10 +34,13 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
-fn test_downloader(cancel: &CancellationToken) -> kithara_stream::dl::Downloader {
-    kithara_stream::dl::Downloader::new(
+fn test_track(cancel: &CancellationToken) -> kithara_stream::dl::TrackHandle {
+    let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
-    )
+    );
+    // Register a noop stream so the loop has something to remove on
+    // teardown — `execute*()` calls bypass the loop entirely.
+    dl.register(crate::loading::NoopCmdStream::new(cancel.child_token()))
 }
 
 type LoaderPair = (
@@ -49,10 +52,10 @@ fn make_test_loader_pair(
     cancel: CancellationToken,
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
-    let downloader = test_downloader(&cancel);
-    let cache = crate::loading::PlaylistCache::new(backend.clone(), downloader.clone());
+    let track = test_track(&cancel);
+    let cache = crate::loading::PlaylistCache::new(backend.clone(), track.clone());
     let loader = Arc::new(crate::loading::SegmentLoader::new(
-        downloader,
+        track,
         backend.clone(),
         None,
         cache,
@@ -139,13 +142,14 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
     let playlist_state = Arc::new(PlaylistState::new(variants));
     let parsed = parsed_variants(num_variants);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,
@@ -184,13 +188,14 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,
@@ -645,13 +650,14 @@ fn demand_range_queues_request_for_unloaded_offset() {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,
@@ -687,13 +693,14 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,
@@ -881,13 +888,14 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, mut source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,
@@ -954,13 +962,14 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     )]));
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_disk_fetch_manager(cancel.clone(), dir.path());
+    let track = test_track(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, mut source) = build_pair(
         backend,
-        kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
+        track,
         &parsed,
         &config,
         playlist_state,

@@ -229,7 +229,7 @@ impl HlsSource {
 /// Build an `HlsScheduler` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
-    downloader_handle: kithara_stream::dl::Downloader,
+    track: kithara_stream::dl::TrackHandle,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,
@@ -277,7 +277,7 @@ pub(crate) fn build_pair(
         None
     };
 
-    let size_probe = crate::loading::SizeMapProbe::new(downloader_handle, config.headers.clone());
+    let size_probe = crate::loading::SizeMapProbe::new(track, config.headers.clone());
     let downloader = HlsScheduler {
         active_seek_epoch: 0,
         backend: backend.clone(),

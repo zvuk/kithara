@@ -205,16 +205,26 @@ fn indexed_cmd(order_log: Arc<Mutex<Vec<usize>>>, index: usize) -> FetchCmd {
     }
 }
 
+/// Helper: drive a registration that immediately retires the stream.
+/// Tests that exercise direct `execute*()` operations don't care about
+/// the streaming pipeline — they just need a track handle.
+fn make_track(dl: &Downloader) -> super::TrackHandle {
+    let (stream, inner) = TestStream::new();
+    inner.lock_sync().done = true;
+    dl.register(stream)
+}
+
 #[kithara_test_macros::test(tokio)]
 async fn execute_batch_fires_on_complete_for_every_cmd() {
     let dl = Downloader::new(DownloaderConfig::default());
+    let track = make_track(&dl);
     let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
 
     let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
         .map(|i| indexed_cmd(Arc::clone(&order_log), i))
         .collect();
 
-    let results = dl.execute_batch(cmds).await;
+    let results = track.execute_batch(cmds).await;
 
     assert_eq!(results.len(), CMD_COUNT);
     assert_eq!(
@@ -227,6 +237,7 @@ async fn execute_batch_fires_on_complete_for_every_cmd() {
 #[kithara_test_macros::test(tokio)]
 async fn execute_batch_delivers_on_complete_in_input_order() {
     let dl = Downloader::new(DownloaderConfig::default());
+    let track = make_track(&dl);
     let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
 
     // Build a batch with indices 0..3 and verify on_complete callbacks
@@ -238,7 +249,7 @@ async fn execute_batch_delivers_on_complete_in_input_order() {
         .map(|i| indexed_cmd(Arc::clone(&order_log), i))
         .collect();
 
-    let _results = dl.execute_batch(cmds).await;
+    let _results = track.execute_batch(cmds).await;
 
     let log = order_log.lock_sync().clone();
     assert_eq!(
@@ -251,6 +262,7 @@ async fn execute_batch_delivers_on_complete_in_input_order() {
 #[kithara_test_macros::test(tokio)]
 async fn execute_batch_returns_results_in_input_order() {
     let dl = Downloader::new(DownloaderConfig::default());
+    let track = make_track(&dl);
 
     // Build 3 cmds and rely on the existing connection-refused pathway.
     let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
@@ -266,7 +278,7 @@ async fn execute_batch_returns_results_in_input_order() {
         })
         .collect();
 
-    let results = dl.execute_batch(cmds).await;
+    let results = track.execute_batch(cmds).await;
 
     assert_eq!(results.len(), CMD_COUNT);
     // All three target a dead URL and must surface FetchResult::Err in
@@ -328,14 +340,15 @@ async fn execute_batch_blocking_from_worker_thread_returns_ordered_results() {
         DownloaderConfig::default()
             .with_runtime(kithara_platform::tokio::runtime::Handle::current()),
     );
+    let track = make_track(&dl);
 
     let order_log = Arc::new(Mutex::new(Vec::<usize>::new()));
     let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
         .map(|i| indexed_cmd(Arc::clone(&order_log), i))
         .collect();
 
-    let dl_clone = dl.clone();
-    let thread_handle = std::thread::spawn(move || dl_clone.execute_batch_blocking(cmds));
+    let track_clone = track.clone();
+    let thread_handle = std::thread::spawn(move || track_clone.execute_batch_blocking(cmds));
 
     let results = kithara_platform::tokio::task::spawn_blocking(move || {
         thread_handle.join().expect("worker thread panicked")
@@ -357,14 +370,15 @@ async fn execute_batch_blocking_fires_every_on_complete() {
         DownloaderConfig::default()
             .with_runtime(kithara_platform::tokio::runtime::Handle::current()),
     );
+    let track = make_track(&dl);
     let counter = Arc::new(AtomicU64::new(0));
 
     let cmds: Vec<FetchCmd> = (0..CMD_COUNT)
         .map(|_| counting_cmd(Arc::clone(&counter)))
         .collect();
 
-    let dl_clone = dl.clone();
-    let thread_handle = std::thread::spawn(move || dl_clone.execute_batch_blocking(cmds));
+    let track_clone = track.clone();
+    let thread_handle = std::thread::spawn(move || track_clone.execute_batch_blocking(cmds));
 
     let results = kithara_platform::tokio::task::spawn_blocking(move || {
         thread_handle.join().expect("worker thread panicked")

@@ -158,8 +158,15 @@ impl File {
             config.look_ahead_bytes,
         );
 
-        let handle = downloader.register(source);
+        // Register a clone of the source as the protocol stream so the
+        // downloader loop can poll it for `FetchCmd`s. The original
+        // `source` stays with the caller for sync `Source` access; the
+        // returned `TrackHandle` is dropped — the only reason to keep
+        // it would be to call `track.execute*()` from inside File, and
+        // File never does that. The `with_downloader` clone keeps the
+        // download pool alive for the source's lifetime.
+        let _track = downloader.register(source.clone());
 
-        Ok(handle.into_source().with_downloader(downloader))
+        Ok(source.with_downloader(downloader))
     }
 }

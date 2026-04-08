@@ -19,11 +19,13 @@
 
 pub(crate) mod atomic_fetch;
 pub(crate) mod keys;
+pub(crate) mod noop_cmd_stream;
 pub(crate) mod playlist_cache;
 pub(crate) mod segment_loader;
 pub(crate) mod size_probe;
 
 pub use keys::KeyManager;
+pub use noop_cmd_stream::NoopCmdStream;
 pub use playlist_cache::PlaylistCache;
 pub use segment_loader::{SegmentLoader, SegmentMeta, SegmentType};
 pub(crate) use size_probe::SizeMapProbe;
