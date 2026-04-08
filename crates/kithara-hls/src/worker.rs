@@ -29,7 +29,7 @@ use tracing::debug;
 use crate::{
     HlsError,
     downloader::{HlsDownloader, HlsFetch, HlsPlan},
-    fetch::DefaultFetchManager,
+    segment_loader::SegmentLoader,
 };
 
 /// Default yield interval (iterations between `yield_now` calls).
@@ -95,7 +95,7 @@ impl Drop for WorkerGuard {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_hls_worker(
     downloader: HlsDownloader,
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
     cancel: &CancellationToken,
     runtime: Option<tokio::runtime::Handle>,
 ) -> WorkerGuard {
@@ -113,7 +113,7 @@ pub(crate) fn spawn_hls_worker(
 
     let handle = if let Some(rt_handle) = shared_handle {
         debug!("hls-worker: spawning as async task on shared runtime");
-        WorkerHandle::Task(rt_handle.spawn(run_hls_worker(downloader, fetch, task_cancel)))
+        WorkerHandle::Task(rt_handle.spawn(run_hls_worker(downloader, loader, task_cancel)))
     } else {
         debug!("hls-worker: fallback — creating dedicated current-thread runtime");
         let id = DOWNLOAD_WORKER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -122,7 +122,7 @@ pub(crate) fn spawn_hls_worker(
                 .enable_all()
                 .build()
                 .expect("failed to build hls-worker runtime");
-            rt.block_on(run_hls_worker(downloader, fetch, task_cancel));
+            rt.block_on(run_hls_worker(downloader, loader, task_cancel));
         }))
     };
 
@@ -135,14 +135,14 @@ pub(crate) fn spawn_hls_worker(
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn_hls_worker(
     downloader: HlsDownloader,
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
     cancel: &CancellationToken,
     _runtime: Option<tokio::runtime::Handle>,
 ) -> WorkerGuard {
     let child_cancel = cancel.child_token();
     let task_cancel = child_cancel.clone();
     debug!("hls-worker: spawning as wasm task");
-    let task = tokio::task::spawn(run_hls_worker(downloader, fetch, task_cancel));
+    let task = tokio::task::spawn(run_hls_worker(downloader, loader, task_cancel));
     WorkerGuard {
         cancel: child_cancel,
         worker: Some(task),
@@ -158,7 +158,7 @@ enum LoopControl {
 #[kithara_hang_detector::hang_watchdog]
 async fn run_hls_worker(
     mut dl: HlsDownloader,
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
     cancel: CancellationToken,
 ) {
     debug!("HLS worker started");
@@ -176,10 +176,10 @@ async fn run_hls_worker(
         // segment-based throttle pressure. Without this, the subsequent
         // wait_while_throttled can block forever when the pending
         // demand would have un-throttled the downloader.
-        let Ok(mut made_progress) = drain_demand_requests(&mut dl, &fetch, &cancel).await else {
+        let Ok(mut made_progress) = drain_demand_requests(&mut dl, &loader, &cancel).await else {
             return;
         };
-        let Ok(throttle_progress) = wait_while_throttled(&mut dl, &fetch, &cancel).await else {
+        let Ok(throttle_progress) = wait_while_throttled(&mut dl, &loader, &cancel).await else {
             return;
         };
         let Ok(outcome) = plan_next(&mut dl, &cancel).await else {
@@ -191,7 +191,7 @@ async fn run_hls_worker(
         made_progress |= throttle_progress;
 
         let control = match outcome {
-            PlanOutcome::Batch(plans) => handle_batch(&mut dl, &fetch, &cancel, plans).await,
+            PlanOutcome::Batch(plans) => handle_batch(&mut dl, &loader, &cancel, plans).await,
             PlanOutcome::Step => {
                 // HLS never emits Step — it always batches.
                 debug!("HLS worker: unexpected Step outcome, ignoring");
@@ -240,7 +240,7 @@ async fn run_hls_worker(
 
 async fn wait_while_throttled(
     dl: &mut HlsDownloader,
-    fetch: &Arc<DefaultFetchManager>,
+    loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
 ) -> Result<bool, ()> {
     let mut made_progress = false;
@@ -251,7 +251,7 @@ async fn wait_while_throttled(
         // throttle. Processing it can reset the cursor and relieve
         // throttle.
         if let Some(plan) = try_poll_demand(dl, cancel).await
-            && fetch_and_commit_demand(dl, fetch, plan, cancel)
+            && fetch_and_commit_demand(dl, loader, plan, cancel)
                 .await
                 .map(|progress| {
                     made_progress |= progress;
@@ -274,7 +274,7 @@ async fn wait_while_throttled(
         }
 
         if let Some(plan) = try_poll_demand(dl, cancel).await
-            && fetch_and_commit_demand(dl, fetch, plan, cancel)
+            && fetch_and_commit_demand(dl, loader, plan, cancel)
                 .await
                 .map(|progress| {
                     made_progress |= progress;
@@ -289,12 +289,12 @@ async fn wait_while_throttled(
 
 async fn drain_demand_requests(
     dl: &mut HlsDownloader,
-    fetch: &Arc<DefaultFetchManager>,
+    loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
 ) -> Result<bool, ()> {
     let mut made_progress = false;
     while let Some(plan) = try_poll_demand(dl, cancel).await {
-        if fetch_and_commit_demand(dl, fetch, plan, cancel)
+        if fetch_and_commit_demand(dl, loader, plan, cancel)
             .await
             .map(|progress| {
                 made_progress |= progress;
@@ -336,7 +336,7 @@ async fn handle_idle(dl: &mut HlsDownloader, cancel: &CancellationToken) -> Loop
 #[kithara_hang_detector::hang_watchdog]
 async fn handle_batch(
     dl: &mut HlsDownloader,
-    fetch: &Arc<DefaultFetchManager>,
+    loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
     plans: Vec<HlsPlan>,
 ) -> LoopControl {
@@ -350,8 +350,8 @@ async fn handle_batch(
         .into_iter()
         .enumerate()
         .map(|(index, plan)| {
-            let fetch = Arc::clone(fetch);
-            async move { (index, fetch_plan(&fetch, plan).await) }
+            let loader = Arc::clone(loader);
+            async move { (index, fetch_plan(&loader, plan).await) }
         })
         .collect::<FuturesUnordered<_>>();
 
@@ -410,7 +410,7 @@ async fn try_poll_demand(dl: &mut HlsDownloader, cancel: &CancellationToken) -> 
 
 async fn fetch_and_commit_demand(
     dl: &mut HlsDownloader,
-    fetch: &Arc<DefaultFetchManager>,
+    loader: &Arc<SegmentLoader>,
     plan: HlsPlan,
     cancel: &CancellationToken,
 ) -> Result<bool, ()> {
@@ -420,7 +420,7 @@ async fn fetch_and_commit_demand(
             debug!("HLS worker cancelled during demand fetch");
             return Err(());
         }
-        result = fetch_plan(fetch, plan) => result,
+        result = fetch_plan(loader, plan) => result,
     };
 
     match result {
@@ -441,16 +441,16 @@ async fn fetch_and_commit_demand(
 /// Kicks off the init-segment load (if requested) in parallel with the
 /// media-segment load via `tokio::join!`, measures duration, and
 /// packages the result into an [`HlsFetch`].
-async fn fetch_plan(fetch: &Arc<DefaultFetchManager>, plan: HlsPlan) -> Result<HlsFetch, HlsError> {
+async fn fetch_plan(loader: &Arc<SegmentLoader>, plan: HlsPlan) -> Result<HlsFetch, HlsError> {
     let start = Instant::now();
 
     let init_fut = {
-        let fetch = Arc::clone(fetch);
+        let loader = Arc::clone(loader);
         let variant = plan.variant;
         let need_init = plan.need_init;
         async move {
             if need_init {
-                match fetch.load_init_segment(variant).await {
+                match loader.load_init_segment(variant).await {
                     Ok(m) => (Some(m.url), m.len),
                     Err(e) => {
                         tracing::warn!(
@@ -473,7 +473,7 @@ async fn fetch_plan(fetch: &Arc<DefaultFetchManager>, plan: HlsPlan) -> Result<H
         .expect("fetch_plan called with non-Media segment");
 
     let (media_result, (init_url, init_len)) = tokio::join!(
-        fetch.load_media_segment_with_source_for_epoch(plan.variant, seg_idx, plan.seek_epoch),
+        loader.load_media_segment_with_source_for_epoch(plan.variant, seg_idx, plan.seek_epoch),
         init_fut,
     );
 

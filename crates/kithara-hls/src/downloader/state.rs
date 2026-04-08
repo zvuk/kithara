@@ -5,7 +5,8 @@ use std::{
 };
 
 use kithara_abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator};
-use kithara_assets::{AssetResourceState, ResourceKey};
+use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
+use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
@@ -19,7 +20,6 @@ use super::{
 use crate::{
     HlsError,
     coord::HlsCoord,
-    fetch::DefaultFetchManager,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
     size_probe::SizeMapProbe,
@@ -29,7 +29,8 @@ use crate::{
 /// HLS downloader: fetches segments and maintains ABR state.
 pub(crate) struct HlsDownloader {
     pub(crate) active_seek_epoch: SeekEpoch,
-    pub(crate) fetch: Arc<DefaultFetchManager>,
+    /// Direct disk-cache access — no `FetchManager` wrapper.
+    pub(crate) backend: AssetStore<DecryptContext>,
     /// HEAD-probe helper for size-map building.
     pub(crate) size_probe: SizeMapProbe,
     pub(crate) playlist_state: Arc<PlaylistState>,
@@ -285,13 +286,12 @@ impl HlsDownloader {
             return true;
         }
 
-        match self.fetch.backend().resource_state(key) {
+        match self.backend.resource_state(key) {
             Ok(AssetResourceState::Committed {
                 final_len: Some(final_len),
             }) => final_len >= len,
             Ok(AssetResourceState::Committed { .. }) => self
-                .fetch
-                .backend()
+                .backend
                 .open_resource(key)
                 .is_ok_and(|resource| resource.contains_range(0..len)),
             _ => false,

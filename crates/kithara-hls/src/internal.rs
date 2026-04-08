@@ -9,7 +9,7 @@ use std::{
 };
 
 pub use kithara_abr::{AbrMode, AbrOptions};
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus};
 use kithara_platform::tokio::sync::broadcast;
@@ -22,51 +22,64 @@ pub use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    fetch::{DefaultFetchManager, FetchManager},
     keys::KeyManager,
     parsing::{
         MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist, variant_info_from_master,
     },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
+    playlist_cache::PlaylistCache,
+    segment_loader::SegmentLoader,
     source::HlsSource,
     stream_index::{SegmentData, StreamIndex},
 };
 
-fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+/// Build a test backend (ephemeral, passthrough DRM) and a private
+/// downloader sharing the supplied cancel token.
+fn make_test_backend(cancel: &CancellationToken) -> AssetStore<DecryptContext> {
     let passthrough: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
             Ok(input.len())
         });
-    let backend = AssetStoreBuilder::new()
+    AssetStoreBuilder::new()
         .ephemeral(true)
         .cancel(cancel.clone())
         .process_fn(passthrough)
-        .build();
+        .build()
+}
+
+fn make_test_loader(
+    cancel: &CancellationToken,
+) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
+    let backend = make_test_backend(cancel);
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-    Arc::new(FetchManager::new(backend, downloader, cancel))
+    let cache = PlaylistCache::new(backend.clone(), downloader.clone());
+    let loader = Arc::new(SegmentLoader::new(downloader, backend.clone(), None, cache));
+    (backend, loader)
 }
 
 pub fn make_test_source(
     playlist_state: Arc<PlaylistState>,
     segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     coord: Arc<HlsCoord>,
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
 ) -> HlsSource {
-    let fetch = make_test_fetch(cancel);
-    make_test_source_with_fetch(playlist_state, segments, coord, fetch)
+    let (backend, loader) = make_test_loader(cancel);
+    make_test_source_with_loader(playlist_state, segments, coord, loader, backend)
 }
 
-pub fn make_test_source_with_fetch(
+pub fn make_test_source_with_loader(
     playlist_state: Arc<PlaylistState>,
     segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     coord: Arc<HlsCoord>,
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
+    backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
     HlsSource {
         coord,
-        fetch,
+        loader,
+        backend,
         segments,
         playlist_state,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
@@ -76,10 +89,13 @@ pub fn make_test_source_with_fetch(
     }
 }
 
-/// Create test fetch manager (public for tests that need shared fetch).
+/// Create a test segment loader + backend pair (public for tests that
+/// need to share both).
 #[must_use]
-pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
-    make_test_fetch(cancel)
+pub fn make_test_segment_loader(
+    cancel: &CancellationToken,
+) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
+    make_test_loader(cancel)
 }
 
 /// Commit dummy resource from a `SegmentData` reference.
@@ -89,7 +105,7 @@ pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchMan
 )]
 #[expect(clippy::missing_panics_doc, reason = "test-only helper")]
 pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
-    let backend = source.fetch.backend();
+    let backend = &source.backend;
     let media_key = ResourceKey::from_url(&data.media_url);
     let res = backend
         .acquire_resource(&media_key)
@@ -112,15 +128,23 @@ pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
 
 #[must_use]
 pub fn build_source(
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
+    backend: AssetStore<DecryptContext>,
     variants: &[VariantStream],
     config: &HlsConfig,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> HlsSource {
     let downloader = Downloader::new(DownloaderConfig::default());
-    let (_downloader, source) =
-        build_pair(fetch, downloader, variants, config, playlist_state, bus);
+    let (_downloader, source) = build_pair(
+        loader,
+        backend,
+        downloader,
+        variants,
+        config,
+        playlist_state,
+        bus,
+    );
     source
 }
 

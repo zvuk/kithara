@@ -55,13 +55,12 @@ impl HlsSource {
     }
 
     pub(super) fn resource_covers_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
-        match self.fetch.backend().resource_state(key) {
+        match self.backend.resource_state(key) {
             Ok(AssetResourceState::Committed {
                 final_len: Some(final_len),
             }) => range.end <= final_len,
             Ok(AssetResourceState::Active | AssetResourceState::Committed { .. }) => self
-                .fetch
-                .backend()
+                .backend
                 .open_resource(key)
                 .is_ok_and(|resource| resource.contains_range(range)),
             _ => false,
@@ -91,7 +90,7 @@ impl HlsSource {
             if !self.resource_covers_range(&key, local_offset..read_end) {
                 return Ok(None);
             }
-            let resource = self.fetch.backend().open_resource(&key)?;
+            let resource = &self.backend.open_resource(&key)?;
             resource.wait_range(local_offset..read_end)?;
 
             #[expect(
@@ -127,7 +126,7 @@ impl HlsSource {
         if !self.resource_covers_range(&key, media_offset..read_end) {
             return Ok(None);
         }
-        let resource = self.fetch.backend().open_resource(&key)?;
+        let resource = &self.backend.open_resource(&key)?;
         resource.wait_range(media_offset..read_end)?;
 
         let bytes_read = resource.read_at(media_offset, buf)?;

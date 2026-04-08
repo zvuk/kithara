@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use futures::future::join_all;
-use kithara_assets::{AssetResourceState, ResourceKey};
+use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
+use kithara_drm::DecryptContext;
 use kithara_platform::Mutex;
 use tracing::debug;
 
@@ -9,7 +10,6 @@ use super::state::HlsDownloader;
 use crate::{
     HlsError,
     coord::HlsCoord,
-    fetch::DefaultFetchManager,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
     size_probe::SizeMapProbe,
     stream_index::{SegmentData, StreamIndex},
@@ -81,15 +81,14 @@ impl HlsDownloader {
     pub(crate) fn populate_cached_segments(
         segments: &Mutex<StreamIndex>,
         coord: &HlsCoord,
-        fetch: &DefaultFetchManager,
+        backend: &AssetStore<DecryptContext>,
         playlist_state: &PlaylistState,
         variant: usize,
     ) -> (usize, u64) {
-        if fetch.backend().is_ephemeral() {
+        if backend.is_ephemeral() {
             return (0, 0);
         }
 
-        let backend = fetch.backend();
         Self::populate_cached_segments_with_open(segments, coord, playlist_state, variant, |key| {
             backend.resource_state(key).ok()
         })
@@ -203,7 +202,7 @@ impl HlsDownloader {
         Self::populate_cached_segments(
             &self.segments,
             &self.coord,
-            &self.fetch,
+            &self.backend,
             &self.playlist_state,
             variant,
         )

@@ -29,7 +29,6 @@ use crate::{
     HlsError,
     config::HlsConfig,
     coord::SegmentRequest,
-    fetch::{DefaultFetchManager, FetchManager},
     parsing::{VariantId, VariantStream},
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
     stream_index::{SegmentData, StreamIndex},
@@ -41,7 +40,27 @@ fn test_downloader(cancel: &CancellationToken) -> kithara_stream::dl::Downloader
     )
 }
 
-fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+type LoaderPair = (
+    kithara_assets::AssetStore<DecryptContext>,
+    Arc<crate::segment_loader::SegmentLoader>,
+);
+
+fn make_test_loader_pair(
+    cancel: CancellationToken,
+    backend: kithara_assets::AssetStore<DecryptContext>,
+) -> LoaderPair {
+    let downloader = test_downloader(&cancel);
+    let cache = crate::playlist_cache::PlaylistCache::new(backend.clone(), downloader.clone());
+    let loader = Arc::new(crate::segment_loader::SegmentLoader::new(
+        downloader,
+        backend.clone(),
+        None,
+        cache,
+    ));
+    (backend, loader)
+}
+
+fn test_fetch_manager(cancel: CancellationToken) -> LoaderPair {
     let noop_drm: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -52,11 +71,10 @@ fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    let downloader = test_downloader(&cancel);
-    Arc::new(FetchManager::new(backend, downloader, cancel))
+    make_test_loader_pair(cancel, backend)
 }
 
-fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> Arc<DefaultFetchManager> {
+fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> LoaderPair {
     let noop_drm: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -69,8 +87,7 @@ fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> Arc<De
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    let downloader = test_downloader(&cancel);
-    Arc::new(FetchManager::new(backend, downloader, cancel))
+    make_test_loader_pair(cancel, backend)
 }
 
 fn parsed_variants(count: usize) -> Vec<VariantStream> {
@@ -121,13 +138,14 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         .collect();
     let playlist_state = Arc::new(PlaylistState::new(variants));
     let parsed = parsed_variants(num_variants);
-    let fetch = test_fetch_manager(cancel.clone());
+    let (backend, loader) = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -166,13 +184,14 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         },
     );
     let parsed = parsed_variants(1);
-    let fetch = test_fetch_manager(cancel.clone());
+    let (backend, loader) = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -627,13 +646,14 @@ fn demand_range_queues_request_for_unloaded_offset() {
         },
     );
     let parsed = parsed_variants(1);
-    let fetch = test_fetch_manager(cancel.clone());
+    let (backend, loader) = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -669,13 +689,14 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     let variant = make_variant_state_with_segments(0, 3);
     let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
     let parsed = parsed_variants(1);
-    let fetch = test_fetch_manager(cancel.clone());
+    let (backend, loader) = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -793,7 +814,7 @@ fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
     let source = build_test_source(1);
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
     let media_key = ResourceKey::from_url(&media_url);
-    let media_res = source.fetch.backend().acquire_resource(&media_key).unwrap();
+    let media_res = &source.backend.acquire_resource(&media_key).unwrap();
     media_res.write_at(0, b"media_data").unwrap();
 
     let seg = ReadSegment {
@@ -820,7 +841,7 @@ fn read_at_does_not_advance_timeline_position() {
     let mut source = build_test_source(1);
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
     let media_key = ResourceKey::from_url(&media_url);
-    let media_res = source.fetch.backend().acquire_resource(&media_key).unwrap();
+    let media_res = &source.backend.acquire_resource(&media_key).unwrap();
     media_res.write_at(0, b"media_data").unwrap();
     media_res.commit(Some(10)).unwrap();
 
@@ -863,13 +884,14 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         },
     );
     let parsed = parsed_variants(1);
-    let fetch = test_fetch_manager(cancel.clone());
+    let (backend, loader) = test_fetch_manager(cancel.clone());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, mut source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -905,7 +927,7 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
 
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
     let media_key = ResourceKey::from_url(&media_url);
-    let media_res = source.fetch.backend().acquire_resource(&media_key).unwrap();
+    let media_res = &source.backend.acquire_resource(&media_key).unwrap();
     media_res.write_at(0, &[0u8; 300]).unwrap();
     media_res.commit(Some(300)).unwrap();
 
@@ -936,13 +958,14 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         0, 4,
     )]));
     let parsed = parsed_variants(1);
-    let fetch = test_disk_fetch_manager(cancel.clone(), dir.path());
+    let (backend, loader) = test_disk_fetch_manager(cancel.clone(), dir.path());
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let (_downloader, mut source) = build_pair(
-        fetch,
+        loader,
+        backend,
         kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default()),
         &parsed,
         &config,
@@ -961,8 +984,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
             .take(128 * 1024 + index * 1024 + 17)
             .collect();
         let res = source
-            .fetch
-            .backend()
+            .backend
             .acquire_resource(&media_key)
             .expect("open media resource");
         res.write_at(0, &payload).expect("write media");
@@ -1008,7 +1030,7 @@ fn hls_phase_ready_when_range_ready() {
 
     // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
-    let res = source.fetch.backend().acquire_resource(&key).unwrap();
+    let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(0, &[0u8; 100]).unwrap();
     res.commit(Some(100)).unwrap();
 
@@ -1021,7 +1043,7 @@ fn hls_phase_waiting_when_active_segment_does_not_cover_requested_range() {
     push_segment(&source.segments, 0, 0, 0, 100);
 
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
-    let res = source.fetch.backend().acquire_resource(&key).unwrap();
+    let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(0, &[0u8; 16]).unwrap();
 
     assert_eq!(source.phase_at(0..16), SourcePhase::Ready);
@@ -1081,7 +1103,7 @@ fn hls_phase_parameterless_ready_when_segment_loaded() {
 
     // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
-    let res = source.fetch.backend().acquire_resource(&key).unwrap();
+    let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(0, &[0u8; 100]).unwrap();
     res.commit(Some(100)).unwrap();
 
@@ -1094,7 +1116,7 @@ fn hls_phase_parameterless_waiting_when_segment_only_partially_streamed() {
     push_segment(&source.segments, 0, 0, 0, 100);
 
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
-    let res = source.fetch.backend().acquire_resource(&key).unwrap();
+    let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(0, &[0u8; 16]).unwrap();
 
     assert_eq!(source.phase(), SourcePhase::Waiting);

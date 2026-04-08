@@ -40,7 +40,7 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// Clone-friendly: all mutable state lives behind `Arc`, so clones see
 /// the same master/media `OnceCell` buckets and configured headers/URLs.
 #[derive(Clone)]
-pub(crate) struct PlaylistCache {
+pub struct PlaylistCache {
     backend: AssetStore<DecryptContext>,
     downloader: Downloader,
     /// Cache-wide config (headers, master URL, base URL override). Held
@@ -60,7 +60,8 @@ struct PlaylistConfig {
 }
 
 impl PlaylistCache {
-    pub(crate) fn new(backend: AssetStore<DecryptContext>, downloader: Downloader) -> Self {
+    #[must_use]
+    pub fn new(backend: AssetStore<DecryptContext>, downloader: Downloader) -> Self {
         Self {
             backend,
             downloader,
@@ -71,19 +72,29 @@ impl PlaylistCache {
         }
     }
 
-    pub(crate) fn set_master_url(&self, url: Url) {
+    pub fn set_master_url(&self, url: Url) {
         self.config.lock_sync_write().master_url = Some(url);
     }
 
-    pub(crate) fn set_base_url(&self, url: Option<Url>) {
+    pub fn set_base_url(&self, url: Option<Url>) {
         self.config.lock_sync_write().base_url = url;
     }
 
-    pub(crate) fn set_headers(&self, headers: Option<Headers>) {
+    pub fn set_headers(&self, headers: Option<Headers>) {
         self.config.lock_sync_write().headers = headers;
     }
 
-    pub(crate) fn headers(&self) -> Option<Headers> {
+    /// Builder-style override of the base URL — used by integration
+    /// tests that want to verify URL resolution without going through
+    /// the full `Hls::create` flow.
+    #[must_use]
+    pub fn with_base_url(self, url: Option<Url>) -> Self {
+        self.set_base_url(url);
+        self
+    }
+
+    #[must_use]
+    pub fn headers(&self) -> Option<Headers> {
         self.config.lock_sync_read().headers.clone()
     }
 
@@ -100,7 +111,7 @@ impl PlaylistCache {
     ///
     /// # Errors
     /// Returns an error when fetching or parsing fails.
-    pub(crate) async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
+    pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
             .master
             .get_or_try_init(|| async {
@@ -116,7 +127,7 @@ impl PlaylistCache {
     ///
     /// # Errors
     /// Returns an error when fetching or parsing fails.
-    pub(crate) async fn media_playlist(
+    pub async fn media_playlist(
         &self,
         url: &Url,
         variant_id: VariantId,
@@ -140,13 +151,15 @@ impl PlaylistCache {
         Ok(playlist.clone())
     }
 
-    pub(crate) fn master_variants(&self) -> Option<Vec<VariantStream>> {
+    #[must_use]
+    pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
         self.master.get().map(|m| m.variants.clone())
     }
 
     /// Variant count derived from the master playlist, cached after the
     /// first successful read.
-    pub(crate) fn num_variants(&self) -> usize {
+    #[must_use]
+    pub fn num_variants(&self) -> usize {
         if let Some(cached) = *self.num_variants_cache.lock_sync_read() {
             return cached;
         }
@@ -163,7 +176,7 @@ impl PlaylistCache {
     ///
     /// # Errors
     /// Returns an error when URL joining fails.
-    pub(crate) fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
+    pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
         let base_override = self.config.lock_sync_read().base_url.clone();
         let resolved = if let Some(base_url) = base_override {
             base_url.join(target).map_err(|e| {
@@ -183,10 +196,7 @@ impl PlaylistCache {
     /// # Errors
     /// Returns an error when the master playlist, URL resolution, or
     /// media playlist fetch fails.
-    pub(crate) async fn load_media_playlist(
-        &self,
-        variant: usize,
-    ) -> HlsResult<(Url, MediaPlaylist)> {
+    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<(Url, MediaPlaylist)> {
         let master_url = self.master_url_clone()?;
         let master = self.master_playlist(&master_url).await?;
 

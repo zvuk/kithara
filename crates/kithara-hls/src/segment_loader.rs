@@ -97,7 +97,7 @@ struct SegmentLoad {
 /// downloader handle, and an optional key manager for DRM. Reads
 /// media playlists through a shared [`PlaylistCache`].
 #[derive(Clone)]
-pub(crate) struct SegmentLoader {
+pub struct SegmentLoader {
     downloader: Downloader,
     backend: AssetStore<DecryptContext>,
     headers: Option<Headers>,
@@ -110,7 +110,8 @@ pub(crate) struct SegmentLoader {
 }
 
 impl SegmentLoader {
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         downloader: Downloader,
         backend: AssetStore<DecryptContext>,
         headers: Option<Headers>,
@@ -127,11 +128,11 @@ impl SegmentLoader {
         }
     }
 
-    pub(crate) fn set_key_manager(&mut self, km: Arc<KeyManager>) {
+    pub fn set_key_manager(&mut self, km: Arc<KeyManager>) {
         self.key_manager = Some(km);
     }
 
-    pub(crate) fn set_headers(&mut self, headers: Option<Headers>) {
+    pub fn set_headers(&mut self, headers: Option<Headers>) {
         self.headers = headers;
     }
 
@@ -148,7 +149,10 @@ impl SegmentLoader {
     /// When `decrypt_ctx` is `Some`, the resource is opened with a
     /// decrypt context; decryption happens on the fly inside
     /// `AssetResource::write_at` via the `ProcessingAssets` layer.
-    pub(crate) async fn start_fetch(
+    ///
+    /// # Errors
+    /// Returns an error when the cache lookup or network fetch fails.
+    pub async fn start_fetch(
         &self,
         url: &Url,
         decrypt_ctx: Option<DecryptContext>,
@@ -341,7 +345,7 @@ impl SegmentLoader {
     ///
     /// # Errors
     /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
-    pub(crate) async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
+    pub async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
         let mut cell = {
             let mut guard = self.init_segments.lock_sync_write();
             guard
@@ -371,7 +375,12 @@ impl SegmentLoader {
         Ok(meta.clone())
     }
 
-    pub(crate) async fn load_media_segment_with_source_for_epoch(
+    /// Load a media segment for the supplied seek epoch.
+    ///
+    /// # Errors
+    /// Returns an error when playlist resolution, DRM context, or
+    /// the segment download fails.
+    pub async fn load_media_segment_with_source_for_epoch(
         &self,
         variant: usize,
         segment_index: usize,
@@ -433,7 +442,12 @@ impl SegmentLoader {
         Ok((load.meta.clone(), load.cached))
     }
 
-    pub(crate) async fn load_media_segment_with_source(
+    /// Convenience wrapper for `load_media_segment_with_source_for_epoch`
+    /// with epoch 0.
+    ///
+    /// # Errors
+    /// Returns an error when the underlying load fails.
+    pub async fn load_media_segment_with_source(
         &self,
         variant: usize,
         segment_index: usize,

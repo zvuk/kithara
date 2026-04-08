@@ -8,7 +8,8 @@ use std::{
 };
 
 use kithara_abr::{AbrController, AbrOptions, Variant};
-use kithara_assets::ResourceKey;
+use kithara_assets::{AssetStore, ResourceKey};
+use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Mutex, time::Duration};
 use kithara_stream::{DownloadCursor, LayoutIndex, StreamResult, Timeline};
@@ -20,9 +21,9 @@ use crate::{
     HlsError,
     coord::{HlsCoord, SegmentRequest},
     downloader::HlsDownloader,
-    fetch::DefaultFetchManager,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
+    segment_loader::SegmentLoader,
     stream_index::{SegmentData, StreamIndex},
     worker::WorkerGuard,
 };
@@ -33,7 +34,8 @@ use crate::{
 /// download worker when the source is dropped.
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
-    pub(crate) fetch: Arc<DefaultFetchManager>,
+    pub(crate) loader: Arc<SegmentLoader>,
+    pub(crate) backend: AssetStore<DecryptContext>,
     pub(crate) segments: Arc<Mutex<StreamIndex>>,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) bus: EventBus,
@@ -230,7 +232,8 @@ impl HlsSource {
 
 /// Build an `HlsDownloader` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
-    fetch: Arc<DefaultFetchManager>,
+    loader: Arc<SegmentLoader>,
+    backend: AssetStore<DecryptContext>,
     downloader_handle: kithara_stream::dl::Downloader,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
@@ -271,7 +274,7 @@ pub(crate) fn build_pair(
     // Segment-based throttle: only for ephemeral backends where LRU eviction
     // destroys data. Disk backends don't need this — files survive eviction.
     // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
-    let look_ahead_segments = if fetch.backend().is_ephemeral() {
+    let look_ahead_segments = if backend.is_ephemeral() {
         const SLOTS_PER_SEGMENT: usize = 2;
         let cache_cap = config.store.effective_cache_capacity().get();
         Some((cache_cap.saturating_sub(SLOTS_PER_SEGMENT) / SLOTS_PER_SEGMENT).max(1))
@@ -283,7 +286,7 @@ pub(crate) fn build_pair(
         crate::size_probe::SizeMapProbe::new(downloader_handle, config.headers.clone());
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
-        fetch: Arc::clone(&fetch),
+        backend: backend.clone(),
         size_probe,
         playlist_state: Arc::clone(&playlist_state),
         cursor: DownloadCursor::fill(0),
@@ -301,7 +304,8 @@ pub(crate) fn build_pair(
 
     let source = HlsSource {
         coord,
-        fetch,
+        loader,
+        backend,
         segments,
         playlist_state,
         bus,

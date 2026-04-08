@@ -9,7 +9,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
     hls::KeyProcessor,
-    internal::{FetchManager, KeyManager},
+    internal::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
 use kithara_test_utils::TestTempDir;
@@ -84,16 +84,12 @@ pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
     kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
 }
 
-pub fn test_fetch_manager(assets: &TestAssets, _net: HttpClient) -> FetchManager {
-    FetchManager::new(
-        assets.assets().clone(),
-        create_test_downloader(),
-        CancellationToken::new(),
-    )
-}
-
-pub fn test_fetch_manager_shared(assets: &TestAssets, net: HttpClient) -> Arc<FetchManager> {
-    Arc::new(test_fetch_manager(assets, net))
+/// Build a test [`PlaylistCache`] backed by the supplied
+/// [`TestAssets`] + a fresh private [`Downloader`]. Used by
+/// integration tests that drive playlist parsing without going
+/// through the full `Hls::create` flow.
+pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
+    PlaylistCache::new(assets.assets().clone(), create_test_downloader())
 }
 
 /// Build a test [`KeyManager`] backed by a fresh [`Downloader`] and the

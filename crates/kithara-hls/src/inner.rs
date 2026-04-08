@@ -24,10 +24,11 @@ use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    fetch::FetchManager,
     keys::KeyManager,
     parsing::variant_info_from_master,
     playlist::PlaylistState,
+    playlist_cache::PlaylistCache,
+    segment_loader::SegmentLoader,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
     worker::spawn_hls_worker,
@@ -129,8 +130,14 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
-        // Build KeyManager directly from the shared downloader + asset
-        // store + base headers — no FetchManager dependency.
+        // Build the small SRP-decomposed HLS sub-systems directly. No
+        // FetchManager façade.
+        let playlist_cache = PlaylistCache::new(backend.clone(), downloader.clone());
+        playlist_cache.set_master_url(config.url.clone());
+        playlist_cache.set_base_url(config.base_url.clone());
+        playlist_cache.set_headers(config.headers.clone());
+
+        // KeyManager: own downloader + backend + headers, no FetchManager.
         let key_manager = Arc::new(KeyManager::from_options(
             downloader.clone(),
             backend.clone(),
@@ -138,21 +145,25 @@ impl StreamType for Hls {
             config.keys.clone(),
         ));
 
-        // Build FetchManager (unified: fetch + playlist cache + Loader)
-        let mut fetch_manager = FetchManager::new(backend, downloader.clone(), cancel.clone())
-            .with_master_url(config.url.clone())
-            .with_base_url(config.base_url.clone())
-            .with_headers(config.headers.clone())
-            .with_key_manager(key_manager);
+        // SegmentLoader: own downloader + backend + headers, shares
+        // PlaylistCache for media playlist lookups.
+        let mut loader = SegmentLoader::new(
+            downloader.clone(),
+            backend.clone(),
+            config.headers.clone(),
+            playlist_cache.clone(),
+        );
+        loader.set_key_manager(key_manager);
+        let loader = Arc::new(loader);
 
-        // Load master playlist
-        let master = fetch_manager.master_playlist(&config.url).await?;
+        // Load master playlist via PlaylistCache.
+        let master = playlist_cache.master_playlist(&config.url).await?;
 
-        // Load all media playlists eagerly for PlaylistState
+        // Load all media playlists eagerly for PlaylistState.
         let mut media_playlists = Vec::new();
         for variant in &master.variants {
-            let media_url = fetch_manager.resolve_url(&config.url, &variant.uri)?;
-            let playlist = fetch_manager
+            let media_url = playlist_cache.resolve_url(&config.url, &variant.uri)?;
+            let playlist = playlist_cache
                 .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
                 .await?;
             media_playlists.push((media_url, playlist));
@@ -162,9 +173,6 @@ impl StreamType for Hls {
             &master.variants,
             &media_playlists,
         ));
-        fetch_manager.set_playlist_state(playlist_state);
-
-        let fetch_manager = Arc::new(fetch_manager);
 
         // Determine initial variant. When a shared ABR controller carries
         // stale state from a previous stream (e.g., current_variant=1 but
@@ -179,8 +187,6 @@ impl StreamType for Hls {
             abr.get_current_variant_index()
         });
 
-        // Event bus was created earlier (before HttpClient) for soft timeout callback.
-
         // Emit VariantsDiscovered event
         let variant_info = variant_info_from_master(&master);
         bus.publish(HlsEvent::VariantsDiscovered {
@@ -189,17 +195,13 @@ impl StreamType for Hls {
         });
 
         // Create HlsDownloader + HlsSource pair
-        let playlist_state = fetch_manager
-            .playlist_state()
-            .cloned()
-            .ok_or_else(|| HlsError::PlaylistParse("playlist state not initialized".to_string()))?;
-        let dl_handle_for_build = downloader.clone();
-        let (downloader, mut source) = build_pair(
-            Arc::clone(&fetch_manager),
-            dl_handle_for_build,
+        let (hls_downloader, mut source) = build_pair(
+            Arc::clone(&loader),
+            backend,
+            downloader.clone(),
             &master.variants,
             &config,
-            playlist_state,
+            Arc::clone(&playlist_state),
             bus,
         );
         *invalidation_target
@@ -211,8 +213,8 @@ impl StreamType for Hls {
         // The WorkerGuard is stored in HlsSource — dropping the source
         // cancels the worker via its child cancel token.
         let guard = spawn_hls_worker(
-            downloader,
-            Arc::clone(&fetch_manager),
+            hls_downloader,
+            Arc::clone(&loader),
             &cancel,
             config.runtime.clone(),
         );
