@@ -14,17 +14,13 @@ use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{RwLock, tokio::sync::OnceCell};
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{
-    ContainerFormat,
-    dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle},
-};
+use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
 use tracing::{debug, trace};
 use url::Url;
 
 use super::{keys::KeyManager, playlist_cache::PlaylistCache};
 use crate::{
     HlsError, HlsResult,
-    ids::{SegmentIndex, VariantIndex},
     parsing::{EncryptionMethod, SegmentKey},
 };
 
@@ -36,13 +32,9 @@ const AES_KEY_LEN: usize = 16;
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
-    pub variant: VariantIndex,
-    pub sequence: u64,
     pub url: Url,
     pub duration: Option<Duration>,
-    pub key: Option<SegmentKey>,
     pub len: u64,
-    pub container: Option<ContainerFormat>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -259,11 +251,6 @@ impl SegmentLoader {
     /// `OnceCell` guarantees exactly one caller performs the download.
     async fn fetch_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
         let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
-        let container = if playlist.init_segment.is_some() {
-            Some(ContainerFormat::Fmp4)
-        } else {
-            Some(ContainerFormat::MpegTs)
-        };
 
         let init_segment = playlist.init_segment.as_ref().ok_or_else(|| {
             HlsError::SegmentNotFound(format!(
@@ -282,13 +269,9 @@ impl SegmentLoader {
         let (init_len, _was_cached) = self.start_fetch(&init_url, decrypt_ctx).await?;
 
         Ok(SegmentMeta {
-            variant,
-            sequence: 0,
             url: init_url,
             duration: None,
-            key: None,
             len: init_len,
-            container,
         })
     }
 
@@ -341,12 +324,6 @@ impl SegmentLoader {
     ) -> HlsResult<(SegmentMeta, bool)> {
         let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
 
-        let container = if playlist.init_segment.is_some() {
-            Some(ContainerFormat::Fmp4)
-        } else {
-            Some(ContainerFormat::MpegTs)
-        };
-
         let segment = playlist.segments.get(segment_index).ok_or_else(|| {
             HlsError::SegmentNotFound(format!(
                 "segment {segment_index} not found in variant {variant} playlist",
@@ -374,13 +351,9 @@ impl SegmentLoader {
                 Ok::<_, HlsError>((
                     cached,
                     SegmentMeta {
-                        variant,
-                        sequence: segment.sequence,
                         url: segment_url.clone(),
                         duration: Some(segment.duration),
-                        key: segment.key.clone(),
                         len: segment_len,
-                        container,
                     },
                 ))
             })
