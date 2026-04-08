@@ -10,11 +10,10 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, AssetsError};
+use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_stream::dl::TrackHandle;
-use thiserror::Error;
 use url::Url;
 
 use super::atomic_fetch::fetch_atomic_body;
@@ -25,24 +24,6 @@ const AES_KEY_LEN: usize = 16;
 
 /// Start offset for sequence number in the 16-byte IV.
 const IV_SEQUENCE_OFFSET: usize = 8;
-
-#[derive(Debug, Error)]
-pub enum KeyError {
-    #[error("Network error: {0}")]
-    Net(#[from] kithara_net::NetError),
-
-    #[error("Assets error: {0}")]
-    Assets(#[from] AssetsError),
-
-    #[error("Key processing failed: {0}")]
-    Processing(String),
-
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
-
-    #[error("Key not found: {0}")]
-    KeyNotFound(String),
-}
 
 /// DRM key fetch + optional processor pipeline.
 ///
