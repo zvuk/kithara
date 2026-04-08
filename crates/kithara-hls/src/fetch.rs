@@ -196,23 +196,6 @@ impl FetchManager {
         self
     }
 
-    /// Merge per-request headers with config-level headers.
-    /// Per-request headers take precedence on key conflict.
-    fn merge_headers(&self, request_headers: Option<Headers>) -> Option<Headers> {
-        match (&self.headers, request_headers) {
-            (None, None) => None,
-            (Some(base), None) => Some(base.clone()),
-            (None, Some(req)) => Some(req),
-            (Some(base), Some(req)) => {
-                let mut merged = base.clone();
-                for (k, v) in req.iter() {
-                    merged.insert(k, v);
-                }
-                Some(merged)
-            }
-        }
-    }
-
     /// Get the parsed playlist state (if set).
     #[must_use]
     pub fn playlist_state(&self) -> Option<&Arc<PlaylistState>> {
@@ -262,25 +245,6 @@ impl FetchManager {
     /// Returns an error when URL joining fails.
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
         self.cache.resolve_url(base, target)
-    }
-
-    // Low-level fetch
-
-    /// Fetch a key resource through the disk cache + unified downloader.
-    ///
-    /// # Errors
-    /// Returns an error when cache access, network fetch, or URL
-    /// handling fails.
-    pub async fn fetch_key(
-        &self,
-        url: &Url,
-        rel_path: &str,
-        headers: Option<Headers>,
-    ) -> HlsResult<Bytes> {
-        let merged = self.merge_headers(headers);
-        self.cache
-            .fetch_atomic_to_store(url, rel_path, merged, "key")
-            .await
     }
 
     /// Start fetching a segment via the unified [`Downloader`].

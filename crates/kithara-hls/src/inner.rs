@@ -129,17 +129,12 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
-        // Build KeyManager for DRM key resolution
+        // Build KeyManager directly from the shared downloader + asset
+        // store + base headers — no FetchManager dependency.
         let key_manager = Arc::new(KeyManager::from_options(
-            // We pass a temporary Arc; the real FetchManager will be used below.
-            // KeyManager needs its own FetchManager for key fetching.
-            // We'll set it up after creating the FetchManager.
-            Arc::new(
-                FetchManager::new(backend.clone(), downloader.clone(), cancel.clone())
-                    .with_master_url(config.url.clone())
-                    .with_base_url(config.base_url.clone())
-                    .with_headers(config.headers.clone()),
-            ),
+            downloader.clone(),
+            backend.clone(),
+            config.headers.clone(),
             config.keys.clone(),
         ));
 

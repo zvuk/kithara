@@ -1,12 +1,25 @@
-use std::{collections::HashMap, sync::Arc};
+#![forbid(unsafe_code)]
+
+//! DRM key fetch + processor pipeline.
+//!
+//! Owns the disk cache + downloader handles directly — no dependency
+//! on `FetchManager`. Shares the same atomic-body helper as
+//! [`crate::playlist_cache::PlaylistCache`] so the cache lookup,
+//! network fetch, and write-back logic is not duplicated.
+
+use std::collections::HashMap;
 
 use bytes::Bytes;
-use kithara_assets::AssetsError;
+use kithara_assets::{AssetStore, AssetsError};
+use kithara_drm::DecryptContext;
 use kithara_net::Headers;
+use kithara_stream::dl::Downloader;
 use thiserror::Error;
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext, config::KeyProcessor, fetch::DefaultFetchManager};
+use crate::{
+    HlsError, HlsResult, KeyContext, atomic_fetch::fetch_atomic_body, config::KeyProcessor,
+};
 
 /// AES-128 key / IV length in bytes.
 const AES_KEY_LEN: usize = 16;
@@ -32,9 +45,17 @@ pub enum KeyError {
     KeyNotFound(String),
 }
 
+/// DRM key fetch + optional processor pipeline.
+///
+/// Reads through the unified [`Downloader`] and persists key bodies in
+/// the supplied [`AssetStore`] via the shared
+/// [`fetch_atomic_body`] helper. No dependency on `FetchManager`.
 #[derive(Clone)]
 pub struct KeyManager {
-    fetch: Arc<DefaultFetchManager>,
+    downloader: Downloader,
+    backend: AssetStore<DecryptContext>,
+    /// Cache-wide headers (typically equal to `HlsConfig::headers`).
+    base_headers: Option<Headers>,
     key_processor: Option<KeyProcessor>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
@@ -43,37 +64,50 @@ pub struct KeyManager {
 impl KeyManager {
     #[must_use]
     pub fn new(
-        fetch: Arc<DefaultFetchManager>,
+        downloader: Downloader,
+        backend: AssetStore<DecryptContext>,
+        base_headers: Option<Headers>,
         key_processor: Option<KeyProcessor>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
-            fetch,
+            downloader,
+            backend,
+            base_headers,
             key_processor,
             key_query_params,
             key_request_headers,
         }
     }
 
-    /// Create from `KeyOptions` and a shared fetch manager.
+    /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
     pub fn from_options(
-        fetch: Arc<DefaultFetchManager>,
+        downloader: Downloader,
+        backend: AssetStore<DecryptContext>,
+        base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
     ) -> Self {
-        Self {
-            fetch,
-            key_processor: options.key_processor,
-            key_query_params: options.query_params,
-            key_request_headers: options.request_headers,
-        }
+        Self::new(
+            downloader,
+            backend,
+            base_headers,
+            options.key_processor,
+            options.query_params,
+            options.request_headers,
+        )
     }
 
     /// Load, optionally preprocess, and return the raw key bytes.
     ///
+    /// Appends configured query parameters, merges key request headers
+    /// over the cache-wide base headers, and routes the fetch through
+    /// [`fetch_atomic_body`] so the disk cache and unified downloader
+    /// are reused.
+    ///
     /// # Errors
-    /// Returns an error when key fetch fails or custom key processing fails.
+    /// Returns an error when the fetch or custom processor fails.
     pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
         if let Some(ref params) = self.key_query_params {
@@ -83,32 +117,41 @@ impl KeyManager {
             }
         }
 
-        let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
-        let rel_path = Self::rel_path_from_url(&fetch_url);
-        let raw_key = Arc::clone(&self.fetch)
-            .fetch_key(&fetch_url, rel_path.as_str(), headers)
-            .await?;
+        let headers = self.merged_headers();
+        let rel_path = rel_path_from_url(&fetch_url);
+        let raw_key = fetch_atomic_body(
+            &self.downloader,
+            &self.backend,
+            headers,
+            &fetch_url,
+            rel_path.as_str(),
+            "key",
+        )
+        .await?;
 
-        let processed_key = self.process_key(raw_key, fetch_url, iv)?;
-        Ok(processed_key)
+        self.process_key(raw_key, fetch_url, iv)
     }
 
-    fn rel_path_from_url(url: &Url) -> String {
-        let last = url
-            .path_segments()
-            .and_then(|mut segments| segments.next_back())
-            .unwrap_or("index");
-        if let Some((stem, _)) = last.rsplit_once('.')
-            && !stem.is_empty()
-        {
-            return stem.to_string();
+    /// Merge key-specific request headers on top of the base headers.
+    /// Key-specific entries take precedence on key conflict.
+    fn merged_headers(&self) -> Option<Headers> {
+        let key_headers = self.key_request_headers.clone().map(Headers::from);
+        match (self.base_headers.clone(), key_headers) {
+            (None, None) => None,
+            (Some(base), None) => Some(base),
+            (None, Some(req)) => Some(req),
+            (Some(base), Some(req)) => {
+                let mut merged = base;
+                for (k, v) in req.iter() {
+                    merged.insert(k, v);
+                }
+                Some(merged)
+            }
         }
-        last.to_string()
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
         let context = KeyContext { iv, url };
-
         if let Some(processor) = &self.key_processor {
             processor(key, context)
         } else {
@@ -145,4 +188,18 @@ impl KeyManager {
         iv[IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
         iv
     }
+}
+
+/// Derive a safe disk cache basename from the key URL.
+fn rel_path_from_url(url: &Url) -> String {
+    let last = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .unwrap_or("index");
+    if let Some((stem, _)) = last.rsplit_once('.')
+        && !stem.is_empty()
+    {
+        return stem.to_string();
+    }
+    last.to_string()
 }

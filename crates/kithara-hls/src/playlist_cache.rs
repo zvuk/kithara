@@ -3,30 +3,25 @@
 //! Playlist fetch + parse + cache for HLS.
 //!
 //! Owns master/media playlist state, the disk cache for playlist bodies,
-//! and URL resolution helpers. Every network fetch routes through the
-//! unified [`Downloader`]. Shared between [`FetchManager`] and future
-//! key/segment modules via [`Clone`] — the `OnceCell` state is held
-//! behind `Arc` so clones see the same cached playlists.
-//!
-//! [`FetchManager`]: crate::fetch::FetchManager
+//! and URL resolution helpers. Network traffic routes through the
+//! shared [`crate::atomic_fetch::fetch_atomic_body`] helper, which in
+//! turn drives the unified [`Downloader`]. Clone-friendly — the
+//! `OnceCell` state lives behind `Arc` so clones see the same cached
+//! playlists.
 
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, ResourceKey};
-use kithara_bufpool::byte_pool;
+use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{RwLock, tokio::sync::OnceCell};
-use kithara_storage::ResourceExt;
-use kithara_stream::dl::{
-    Downloader, FetchCmd, FetchMethod, FetchResult as DlFetchResult, Priority,
-};
-use tracing::{debug, trace};
+use kithara_stream::dl::Downloader;
 use url::Url;
 
 use crate::{
     HlsError, HlsResult,
+    atomic_fetch::fetch_atomic_body,
     parsing::{
         MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist,
@@ -90,95 +85,6 @@ impl PlaylistCache {
         self.master_url
             .as_ref()
             .ok_or_else(|| HlsError::InvalidUrl("master_url not set on PlaylistCache".to_string()))
-    }
-
-    /// Fetch an atomic body (playlist or DRM key) through the disk
-    /// cache + unified downloader pipeline.
-    ///
-    /// Both the playlist and key paths share this helper: a best-effort
-    /// resource lookup, a single `Downloader::execute` on cache miss,
-    /// and a write-back to the asset store.
-    ///
-    /// # Errors
-    /// Returns an error when cache access or the network fetch fails.
-    pub(crate) async fn fetch_atomic_to_store(
-        &self,
-        url: &Url,
-        rel_path: &str,
-        headers: Option<Headers>,
-        resource_kind: &str,
-    ) -> HlsResult<Bytes> {
-        let key = ResourceKey::from_url(url);
-        if let Ok(res) = self.backend.open_resource(&key) {
-            let mut buf = byte_pool().get();
-            let n = res.read_into(&mut buf)?;
-            if n > 0 {
-                debug!(
-                    url = %url,
-                    asset_root = %self.backend.asset_root(),
-                    rel_path = %rel_path,
-                    bytes = n,
-                    resource_kind,
-                    "kithara-hls: cache hit"
-                );
-                return Ok(Bytes::copy_from_slice(&buf));
-            }
-        }
-
-        debug!(
-            url = %url,
-            asset_root = %self.backend.asset_root(),
-            rel_path = %rel_path,
-            resource_kind,
-            "kithara-hls: cache miss -> fetching from network"
-        );
-
-        let res = self.backend.acquire_resource(&key)?;
-        let bytes = self.fetch_atomic_bytes(url.clone(), headers).await?;
-
-        // Best-effort cache write. Concurrent callers may race here: all
-        // miss the cache, all fetch from network, first commits the
-        // resource, subsequent `write_all` calls fail because the
-        // resource is already committed. Harmless — the bytes are in
-        // memory from the network fetch.
-        if let Err(e) = res.write_all(&bytes) {
-            trace!(
-                url = %url,
-                error = %e,
-                resource_kind,
-                "kithara-hls: cache write failed (concurrent commit), using network bytes"
-            );
-        } else {
-            debug!(
-                url = %url,
-                asset_root = %self.backend.asset_root(),
-                rel_path = %rel_path,
-                bytes = bytes.len(),
-                resource_kind,
-                "kithara-hls: fetched from network and cached"
-            );
-        }
-
-        Ok(bytes)
-    }
-
-    /// Fetch a small body via `Downloader::execute` (GET, accumulating).
-    async fn fetch_atomic_bytes(&self, url: Url, headers: Option<Headers>) -> HlsResult<Bytes> {
-        let cmd = FetchCmd {
-            method: FetchMethod::Get,
-            url,
-            range: None,
-            headers,
-            priority: Priority::High,
-            on_connect: None,
-            writer: None,
-            on_complete: None,
-            throttle: None,
-        };
-        match self.downloader.execute(cmd).await {
-            DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
-            DlFetchResult::Err(e) => Err(HlsError::from(e)),
-        }
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -292,9 +198,15 @@ impl PlaylistCache {
     {
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
-        let bytes = self
-            .fetch_atomic_to_store(url, basename, self.headers.clone(), "playlist")
-            .await?;
+        let bytes = fetch_atomic_body(
+            &self.downloader,
+            &self.backend,
+            self.headers.clone(),
+            url,
+            basename,
+            "playlist",
+        )
+        .await?;
         parse(&bytes)
     }
 }

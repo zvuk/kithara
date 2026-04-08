@@ -3,12 +3,13 @@
 //! Provides `TestAssets` and helper functions for creating test assets.
 //! On native: disk-backed with temp directory. On WASM: ephemeral (in-memory).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    internal::FetchManager,
+    hls::KeyProcessor,
+    internal::{FetchManager, KeyManager},
     net::{HttpClient, NetOptions},
 };
 use kithara_test_utils::TestTempDir;
@@ -93,6 +94,25 @@ pub fn test_fetch_manager(assets: &TestAssets, _net: HttpClient) -> FetchManager
 
 pub fn test_fetch_manager_shared(assets: &TestAssets, net: HttpClient) -> Arc<FetchManager> {
     Arc::new(test_fetch_manager(assets, net))
+}
+
+/// Build a test [`KeyManager`] backed by a fresh [`Downloader`] and the
+/// supplied [`TestAssets`]. Mirrors the production constructor in
+/// `Hls::create` so integration tests exercise the same wiring.
+pub fn test_key_manager(
+    assets: &TestAssets,
+    key_processor: Option<KeyProcessor>,
+    key_query_params: Option<HashMap<String, String>>,
+    key_request_headers: Option<HashMap<String, String>>,
+) -> KeyManager {
+    KeyManager::new(
+        create_test_downloader(),
+        assets.assets().clone(),
+        None,
+        key_processor,
+        key_query_params,
+        key_request_headers,
+    )
 }
 
 /// Fixture: test assets

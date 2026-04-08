@@ -42,6 +42,7 @@ pub mod error;
 #[cfg(feature = "internal")]
 pub mod internal;
 
+mod atomic_fetch;
 mod context;
 mod coord;
 mod downloader;
