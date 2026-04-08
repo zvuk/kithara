@@ -33,31 +33,10 @@ const AES_KEY_LEN: usize = 16;
 
 // Public segment-data types
 
-/// Segment type: initialization segment or media segment with index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentType {
-    /// Initialization segment (fMP4 only, contains codec metadata).
-    Init,
-    /// Media segment with index in the playlist.
-    Media(SegmentIndex),
-}
-
-impl SegmentType {
-    /// Get media segment index, or None for init segment.
-    #[must_use]
-    pub fn media_index(self) -> Option<usize> {
-        match self {
-            Self::Media(idx) => Some(idx),
-            Self::Init => None,
-        }
-    }
-}
-
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub variant: VariantIndex,
-    pub segment_type: SegmentType,
     pub sequence: u64,
     pub url: Url,
     pub duration: Option<Duration>,
@@ -304,7 +283,6 @@ impl SegmentLoader {
 
         Ok(SegmentMeta {
             variant,
-            segment_type: SegmentType::Init,
             sequence: 0,
             url: init_url,
             duration: None,
@@ -397,7 +375,6 @@ impl SegmentLoader {
                     cached,
                     SegmentMeta {
                         variant,
-                        segment_type: SegmentType::Media(segment_index),
                         sequence: segment.sequence,
                         url: segment_url.clone(),
                         duration: Some(segment.duration),
