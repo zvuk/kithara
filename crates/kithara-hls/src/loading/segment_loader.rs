@@ -72,11 +72,9 @@ struct SegmentFetchKey {
     key: ResourceKey,
 }
 
-#[derive(Clone, Debug)]
-struct SegmentLoad {
-    cached: bool,
-    meta: SegmentMeta,
-}
+/// Cached result of an in-flight or completed media segment fetch:
+/// `(was_cached, meta)`.
+type SegmentLoad = (bool, SegmentMeta);
 
 // SegmentLoader
 
@@ -395,9 +393,9 @@ impl SegmentLoader {
             .get_or_try_init(|| async {
                 let (segment_len, cached) = self.start_fetch(&segment_url, decrypt_ctx).await?;
 
-                Ok::<_, HlsError>(SegmentLoad {
+                Ok::<_, HlsError>((
                     cached,
-                    meta: SegmentMeta {
+                    SegmentMeta {
                         variant,
                         segment_type: SegmentType::Media(segment_index),
                         sequence: segment.sequence,
@@ -407,13 +405,13 @@ impl SegmentLoader {
                         len: segment_len,
                         container,
                     },
-                })
+                ))
             })
             .await;
         self.clear_media_segment_cell(&fetch_key, &cell);
 
-        let load = load?;
-        Ok((load.meta.clone(), load.cached))
+        let (cached, meta) = load?;
+        Ok((meta.clone(), *cached))
     }
 
     /// Convenience wrapper for `load_media_segment_with_source_for_epoch`
