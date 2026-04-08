@@ -53,6 +53,7 @@ mod keys;
 mod parsing;
 pub(crate) mod playlist;
 mod playlist_cache;
+mod segment_loader;
 mod size_probe;
 mod source;
 pub(crate) mod stream_index;

@@ -38,17 +38,25 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// Playlist fetch + parse + disk cache.
 ///
 /// Clone-friendly: all mutable state lives behind `Arc`, so clones see
-/// the same master/media `OnceCell` buckets.
+/// the same master/media `OnceCell` buckets and configured headers/URLs.
 #[derive(Clone)]
 pub(crate) struct PlaylistCache {
     backend: AssetStore<DecryptContext>,
     downloader: Downloader,
-    headers: Option<Headers>,
-    master_url: Option<Url>,
-    base_url: Option<Url>,
+    /// Cache-wide config (headers, master URL, base URL override). Held
+    /// behind `Arc<RwLock<...>>` so clones see the same builder
+    /// mutations.
+    config: Arc<RwLock<PlaylistConfig>>,
     master: Arc<OnceCell<MasterPlaylist>>,
     media: Arc<RwLock<HashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>>,
     num_variants_cache: Arc<RwLock<Option<usize>>>,
+}
+
+#[derive(Default, Clone)]
+struct PlaylistConfig {
+    headers: Option<Headers>,
+    master_url: Option<Url>,
+    base_url: Option<Url>,
 }
 
 impl PlaylistCache {
@@ -56,34 +64,34 @@ impl PlaylistCache {
         Self {
             backend,
             downloader,
-            headers: None,
-            master_url: None,
-            base_url: None,
+            config: Arc::new(RwLock::new(PlaylistConfig::default())),
             master: Arc::new(OnceCell::new()),
             media: Arc::new(RwLock::new(HashMap::new())),
             num_variants_cache: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub(crate) fn set_master_url(&mut self, url: Url) {
-        self.master_url = Some(url);
+    pub(crate) fn set_master_url(&self, url: Url) {
+        self.config.lock_sync_write().master_url = Some(url);
     }
 
-    pub(crate) fn set_base_url(&mut self, url: Option<Url>) {
-        self.base_url = url;
+    pub(crate) fn set_base_url(&self, url: Option<Url>) {
+        self.config.lock_sync_write().base_url = url;
     }
 
-    pub(crate) fn set_headers(&mut self, headers: Option<Headers>) {
-        self.headers = headers;
+    pub(crate) fn set_headers(&self, headers: Option<Headers>) {
+        self.config.lock_sync_write().headers = headers;
     }
 
-    pub(crate) fn headers(&self) -> Option<&Headers> {
-        self.headers.as_ref()
+    pub(crate) fn headers(&self) -> Option<Headers> {
+        self.config.lock_sync_read().headers.clone()
     }
 
-    pub(crate) fn master_url(&self) -> HlsResult<&Url> {
-        self.master_url
-            .as_ref()
+    fn master_url_clone(&self) -> HlsResult<Url> {
+        self.config
+            .lock_sync_read()
+            .master_url
+            .clone()
             .ok_or_else(|| HlsError::InvalidUrl("master_url not set on PlaylistCache".to_string()))
     }
 
@@ -156,7 +164,8 @@ impl PlaylistCache {
     /// # Errors
     /// Returns an error when URL joining fails.
     pub(crate) fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
-        let resolved = if let Some(ref base_url) = self.base_url {
+        let base_override = self.config.lock_sync_read().base_url.clone();
+        let resolved = if let Some(base_url) = base_override {
             base_url.join(target).map_err(|e| {
                 HlsError::InvalidUrl(format!("Failed to resolve URL with base override: {e}"))
             })?
@@ -178,15 +187,15 @@ impl PlaylistCache {
         &self,
         variant: usize,
     ) -> HlsResult<(Url, MediaPlaylist)> {
-        let master_url = self.master_url()?;
-        let master = self.master_playlist(master_url).await?;
+        let master_url = self.master_url_clone()?;
+        let master = self.master_playlist(&master_url).await?;
 
         let variant_stream = master
             .variants
             .get(variant)
             .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
 
-        let media_url = self.resolve_url(master_url, &variant_stream.uri)?;
+        let media_url = self.resolve_url(&master_url, &variant_stream.uri)?;
         let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
 
         Ok((media_url, playlist))
@@ -198,10 +207,11 @@ impl PlaylistCache {
     {
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
+        let headers = self.headers();
         let bytes = fetch_atomic_body(
             &self.downloader,
             &self.backend,
-            self.headers.clone(),
+            headers,
             url,
             basename,
             "playlist",
