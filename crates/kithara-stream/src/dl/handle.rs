@@ -114,12 +114,17 @@ impl TrackHandle {
     /// If `cmd.on_complete` is set, it is called with `&result` before
     /// the result is returned — both the callback and the caller observe
     /// the same result.
+    ///
+    /// The fetch honors the per-track cancellation token: dropping the
+    /// last clone of this handle cancels any in-flight `execute` promptly,
+    /// without waiting for `chunk_timeout`.
     pub async fn execute(&self, mut cmd: FetchCmd) -> FetchResult {
         let on_complete = cmd.on_complete.take();
         let result = fetch_only(
             &self.pool.client,
             self.pool.chunk_timeout,
             &self.pool.pool,
+            &self.state.cancel,
             cmd,
         )
         .await;

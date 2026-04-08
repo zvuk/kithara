@@ -201,8 +201,9 @@ impl Downloader {
             let client = self.inner.client.clone();
             let chunk_timeout = self.inner.chunk_timeout;
             let pool = self.inner.pool.clone();
+            let cancel = self.inner.cancel.clone();
             task::spawn(async move {
-                execute_one(&client, chunk_timeout, &pool, cmd).await;
+                execute_one(&client, chunk_timeout, &pool, &cancel, cmd).await;
             });
 
             hang_tick!();
@@ -218,10 +219,11 @@ pub(super) async fn execute_one(
     client: &HttpClient,
     chunk_timeout: Duration,
     pool: &BytePool,
+    cancel: &CancellationToken,
     mut cmd: FetchCmd,
 ) -> FetchResult {
     let on_complete = cmd.on_complete.take();
-    let result = fetch_only(client, chunk_timeout, pool, cmd).await;
+    let result = fetch_only(client, chunk_timeout, pool, cancel, cmd).await;
     if let Some(cb) = on_complete {
         cb(&result);
     }
@@ -235,43 +237,56 @@ pub(super) async fn execute_one(
 /// responsible for invoking `on_complete` (if any) — this split enables
 /// ordered `on_complete` delivery in batched execution where the caller
 /// wants to fire callbacks in a deterministic order.
+///
+/// Honors `cancel` at three points: before the initial HEAD/GET request,
+/// before each chunk wait in the body stream, and during throttle backoff.
+/// Returns [`FetchResult::Err(NetError::Cancelled)`] when the token fires.
 #[expect(clippy::cognitive_complexity)]
 pub(super) async fn fetch_only(
     client: &HttpClient,
     chunk_timeout: Duration,
     pool: &BytePool,
+    cancel: &CancellationToken,
     mut cmd: FetchCmd,
 ) -> FetchResult {
     let url = cmd.url.clone();
 
     // HEAD — headers only, no body.
     if cmd.method == FetchMethod::Head {
-        return match client.head(url.clone(), cmd.headers.take()).await {
-            Ok(headers) => {
-                if let Some(on_connect) = cmd.on_connect.take() {
-                    on_connect(&headers);
+        return tokio::select! {
+            () = cancel.cancelled() => FetchResult::Err(NetError::Cancelled),
+            result = client.head(url.clone(), cmd.headers.take()) => match result {
+                Ok(headers) => {
+                    if let Some(on_connect) = cmd.on_connect.take() {
+                        on_connect(&headers);
+                    }
+                    FetchResult::Ok {
+                        bytes_written: 0,
+                        headers,
+                        body: None,
+                    }
                 }
-                FetchResult::Ok {
-                    bytes_written: 0,
-                    headers,
-                    body: None,
+                Err(e) => {
+                    debug!(?url, "head failed: {e}");
+                    FetchResult::Err(e)
                 }
-            }
-            Err(e) => {
-                debug!(?url, "head failed: {e}");
-                FetchResult::Err(e)
-            }
+            },
         };
     }
 
     // GET or Stream — both fetch a body stream.
-    let stream_result = match cmd.range.take() {
-        Some(range) => {
-            client
-                .get_range(url.clone(), range, cmd.headers.take())
-                .await
-        }
-        None => client.stream(url.clone(), cmd.headers.take()).await,
+    let stream_result = tokio::select! {
+        () = cancel.cancelled() => return FetchResult::Err(NetError::Cancelled),
+        r = async {
+            match cmd.range.take() {
+                Some(range) => {
+                    client
+                        .get_range(url.clone(), range, cmd.headers.take())
+                        .await
+                }
+                None => client.stream(url.clone(), cmd.headers.take()).await,
+            }
+        } => r,
     };
 
     let mut byte_stream = match stream_result {
@@ -299,6 +314,7 @@ pub(super) async fn fetch_only(
 
     loop {
         let chunk = tokio::select! {
+            () = cancel.cancelled() => return FetchResult::Err(NetError::Cancelled),
             c = byte_stream.next() => c,
             () = sleep(chunk_timeout) => None,
         };
@@ -318,7 +334,12 @@ pub(super) async fn fetch_only(
                 // Backpressure: pause while download is too far ahead.
                 if let Some(ref throttle) = cmd.throttle {
                     while throttle() {
-                        sleep(THROTTLE_PAUSE).await;
+                        tokio::select! {
+                            () = cancel.cancelled() => {
+                                return FetchResult::Err(NetError::Cancelled);
+                            }
+                            () = sleep(THROTTLE_PAUSE) => {}
+                        }
                     }
                 }
             }

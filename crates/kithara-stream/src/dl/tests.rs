@@ -8,9 +8,11 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll, Waker},
+    time::Instant,
 };
 
 use futures::Stream;
+use kithara_net::NetOptions;
 use kithara_platform::{
     Mutex,
     time::Duration,
@@ -19,7 +21,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{Downloader, DownloaderConfig, FetchCmd};
+use super::{Downloader, DownloaderConfig, FetchCmd, FetchResult};
 
 const POLL_MS: u64 = 50;
 const SETTLE_MS: u64 = 100;
@@ -225,4 +227,95 @@ async fn register_after_first() {
 
     sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 2);
+}
+
+// R4: per-track cancel regression tests.
+
+/// Build a `FetchCmd` whose `stream()` will hit a non-routable address and
+/// hang in connect (until the track's cancel fires or `chunk_timeout` expires).
+fn unreachable_stream_cmd() -> FetchCmd {
+    FetchCmd {
+        method: super::FetchMethod::Stream,
+        // TEST-NET-1 (RFC 5737) — guaranteed not to route anywhere. Port 1
+        // with a connect attempt will either hang until kernel timeout or
+        // return a connection error; the important thing is that a
+        // cooperative cancel should beat any of those outcomes.
+        url: Url::parse("http://192.0.2.1:1/").expect("valid url"),
+        range: None,
+        headers: None,
+        on_connect: None,
+        writer: None,
+        throttle: None,
+        on_complete: None,
+    }
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_returns_promptly_when_track_dropped_mid_fetch() {
+    // Use a long request timeout so "promptly" can only be achieved via
+    // cancel, not by waiting for the fetch itself to naturally fail.
+    let net = NetOptions {
+        request_timeout: Duration::from_secs(60),
+        ..NetOptions::default()
+    };
+    let dl = Downloader::new(DownloaderConfig::default().with_net(net));
+
+    // Register a dummy stream to get a TrackHandle.
+    let (stream, _inner) = TestStream::new();
+    let handle = dl.register(stream);
+
+    // Spawn an execute that will hang on the unreachable address.
+    let h2 = handle.clone();
+    let task = kithara_platform::tokio::task::spawn(async move {
+        let start = Instant::now();
+        let result = h2.execute(unreachable_stream_cmd()).await;
+        (start.elapsed(), result)
+    });
+
+    // Let the fetch start.
+    sleep(POLL_MS).await;
+
+    // Cancel track A explicitly — this is what `TrackInner::Drop` would do
+    // when the last clone of the handle is dropped.
+    handle.cancel().cancel();
+
+    // The task should finish within a second — much less than the 60s
+    // timeout we configured.
+    let (elapsed, result) = kithara_platform::tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("task should complete within 2s after track cancel")
+        .expect("task should not panic");
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "execute should return promptly after track cancel, took {elapsed:?}"
+    );
+    // Result must be an error of some kind — either Cancelled (if the cancel
+    // fired before the connection error propagated) or Http (if the
+    // unreachable address resolved to a connection failure first). What
+    // matters is that we did NOT wait 60s.
+    assert!(
+        matches!(result, FetchResult::Err(_)),
+        "expected Err after track cancel"
+    );
+}
+
+#[kithara_test_macros::test(tokio)]
+async fn execute_cancel_is_scoped_to_one_track() {
+    // Two tracks — cancelling one should not affect the other.
+    let dl = Downloader::new(DownloaderConfig::default());
+    let (s1, _i1) = TestStream::new();
+    let (s2, _i2) = TestStream::new();
+    let track_a = dl.register(s1);
+    let track_b = dl.register(s2);
+
+    // Cancel track A.
+    track_a.cancel().cancel();
+
+    // Track B's cancel token must still be alive — dropping it later should
+    // NOT have been pre-triggered by A's cancel.
+    assert!(
+        !track_b.cancel().is_cancelled(),
+        "track B cancel should not fire when A cancels"
+    );
 }
