@@ -1069,10 +1069,7 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
     ]));
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
-    let config = HlsConfig {
-        cancel: Some(cancel),
-        ..HlsConfig::default()
-    };
+    let config = HlsConfig::default().with_cancel(cancel);
     let source = build_source(
         backend,
         &variants,
@@ -1096,14 +1093,12 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     ]));
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
-    let config = HlsConfig {
-        abr: Some(kithara_abr::AbrController::new(AbrOptions {
+    let config = HlsConfig::default()
+        .with_abr(kithara_abr::AbrController::new(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
-        })),
-        cancel: Some(cancel),
-        ..HlsConfig::default()
-    };
+        }))
+        .with_cancel(cancel);
     let source = build_source(
         backend,
         &variants,

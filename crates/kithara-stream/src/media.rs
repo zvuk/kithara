@@ -62,6 +62,7 @@ pub enum AudioCodec {
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
     pub channels: Option<u16>,

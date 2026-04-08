@@ -44,13 +44,10 @@ impl HlsSource {
 
         #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
         let segment_index = segment_index as u32;
-        Ok(SourceSeekAnchor {
-            byte_offset,
-            segment_start,
-            segment_end: Some(segment_end),
-            segment_index: Some(segment_index),
-            variant_index: Some(variant),
-        })
+        Ok(SourceSeekAnchor::new(byte_offset, segment_start)
+            .with_segment_end(segment_end)
+            .with_segment_index(segment_index)
+            .with_variant_index(variant))
     }
 
     /// Classify a seek as Preserve or Reset.

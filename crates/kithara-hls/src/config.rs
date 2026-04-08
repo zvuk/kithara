@@ -62,6 +62,7 @@ impl KeyOptions {
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct HlsConfig {
     /// Pre-created ABR controller. When `None`, `build_pair()` creates
     /// one from default `AbrOptions`.

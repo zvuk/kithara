@@ -245,13 +245,9 @@ fn push_segment(
     reason = "test helper, segment index fits u32"
 )]
 fn make_anchor(variant: usize, segment: usize, offset: u64) -> SourceSeekAnchor {
-    SourceSeekAnchor {
-        byte_offset: offset,
-        segment_start: Duration::ZERO,
-        segment_end: None,
-        variant_index: Some(variant),
-        segment_index: Some(segment as u32),
-    }
+    SourceSeekAnchor::new(offset, Duration::ZERO)
+        .with_variant_index(variant)
+        .with_segment_index(segment as u32)
 }
 
 #[kithara::test]

@@ -74,13 +74,29 @@ impl StdError for VariantChangeError {}
 ///
 /// Represents a deterministic mapping from target playback time to a byte
 /// position and segment context inside the source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, derive_setters::Setters)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct SourceSeekAnchor {
     pub byte_offset: u64,
     pub segment_start: Duration,
     pub segment_end: Option<Duration>,
     pub segment_index: Option<u32>,
     pub variant_index: Option<usize>,
+}
+
+impl SourceSeekAnchor {
+    /// Create a minimal anchor with just a byte offset and segment start
+    /// time. Optional fields default to `None`; set them via the
+    /// `with_*` builders.
+    #[must_use]
+    pub fn new(byte_offset: u64, segment_start: Duration) -> Self {
+        Self {
+            byte_offset,
+            segment_start,
+            ..Self::default()
+        }
+    }
 }
 
 /// Sync random-access source.
