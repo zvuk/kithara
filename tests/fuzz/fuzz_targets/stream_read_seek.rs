@@ -123,15 +123,10 @@ impl TransferCoordination<()> for ScriptCoord {
 impl Source for ScriptSource {
     type Error = io::Error;
     type Topology = ();
-    type Layout = ();
     type Coord = ScriptCoord;
     type Demand = ();
 
     fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
         &()
     }
 
@@ -180,7 +175,6 @@ impl StreamType for DummyType {
     type Demand = ();
     type Error = io::Error;
     type Events = ();
-    type Layout = ();
     type Source = ScriptSource;
     type Topology = ();
 

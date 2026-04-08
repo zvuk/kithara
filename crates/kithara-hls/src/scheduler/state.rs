@@ -124,11 +124,9 @@ impl HlsScheduler {
             let segments = self.segments.lock_sync();
             let vs = segments.variant_segments(variant)?;
             vs.iter().find_map(|(segment_index, _data)| {
-                <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-                    &segments,
-                    (variant, segment_index),
-                )
-                .map(|range| (segment_index, range.start))
+                segments
+                    .item_range((variant, segment_index))
+                    .map(|range| (segment_index, range.start))
             })
         };
         let (segment_index, byte_offset) = anchor?;
@@ -250,11 +248,9 @@ impl HlsScheduler {
         segment_index: usize,
     ) -> Option<u64> {
         let segments = self.segments.lock_sync();
-        <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-            &segments,
-            (variant, segment_index),
-        )
-        .map(|r| r.start)
+        segments
+            .item_range((variant, segment_index))
+            .map(|r| r.start)
     }
 
     pub(super) fn expected_layout_offset(
@@ -263,10 +259,7 @@ impl HlsScheduler {
         segment_index: usize,
     ) -> Option<u64> {
         let segments = self.segments.lock_sync();
-        if let Some(range) = <StreamIndex as kithara_stream::LayoutIndex>::item_range(
-            &segments,
-            (variant, segment_index),
-        ) {
+        if let Some(range) = segments.item_range((variant, segment_index)) {
             return Some(range.start);
         }
         drop(segments);

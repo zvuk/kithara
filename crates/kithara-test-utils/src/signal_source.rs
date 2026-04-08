@@ -61,15 +61,10 @@ pub struct SignalSourceError;
 impl<S: signal::SignalFn> Source for SignalSource<S> {
     type Error = SignalSourceError;
     type Topology = ();
-    type Layout = ();
     type Coord = MemoryCoord;
     type Demand = ();
 
     fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
         &()
     }
 
@@ -148,7 +143,6 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 impl<S: signal::SignalFn> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
     type Topology = ();
-    type Layout = ();
     type Coord = MemoryCoord;
     type Demand = ();
     type Source = SignalSource<S>;

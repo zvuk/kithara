@@ -21,7 +21,6 @@ use kithara_storage::WaitOutcome;
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
     coordination::TransferCoordination,
-    layout::LayoutIndex,
     source::{ReadOutcome, Source, VariantChangeError},
     topology::Topology,
 };
@@ -40,20 +39,13 @@ pub trait StreamType: MaybeSend + 'static {
     type Config: Default + MaybeSend;
     /// Read-only media structure for this stream type.
     type Topology: Topology;
-    /// Committed placement of logical items in the virtual byte space.
-    type Layout: LayoutIndex;
     /// Shared runtime coordination between source and downloader.
     type Coord: TransferCoordination<Self::Demand>;
     /// On-demand request type used by the stream-specific coordinator.
     type Demand: Clone + Send + Sync + 'static;
 
     /// Source implementing `Source`.
-    type Source: Source<
-            Topology = Self::Topology,
-            Layout = Self::Layout,
-            Coord = Self::Coord,
-            Demand = Self::Demand,
-        >;
+    type Source: Source<Topology = Self::Topology, Coord = Self::Coord, Demand = Self::Demand>;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -388,15 +380,10 @@ mod tests {
     impl Source for ScriptSource {
         type Error = io::Error;
         type Topology = ();
-        type Layout = ();
         type Coord = TestCoord;
         type Demand = ();
 
         fn topology(&self) -> &Self::Topology {
-            &()
-        }
-
-        fn layout(&self) -> &Self::Layout {
             &()
         }
 
@@ -456,7 +443,6 @@ mod tests {
         type Demand = ();
         type Error = io::Error;
         type Events = ();
-        type Layout = ();
         type Source = ScriptSource;
         type Topology = ();
 
@@ -473,7 +459,6 @@ mod tests {
         type Demand = ();
         type Error = io::Error;
         type Events = ();
-        type Layout = ();
         type Source = SeekDuringWaitSource;
         type Topology = ();
 
@@ -490,15 +475,10 @@ mod tests {
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
         type Topology = ();
-        type Layout = ();
         type Coord = TestCoord;
         type Demand = ();
 
         fn topology(&self) -> &Self::Topology {
-            &()
-        }
-
-        fn layout(&self) -> &Self::Layout {
             &()
         }
 

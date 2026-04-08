@@ -7,5 +7,4 @@ crates/kithara-ffi/src/observer.rs|FFI callback traits (PlayerObserver/ItemObser
 crates/kithara-app/src/controls.rs|PlayerControls is an app-level UI contract implemented by AppController; validated through integration tests
 crates/kithara-app/src/frontend.rs|Frontend trait requires Sized and has lifecycle methods (new/start/run_loop/shutdown); not suitable for unimock
 crates/kithara-stream/src/coordination.rs|TransferCoordination is a generic coordination trait validated through concrete implementations in backend tests
-crates/kithara-stream/src/layout.rs|LayoutIndex is a stream-internal trait validated through concrete HLS/file implementations
 crates/kithara-stream/src/topology.rs|Topology is a stream-internal trait validated through concrete HLS/file implementations

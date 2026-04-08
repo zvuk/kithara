@@ -13,7 +13,6 @@
 use std::{collections::BTreeMap, ops::Range};
 
 use kithara_assets::ResourceKey;
-use kithara_stream::LayoutIndex;
 use rangemap::RangeMap;
 use tracing::trace;
 use url::Url;
@@ -630,18 +629,24 @@ impl StreamIndex {
     }
 }
 
-// LayoutIndex
+// Layout lookup helpers
 
-impl LayoutIndex for StreamIndex {
-    type Item = (VariantIndex, SegmentIndex);
-
-    fn item_at_offset(&self, offset: u64) -> Option<Self::Item> {
+impl StreamIndex {
+    /// Resolve a byte offset to the (variant, segment) pair that owns it
+    /// in the current layout variant.
+    #[must_use]
+    pub fn item_at_offset(&self, offset: u64) -> Option<(VariantIndex, SegmentIndex)> {
         self.variant_byte_maps[self.layout_variant]
             .get(&offset)
             .map(|&seg_idx| (self.layout_variant, seg_idx))
     }
 
-    fn item_range(&self, (variant, seg_idx): Self::Item) -> Option<Range<u64>> {
+    /// Byte range of `(variant, seg_idx)` in that variant's byte map.
+    #[must_use]
+    pub fn item_range(
+        &self,
+        (variant, seg_idx): (VariantIndex, SegmentIndex),
+    ) -> Option<Range<u64>> {
         self.variant_byte_maps
             .get(variant)?
             .iter()
@@ -1024,7 +1029,7 @@ mod tests {
         assert_eq!(idx.find_at_offset(100).expect("v0").segment_index, 1);
     }
 
-    // LayoutIndex
+    // Layout lookup helpers
 
     #[kithara::test]
     fn layout_index_item_at_offset() {

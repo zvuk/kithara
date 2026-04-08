@@ -56,15 +56,10 @@ impl TimelineSource {
 impl Source for TimelineSource {
     type Error = io::Error;
     type Topology = ();
-    type Layout = ();
     type Coord = TimelineCoord;
     type Demand = ();
 
     fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
         &()
     }
 
@@ -113,7 +108,6 @@ struct TimelineStream;
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
     type Topology = ();
-    type Layout = ();
     type Coord = TimelineCoord;
     type Demand = ();
     type Source = TimelineSource;

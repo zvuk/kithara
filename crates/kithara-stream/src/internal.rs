@@ -8,7 +8,6 @@ pub use crate::{
     demand::DemandSlot,
     error::{StreamError, StreamResult},
     fetch::{EpochValidator, Fetch},
-    layout::LayoutIndex,
     media::{AudioCodec, ContainerFormat, MediaInfo},
     source::{Source, SourceSeekAnchor},
     stream::{Stream, StreamType},

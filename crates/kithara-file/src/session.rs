@@ -430,15 +430,10 @@ impl Stream for FileSource {
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
     type Topology = ();
-    type Layout = ();
     type Coord = Arc<FileCoord>;
     type Demand = Range<u64>;
 
     fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
         &()
     }
 

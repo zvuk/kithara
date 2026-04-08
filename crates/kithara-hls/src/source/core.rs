@@ -12,7 +12,7 @@ use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Mutex, time::Duration};
-use kithara_stream::{DownloadCursor, LayoutIndex, StreamResult, Timeline};
+use kithara_stream::{DownloadCursor, StreamResult, Timeline};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -134,9 +134,7 @@ impl HlsSource {
         segment_index: SegmentIndex,
     ) -> Option<u64> {
         let segments = self.segments.lock_sync();
-        if let Some(range) =
-            <StreamIndex as LayoutIndex>::item_range(&segments, (variant, segment_index))
-        {
+        if let Some(range) = segments.item_range((variant, segment_index)) {
             return Some(range.start);
         }
         let layout_offset =
@@ -180,7 +178,7 @@ impl HlsSource {
         // The pipeline waits (source_is_ready_for_boundary) until segment 0
         // is actually downloaded before creating the decoder.
         if seg_idx == 0 {
-            let seg_range = <StreamIndex as LayoutIndex>::item_range(&segments, (variant, 0))?;
+            let seg_range = segments.item_range((variant, 0))?;
             if seg_data.init_url.is_none() {
                 drop(segments);
                 if let Some(metadata_range) = self.metadata_range_for_segment(variant, 0) {
@@ -192,8 +190,7 @@ impl HlsSource {
 
         // Init-bearing segment is not segment 0 — use segment 0's range
         // (from byte map or metadata) so the decoder starts at offset 0.
-        if let Some(seg0_range) = <StreamIndex as LayoutIndex>::item_range(&segments, (variant, 0))
-        {
+        if let Some(seg0_range) = segments.item_range((variant, 0)) {
             return Some(seg0_range);
         }
         drop(segments);

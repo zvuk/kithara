@@ -37,16 +37,11 @@ fn wait_range_hang_timeout(timeout: Duration) -> Duration {
 impl Source for HlsSource {
     type Error = HlsError;
     type Topology = Arc<PlaylistState>;
-    type Layout = Arc<Mutex<StreamIndex>>;
     type Coord = Arc<HlsCoord>;
     type Demand = SegmentRequest;
 
     fn topology(&self) -> &Self::Topology {
         &self.playlist_state
-    }
-
-    fn layout(&self) -> &Self::Layout {
-        &self.segments
     }
 
     fn coord(&self) -> &Self::Coord {
@@ -373,7 +368,7 @@ impl Source for HlsSource {
     fn current_segment_range(&self) -> Option<Range<u64>> {
         let (variant, seg_idx) = self.current_loaded_segment_key()?;
         let segments = self.segments.lock_sync();
-        <StreamIndex as kithara_stream::LayoutIndex>::item_range(&segments, (variant, seg_idx))
+        segments.item_range((variant, seg_idx))
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
