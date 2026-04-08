@@ -16,6 +16,7 @@
 pub(crate) mod helpers;
 mod state;
 
+mod cmd_builder;
 mod commit;
 mod cursor;
 mod plan;

@@ -12,20 +12,19 @@
 //! - Cancellation via `CancellationToken`
 //! - Hang detector ticks
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use futures::{StreamExt, stream::FuturesUnordered};
 use kithara_platform::{
     JoinHandle,
     thread::{spawn_named, yield_now},
-    time::Instant,
     tokio,
     tokio::task::yield_now as task_yield_now,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{HlsFetch, HlsPlan, HlsScheduler, plan::PlanOutcome};
+use super::{HlsFetch, HlsPlan, HlsScheduler, cmd_builder::fetch_plan, plan::PlanOutcome};
 use crate::{HlsError, loading::SegmentLoader};
 
 /// Default yield interval (iterations between `yield_now` calls).
@@ -427,60 +426,4 @@ async fn fetch_and_commit_demand(
             Ok(false)
         }
     }
-}
-
-/// Fetch a single HLS plan — replaces the deleted `HlsIo::fetch`.
-///
-/// Kicks off the init-segment load (if requested) in parallel with the
-/// media-segment load via `tokio::join!`, measures duration, and
-/// packages the result into an [`HlsFetch`].
-async fn fetch_plan(loader: &Arc<SegmentLoader>, plan: HlsPlan) -> Result<HlsFetch, HlsError> {
-    let start = Instant::now();
-
-    let init_fut = {
-        let loader = Arc::clone(loader);
-        let variant = plan.variant;
-        let need_init = plan.need_init;
-        async move {
-            if need_init {
-                match loader.load_init_segment(variant).await {
-                    Ok(m) => (Some(m.url), m.len),
-                    Err(e) => {
-                        tracing::warn!(
-                            variant,
-                            error = %e,
-                            "init segment load failed"
-                        );
-                        (None, 0)
-                    }
-                }
-            } else {
-                (None, 0)
-            }
-        }
-    };
-
-    let seg_idx = plan
-        .segment
-        .media_index()
-        .expect("fetch_plan called with non-Media segment");
-
-    let (media_result, (init_url, init_len)) = tokio::join!(
-        loader.load_media_segment_with_source_for_epoch(plan.variant, seg_idx, plan.seek_epoch),
-        init_fut,
-    );
-
-    let duration: Duration = start.elapsed();
-    let (media, media_cached) = media_result?;
-
-    Ok(HlsFetch {
-        init_len,
-        init_url,
-        media,
-        media_cached,
-        segment: plan.segment,
-        variant: plan.variant,
-        duration,
-        seek_epoch: plan.seek_epoch,
-    })
 }
