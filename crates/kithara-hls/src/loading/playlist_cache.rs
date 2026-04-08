@@ -142,10 +142,8 @@ impl PlaylistCache {
 
         let playlist = cell
             .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "media_playlist", |bytes| {
-                    parse_media_playlist(bytes, variant_id)
-                })
-                .await
+                self.fetch_and_parse(url, "media_playlist", parse_media_playlist)
+                    .await
             })
             .await?;
         Ok(playlist.clone())

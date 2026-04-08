@@ -714,14 +714,12 @@ mod tests {
             segments: vec![
                 MediaSegment {
                     sequence: 0,
-                    variant_id: VariantId(0),
                     uri: "segment-0.m4s".to_string(),
                     duration: Duration::from_secs(4),
                     key: None,
                 },
                 MediaSegment {
                     sequence: 1,
-                    variant_id: VariantId(0),
                     uri: "segment-1.m4s".to_string(),
                     duration: Duration::from_secs(4),
                     key: None,
