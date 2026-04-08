@@ -51,6 +51,7 @@ mod inner;
 mod keys;
 mod parsing;
 pub(crate) mod playlist;
+mod playlist_cache;
 mod source;
 pub(crate) mod stream_index;
 mod worker;

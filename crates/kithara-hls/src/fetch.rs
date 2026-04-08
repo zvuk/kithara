@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
 
-//! Fetch layer: network fetch + disk cache + playlist management + segment loading.
+//! Segment fetch layer: init/media dedup, DRM context resolution, HEAD probes.
+//!
+//! Playlist fetch/parse/cache lives in [`crate::playlist_cache::PlaylistCache`].
+//! Network traffic flows through the unified [`Downloader`], which is the
+//! sole `HttpClient` owner in production.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use kithara_assets::{AssetResource, AssetResourceState, AssetStore, ResourceKey};
-use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{MaybeSend, MaybeSync, RwLock, tokio, tokio::sync::OnceCell};
@@ -22,11 +25,9 @@ use url::Url;
 use crate::{
     HlsError, HlsResult,
     ids::{SegmentIndex, VariantIndex},
-    parsing::{
-        EncryptionMethod, MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream,
-        parse_master_playlist, parse_media_playlist,
-    },
+    parsing::{EncryptionMethod, MasterPlaylist, MediaPlaylist, SegmentKey, VariantId},
     playlist::PlaylistState,
+    playlist_cache::PlaylistCache,
 };
 
 /// AES-128 key length in bytes.
@@ -115,21 +116,16 @@ pub trait Loader: MaybeSend + MaybeSync {
 
 // FetchManager
 
-fn uri_basename_no_query(uri: &str) -> Option<&str> {
-    let no_query = uri.split('?').next().unwrap_or(uri);
-    let base = no_query.rsplit('/').next().unwrap_or(no_query);
-    if base.is_empty() { None } else { Some(base) }
-}
-
-/// Unified HLS fetch manager.
+/// Unified HLS segment fetch + cache coordinator.
 ///
-/// Handles disk cache + playlist parsing/caching + segment loading.
-/// Every network fetch is routed through the unified [`Downloader`],
-/// which is the sole `HttpClient` owner in production.
+/// Handles init/media segment deduplication, DRM context resolution,
+/// and HEAD probes. Playlist fetch/parse/cache is delegated to an
+/// inline [`PlaylistCache`]. Every network fetch routes through the
+/// unified [`Downloader`], which is the sole `HttpClient` owner in
+/// production.
 #[derive(Clone)]
 pub struct FetchManager {
     backend: AssetStore<DecryptContext>,
-    key_manager: Option<Arc<crate::keys::KeyManager>>,
     /// Sole network fetcher — shared `HttpClient` / pool / runtime.
     downloader: Downloader,
     #[expect(
@@ -137,13 +133,11 @@ pub struct FetchManager {
         reason = "used by future phase 3 dedicated-thread migration"
     )]
     cancel: CancellationToken,
+    key_manager: Option<Arc<crate::keys::KeyManager>>,
     headers: Option<Headers>,
-    // Playlist state
-    master_url: Option<Url>,
-    base_url: Option<Url>,
-    master: Arc<OnceCell<MasterPlaylist>>,
-    media: Arc<RwLock<HashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>>,
-    num_variants_cache: Arc<RwLock<Option<usize>>>,
+    /// Playlist fetch + parse + disk cache. Shared via `Clone` — clones
+    /// see the same master/media `OnceCell` state through internal `Arc`s.
+    cache: PlaylistCache,
     // Init segment deduplication: first caller downloads, others wait on OnceCell
     init_segments: Arc<RwLock<HashMap<usize, Arc<OnceCell<SegmentMeta>>>>>,
     // Media segment deduplication for active network fetches only.
@@ -159,17 +153,14 @@ impl FetchManager {
         downloader: Downloader,
         cancel: CancellationToken,
     ) -> Self {
+        let cache = PlaylistCache::new(backend.clone(), downloader.clone());
         Self {
             backend,
-            key_manager: None,
             downloader,
             cancel,
+            key_manager: None,
             headers: None,
-            master_url: None,
-            base_url: None,
-            master: Arc::new(OnceCell::new()),
-            media: Arc::new(RwLock::new(HashMap::new())),
-            num_variants_cache: Arc::new(RwLock::new(None)),
+            cache,
             init_segments: Arc::new(RwLock::new(HashMap::new())),
             media_segments: Arc::new(RwLock::new(HashMap::new())),
             playlist_state: None,
@@ -179,14 +170,14 @@ impl FetchManager {
     /// Set master playlist URL (required for Loader functionality).
     #[must_use]
     pub fn with_master_url(mut self, url: Url) -> Self {
-        self.master_url = Some(url);
+        self.cache.set_master_url(url);
         self
     }
 
     /// Set base URL override for resolving relative URLs.
     #[must_use]
     pub fn with_base_url(mut self, url: Option<Url>) -> Self {
-        self.base_url = url;
+        self.cache.set_base_url(url);
         self
     }
 
@@ -200,7 +191,8 @@ impl FetchManager {
     /// Set additional HTTP headers for all requests.
     #[must_use]
     pub fn with_headers(mut self, headers: Option<Headers>) -> Self {
-        self.headers = headers;
+        self.headers = headers.clone();
+        self.cache.set_headers(headers);
         self
     }
 
@@ -242,21 +234,43 @@ impl FetchManager {
         &self.backend
     }
 
-    // Low-level fetch
+    // Playlist delegates
 
-    /// Fetch a playlist-like resource and cache it in the assets backend.
+    /// Load and parse the master playlist.
     ///
     /// # Errors
-    /// Returns an error when cache access, network fetch, or URL/resource handling fails.
-    pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        self.fetch_atomic_internal(url, rel_path, self.headers.clone(), "playlist")
-            .await
+    /// Returns an error when fetching or parsing fails.
+    pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
+        self.cache.master_playlist(url).await
     }
 
-    /// Fetch a key resource and cache it in the assets backend.
+    /// Load and parse the media playlist for a specific variant.
     ///
     /// # Errors
-    /// Returns an error when cache access, network fetch, or URL/resource handling fails.
+    /// Returns an error when fetching or parsing fails.
+    pub async fn media_playlist(
+        &self,
+        url: &Url,
+        variant_id: VariantId,
+    ) -> HlsResult<MediaPlaylist> {
+        self.cache.media_playlist(url, variant_id).await
+    }
+
+    /// Resolve a possibly-relative target URL.
+    ///
+    /// # Errors
+    /// Returns an error when URL joining fails.
+    pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
+        self.cache.resolve_url(base, target)
+    }
+
+    // Low-level fetch
+
+    /// Fetch a key resource through the disk cache + unified downloader.
+    ///
+    /// # Errors
+    /// Returns an error when cache access, network fetch, or URL
+    /// handling fails.
     pub async fn fetch_key(
         &self,
         url: &Url,
@@ -264,91 +278,9 @@ impl FetchManager {
         headers: Option<Headers>,
     ) -> HlsResult<Bytes> {
         let merged = self.merge_headers(headers);
-        self.fetch_atomic_internal(url, rel_path, merged, "key")
+        self.cache
+            .fetch_atomic_to_store(url, rel_path, merged, "key")
             .await
-    }
-
-    async fn fetch_atomic_internal(
-        &self,
-        url: &Url,
-        rel_path: &str,
-        headers: Option<Headers>,
-        resource_kind: &str,
-    ) -> HlsResult<Bytes> {
-        let key = ResourceKey::from_url(url);
-        if let Ok(res) = self.backend.open_resource(&key) {
-            let mut buf = byte_pool().get();
-            let n = res.read_into(&mut buf)?;
-            if n > 0 {
-                debug!(
-                    url = %url,
-                    asset_root = %self.asset_root(),
-                    rel_path = %rel_path,
-                    bytes = n,
-                    resource_kind,
-                    "kithara-hls: cache hit"
-                );
-                return Ok(Bytes::copy_from_slice(&buf));
-            }
-        }
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root(),
-            rel_path = %rel_path,
-            resource_kind,
-            "kithara-hls: cache miss -> fetching from network"
-        );
-
-        let res = self.backend.acquire_resource(&key)?;
-        let bytes = self.fetch_atomic_bytes(url.clone(), headers).await?;
-
-        // Best-effort cache write. Multiple concurrent callers may race here:
-        // all miss the cache, all fetch from network, first commits the resource,
-        // subsequent write_all calls fail because the resource is already committed.
-        // This is harmless — the bytes are in memory from the network fetch.
-        if let Err(e) = res.write_all(&bytes) {
-            trace!(
-                url = %url,
-                error = %e,
-                resource_kind,
-                "kithara-hls: cache write failed (concurrent commit), using network bytes"
-            );
-        } else {
-            debug!(
-                url = %url,
-                asset_root = %self.asset_root(),
-                rel_path = %rel_path,
-                bytes = bytes.len(),
-                resource_kind,
-                "kithara-hls: fetched from network and cached"
-            );
-        }
-
-        Ok(bytes)
-    }
-
-    /// Fetch a small atomic body via the unified [`Downloader`].
-    ///
-    /// Used for control-plane requests (playlists, DRM keys) where the
-    /// full body is wanted as a single `Bytes` buffer. Streaming media
-    /// paths do not use this helper — they use `start_fetch`.
-    async fn fetch_atomic_bytes(&self, url: Url, headers: Option<Headers>) -> HlsResult<Bytes> {
-        let cmd = FetchCmd {
-            method: FetchMethod::Get,
-            url,
-            range: None,
-            headers,
-            priority: Priority::High,
-            on_connect: None,
-            writer: None,
-            on_complete: None,
-            throttle: None,
-        };
-        match self.downloader.execute(cmd).await {
-            DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
-            DlFetchResult::Err(e) => Err(HlsError::from(e)),
-        }
     }
 
     /// Start fetching a segment via the unified [`Downloader`].
@@ -465,85 +397,6 @@ impl FetchManager {
         }
     }
 
-    // Playlist management
-
-    /// Load and parse the master playlist.
-    ///
-    /// # Errors
-    /// Returns an error when fetching/parsing fails or the URL basename cannot be derived.
-    pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
-        let master = self
-            .master
-            .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
-                    .await
-            })
-            .await?;
-
-        Ok(master.clone())
-    }
-
-    /// Load and parse the media playlist for a specific variant.
-    ///
-    /// # Errors
-    /// Returns an error when fetching/parsing fails or the URL basename cannot be derived.
-    pub async fn media_playlist(
-        &self,
-        url: &Url,
-        variant_id: VariantId,
-    ) -> HlsResult<MediaPlaylist> {
-        let cell = {
-            let mut guard = self.media.lock_sync_write();
-            guard
-                .entry(variant_id)
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
-        };
-
-        let playlist = cell
-            .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "media_playlist", |bytes| {
-                    parse_media_playlist(bytes, variant_id)
-                })
-                .await
-            })
-            .await?;
-
-        Ok(playlist.clone())
-    }
-
-    #[must_use]
-    pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
-        self.master.get().map(|m| m.variants.clone())
-    }
-
-    /// Resolve a possibly relative target URL.
-    ///
-    /// # Errors
-    /// Returns an error when URL joining fails.
-    pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
-        let resolved = if let Some(ref base_url) = self.base_url {
-            base_url.join(target).map_err(|e| {
-                HlsError::InvalidUrl(format!("Failed to resolve URL with base override: {e}"))
-            })?
-        } else {
-            base.join(target)
-                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve URL: {e}")))?
-        };
-
-        Ok(resolved)
-    }
-
-    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
-    where
-        F: Fn(&[u8]) -> HlsResult<T>,
-    {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
-        let bytes = self.fetch_playlist(url, basename).await?;
-        parse(&bytes)
-    }
-
     // DRM helpers
 
     /// Resolve decryption context for a segment.
@@ -602,7 +455,7 @@ impl FetchManager {
     /// Download init segment for a variant. No race recovery needed — `OnceCell`
     /// guarantees exactly one caller performs the download.
     async fn fetch_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
-        let (media_url, playlist) = self.load_media_playlist(variant).await?;
+        let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
         let container = if playlist.init_segment.is_some() {
             Some(ContainerFormat::Fmp4)
         } else {
@@ -642,7 +495,7 @@ impl FetchManager {
     /// Load init segment with deduplication via `OnceCell`.
     ///
     /// First caller downloads, concurrent callers wait on the same cell.
-    /// Pattern matches `media_playlist()`.
+    /// Pattern matches `PlaylistCache::media_playlist()`.
     ///
     /// # Errors
     /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
@@ -682,7 +535,7 @@ impl FetchManager {
         segment_index: usize,
         _seek_epoch: u64,
     ) -> HlsResult<(SegmentMeta, bool)> {
-        let (media_url, playlist) = self.load_media_playlist(variant).await?;
+        let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
 
         let container = if playlist.init_segment.is_some() {
             Some(ContainerFormat::Fmp4)
@@ -747,29 +600,6 @@ impl FetchManager {
             .await
     }
 
-    // Loader helpers
-
-    fn master_url(&self) -> HlsResult<&Url> {
-        self.master_url
-            .as_ref()
-            .ok_or_else(|| HlsError::InvalidUrl("master_url not set on FetchManager".to_string()))
-    }
-
-    async fn load_media_playlist(&self, variant: usize) -> HlsResult<(Url, MediaPlaylist)> {
-        let master_url = self.master_url()?;
-        let master = self.master_playlist(master_url).await?;
-
-        let variant_stream = master
-            .variants
-            .get(variant)
-            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
-
-        let media_url = self.resolve_url(master_url, &variant_stream.uri)?;
-        let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
-
-        Ok((media_url, playlist))
-    }
-
     /// Get Content-Length for a URL using HEAD request via the unified
     /// [`Downloader`]. Returns the size in bytes if Content-Length is
     /// present and parseable.
@@ -832,17 +662,7 @@ impl Loader for FetchManager {
     }
 
     fn num_variants(&self) -> usize {
-        if let Some(cached) = *self.num_variants_cache.lock_sync_read() {
-            return cached;
-        }
-
-        if let Some(variants) = self.master_variants() {
-            let count = variants.len();
-            *self.num_variants_cache.lock_sync_write() = Some(count);
-            return count;
-        }
-
-        0
+        self.cache.num_variants()
     }
 
     async fn num_segments(&self, variant: usize) -> HlsResult<usize> {
@@ -853,7 +673,7 @@ impl Loader for FetchManager {
             return Ok(count);
         }
 
-        let (_media_url, playlist) = self.load_media_playlist(variant).await?;
+        let (_media_url, playlist) = self.cache.load_media_playlist(variant).await?;
         Ok(playlist.segments.len())
     }
 }
