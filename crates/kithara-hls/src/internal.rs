@@ -22,14 +22,12 @@ pub use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    keys::KeyManager,
+    loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::{
         MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist, variant_info_from_master,
     },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
-    playlist_cache::PlaylistCache,
-    segment_loader::SegmentLoader,
     source::HlsSource,
     stream_index::{SegmentData, StreamIndex},
 };
@@ -65,20 +63,18 @@ pub fn make_test_source(
     coord: Arc<HlsCoord>,
     cancel: &CancellationToken,
 ) -> HlsSource {
-    let (backend, loader) = make_test_loader(cancel);
-    make_test_source_with_loader(playlist_state, segments, coord, loader, backend)
+    let (backend, _loader) = make_test_loader(cancel);
+    make_test_source_with_backend(playlist_state, segments, coord, backend)
 }
 
-pub fn make_test_source_with_loader(
+pub fn make_test_source_with_backend(
     playlist_state: Arc<PlaylistState>,
     segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     coord: Arc<HlsCoord>,
-    loader: Arc<SegmentLoader>,
     backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
     HlsSource {
         coord,
-        loader,
         backend,
         segments,
         playlist_state,
@@ -90,7 +86,7 @@ pub fn make_test_source_with_loader(
 }
 
 /// Create a test segment loader + backend pair (public for tests that
-/// need to share both).
+/// need to drive a worker against an isolated backend).
 #[must_use]
 pub fn make_test_segment_loader(
     cancel: &CancellationToken,
@@ -128,7 +124,6 @@ pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
 
 #[must_use]
 pub fn build_source(
-    loader: Arc<SegmentLoader>,
     backend: AssetStore<DecryptContext>,
     variants: &[VariantStream],
     config: &HlsConfig,
@@ -136,15 +131,8 @@ pub fn build_source(
     bus: EventBus,
 ) -> HlsSource {
     let downloader = Downloader::new(DownloaderConfig::default());
-    let (_downloader, source) = build_pair(
-        loader,
-        backend,
-        downloader,
-        variants,
-        config,
-        playlist_state,
-        bus,
-    );
+    let (_downloader, source) =
+        build_pair(backend, downloader, variants, config, playlist_state, bus);
     source
 }
 

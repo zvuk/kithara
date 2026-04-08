@@ -10,8 +10,8 @@ use super::state::HlsDownloader;
 use crate::{
     HlsError,
     coord::HlsCoord,
+    loading::SizeMapProbe,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
-    size_probe::SizeMapProbe,
     stream_index::{SegmentData, StreamIndex},
 };
 

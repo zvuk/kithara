@@ -21,8 +21,8 @@ use crate::{
     HlsError,
     coord::HlsCoord,
     ids::{SegmentIndex, VariantIndex},
+    loading::SizeMapProbe,
     playlist::{PlaylistAccess, PlaylistState},
-    size_probe::SizeMapProbe,
     stream_index::{SegmentData, StreamIndex},
 };
 

@@ -14,7 +14,7 @@ use kithara_hls::internal::{
     SegmentLoader, SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap,
     VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
     make_test_segment_loader, make_test_source as make_internal_test_source,
-    make_test_source_with_loader as make_internal_test_source_with_loader,
+    make_test_source_with_backend as make_internal_test_source_with_backend,
     set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
     subscribe_source_events,
 };
@@ -112,16 +112,14 @@ fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> H
     )
 }
 
-fn make_test_source_with_loader(
+fn make_test_source_with_backend(
     shared: Arc<SharedSegments>,
-    loader: Arc<SegmentLoader>,
     backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
-    make_internal_test_source_with_loader(
+    make_internal_test_source_with_backend(
         Arc::clone(&shared.playlist_state),
         Arc::clone(&shared.segments),
         Arc::clone(&shared.coord),
-        loader,
         backend,
     )
 }
@@ -813,9 +811,9 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let (backend, loader) = make_test_segment_loader(&cancel);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
     let write_backend = backend.clone();
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let init_bytes = b"v1-init";
     let media_bytes = b"v1-seg2";
     let mut expected = Vec::new();
@@ -868,9 +866,9 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let (backend, loader) = make_test_segment_loader(&cancel);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
     let write_backend = backend.clone();
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let segment_data = make_segment_data(100);
     let expected: Vec<u8> = (0u8..100).collect();
 
@@ -924,9 +922,9 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let (backend, loader) = make_test_segment_loader(&cancel);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
     let write_backend = backend.clone();
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let seg0_bytes = b"v0-seg0|";
     let seg1_bytes = b"v0-seg1|";
@@ -1072,13 +1070,12 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
         make_variant_state(1, 3),
     ]));
     let variants = parsed_variants(2);
-    let (backend, loader) = local_test_loader(&cancel);
+    let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
     let source = build_source(
-        loader,
         backend,
         &variants,
         &config,
@@ -1100,7 +1097,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
         make_variant_state(1, 3),
     ]));
     let variants = parsed_variants(2);
-    let (backend, loader) = local_test_loader(&cancel);
+    let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig {
         abr: Some(kithara_abr::AbrController::new(AbrOptions {
             mode: AbrMode::Manual(1),
@@ -1110,7 +1107,6 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
         ..HlsConfig::default()
     };
     let source = build_source(
-        loader,
         backend,
         &variants,
         &config,
@@ -1355,11 +1351,10 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let (backend, loader) = make_test_segment_loader(&cancel);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
     // commit_source shares the same fetch backend for writing dummy resources.
-    let commit_source =
-        make_test_source_with_loader(Arc::clone(&shared), Arc::clone(&loader), backend.clone());
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
 
@@ -1458,10 +1453,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let (backend, loader) = make_test_segment_loader(&cancel);
-    let commit_source =
-        make_test_source_with_loader(Arc::clone(&shared), Arc::clone(&loader), backend.clone());
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
@@ -1909,10 +1903,9 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
-    let (backend, loader) = make_test_segment_loader(&cancel);
-    let commit_source =
-        make_test_source_with_loader(Arc::clone(&shared), Arc::clone(&loader), backend.clone());
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
@@ -2101,10 +2094,9 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(1, Ordering::Release);
     shared.had_midstream_switch.store(true, Ordering::Release);
-    let (backend, loader) = local_test_loader(&cancel);
-    let commit_source =
-        make_test_source_with_loader(Arc::clone(&shared), Arc::clone(&loader), backend.clone());
-    let mut source = make_test_source_with_loader(Arc::clone(&shared), loader, backend.clone());
+    let (backend, _loader) = local_test_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     set_source_variant_fence(&mut source, Some(0));
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));

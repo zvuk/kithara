@@ -19,9 +19,9 @@ use kithara_platform::{RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::Downloader;
 use url::Url;
 
+use super::atomic_fetch::fetch_atomic_body;
 use crate::{
     HlsError, HlsResult,
-    atomic_fetch::fetch_atomic_body,
     parsing::{
         MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist,

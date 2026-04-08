@@ -24,11 +24,9 @@ use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
     error::HlsError,
-    keys::KeyManager,
+    loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
     playlist::PlaylistState,
-    playlist_cache::PlaylistCache,
-    segment_loader::SegmentLoader,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
     worker::spawn_hls_worker,
@@ -196,7 +194,6 @@ impl StreamType for Hls {
 
         // Create HlsDownloader + HlsSource pair
         let (hls_downloader, mut source) = build_pair(
-            Arc::clone(&loader),
             backend,
             downloader.clone(),
             &master.variants,

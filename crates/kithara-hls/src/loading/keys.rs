@@ -17,9 +17,8 @@ use kithara_stream::dl::Downloader;
 use thiserror::Error;
 use url::Url;
 
-use crate::{
-    HlsError, HlsResult, KeyContext, atomic_fetch::fetch_atomic_body, config::KeyProcessor,
-};
+use super::atomic_fetch::fetch_atomic_body;
+use crate::{HlsError, HlsResult, KeyContext, config::KeyProcessor};
 
 /// AES-128 key / IV length in bytes.
 const AES_KEY_LEN: usize = 16;

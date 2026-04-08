@@ -23,18 +23,18 @@ use crate::{
     downloader::HlsDownloader,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
-    segment_loader::SegmentLoader,
     stream_index::{SegmentData, StreamIndex},
     worker::WorkerGuard,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
 ///
-/// Holds an optional [`WorkerGuard`] that cancels+joins the background
+/// Reads bytes directly from the [`AssetStore`] backend — segment
+/// downloading is the worker's job, not the source's. Holds an
+/// optional [`WorkerGuard`] that cancels+joins the background
 /// download worker when the source is dropped.
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
-    pub(crate) loader: Arc<SegmentLoader>,
     pub(crate) backend: AssetStore<DecryptContext>,
     pub(crate) segments: Arc<Mutex<StreamIndex>>,
     pub(crate) playlist_state: Arc<PlaylistState>,
@@ -232,7 +232,6 @@ impl HlsSource {
 
 /// Build an `HlsDownloader` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
-    loader: Arc<SegmentLoader>,
     backend: AssetStore<DecryptContext>,
     downloader_handle: kithara_stream::dl::Downloader,
     variants: &[crate::parsing::VariantStream],
@@ -282,8 +281,7 @@ pub(crate) fn build_pair(
         None
     };
 
-    let size_probe =
-        crate::size_probe::SizeMapProbe::new(downloader_handle, config.headers.clone());
+    let size_probe = crate::loading::SizeMapProbe::new(downloader_handle, config.headers.clone());
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
         backend: backend.clone(),
@@ -304,7 +302,6 @@ pub(crate) fn build_pair(
 
     let source = HlsSource {
         coord,
-        loader,
         backend,
         segments,
         playlist_state,

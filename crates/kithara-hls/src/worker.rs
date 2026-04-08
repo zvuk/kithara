@@ -29,7 +29,7 @@ use tracing::debug;
 use crate::{
     HlsError,
     downloader::{HlsDownloader, HlsFetch, HlsPlan},
-    segment_loader::SegmentLoader,
+    loading::SegmentLoader,
 };
 
 /// Default yield interval (iterations between `yield_now` calls).

@@ -42,19 +42,15 @@ pub mod error;
 #[cfg(feature = "internal")]
 pub mod internal;
 
-mod atomic_fetch;
 mod context;
 mod coord;
 mod downloader;
 mod fetch;
 mod ids;
 mod inner;
-mod keys;
+pub(crate) mod loading;
 mod parsing;
 pub(crate) mod playlist;
-mod playlist_cache;
-mod segment_loader;
-mod size_probe;
 mod source;
 pub(crate) mod stream_index;
 mod worker;
