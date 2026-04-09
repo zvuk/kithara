@@ -126,6 +126,10 @@ class KitharaPlayerItem(
             is FfiItemEvent.StatusChanged ->
                 updateState { it.copy(status = event.status.toItemStatus()) }
 
+            is FfiItemEvent.VariantsDiscovered,
+            is FfiItemEvent.VariantSelected,
+            is FfiItemEvent.VariantApplied -> Unit
+
             is FfiItemEvent.Error ->
                 updateState { it.copy(
                     error = KitharaError.ItemFailed(event.error),

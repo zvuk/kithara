@@ -165,7 +165,7 @@ Prerequisites:
 - Rust Android targets installed:
 
 ```bash
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add aarch64-linux-android x86_64-linux-android
 ```
 
 Build the Android libraries:

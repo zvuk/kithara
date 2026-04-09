@@ -32,10 +32,12 @@ pub mod internal;
 pub mod mock;
 
 // Platform-specific backends
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
+
+mod hardware;
 
 // Error types
 pub use error::{DecodeError, DecodeResult};

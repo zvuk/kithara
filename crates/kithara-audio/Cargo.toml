@@ -45,6 +45,8 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
+# Enable Android MediaCodec hardware decoder (Android)
+android = ["kithara-decode/android"]
 # Disable hang-loop detection in wait loops (fallback to no-op detector)
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",

@@ -64,6 +64,7 @@ disable-hang-detector = [
     "kithara-hls?/disable-hang-detector",
 ]
 apple = ["kithara-audio/apple", "kithara-play/apple"]
+android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 internal = [
     "kithara-assets?/internal",
@@ -82,4 +83,3 @@ rodio = { workspace = true, features = ["playback"] }
 
 [package.metadata.cargo-machete]
 ignored = ["rodio"]
-
