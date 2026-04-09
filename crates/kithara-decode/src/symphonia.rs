@@ -186,16 +186,20 @@ impl SymphoniaInner {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        // Disable seek during initialization for ALL containers.
+        // Disable seek during initialization for most containers (especially HLS).
         // Some format readers (IsoMp4Reader) try to seek to end looking for atoms,
         // which breaks streaming scenarios. After initialization, seek is enabled.
         //
+        // However, standard MP4 REQUIRES seeking to find the moov atom if it is
+        // not at the beginning. We enable seeking specifically for Mp4.
+        let seek_enabled = container == ContainerFormat::Mp4;
+
         // When config provides a byte_len_handle, the adapter shares the same
         // Arc so that later update_byte_len() calls are visible to Symphonia.
         let adapter = if let Some(ref handle) = config.byte_len_handle {
-            ReadSeekAdapter::new_seek_disabled_shared(source, Arc::clone(handle))
+            ReadSeekAdapter::new_inner(source, Some(Arc::clone(handle)), seek_enabled)
         } else {
-            ReadSeekAdapter::new_seek_disabled(source)
+            ReadSeekAdapter::new_inner(source, None, seek_enabled)
         };
 
         let byte_len_handle = adapter.byte_len_handle();
@@ -305,6 +309,18 @@ impl SymphoniaInner {
         format_opts: FormatOptions,
     ) -> DecodeResult<Box<dyn FormatReader>> {
         match container {
+            ContainerFormat::Mp4 => {
+                // Standard MP4 requires probing even if we know the container,
+                // because IsoMp4Reader::try_new is optimized for fMP4 and
+                // may fail on standard MP4 if moov is not where it expects.
+                let mut hint = Hint::new();
+                hint.with_extension("mp4");
+                let meta_opts = MetadataOptions::default();
+                let format_reader = get_probe()
+                    .probe(&hint, mss, format_opts, meta_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(format_reader)
+            }
             ContainerFormat::Fmp4 => {
                 let reader = IsoMp4Reader::try_new(mss, format_opts)
                     .map_err(|e| DecodeError::Backend(Box::new(e)))?;

@@ -23,7 +23,10 @@ fn rfc6381_for_codec_and_container(
     match (codec, container) {
         (
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
-            ContainerFormat::Fmp4 | ContainerFormat::MpegTs | ContainerFormat::Adts,
+            ContainerFormat::Mp4
+            | ContainerFormat::Fmp4
+            | ContainerFormat::MpegTs
+            | ContainerFormat::Adts,
         ) => match codec {
             AudioCodec::AacLc => Some(Cow::Borrowed("mp4a.40.2")),
             AudioCodec::AacHe => Some(Cow::Borrowed("mp4a.40.5")),
@@ -32,19 +35,26 @@ fn rfc6381_for_codec_and_container(
         },
         (
             AudioCodec::Mp3,
-            ContainerFormat::Fmp4 | ContainerFormat::MpegTs | ContainerFormat::MpegAudio,
+            ContainerFormat::Mp4
+            | ContainerFormat::Fmp4
+            | ContainerFormat::MpegTs
+            | ContainerFormat::MpegAudio,
         ) => Some(Cow::Borrowed("mp4a.40.34")),
         (
             AudioCodec::Flac,
-            ContainerFormat::Fmp4 | ContainerFormat::Flac | ContainerFormat::Ogg,
+            ContainerFormat::Mp4
+            | ContainerFormat::Fmp4
+            | ContainerFormat::Flac
+            | ContainerFormat::Ogg,
         ) => Some(Cow::Borrowed("flac")),
-        (AudioCodec::Vorbis, ContainerFormat::Fmp4 | ContainerFormat::Ogg) => {
-            Some(Cow::Borrowed("vorbis"))
-        }
-        (AudioCodec::Opus, ContainerFormat::Fmp4 | ContainerFormat::Ogg) => {
+        (
+            AudioCodec::Vorbis,
+            ContainerFormat::Mp4 | ContainerFormat::Fmp4 | ContainerFormat::Ogg,
+        ) => Some(Cow::Borrowed("vorbis")),
+        (AudioCodec::Opus, ContainerFormat::Mp4 | ContainerFormat::Fmp4 | ContainerFormat::Ogg) => {
             Some(Cow::Borrowed("opus"))
         }
-        (AudioCodec::Alac, ContainerFormat::Fmp4 | ContainerFormat::Caf) => {
+        (AudioCodec::Alac, ContainerFormat::Mp4 | ContainerFormat::Fmp4 | ContainerFormat::Caf) => {
             Some(Cow::Borrowed("alac"))
         }
         _ => None,

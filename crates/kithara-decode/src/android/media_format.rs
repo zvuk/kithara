@@ -1,7 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::ffi::CStr;
-use std::ptr::NonNull;
+use std::{ffi::CStr, ptr::NonNull};
 
 use super::{error::AndroidBackendError, ffi};
 

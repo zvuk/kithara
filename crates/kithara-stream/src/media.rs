@@ -8,6 +8,8 @@ use derive_setters::Setters;
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerFormat {
+    /// Standard MP4 (ISO/IEC 14496-12)
+    Mp4,
     /// Fragmented MP4 (fMP4) - common for HLS
     Fmp4,
     /// MPEG Transport Stream
