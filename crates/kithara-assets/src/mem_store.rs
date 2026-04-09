@@ -69,7 +69,11 @@ impl MemAssetStore {
     }
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
+        ScopedAvailabilityObserver::new(
+            self.asset_root.clone(),
+            key.clone(),
+            self.availability.clone(),
+        )
     }
 }
 

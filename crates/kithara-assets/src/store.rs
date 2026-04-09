@@ -410,6 +410,7 @@ where
             .expect("process_fn is required for AssetStoreBuilder");
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
+        let asset_root_clone = asset_root.clone();
         let mem = Arc::new(MemAssetStore::with_availability(
             asset_root,
             cancel.clone(),
@@ -428,15 +429,9 @@ where
             process_fn,
             pool.clone(),
         ));
-        // Mem-specific: when `CachedAssets` evicts a handle, the
-        // underlying `MemResource`'s bytes go with it (MemDriver is
-        // per-handle stateless). Clear the matching aggregate entry in
-        // the same `on_invalidated` callback so subsequent queries
-        // don't report stale availability for resurrected keys. Disk
-        // backend never needs this — files survive eviction.
         let user_on_invalidated = self.on_invalidated;
         let hooked_on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
-            availability.remove(key);
+            availability.remove(&asset_root_clone, key);
             if let Some(ref cb) = user_on_invalidated {
                 cb(key);
             }

@@ -13,7 +13,7 @@ pub use crate::{base::Assets, disk_store::DiskAssetStore};
 pub use crate::{
     cache::CachedAssets,
     evict::EvictAssets,
-    index::EvictConfig,
+    index::{EvictConfig, schema},
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
     process::{ProcessedResource, ProcessingAssets},

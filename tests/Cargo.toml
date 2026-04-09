@@ -23,6 +23,8 @@ kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
 kithara-test-utils = { workspace = true }
+rkyv = { workspace = true }
+bytecheck = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -49,7 +51,6 @@ tracing-subscriber = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-postcard = { workspace = true }
 
 # Crypto (for HLS encryption tests)
 hex = { workspace = true }

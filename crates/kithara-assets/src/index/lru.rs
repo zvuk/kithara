@@ -5,40 +5,17 @@ use std::collections::{HashMap, HashSet};
 use kithara_bufpool::BytePool;
 use kithara_storage::{Atomic, ResourceExt};
 
-use crate::error::AssetsResult;
+use super::schema::{LruEntryFile, LruIndexFile};
+use crate::error::{AssetsError, AssetsResult};
 
 /// Eviction configuration for an assets store decorator.
-///
-/// ## Normative
-/// - Eviction is evaluated at "asset creation time" (i.e. when a new `asset_root` is observed),
-///   not as a background task.
-/// - `max_assets` and `max_bytes` are soft caps enforced best-effort by the eviction decorator.
-/// - If a candidate is pinned, it must not be evicted and is skipped.
-/// - If `max_assets` / `max_bytes` are `None`, that constraint is disabled.
-///
-/// Notes:
-/// - `max_bytes` is based on best-effort accounting in the LRU index (not a filesystem walk).
 #[derive(Clone, Debug, Default)]
 pub struct EvictConfig {
     pub max_assets: Option<usize>,
     pub max_bytes: Option<u64>,
 }
 
-/// A best-effort, storage-backed LRU index over `asset_root`.
-///
-/// This index is persisted via a resource implementing [`ResourceExt`]
-/// (whole-object read/write).
-///
-/// ## Data model (normative)
-/// - We track per-asset metadata:
-///   - `last_touch`: monotonically increasing counter (logical clock)
-///   - `bytes`: best-effort size accounting provided by higher layers (or left as `None`)
-/// - The on-disk representation is internal to this module (binary format via postcard).
-///
-/// ## What this is NOT
-/// - It is not a filesystem walker.
-/// - It does not delete anything.
-/// - It does not know about pinning; the eviction decorator combines this with a pins index.
+/// A best-effort LRU index over `asset_root`.
 pub(crate) struct LruIndex<R: ResourceExt> {
     res: Atomic<R>,
     pool: BytePool,
@@ -52,11 +29,8 @@ impl<R: ResourceExt> LruIndex<R> {
         }
     }
 
-    /// Load the entire LRU table from storage.
-    ///
-    /// Missing/empty file is treated as an empty index.
-    /// Invalid or corrupted data is treated as an empty index (best-effort).
-    pub(crate) fn load(&self) -> AssetsResult<LruState> {
+    /// Load the in-memory state from storage.
+    fn load(&self) -> AssetsResult<LruState> {
         let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
 
@@ -64,9 +38,15 @@ impl<R: ResourceExt> LruIndex<R> {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match postcard::from_bytes(&buf[..n]) {
-            Ok(file) => file,
-            Err(_) => return Ok(LruState::default()),
+        let file = match rkyv::check_archived_root::<LruIndexFile>(&buf[..n]) {
+            Ok(archived) => {
+                use rkyv::Deserialize;
+                archived.deserialize(&mut rkyv::Infallible).unwrap()
+            }
+            Err(e) => {
+                tracing::debug!("Failed to deserialize lru index: {}", e);
+                return Ok(LruState::default());
+            }
         };
 
         Ok(LruState::from_file(file))
@@ -75,16 +55,14 @@ impl<R: ResourceExt> LruIndex<R> {
     /// Persist the provided state to storage atomically.
     pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = postcard::to_allocvec(&file)?;
+        let bytes = rkyv::to_bytes::<_, 4096>(&file).map_err(|e| {
+            AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
+        })?;
         self.res.write_all(&bytes)?;
         Ok(())
     }
 
     /// Touch (mark as most-recent) an asset.
-    ///
-    /// - If the asset is new, it is inserted.
-    /// - If `bytes_hint` is `Some`, the stored bytes are updated to that value.
-    /// - Returns `true` if the asset was newly inserted (i.e. "created").
     pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
         let mut st = self.load()?;
         let created = st.touch(asset_root, bytes_hint);
@@ -102,11 +80,6 @@ impl<R: ResourceExt> LruIndex<R> {
     }
 
     /// Compute eviction candidates in LRU order (oldest first) under the given config.
-    ///
-    /// - `pinned` contains `asset_root`s that must not be evicted (will be skipped).
-    /// - Returns a list of candidate `asset_root`s to attempt eviction for.
-    ///
-    /// This function does not mutate storage.
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -115,13 +88,18 @@ impl<R: ResourceExt> LruIndex<R> {
         let st = self.load()?;
         Ok(st.eviction_candidates(cfg, pinned))
     }
+
+    /// Return total bytes across all assets (best-effort).
+    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
+        if let Ok(st) = self.load() {
+            st.by_root.values().filter_map(|e| e.bytes).sum()
+        } else {
+            0
+        }
+    }
 }
 
 /// In-memory state of the LRU index.
-///
-/// This is separated to:
-/// - keep persistence format private,
-/// - keep logic testable without storage.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LruState {
     clock: u64,
@@ -139,8 +117,6 @@ impl LruState {
     }
 
     /// Touch an asset in-memory.
-    ///
-    /// Returns `true` if it was newly inserted.
     pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);
 
@@ -162,24 +138,6 @@ impl LruState {
         }
     }
 
-    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
-        self.by_root
-            .values()
-            .filter_map(|e| e.bytes)
-            .fold(0u64, u64::saturating_add)
-    }
-
-    pub(crate) fn oldest_first(&self) -> Vec<(String, LruEntry)> {
-        let mut v: Vec<(String, LruEntry)> = self
-            .by_root
-            .iter()
-            .map(|(k, e)| (k.clone(), e.clone()))
-            .collect();
-
-        v.sort_by_key(|(_k, e)| e.last_touch);
-        v
-    }
-
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -188,50 +146,39 @@ impl LruState {
         let max_assets = cfg.max_assets;
         let max_bytes = cfg.max_bytes;
 
-        // Fast path: no constraints.
         if max_assets.is_none() && max_bytes.is_none() {
             return Vec::new();
         }
 
-        let mut over_assets = false;
-        if let Some(max) = max_assets {
-            over_assets = self.len() > max;
-        }
+        let total_assets = self.len();
+        let total_bytes: u64 = self.by_root.values().filter_map(|e| e.bytes).sum();
 
-        let mut over_bytes = false;
-        let total_bytes = self.total_bytes_best_effort();
-        if let Some(max) = max_bytes {
-            over_bytes = total_bytes > max;
-        }
-
-        if !over_assets && !over_bytes {
+        if max_assets.is_none_or(|max| total_assets <= max)
+            && max_bytes.is_none_or(|max| total_bytes <= max)
+        {
             return Vec::new();
         }
 
-        // We propose eviction in oldest-first order, skipping pinned.
-        // We stop when both constraints are satisfied under a simulated removal.
-        let mut simulated_assets = self.len();
-        let mut simulated_bytes = total_bytes;
+        let mut candidates: Vec<_> = self.by_root.iter().collect();
+        candidates.sort_by_key(|(_, e)| e.last_touch);
 
         let mut out = Vec::new();
+        let mut simulated_assets = total_assets;
+        let mut simulated_bytes = total_bytes;
 
-        for (root, entry) in self.oldest_first() {
-            if pinned.contains(&root) {
+        for (root, entry) in candidates {
+            if pinned.contains(root) {
                 continue;
             }
 
-            // Propose evicting this asset.
             out.push(root.clone());
-
             simulated_assets = simulated_assets.saturating_sub(1);
-            if let Some(b) = entry.bytes {
-                simulated_bytes = simulated_bytes.saturating_sub(b);
-            }
+            simulated_bytes = simulated_bytes.saturating_sub(entry.bytes.unwrap_or(0));
 
-            // Stop if both constraints are satisfied.
-            let satisfied_assets = max_assets.is_none_or(|max| simulated_assets <= max);
-            let satisfied_bytes = max_bytes.is_none_or(|max| simulated_bytes <= max);
-            if satisfied_assets && satisfied_bytes {
+            let under_asset_limit = max_assets.is_none_or(|max| simulated_assets <= max);
+            let under_byte_limit = max_bytes.is_none_or(|max| simulated_bytes <= max);
+
+            if under_asset_limit && under_byte_limit {
                 break;
             }
         }
@@ -240,13 +187,13 @@ impl LruState {
     }
 
     fn from_file(file: LruIndexFile) -> Self {
-        let mut by_root = HashMap::with_capacity(file.entries.len());
-        for e in file.entries {
+        let mut by_root = HashMap::new();
+        for (root, entry) in file.entries {
             by_root.insert(
-                e.asset_root,
+                root,
                 LruEntry {
-                    last_touch: e.last_touch,
-                    bytes: e.bytes,
+                    last_touch: entry.last_touch,
+                    bytes: entry.bytes,
                 },
             );
         }
@@ -258,18 +205,16 @@ impl LruState {
     }
 
     fn to_file(&self) -> LruIndexFile {
-        let mut entries: Vec<LruIndexFileEntry> = self
-            .by_root
-            .iter()
-            .map(|(root, e)| LruIndexFileEntry {
-                asset_root: root.clone(),
-                last_touch: e.last_touch,
-                bytes: e.bytes,
-            })
-            .collect();
-
-        // Stable output: sort by asset_root for deterministic serialization.
-        entries.sort_by(|a, b| a.asset_root.cmp(&b.asset_root));
+        let mut entries = std::collections::BTreeMap::new();
+        for (root, entry) in &self.by_root {
+            entries.insert(
+                root.clone(),
+                LruEntryFile {
+                    last_touch: entry.last_touch,
+                    bytes: entry.bytes,
+                },
+            );
+        }
 
         LruIndexFile {
             version: 1,
@@ -280,22 +225,7 @@ impl LruState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct LruEntry {
-    pub(crate) last_touch: u64,
-    pub(crate) bytes: Option<u64>,
-}
-
-/// On-disk binary format (private).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct LruIndexFile {
-    version: u32,
-    clock: u64,
-    entries: Vec<LruIndexFileEntry>,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct LruIndexFileEntry {
-    asset_root: String,
+struct LruEntry {
     last_touch: u64,
     bytes: Option<u64>,
 }

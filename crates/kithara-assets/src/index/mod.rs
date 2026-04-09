@@ -3,6 +3,7 @@
 mod availability;
 mod lru;
 mod pin;
+pub mod schema;
 
 pub(crate) use availability::{AvailabilityIndex, ScopedAvailabilityObserver};
 pub use lru::EvictConfig;

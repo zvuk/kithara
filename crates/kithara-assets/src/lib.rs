@@ -39,7 +39,7 @@ mod cache;
 mod disk_store;
 mod error;
 mod evict;
-mod index;
+pub mod index;
 mod key;
 mod lease;
 mod mem_store;

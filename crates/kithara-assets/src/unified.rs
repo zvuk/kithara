@@ -170,7 +170,7 @@ where
                 let _ = store.remove_resource(key);
             }
         }
-        self.availability().remove(key);
+        self.availability().remove(self.asset_root(), key);
     }
 
     /// Return the root directory for the asset store.
@@ -234,7 +234,7 @@ where
     /// seeding on open).
     #[must_use]
     pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
-        let ranges = self.availability().available_ranges(key);
+        let ranges = self.availability().available_ranges(self.asset_root(), key);
         if !ranges.is_empty() {
             return ranges;
         }
@@ -261,7 +261,10 @@ where
         if range.start >= range.end {
             return true;
         }
-        if self.availability().contains_range(key, range.clone()) {
+        if self
+            .availability()
+            .contains_range(self.asset_root(), key, range.clone())
+        {
             return true;
         }
         if let Ok(AssetResourceState::Committed {
@@ -276,7 +279,7 @@ where
     /// Return the committed final length of the resource, if known.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
-        if let Some(len) = self.availability().final_len(key) {
+        if let Some(len) = self.availability().final_len(self.asset_root(), key) {
             return Some(len);
         }
         if let Ok(AssetResourceState::Committed {

@@ -135,7 +135,7 @@ where
     fn prepare_over_limit_eviction(&self) -> Option<PreparedEviction<A::IndexRes>> {
         let lru = self.load_lru_for_eviction()?;
         let pinned = self.load_pins_for_eviction()?;
-        let total_bytes = Self::load_total_bytes_for_eviction(&lru)?;
+        let total_bytes = Self::load_total_bytes_for_eviction(&lru);
         tracing::debug!(
             total_bytes,
             max_bytes = ?self.cfg.max_bytes,
@@ -173,14 +173,8 @@ where
         }
     }
 
-    fn load_total_bytes_for_eviction(lru: &LruIndex<A::IndexRes>) -> Option<u64> {
-        match lru.load() {
-            Ok(state) => Some(state.total_bytes_best_effort()),
-            Err(e) => {
-                tracing::debug!("Failed to load LRU state: {:?}", e);
-                None
-            }
-        }
+    fn load_total_bytes_for_eviction(lru: &LruIndex<A::IndexRes>) -> u64 {
+        lru.total_bytes_best_effort()
     }
 
     fn load_candidates_for_eviction(
@@ -257,10 +251,6 @@ where
         };
 
         let Ok(pinned) = pins.load() else {
-            return;
-        };
-
-        let Ok(_lru_state) = lru.load() else {
             return;
         };
 

@@ -8,7 +8,6 @@ use std::{
     sync::Arc,
 };
 
-use kithara_bufpool::byte_pool;
 use kithara_storage::{
     Atomic, AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
     ResourceStatus, StorageError, StorageResource,
@@ -16,11 +15,11 @@ use kithara_storage::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssetResourceState,
     base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::{AvailabilityIndex, ScopedAvailabilityObserver},
+    index::AvailabilityIndex,
     key::ResourceKey,
+    state::AssetResourceState,
 };
 
 /// Initial mmap file size for index resources (4 KB).
@@ -135,7 +134,7 @@ impl DiskAssetStore {
         }
         let res = self.open_availability_index_resource()?;
         let atomic = Atomic::new(res);
-        self.availability.load_from(&atomic, byte_pool())
+        self.availability.load_from(&atomic)
     }
 
     /// Persist the current [`AvailabilityIndex`] snapshot to
@@ -155,7 +154,11 @@ impl DiskAssetStore {
     }
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
+        crate::index::ScopedAvailabilityObserver::new(
+            self.asset_root.clone(),
+            key.clone(),
+            self.availability.clone(),
+        )
     }
 
     fn open_storage_resource(
@@ -184,7 +187,7 @@ impl DiskAssetStore {
             final_len: Some(len),
         } = resource.status()
         {
-            self.availability.record_commit(key, len);
+            self.availability.record_commit(&self.asset_root, key, len);
         }
         Ok(resource)
     }

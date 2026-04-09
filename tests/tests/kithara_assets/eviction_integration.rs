@@ -12,15 +12,9 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_assets::internal::schema::PinsIndexFile;
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
-
-#[derive(serde::Deserialize)]
-#[expect(dead_code, reason = "fields deserialized from binary")]
-struct PinsIndexFile {
-    version: u32,
-    pinned: Vec<String>,
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -72,13 +66,19 @@ fn eviction_max_assets_skips_pinned_assets(
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
-                && let Ok(pins_file) = postcard::from_bytes::<PinsIndexFile>(&pins_bytes)
+                && let Ok(archived) = rkyv::check_archived_root::<PinsIndexFile>(&pins_bytes)
             {
+                use rkyv::Deserialize;
+                let pins_file: PinsIndexFile = archived.deserialize(&mut rkyv::Infallible).unwrap();
+                let mut is_pinned = false;
+                for (k, v) in pins_file.pinned.iter() {
+                    if *v && k.as_str() == format!("asset-{}", i) {
+                        is_pinned = true;
+                        break;
+                    }
+                }
                 assert!(
-                    pins_file
-                        .pinned
-                        .iter()
-                        .any(|v| v == &format!("asset-{}", i)),
+                    is_pinned,
                     "asset-{} must be pinned while its handle is alive",
                     i
                 );
