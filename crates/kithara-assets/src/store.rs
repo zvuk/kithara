@@ -17,7 +17,7 @@ use crate::disk_store::DiskAssetStore;
 use crate::{
     cache::CachedAssets,
     evict::EvictAssets,
-    index::EvictConfig,
+    index::{AvailabilityIndex, EvictConfig},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
@@ -228,22 +228,39 @@ where
     /// Build the storage backend.
     ///
     /// Returns `AssetStore::Disk` for persistent storage or
-    /// `AssetStore::Mem` when `ephemeral(true)` is set.
+    /// `AssetStore::Mem` when `ephemeral(true)` is set. Creates a
+    /// single [`AvailabilityIndex`] per build call and threads it
+    /// through both the base store (observer target) and the enum
+    /// variant (query target) so writes observed by any resource
+    /// become visible through `AssetStore::contains_range`.
     ///
     /// # Panics
     /// Panics if `process_fn` is not set.
     #[must_use]
     pub fn build(self) -> AssetStore<Ctx> {
+        let availability = AvailabilityIndex::new();
         #[cfg(target_arch = "wasm32")]
         {
-            self.build_ephemeral().into()
+            let store = self.build_ephemeral_with_availability(availability.clone());
+            AssetStore::Mem {
+                store,
+                availability,
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.ephemeral {
-                self.build_ephemeral().into()
+                let store = self.build_ephemeral_with_availability(availability.clone());
+                AssetStore::Mem {
+                    store,
+                    availability,
+                }
             } else {
-                self.build_disk().into()
+                let store = self.build_disk_with_availability(availability.clone());
+                AssetStore::Disk {
+                    store,
+                    availability,
+                }
             }
         }
     }
@@ -315,13 +332,22 @@ where
         self
     }
 
-    /// Build disk-backed asset store.
+    /// Build disk-backed asset store with its own unshared
+    /// [`AvailabilityIndex`]. Kept for tests and the `internal`
+    /// feature; production construction uses
+    /// [`AssetStoreBuilder::build`] which shares the aggregate with
+    /// the enum variant.
     ///
     /// # Panics
     /// Panics if `process_fn` is not set for Ctx != ().
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn build_disk(self) -> DiskStore<Ctx> {
+        self.build_disk_with_availability(AvailabilityIndex::new())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_disk_with_availability(self, availability: AvailabilityIndex) -> DiskStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempfile::tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -335,12 +361,14 @@ where
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
 
-        // Use provided pool or global pool
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
-        // Each decorator checks `capabilities()` to decide whether to activate.
-        let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
+        let disk = Arc::new(DiskAssetStore::with_availability(
+            root_dir,
+            asset_root,
+            cancel.clone(),
+            availability,
+        ));
         let evict = Arc::new(EvictAssets::new(
             disk,
             evict_cfg,
@@ -359,12 +387,14 @@ where
         LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool)
     }
 
-    /// Build ephemeral (in-memory) asset store.
-    ///
-    /// `MemAssetStore` is a stateless factory — each `open_resource` creates a
-    /// fresh `MemResource`. The `CachedAssets` LRU is the single owner: when a
-    /// handle is evicted its `Arc` ref-count drops and memory is freed.
+    /// Build ephemeral (in-memory) asset store with its own
+    /// unshared [`AvailabilityIndex`].
+    #[cfg(test)]
     fn build_ephemeral(self) -> MemStore<Ctx> {
+        self.build_ephemeral_with_availability(AvailabilityIndex::new())
+    }
+
+    fn build_ephemeral_with_availability(self, availability: AvailabilityIndex) -> MemStore<Ctx> {
         let asset_root = self.asset_root.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
@@ -373,10 +403,11 @@ where
             .expect("process_fn is required for AssetStoreBuilder");
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        let mem = Arc::new(MemAssetStore::new(
+        let mem = Arc::new(MemAssetStore::with_availability(
             asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
+            availability,
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,

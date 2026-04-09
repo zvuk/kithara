@@ -5,15 +5,17 @@
 use std::{
     io::{Error as IoError, ErrorKind},
     path::Path,
+    sync::Arc,
 };
 
-use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
+use kithara_storage::{AvailabilityObserver, MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
     base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
+    index::{AvailabilityIndex, ScopedAvailabilityObserver},
     key::ResourceKey,
 };
 
@@ -31,20 +33,43 @@ pub struct MemAssetStore {
     asset_root: String,
     cancel: CancellationToken,
     mem_resource_capacity: Option<usize>,
+    availability: AvailabilityIndex,
 }
 
 impl MemAssetStore {
-    /// Create a new in-memory asset store.
+    /// Create a new in-memory asset store with its own unshared
+    /// [`AvailabilityIndex`].
     pub fn new<S: Into<String>>(
         asset_root: S,
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
     ) -> Self {
+        Self::with_availability(
+            asset_root,
+            cancel,
+            mem_resource_capacity,
+            AvailabilityIndex::new(),
+        )
+    }
+
+    /// Like [`MemAssetStore::new`] but shares the given aggregate
+    /// availability handle.
+    pub(crate) fn with_availability<S: Into<String>>(
+        asset_root: S,
+        cancel: CancellationToken,
+        mem_resource_capacity: Option<usize>,
+        availability: AvailabilityIndex,
+    ) -> Self {
         Self {
             asset_root: asset_root.into(),
             cancel,
             mem_resource_capacity,
+            availability,
         }
+    }
+
+    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
+        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
     }
 }
 
@@ -96,7 +121,12 @@ impl Assets for MemAssetStore {
         {
             options.capacity = capacity;
         }
-        let mem = Resource::open(self.cancel.clone(), options).map_err(AssetsError::Storage)?;
+        let mem = Resource::open_with_observer(
+            self.cancel.clone(),
+            options,
+            Some(self.scoped_observer(key)),
+        )
+        .map_err(AssetsError::Storage)?;
         Ok(StorageResource::Mem(mem))
     }
 

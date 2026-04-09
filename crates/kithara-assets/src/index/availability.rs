@@ -1,16 +1,4 @@
 #![forbid(unsafe_code)]
-// Phase P-2 wires only the read-side queries (`contains_range`,
-// `available_ranges`, `final_len`) and `remove`. The mutation path
-// (`record_write` / `record_commit` / the `ScopedAvailabilityObserver`
-// struct / `snapshot` / `seed_from`) is wired in Phase P-3 when the
-// storage observer trait lands, and `insert` / `mark_committed` / the
-// `committed` field become used through that path. Silenced here,
-// file-scoped, with an explicit reason; the `#[expect]` fires if these
-// items remain unused after Phase P-3 / P-4.
-#![expect(
-    dead_code,
-    reason = "wired in Phase P-3 (observer) and Phase P-4 (persistence)"
-)]
 
 //! Per-resource byte availability index.
 //!
@@ -44,7 +32,7 @@ use std::{ops::Range, sync::Arc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, ResourceExt};
+use kithara_storage::{Atomic, AvailabilityObserver, ResourceExt};
 use rangemap::RangeSet;
 use serde::{Deserialize, Serialize};
 
@@ -205,6 +193,7 @@ impl AvailabilityIndex {
     /// persistence. Holds the `DashMap` shard guards briefly, one at a
     /// time, and clones the inner state — callers on other keys are
     /// not blocked for the whole iteration.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
     pub(crate) fn snapshot(&self) -> Vec<AvailabilityEntry> {
         self.inner
             .entries
@@ -227,6 +216,7 @@ impl AvailabilityIndex {
 
     /// Seed the aggregate from a persisted snapshot. Overwrites any
     /// existing in-memory entries for the same keys.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
     pub(crate) fn seed_from(&self, entries: Vec<AvailabilityEntry>) {
         for entry in entries {
             let mut av = Availability::default();
@@ -293,28 +283,29 @@ impl std::fmt::Debug for AvailabilityIndex {
 // ScopedAvailabilityObserver — storage hook → aggregate mutation
 // ──────────────────────────────────────────────────────────────────────
 
-/// Observer scoped to a single `ResourceKey`. Holds the captured
-/// `(ResourceKey, AvailabilityIndex)` pair and exposes the two
-/// `record_*` entry points as bare methods. Phase P-3 adds the
-/// `kithara_storage::AvailabilityObserver` trait and an `impl` block
-/// for this type, at which point storage fires the hooks via dynamic
-/// dispatch. Until then the type is still useful in isolation for
-/// unit tests.
+/// `kithara_storage::AvailabilityObserver` implementation scoped to a
+/// single `ResourceKey`. Constructed per-resource by the asset-layer
+/// `DiskAssetStore::open_storage_resource` /
+/// `MemAssetStore::acquire_resource_with_ctx` call sites: the
+/// captured `(key, index)` pair routes every `on_write` / `on_commit`
+/// event into `AvailabilityIndex::record_*`.
 pub(crate) struct ScopedAvailabilityObserver {
-    pub(crate) key: ResourceKey,
-    pub(crate) index: AvailabilityIndex,
+    key: ResourceKey,
+    index: AvailabilityIndex,
 }
 
 impl ScopedAvailabilityObserver {
     pub(crate) fn new(key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
         Arc::new(Self { key, index })
     }
+}
 
-    pub(crate) fn on_write(&self, range: Range<u64>) {
+impl AvailabilityObserver for ScopedAvailabilityObserver {
+    fn on_write(&self, range: Range<u64>) {
         self.index.record_write(&self.key, range);
     }
 
-    pub(crate) fn on_commit(&self, final_len: u64) {
+    fn on_commit(&self, final_len: u64) {
         self.index.record_commit(&self.key, final_len);
     }
 }
@@ -349,6 +340,7 @@ pub(crate) struct AvailabilityEntry {
 ///
 /// Returns `AssetsError` only if the underlying resource read itself
 /// fails (I/O error, cancellation). A corrupt payload is not an error.
+#[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
 pub(crate) fn load<R: ResourceExt>(
     res: &Atomic<R>,
     pool: &BytePool,
@@ -371,6 +363,7 @@ pub(crate) fn load<R: ResourceExt>(
 ///
 /// Returns `AssetsError` if serialization or writing to the storage
 /// resource fails.
+#[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
 pub(crate) fn store<R: ResourceExt>(
     res: &Atomic<R>,
     entries: &[AvailabilityEntry],
