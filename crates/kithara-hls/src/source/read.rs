@@ -78,7 +78,15 @@ impl HlsSource {
             if !self.backend.contains_range(&key, local_offset..read_end) {
                 return Ok(None);
             }
-            let resource = &self.backend.open_resource(&key)?;
+            let resource = match self.backend.open_resource(&key) {
+                Ok(res) => res,
+                Err(kithara_assets::AssetsError::Io(e))
+                    if e.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    return Ok(None);
+                }
+                Err(e) => return Err(e.into()),
+            };
             resource.wait_range(local_offset..read_end)?;
 
             #[expect(
@@ -114,7 +122,13 @@ impl HlsSource {
         if !self.backend.contains_range(&key, media_offset..read_end) {
             return Ok(None);
         }
-        let resource = &self.backend.open_resource(&key)?;
+        let resource = match self.backend.open_resource(&key) {
+            Ok(res) => res,
+            Err(kithara_assets::AssetsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e.into()),
+        };
         resource.wait_range(media_offset..read_end)?;
 
         let bytes_read = resource.read_at(media_offset, buf)?;

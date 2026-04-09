@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::DashMap;
 use kithara_platform::Mutex;
 use kithara_storage::{Atomic, AvailabilityObserver, ResourceExt};
 use rangemap::RangeSet;
@@ -63,16 +63,6 @@ struct InnerIndex {
     assets: AssetMap,
 }
 
-fn resolve_key(asset_root: &str, key: &ResourceKey) -> (String, String) {
-    match key {
-        ResourceKey::Relative(path) => (asset_root.to_string(), path.clone()),
-        ResourceKey::Absolute(path) => (
-            "__absolute__".to_string(),
-            path.to_string_lossy().to_string(),
-        ),
-    }
-}
-
 impl AvailabilityIndex {
     pub(crate) fn new() -> Self {
         Self {
@@ -86,21 +76,21 @@ impl AvailabilityIndex {
         if range.start >= range.end {
             return;
         }
-        let (root, path) = resolve_key(asset_root, key);
-        let arc = self.insert_or_get_entry(&root, &path);
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().insert(range);
     }
 
     pub(crate) fn record_commit(&self, asset_root: &str, key: &ResourceKey, final_len: u64) {
-        let (root, path) = resolve_key(asset_root, key);
-        let arc = self.insert_or_get_entry(&root, &path);
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().mark_committed(final_len);
     }
 
     pub(crate) fn available_ranges(&self, asset_root: &str, key: &ResourceKey) -> RangeSet<u64> {
-        let (root, path) = resolve_key(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(&root)
-            && let Some(arc) = asset.get(&path)
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
         {
             return arc.lock_sync().ranges.clone();
         }
@@ -116,9 +106,9 @@ impl AvailabilityIndex {
         if range.start >= range.end {
             return true;
         }
-        let (root, path) = resolve_key(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(&root)
-            && let Some(arc) = asset.get(&path)
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
         {
             return arc.lock_sync().contains(&range);
         }
@@ -126,9 +116,9 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn final_len(&self, asset_root: &str, key: &ResourceKey) -> Option<u64> {
-        let (root, path) = resolve_key(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(&root)
-            && let Some(arc) = asset.get(&path)
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
         {
             return arc.lock_sync().final_len;
         }
@@ -136,30 +126,40 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn remove(&self, asset_root: &str, key: &ResourceKey) {
-        let (root, path) = resolve_key(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(&root) {
-            asset.remove(&path);
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root) {
+            asset.remove(path);
+        }
+    }
+
+    fn resolve_refs<'a>(asset_root: &'a str, key: &'a ResourceKey) -> (&'a str, &'a str) {
+        match key {
+            ResourceKey::Relative(path) => (asset_root, path.as_str()),
+            ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
         }
     }
 
     fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Arc<Mutex<Availability>> {
-        let asset_map = match self.inner.assets.entry(asset_root.to_string()) {
-            Entry::Occupied(o) => o.get().clone(),
-            Entry::Vacant(v) => {
-                let m = Arc::new(DashMap::new());
-                v.insert(m.clone());
-                m
-            }
-        };
+        let asset_map = self.inner.assets.get(asset_root).map_or_else(
+            || {
+                self.inner
+                    .assets
+                    .entry(asset_root.to_string())
+                    .or_insert_with(|| Arc::new(DashMap::new()))
+                    .clone()
+            },
+            |map| map.clone(),
+        );
 
-        match asset_map.entry(path.to_string()) {
-            Entry::Occupied(o) => o.get().clone(),
-            Entry::Vacant(v) => {
-                let arc = Arc::new(Mutex::new(Availability::default()));
-                v.insert(arc.clone());
-                arc
-            }
-        }
+        asset_map.get(path).map_or_else(
+            || {
+                asset_map
+                    .entry(path.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(Availability::default())))
+                    .clone()
+            },
+            |arc| arc.clone(),
+        )
     }
 
     /// Load the availability index from a persistent resource.
