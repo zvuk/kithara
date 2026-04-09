@@ -16,6 +16,7 @@ internal = []  # Expose internal types for testing
 [dependencies]
 postcard = { workspace = true }
 bitflags = { workspace = true }
+dashmap = { workspace = true }
 delegate = { workspace = true }
 derive_setters = { workspace = true }
 hex = { workspace = true }
@@ -23,6 +24,7 @@ kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
 lru = { workspace = true }
 kithara-platform = { workspace = true }
+rangemap = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
