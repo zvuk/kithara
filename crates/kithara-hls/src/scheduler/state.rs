@@ -4,11 +4,10 @@ use std::{
 };
 
 use kithara_abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator};
-use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
-use kithara_storage::ResourceExt;
 use tracing::debug;
 
 use super::{
@@ -279,31 +278,17 @@ impl HlsScheduler {
             .unwrap_or_else(|| self.current_segment_index())
     }
 
-    pub(super) fn resource_covers_len(&self, key: &ResourceKey, len: u64) -> bool {
-        if len == 0 {
-            return true;
-        }
-
-        match self.backend.resource_state(key) {
-            Ok(AssetResourceState::Committed {
-                final_len: Some(final_len),
-            }) => final_len >= len,
-            Ok(AssetResourceState::Committed { .. }) => self
-                .backend
-                .open_resource(key)
-                .is_ok_and(|resource| resource.contains_range(0..len)),
-            _ => false,
-        }
-    }
-
     pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {
         if data.init_len > 0
             && let Some(ref init_url) = data.init_url
-            && !self.resource_covers_len(&ResourceKey::from_url(init_url), data.init_len)
+            && !self
+                .backend
+                .contains_range(&ResourceKey::from_url(init_url), 0..data.init_len)
         {
             return false;
         }
-        self.resource_covers_len(&ResourceKey::from_url(&data.media_url), data.media_len)
+        self.backend
+            .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
     }
 
     pub(super) fn demand_init_evicted(&self, variant: usize, segment_index: usize) -> bool {
@@ -319,6 +304,8 @@ impl HlsScheduler {
             return false;
         };
         drop(segments);
-        !self.resource_covers_len(&ResourceKey::from_url(&init_url), init_len)
+        !self
+            .backend
+            .contains_range(&ResourceKey::from_url(&init_url), 0..init_len)
     }
 }

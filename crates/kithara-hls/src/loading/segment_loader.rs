@@ -10,7 +10,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use kithara_assets::{AssetResource, AssetResourceState, AssetStore, ResourceKey};
+use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::tokio::sync::OnceCell;
@@ -119,9 +119,8 @@ impl SegmentLoader {
         decrypt_ctx: Option<DecryptContext>,
     ) -> HlsResult<(u64, bool)> {
         let key = ResourceKey::from_url(url);
-        if let AssetResourceState::Committed { final_len } = self.backend.resource_state(&key)? {
-            let len = final_len.unwrap_or(0);
-            trace!(url = %url, len, "start_fetch: cache hit via resource_state");
+        if let Some(len) = self.backend.final_len(&key) {
+            trace!(url = %url, len, "start_fetch: cache hit via AssetStore availability index");
             return Ok((len, true));
         }
 
