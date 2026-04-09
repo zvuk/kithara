@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use kithara_assets::{AssetResourceState, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_events::HlsEvent;
 use kithara_storage::ResourceExt;
 
@@ -31,7 +31,9 @@ impl HlsSource {
             let Some(ref init_url) = seg_ref.data.init_url else {
                 return false;
             };
-            if !self.resource_covers_range(&ResourceKey::from_url(init_url), local_start..init_end)
+            if !self
+                .backend
+                .contains_range(&ResourceKey::from_url(init_url), local_start..init_end)
             {
                 return false;
             }
@@ -42,7 +44,7 @@ impl HlsSource {
             .saturating_sub(seg_ref.data.init_len);
         let media_end = local_end.saturating_sub(seg_ref.data.init_len);
         if media_start < media_end
-            && !self.resource_covers_range(
+            && !self.backend.contains_range(
                 &ResourceKey::from_url(&seg_ref.data.media_url),
                 media_start..media_end,
             )
@@ -51,19 +53,6 @@ impl HlsSource {
         }
 
         true
-    }
-
-    pub(super) fn resource_covers_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
-        match self.backend.resource_state(key) {
-            Ok(AssetResourceState::Committed {
-                final_len: Some(final_len),
-            }) => range.end <= final_len,
-            Ok(AssetResourceState::Active | AssetResourceState::Committed { .. }) => self
-                .backend
-                .open_resource(key)
-                .is_ok_and(|resource| resource.contains_range(range)),
-            _ => false,
-        }
     }
 
     /// Read from a loaded segment.
@@ -86,7 +75,7 @@ impl HlsSource {
 
             let key = ResourceKey::from_url(init_url);
             let read_end = (local_offset + buf.len() as u64).min(seg.init_len);
-            if !self.resource_covers_range(&key, local_offset..read_end) {
+            if !self.backend.contains_range(&key, local_offset..read_end) {
                 return Ok(None);
             }
             let resource = &self.backend.open_resource(&key)?;
@@ -122,7 +111,7 @@ impl HlsSource {
     ) -> Result<Option<usize>, HlsError> {
         let key = ResourceKey::from_url(&seg.media_url);
         let read_end = (media_offset + buf.len() as u64).min(seg.media_len);
-        if !self.resource_covers_range(&key, media_offset..read_end) {
+        if !self.backend.contains_range(&key, media_offset..read_end) {
             return Ok(None);
         }
         let resource = &self.backend.open_resource(&key)?;
