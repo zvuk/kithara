@@ -8,8 +8,9 @@ use std::{
     sync::Arc,
 };
 
+use kithara_bufpool::byte_pool;
 use kithara_storage::{
-    AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
+    Atomic, AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
     ResourceStatus, StorageError, StorageResource,
 };
 use tokio_util::sync::CancellationToken;
@@ -56,18 +57,28 @@ impl DiskAssetStore {
     /// availability handle. Observer callbacks fired by this store's
     /// resources mutate the shared handle, so queries through the
     /// owning [`crate::AssetStore`] see the updates immediately.
+    ///
+    /// If `_index/availability.bin` exists under `root_dir`, the
+    /// constructor best-effort seeds the shared [`AvailabilityIndex`]
+    /// from it. A missing / empty / corrupt file is silently treated
+    /// as an empty seed (same policy as `LruIndex::load` and
+    /// `PinsIndex::load`). Errors from the underlying resource read
+    /// itself are swallowed here — a broken cache must not prevent
+    /// store construction.
     pub(crate) fn with_availability<P: Into<PathBuf>, S: Into<String>>(
         root_dir: P,
         asset_root: S,
         cancel: CancellationToken,
         availability: AvailabilityIndex,
     ) -> Self {
-        Self {
+        let store = Self {
             root_dir: root_dir.into(),
             asset_root: asset_root.into(),
             cancel,
             availability,
-        }
+        };
+        let _ = store.seed_availability_from_disk();
+        store
     }
 
     #[must_use]
@@ -98,6 +109,49 @@ impl DiskAssetStore {
 
     fn lru_index_path(&self) -> PathBuf {
         self.root_dir.join("_index").join("lru.bin")
+    }
+
+    fn availability_index_path(&self) -> PathBuf {
+        self.root_dir.join("_index").join("availability.bin")
+    }
+
+    /// Open `_index/availability.bin` as a raw `MmapResource`. Used by
+    /// [`Self::checkpoint`] and [`Self::seed_availability_from_disk`]
+    /// to persist / hydrate the [`AvailabilityIndex`].
+    fn open_availability_index_resource(&self) -> AssetsResult<MmapResource> {
+        self.open_index_resource(self.availability_index_path())
+    }
+
+    /// Hydrate the shared [`AvailabilityIndex`] from disk if a
+    /// persisted snapshot exists. Called exactly once, from
+    /// [`Self::with_availability`] at construction time.
+    ///
+    /// If `_index/availability.bin` is absent, this is a no-op. A
+    /// corrupt / wrong-version payload is silently dropped by
+    /// `AvailabilityIndex::load_from` and the aggregate stays empty.
+    fn seed_availability_from_disk(&self) -> AssetsResult<()> {
+        if !self.availability_index_path().exists() {
+            return Ok(());
+        }
+        let res = self.open_availability_index_resource()?;
+        let atomic = Atomic::new(res);
+        self.availability.load_from(&atomic, byte_pool())
+    }
+
+    /// Persist the current [`AvailabilityIndex`] snapshot to
+    /// `_index/availability.bin` via an `Atomic` tempfile swap. Called
+    /// from [`crate::AssetStore::checkpoint`]. No [`Drop`] hook is
+    /// used — checkpointing is always explicit (closes attempt #1's
+    /// landmine L3).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the index resource cannot be opened
+    /// or the atomic write fails.
+    pub(crate) fn checkpoint(&self) -> AssetsResult<()> {
+        let res = self.open_availability_index_resource()?;
+        let atomic = Atomic::new(res);
+        self.availability.persist_to(&atomic)
     }
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {

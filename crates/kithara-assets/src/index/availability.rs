@@ -193,7 +193,6 @@ impl AvailabilityIndex {
     /// persistence. Holds the `DashMap` shard guards briefly, one at a
     /// time, and clones the inner state — callers on other keys are
     /// not blocked for the whole iteration.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
     pub(crate) fn snapshot(&self) -> Vec<AvailabilityEntry> {
         self.inner
             .entries
@@ -216,7 +215,6 @@ impl AvailabilityIndex {
 
     /// Seed the aggregate from a persisted snapshot. Overwrites any
     /// existing in-memory entries for the same keys.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
     pub(crate) fn seed_from(&self, entries: Vec<AvailabilityEntry>) {
         for entry in entries {
             let mut av = Availability::default();
@@ -229,6 +227,37 @@ impl AvailabilityIndex {
                 .entries
                 .insert(entry.key, Arc::new(Mutex::new(av)));
         }
+    }
+
+    /// Persist this index to `res` by serializing a snapshot through
+    /// `store`. Called from `DiskAssetStore::checkpoint` on the
+    /// `_index/availability.bin` resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if serialization or the underlying
+    /// resource write fails.
+    pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
+        store(res, &self.snapshot())
+    }
+
+    /// Hydrate this index from `res` by deserializing through `load`
+    /// and seeding the aggregate. Called from
+    /// `DiskAssetStore::with_availability` at construction time.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource read itself fails. A
+    /// missing / empty / corrupt payload is silently treated as an
+    /// empty seed, same as `LruIndex::load` / `PinsIndex::load`.
+    pub(crate) fn load_from<R: ResourceExt>(
+        &self,
+        res: &Atomic<R>,
+        pool: &BytePool,
+    ) -> AssetsResult<()> {
+        let entries = load(res, pool)?;
+        self.seed_from(entries);
+        Ok(())
     }
 
     /// Number of tracked resources. Used by `Debug` and by tests.
@@ -340,11 +369,7 @@ pub(crate) struct AvailabilityEntry {
 ///
 /// Returns `AssetsError` only if the underlying resource read itself
 /// fails (I/O error, cancellation). A corrupt payload is not an error.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
-pub(crate) fn load<R: ResourceExt>(
-    res: &Atomic<R>,
-    pool: &BytePool,
-) -> AssetsResult<Vec<AvailabilityEntry>> {
+fn load<R: ResourceExt>(res: &Atomic<R>, pool: &BytePool) -> AssetsResult<Vec<AvailabilityEntry>> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
     if n == 0 {
@@ -363,11 +388,7 @@ pub(crate) fn load<R: ResourceExt>(
 ///
 /// Returns `AssetsError` if serialization or writing to the storage
 /// resource fails.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in P-4 checkpoint API"))]
-pub(crate) fn store<R: ResourceExt>(
-    res: &Atomic<R>,
-    entries: &[AvailabilityEntry],
-) -> AssetsResult<()> {
+fn store<R: ResourceExt>(res: &Atomic<R>, entries: &[AvailabilityEntry]) -> AssetsResult<()> {
     let file = AvailabilityFileV1 {
         version: CURRENT_VERSION,
         entries: entries.to_vec(),

@@ -2,12 +2,10 @@
 
 //! Unified asset store: disk or memory backend.
 
-use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
+use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use rangemap::RangeSet;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::store::DiskStore;
 use crate::{
     AssetResourceState,
     base::Assets,
@@ -16,6 +14,8 @@ use crate::{
     key::ResourceKey,
     store::{AssetResource, MemStore},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{disk_store::DiskAssetStore, store::DiskStore};
 
 /// Unified storage backend for assets.
 ///
@@ -24,7 +24,15 @@ use crate::{
 /// (Phase P-2): every query method below checks it first and falls back
 /// to a slow `resource_state` probe only when the aggregate has no entry
 /// for the key. Phase P-3 wires the storage observer that populates the
-/// aggregate on `write_at` / `commit`; Phase P-4 adds persistence.
+/// aggregate on `write_at` / `commit`; Phase P-4 adds explicit
+/// persistence via [`AssetStore::checkpoint`].
+///
+/// The `base` field on the `Disk` variant is an optional
+/// [`Arc<DiskAssetStore>`] needed only to open `_index/availability.bin`
+/// for checkpointing. It is `Some` when the store is built through
+/// [`crate::AssetStoreBuilder::build`] (production path) and `None`
+/// when a bare [`DiskStore`] chain is converted via `From`/`Into`
+/// (test-only path). A `None` `base` makes `checkpoint()` a no-op.
 #[derive(Clone, Debug)]
 pub enum AssetStore<Ctx = ()>
 where
@@ -35,6 +43,7 @@ where
     Disk {
         store: DiskStore<Ctx>,
         availability: AvailabilityIndex,
+        base: Option<Arc<DiskAssetStore>>,
     },
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem {
@@ -187,6 +196,25 @@ where
         }
     }
 
+    /// Persist the in-memory byte-availability aggregate snapshot to
+    /// disk. For `AssetStore::Mem` this is a no-op.
+    ///
+    /// Checkpointing is always explicit — there is no `Drop` hook and
+    /// no background flush timer (attempt #1 landmine L3). Callers
+    /// decide when a consistent aggregate must survive a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the persistent index resource cannot
+    /// be opened or the atomic write fails.
+    pub fn checkpoint(&self) -> AssetsResult<()> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { base, .. } => base.as_ref().map_or(Ok(()), |base| base.checkpoint()),
+            Self::Mem { .. } => Ok(()),
+        }
+    }
+
     /// Return the crate-private aggregate availability handle.
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
         match self {
@@ -270,6 +298,7 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
+            base: None,
         }
     }
 }

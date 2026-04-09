@@ -256,10 +256,11 @@ where
                     availability,
                 }
             } else {
-                let store = self.build_disk_with_availability(availability.clone());
+                let (store, base) = self.build_disk_with_availability(availability.clone());
                 AssetStore::Disk {
                     store,
                     availability,
+                    base: Some(base),
                 }
             }
         }
@@ -343,11 +344,15 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn build_disk(self) -> DiskStore<Ctx> {
-        self.build_disk_with_availability(AvailabilityIndex::new())
+        let (chain, _base) = self.build_disk_with_availability(AvailabilityIndex::new());
+        chain
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn build_disk_with_availability(self, availability: AvailabilityIndex) -> DiskStore<Ctx> {
+    fn build_disk_with_availability(
+        self,
+        availability: AvailabilityIndex,
+    ) -> (DiskStore<Ctx>, Arc<DiskAssetStore>) {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempfile::tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -369,6 +374,7 @@ where
             cancel.clone(),
             availability,
         ));
+        let base = Arc::clone(&disk);
         let evict = Arc::new(EvictAssets::new(
             disk,
             evict_cfg,
@@ -384,7 +390,8 @@ where
         let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool)
+        let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool);
+        (chain, base)
     }
 
     /// Build ephemeral (in-memory) asset store with its own
