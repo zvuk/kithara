@@ -1,4 +1,16 @@
 #![forbid(unsafe_code)]
+// Phase P-2 wires only the read-side queries (`contains_range`,
+// `available_ranges`, `final_len`) and `remove`. The mutation path
+// (`record_write` / `record_commit` / the `ScopedAvailabilityObserver`
+// struct / `snapshot` / `seed_from`) is wired in Phase P-3 when the
+// storage observer trait lands, and `insert` / `mark_committed` / the
+// `committed` field become used through that path. Silenced here,
+// file-scoped, with an explicit reason; the `#[expect]` fires if these
+// items remain unused after Phase P-3 / P-4.
+#![expect(
+    dead_code,
+    reason = "wired in Phase P-3 (observer) and Phase P-4 (persistence)"
+)]
 
 //! Per-resource byte availability index.
 //!
@@ -105,8 +117,12 @@ impl Availability {
 /// thread the caller chooses, never from an `Arc` release path. This is
 /// the structural fix for attempt #1's landmine L3 (audio-worker Drop
 /// sync writes).
+///
+/// Public as a type so it can appear in `AssetStore` enum variants, but
+/// all methods are `pub(crate)` — callers outside the crate should go
+/// through [`crate::AssetStore::contains_range`] and friends.
 #[derive(Clone)]
-pub(crate) struct AvailabilityIndex {
+pub struct AvailabilityIndex {
     inner: Arc<InnerIndex>,
 }
 
