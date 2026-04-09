@@ -414,7 +414,7 @@ where
             asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
-            availability,
+            availability.clone(),
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,
@@ -428,7 +428,24 @@ where
             process_fn,
             pool.clone(),
         ));
-        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
+        // Mem-specific: when `CachedAssets` evicts a handle, the
+        // underlying `MemResource`'s bytes go with it (MemDriver is
+        // per-handle stateless). Clear the matching aggregate entry in
+        // the same `on_invalidated` callback so subsequent queries
+        // don't report stale availability for resurrected keys. Disk
+        // backend never needs this — files survive eviction.
+        let user_on_invalidated = self.on_invalidated;
+        let hooked_on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
+            availability.remove(key);
+            if let Some(ref cb) = user_on_invalidated {
+                cb(key);
+            }
+        });
+        let cached = Arc::new(CachedAssets::new(
+            processing,
+            capacity,
+            Some(hooked_on_invalidated),
+        ));
         LeaseAssets::new(cached, cancel, pool)
     }
 }
