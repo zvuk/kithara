@@ -1,8 +1,12 @@
 //! [`Downloader`] — unified download orchestrator implementation.
 
-use std::{pin::Pin, sync::Arc};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
-use futures::{StreamExt, stream::SelectAll};
+use futures::{Stream, StreamExt, stream::SelectAll};
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{
@@ -17,12 +21,14 @@ use tracing::debug;
 use super::{
     cmd::{FetchCmd, FetchMethod, FetchResult},
     handle::TrackHandle,
+    peer::{InternalCmd, Peer, PeerHandle},
+    response::{BodyStream, FetchResponse},
 };
 
 /// Backpressure pause between chunks when throttle returns `true`.
 const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
 
-pub(super) type BoxStream = Pin<Box<dyn futures::Stream<Item = FetchCmd> + Send>>;
+pub(super) type BoxStream = Pin<Box<dyn Stream<Item = FetchCmd> + Send>>;
 
 /// Unified downloader — sole HTTP client owner and fetch orchestrator.
 ///
@@ -46,6 +52,26 @@ impl std::fmt::Debug for Downloader {
     }
 }
 
+/// Peer registration entry sent to the `run_v2` loop.
+pub(super) struct RegisteredPeerEntry {
+    pub(super) _peer: Arc<dyn Peer>,
+    pub(super) cmd_rx: mpsc::Receiver<InternalCmd>,
+}
+
+/// Adapter: wrap `mpsc::Receiver<InternalCmd>` as a `Stream` for use
+/// inside `SelectAll`.
+struct PeerCmdStream {
+    rx: mpsc::Receiver<InternalCmd>,
+}
+
+impl Stream for PeerCmdStream {
+    type Item = InternalCmd;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<InternalCmd>> {
+        self.get_mut().rx.poll_recv(cx)
+    }
+}
+
 /// Shared inner state for the downloader.
 ///
 /// Both [`Downloader`] and [`TrackHandle`] hold an `Arc` to this; cloning
@@ -62,6 +88,10 @@ pub(super) struct DownloaderInner {
     pub(super) register_tx: mpsc::UnboundedSender<BoxStream>,
     /// Receiver — taken once by [`spawn`](Downloader::spawn).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<BoxStream>>>,
+    /// Sender for registering new peers (cold path).
+    pub(super) register_peer_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
+    /// Receiver — taken once by [`ensure_peer_loop_spawned`].
+    pub(super) register_peer_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
 }
 
 impl Downloader {
@@ -71,6 +101,7 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (peer_tx, peer_rx) = mpsc::unbounded_channel();
         let chunk_timeout = config.net.request_timeout;
         let runtime = config.runtime;
         let pool = config.pool.unwrap_or_else(|| byte_pool().clone());
@@ -83,6 +114,8 @@ impl Downloader {
                 runtime,
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
+                register_peer_tx: peer_tx,
+                register_peer_rx: Mutex::new(Some(peer_rx)),
             }),
         }
     }
@@ -105,7 +138,7 @@ impl Downloader {
     /// without registering a stream in the `SelectAll` set.
     pub fn register<S>(&self, stream: S) -> TrackHandle
     where
-        S: futures::Stream<Item = FetchCmd> + Send + Unpin + 'static,
+        S: Stream<Item = FetchCmd> + Send + Unpin + 'static,
     {
         self.ensure_spawned();
         let _ = self.inner.register_tx.send(Box::pin(stream));
@@ -161,6 +194,104 @@ impl Downloader {
         };
         let this = self.clone();
         handle.spawn(async move { this.run(rx).await });
+    }
+
+    /// Register a peer and return its [`PeerHandle`].
+    ///
+    /// Creates a per-peer cancel token (child of the downloader cancel)
+    /// and a bounded command channel. The peer loop is lazily spawned
+    /// on first call.
+    pub fn register_peer(&self, peer: Arc<dyn Peer>) -> PeerHandle {
+        self.ensure_peer_loop_spawned();
+        let cancel = self.inner.cancel.child_token();
+        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let entry = RegisteredPeerEntry {
+            _peer: peer,
+            cmd_rx,
+        };
+        let _ = self.inner.register_peer_tx.send(entry);
+        PeerHandle::new(cancel, cmd_tx)
+    }
+
+    /// Ensure the peer loop (`run_v2`) is running.
+    fn ensure_peer_loop_spawned(&self) {
+        let handle = self
+            .inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok());
+        let Some(handle) = handle else {
+            return;
+        };
+        let Some(rx) = self.inner.register_peer_rx.lock_sync().take() else {
+            return;
+        };
+        let this = self.clone();
+        handle.spawn(async move { this.run_v2(rx).await });
+    }
+
+    /// Peer-based download loop.
+    ///
+    /// Polls per-peer command channels via `SelectAll`, establishes
+    /// HTTP connections, and sends responses back through oneshot
+    /// channels. Each fetch runs as an independent task.
+    #[kithara_hang_detector::hang_watchdog]
+    async fn run_v2(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
+        let mut cmd_streams: SelectAll<PeerCmdStream> = SelectAll::new();
+        let mut has_peers = false;
+
+        loop {
+            while let Ok(entry) = register_rx.try_recv() {
+                cmd_streams.push(PeerCmdStream { rx: entry.cmd_rx });
+                has_peers = true;
+            }
+
+            if !has_peers {
+                tokio::select! {
+                    biased;
+                    () = self.inner.cancel.cancelled() => return,
+                    entry = register_rx.recv() => match entry {
+                        Some(e) => {
+                            cmd_streams.push(PeerCmdStream { rx: e.cmd_rx });
+                            has_peers = true;
+                            hang_reset!();
+                            continue;
+                        }
+                        None => return,
+                    },
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    () = self.inner.cancel.cancelled() => return,
+                    entry = register_rx.recv() => {
+                        if let Some(e) = entry {
+                            cmd_streams.push(PeerCmdStream { rx: e.cmd_rx });
+                        }
+                        hang_reset!();
+                        continue;
+                    },
+                    cmd = cmd_streams.next() => {
+                        if let Some(internal) = cmd {
+                            let client = self.inner.client.clone();
+                            let timeout = self.inner.chunk_timeout;
+                            task::spawn(async move {
+                                let result = establish(
+                                    &client, timeout, &internal.cancel, internal.cmd,
+                                ).await;
+                                let _ = internal.resp_tx.send(result);
+                            });
+                        } else {
+                            has_peers = false;
+                            hang_reset!();
+                            continue;
+                        }
+                    },
+                }
+            }
+
+            hang_tick!();
+        }
     }
 
     /// Core download loop.
@@ -375,6 +506,56 @@ pub(super) async fn fetch_only(
         headers: response_headers,
         body: body_buf.map(kithara_bufpool::PooledOwned::into_inner),
     }
+}
+
+/// Establish an HTTP connection and return a [`FetchResponse`].
+///
+/// Connects to the remote server, wraps the body in a [`BodyStream`]
+/// with per-chunk cancel + timeout, and returns headers + body. The
+/// callback fields on `cmd` (`writer`, `on_connect`, `on_complete`,
+/// `throttle`) are ignored — the new API delivers data through the
+/// body stream.
+async fn establish(
+    client: &HttpClient,
+    chunk_timeout: Duration,
+    cancel: &CancellationToken,
+    cmd: FetchCmd,
+) -> Result<FetchResponse, NetError> {
+    let FetchCmd {
+        method,
+        url,
+        range,
+        headers,
+        ..
+    } = cmd;
+
+    if method == FetchMethod::Head {
+        let resp_headers = tokio::select! {
+            () = cancel.cancelled() => return Err(NetError::Cancelled),
+            r = client.head(url, headers) => r?,
+        };
+        return Ok(FetchResponse {
+            headers: resp_headers,
+            body: BodyStream::empty(),
+        });
+    }
+
+    let byte_stream = tokio::select! {
+        () = cancel.cancelled() => return Err(NetError::Cancelled),
+        r = async {
+            match range {
+                Some(range) => client.get_range(url, range, headers).await,
+                None => client.stream(url, headers).await,
+            }
+        } => r?,
+    };
+
+    let resp_headers = byte_stream.headers.clone();
+    let body = BodyStream::from_http(byte_stream, cancel.clone(), chunk_timeout);
+    Ok(FetchResponse {
+        headers: resp_headers,
+        body,
+    })
 }
 
 impl Drop for DownloaderInner {

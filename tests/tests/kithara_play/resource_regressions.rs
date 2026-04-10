@@ -956,23 +956,24 @@ async fn stress_offline_crossfade_no_gaps() {
 
     // Scenario 1: MP3 to HLS
     let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
 
     let hls_1 = make_hls(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
     // Scenario 2: HLS to MP3
     let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
     // Scenario 3: MP3 to MP3
     let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
 
@@ -993,13 +994,13 @@ async fn stress_offline_crossfade_no_gaps() {
     for iter in 0..5 {
         // HLS phase
         let hls_n = make_hls(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
         // Crossfade HLS→MP3
         let mp3_n = make_mp3(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
         let sm = render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR);
 

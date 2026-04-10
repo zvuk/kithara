@@ -55,6 +55,8 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         if n > 0 {
             return (n, retry);
         }
+        // Give background worker some time to fill the buffer
+        thread::sleep(Duration::from_millis(1));
     }
     (0, MAX_ZERO_READS)
 }

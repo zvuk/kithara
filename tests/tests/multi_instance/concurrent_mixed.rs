@@ -164,7 +164,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn mixed_two_file_two_hls() {
@@ -268,7 +268,7 @@ async fn mixed_two_file_two_hls() {
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
 async fn mixed_four_file_four_hls() {

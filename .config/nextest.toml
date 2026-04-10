@@ -13,7 +13,9 @@ filter = """
     test(real_time) |
     test(stress_offline_crossfade_no_gaps) |
     test(stress_chunk_integrity) |
-    test(stress_seek_abr_audio)
+    test(stress_seek_abr_audio) |
+    test(multi_instance) |
+    test(resource_regressions)
   )
 """
 threads-required = "num-cpus"

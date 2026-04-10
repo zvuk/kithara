@@ -12,6 +12,8 @@ mod cmd;
 mod config;
 mod downloader;
 mod handle;
+mod peer;
+mod response;
 #[cfg(test)]
 mod tests;
 
@@ -21,3 +23,5 @@ pub use cmd::{
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use handle::TrackHandle;
+pub use peer::{Peer, PeerHandle};
+pub use response::{BodyStream, FetchResponse};
