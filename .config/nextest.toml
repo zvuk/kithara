@@ -7,16 +7,14 @@ slow-timeout = { period = "120s", terminate-after = 3 }
 # need exclusive CPU — run one at a time.
 [[profile.default.overrides]]
 filter = """
-  binary(suite_stress) & (
-    test(thread_budget) |
-    test(hang_detector) |
-    test(real_time) |
-    test(stress_offline_crossfade_no_gaps) |
-    test(stress_chunk_integrity) |
-    test(stress_seek_abr_audio) |
-    test(multi_instance) |
-    test(resource_regressions)
-  )
+  test(thread_budget) |
+  test(stress_chunk_integrity) |
+  test(stress_seek_abr_audio) |
+  test(stress_seek_lifecycle) |
+  test(live_ephemeral_revisit_sequence_regression) |
+  test(abr_auto_switch_during_playback) |
+  test(multi_instance) |
+  test(stress_offline_crossfade_no_gaps)
 """
 threads-required = "num-cpus"
 
@@ -27,7 +25,6 @@ threads-required = "num-cpus"
 filter = """
   test(drm_stream_byte_integrity) |
   test(stress_chunk_integrity) |
-  test(stress_seek_lifecycle) |
   test(live_stress_real_stream) |
   test(stream_continues_after_seek) |
   test(seek_sequence_from_log_real_stream_drm) |
