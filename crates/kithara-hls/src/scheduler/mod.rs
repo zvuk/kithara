@@ -25,6 +25,6 @@ mod trait_impl;
 pub(crate) mod worker;
 
 pub(crate) use cursor::DownloadCursor;
-pub(crate) use plan::HlsPlan;
+pub(crate) use plan::{DemandOutcome, HlsPlan, PlanOutcome};
 pub(crate) use state::HlsScheduler;
 pub(crate) use trait_impl::HlsFetch;

@@ -2,8 +2,7 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use kithara_abr::{AbrDecision, ThroughputSample, ThroughputSampleSource};
 use kithara_events::{HlsEvent, SeekEpoch};
-use kithara_platform::{time::Instant, tokio};
-use tokio::task::yield_now as task_yield_now;
+use kithara_platform::time::Instant;
 use tracing::{debug, trace};
 
 use super::{
@@ -29,19 +28,29 @@ pub(crate) struct HlsPlan {
 pub(crate) enum PlanOutcome {
     /// One or more plans ready to fetch in parallel.
     Batch(Vec<HlsPlan>),
+    /// Required metadata (e.g. size map) is missing. Caller must fetch it.
+    FetchMetadata(VariantIndex),
     /// No new work this tick, but scheduler is not done.
     Idle,
     /// All variants drained — scheduler should exit.
+    #[expect(
+        dead_code,
+        reason = "Phase 4c prep — will be used for final EOF transition"
+    )]
     Complete,
     /// Single-step progress (unused by HLS, kept for worker loop contract).
     #[expect(dead_code, reason = "worker loop handles this variant defensively")]
     Step,
 }
 
+pub(crate) enum DemandOutcome {
+    Fetch(HlsPlan),
+    FetchMetadata(VariantIndex),
+}
+
 impl HlsScheduler {
-    pub(super) async fn plan_impl(&mut self) -> PlanOutcome {
+    pub(super) fn plan_impl(&mut self) -> PlanOutcome {
         if self.coord.timeline().is_flushing() {
-            task_yield_now().await;
             return PlanOutcome::Idle;
         }
 
@@ -59,17 +68,11 @@ impl HlsScheduler {
             return PlanOutcome::Idle;
         }
 
-        let (is_variant_switch, is_midstream_switch) = match self
-            .ensure_variant_ready(variant, self.current_segment_index())
-            .await
-        {
-            Ok(flags) => flags,
-            Err(e) => {
-                self.coord.condvar.notify_all();
-                self.publish_download_error("variant preparation error", &e);
-                return PlanOutcome::Complete;
-            }
-        };
+        let (is_variant_switch, is_midstream_switch) =
+            match self.ensure_variant_ready(variant, self.current_segment_index()) {
+                Ok(flags) => flags,
+                Err(outcome) => return outcome,
+            };
 
         let old_variant_param = if old_variant != variant {
             Some(old_variant)
@@ -100,12 +103,7 @@ impl HlsScheduler {
         PlanOutcome::Batch(plans)
     }
 
-    pub(super) async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
-        if self.coord.timeline().is_flushing() {
-            task_yield_now().await;
-            return None;
-        }
-
+    pub(super) fn poll_demand_impl(&mut self) -> Option<DemandOutcome> {
         let req = self.next_valid_demand_request()?;
         trace!(
             variant = req.variant,
@@ -113,7 +111,10 @@ impl HlsScheduler {
             "processing on-demand segment request"
         );
 
-        let (req, num_segments) = self.num_segments_for_demand(req)?;
+        let Some((req, num_segments)) = self.num_segments_for_demand(req) else {
+            return Some(DemandOutcome::FetchMetadata(req.variant));
+        };
+
         if Self::demand_request_out_of_range(&req, num_segments) {
             self.coord.clear_pending_segment_request(req);
             self.coord.condvar.notify_all();
@@ -143,13 +144,15 @@ impl HlsScheduler {
             return None;
         }
 
-        let Some((is_variant_switch, is_midstream_switch)) = self
-            .prepare_variant_for_demand(req.variant, req.segment_index)
-            .await
-        else {
-            self.coord.clear_pending_segment_request(req);
-            return None;
-        };
+        let (is_variant_switch, is_midstream_switch) =
+            match self.prepare_variant_for_demand(req.variant, req.segment_index) {
+                Some(Ok(flags)) => flags,
+                Some(Err(outcome)) => return Some(outcome),
+                None => {
+                    self.coord.clear_pending_segment_request(req);
+                    return None;
+                }
+            };
 
         if self.should_skip_pre_switch_variant(req.variant, req.segment_index, is_midstream_switch)
         {
@@ -169,7 +172,9 @@ impl HlsScheduler {
             return None;
         }
 
-        Some(self.build_demand_plan(&req, is_variant_switch))
+        Some(DemandOutcome::Fetch(
+            self.build_demand_plan(&req, is_variant_switch),
+        ))
     }
 
     pub(super) fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
@@ -267,18 +272,15 @@ impl HlsScheduler {
         true
     }
 
-    async fn prepare_variant_for_demand(
+    fn prepare_variant_for_demand(
         &mut self,
         variant: usize,
         segment_index: usize,
-    ) -> Option<(bool, bool)> {
-        match self.ensure_variant_ready(variant, segment_index).await {
-            Ok(flags) => Some(flags),
-            Err(e) => {
-                self.publish_download_error("variant preparation error in poll_demand", &e);
-                self.coord.condvar.notify_all();
-                None
-            }
+    ) -> Option<Result<(bool, bool), DemandOutcome>> {
+        match self.ensure_variant_ready(variant, segment_index) {
+            Ok(flags) => Some(Ok(flags)),
+            Err(PlanOutcome::FetchMetadata(v)) => Some(Err(DemandOutcome::FetchMetadata(v))),
+            Err(_) => unreachable!(),
         }
     }
 
@@ -337,20 +339,17 @@ impl HlsScheduler {
         }
     }
 
-    pub(super) async fn ensure_variant_ready(
+    pub(super) fn ensure_variant_ready(
         &mut self,
         variant: usize,
         segment_index: usize,
-    ) -> Result<(bool, bool), HlsError> {
+    ) -> Result<(bool, bool), PlanOutcome> {
         let (is_variant_switch, is_midstream_switch) =
             self.classify_variant_transition(variant, segment_index);
         self.handle_midstream_switch(is_midstream_switch);
 
-        if !self.playlist_state.has_size_map(variant)
-            && let Err(e) =
-                Self::calculate_size_map(&self.playlist_state, &self.size_probe, variant).await
-        {
-            debug!(?e, variant, "failed to calculate variant size map");
+        if !self.playlist_state.has_size_map(variant) {
+            return Err(PlanOutcome::FetchMetadata(variant));
         }
 
         {

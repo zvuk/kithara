@@ -9,7 +9,7 @@ use tracing::{debug, trace};
 
 use super::{
     helpers::is_stale_epoch,
-    plan::{HlsPlan, PlanOutcome},
+    plan::{DemandOutcome, PlanOutcome},
     state::{HlsScheduler, VERBOSE_SEGMENT_LIMIT},
 };
 use crate::{
@@ -39,13 +39,13 @@ pub(crate) struct HlsFetch {
 
 impl HlsScheduler {
     /// Check for on-demand requests (e.g. seek) without blocking.
-    pub(crate) async fn poll_demand_next(&mut self) -> Option<HlsPlan> {
-        self.poll_demand_impl().await
+    pub(crate) fn poll_demand_next(&mut self) -> Option<DemandOutcome> {
+        self.poll_demand_impl()
     }
 
     /// Plan the next work batch.
-    pub(crate) async fn plan_next(&mut self) -> PlanOutcome {
-        self.plan_impl().await
+    pub(crate) fn plan_next(&mut self) -> PlanOutcome {
+        self.plan_impl()
     }
 
     /// Wait until the throttle condition clears (reader advances enough).

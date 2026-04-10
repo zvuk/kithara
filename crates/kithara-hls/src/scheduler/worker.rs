@@ -24,7 +24,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{HlsFetch, HlsPlan, HlsScheduler, cmd_builder::fetch_plan, plan::PlanOutcome};
+use super::{DemandOutcome, HlsFetch, HlsPlan, HlsScheduler, PlanOutcome, cmd_builder::fetch_plan};
 use crate::{HlsError, loading::SegmentLoader};
 
 /// Default yield interval (iterations between `yield_now` calls).
@@ -171,15 +171,9 @@ async fn run_hls_worker(
         // segment-based throttle pressure. Without this, the subsequent
         // wait_while_throttled can block forever when the pending
         // demand would have un-throttled the downloader.
-        let Ok(mut made_progress) = drain_demand_requests(&mut dl, &loader, &cancel).await else {
-            return;
-        };
-        let Ok(throttle_progress) = wait_while_throttled(&mut dl, &loader, &cancel).await else {
-            return;
-        };
-        let Ok(outcome) = plan_next(&mut dl, &cancel).await else {
-            return;
-        };
+        let mut made_progress = drain_demand_requests(&mut dl, &loader, &cancel).await;
+        let throttle_progress = wait_while_throttled(&mut dl, &loader, &cancel).await;
+        let outcome = dl.plan_next();
 
         hang_tick!();
         yield_now();
@@ -187,6 +181,17 @@ async fn run_hls_worker(
 
         let control = match outcome {
             PlanOutcome::Batch(plans) => handle_batch(&mut dl, &loader, &cancel, plans).await,
+            PlanOutcome::FetchMetadata(variant) => {
+                if handle_metadata(&mut dl, &loader, variant, &cancel)
+                    .await
+                    .is_err()
+                {
+                    LoopControl::Restart
+                } else {
+                    // Immediate restart after metadata to plan the new segments.
+                    LoopControl::Restart
+                }
+            }
             PlanOutcome::Step => {
                 // HLS never emits Step — it always batches.
                 debug!("HLS worker: unexpected Step outcome, ignoring");
@@ -237,23 +242,14 @@ async fn wait_while_throttled(
     dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
-) -> Result<bool, ()> {
+) -> bool {
     let mut made_progress = false;
     while dl.should_throttle() {
-        // Check demand BEFORE blocking: a demand request may have
-        // arrived between drain_demand_requests() and entering this
-        // loop, or between a previous wait_ready wake and re-checking
-        // throttle. Processing it can reset the cursor and relieve
-        // throttle.
-        if let Some(plan) = try_poll_demand(dl, cancel).await
-            && fetch_and_commit_demand(dl, loader, plan, cancel)
-                .await
-                .map(|progress| {
-                    made_progress |= progress;
-                })
-                .is_err()
-        {
-            return Err(());
+        if let Some(outcome) = dl.poll_demand_next() {
+            match handle_demand_outcome(dl, loader, cancel, outcome).await {
+                Ok(progress) => made_progress |= progress,
+                Err(()) => return made_progress,
+            }
         }
         if !dl.should_throttle() {
             break;
@@ -263,54 +259,87 @@ async fn wait_while_throttled(
             biased;
             () = cancel.cancelled() => {
                 debug!("HLS worker cancelled during backpressure");
-                return Err(());
+                return made_progress;
             }
             () = dl.wait_ready_future() => {}
         }
 
-        if let Some(plan) = try_poll_demand(dl, cancel).await
-            && fetch_and_commit_demand(dl, loader, plan, cancel)
-                .await
-                .map(|progress| {
-                    made_progress |= progress;
-                })
-                .is_err()
-        {
-            return Err(());
+        if let Some(outcome) = dl.poll_demand_next() {
+            match handle_demand_outcome(dl, loader, cancel, outcome).await {
+                Ok(progress) => made_progress |= progress,
+                Err(()) => return made_progress,
+            }
         }
     }
-    Ok(made_progress)
+    made_progress
 }
 
 async fn drain_demand_requests(
     dl: &mut HlsScheduler,
     loader: &Arc<SegmentLoader>,
     cancel: &CancellationToken,
-) -> Result<bool, ()> {
+) -> bool {
     let mut made_progress = false;
-    while let Some(plan) = try_poll_demand(dl, cancel).await {
-        if fetch_and_commit_demand(dl, loader, plan, cancel)
-            .await
-            .map(|progress| {
-                made_progress |= progress;
-            })
-            .is_err()
-        {
-            return Err(());
+    while let Some(outcome) = dl.poll_demand_next() {
+        match handle_demand_outcome(dl, loader, cancel, outcome).await {
+            Ok(progress) => made_progress |= progress,
+            Err(()) => return made_progress,
         }
     }
-    Ok(made_progress)
+    made_progress
 }
 
-async fn plan_next(dl: &mut HlsScheduler, cancel: &CancellationToken) -> Result<PlanOutcome, ()> {
+async fn handle_demand_outcome(
+    dl: &mut HlsScheduler,
+    loader: &Arc<SegmentLoader>,
+    cancel: &CancellationToken,
+    outcome: DemandOutcome,
+) -> Result<bool, ()> {
+    match outcome {
+        DemandOutcome::Fetch(plan) => fetch_and_commit_demand(dl, loader, plan, cancel).await,
+        DemandOutcome::FetchMetadata(variant) => {
+            if handle_metadata(dl, loader, variant, cancel).await.is_err() {
+                // If metadata fetch fails, we don't abort the worker, just log
+                // and proceed. The next demand request will retry or the reader will fail.
+                return Ok(false);
+            }
+            // After metadata is loaded, we loop back to `try_poll_demand`
+            // since the next request will evaluate against the new metadata.
+            Ok(true)
+        }
+    }
+}
+
+async fn handle_metadata(
+    dl: &mut HlsScheduler,
+    loader: &Arc<SegmentLoader>,
+    variant: usize,
+    cancel: &CancellationToken,
+) -> Result<(), ()> {
     tokio::select! {
         biased;
         () = cancel.cancelled() => {
-            debug!("HLS worker cancelled during plan");
-            Err(())
+            debug!("HLS worker cancelled during metadata fetch");
+            return Err(());
         }
-        outcome = dl.plan_next() => Ok(outcome),
+        res = async {
+            loader.cache.load_media_playlist(variant).await?;
+            HlsScheduler::calculate_size_map(&dl.playlist_state, &dl.size_probe, variant).await
+        } => {
+            if let Err(e) = res {
+                debug!(?e, variant, "failed to fetch variant metadata");
+                // Demand relies on this, so we should publish the error.
+                dl.publish_download_error("variant metadata preparation error", &e);
+                dl.coord.condvar.notify_all();
+                return Err(());
+            }
+        }
     }
+    // After calculating size map, we should apply cached progress.
+    let (cached_count, cached_end_offset) = dl.populate_cached_segments_if_needed(variant);
+    dl.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
+    dl.coord.condvar.notify_all();
+    Ok(())
 }
 
 async fn handle_idle(dl: &mut HlsScheduler, cancel: &CancellationToken) -> LoopControl {
@@ -375,36 +404,14 @@ async fn handle_batch(
                 Err(e) => debug!(?e, "batch fetch error"),
             }
             next_commit += 1;
-
-            // NOTE: demand processing is intentionally NOT done here.
-            // Fetching a demand segment inside handle_batch can deadlock
-            // when the demand targets a segment still pending in the
-            // batch's FuturesUnordered — both share the same OnceCell,
-            // and the demand's get_or_try_init blocks waiting for the
-            // batch future that is not being polled. Demand is processed
-            // at the top of the main loop via drain_demand_requests().
         }
 
-        // Drain all enqueued commits in FIFO order inside the same loop
-        // iteration — this preserves the legacy "commit as soon as the
-        // next expected result is available" behavior but routes every
-        // commit through the shared queue so Phase 4c can later feed
-        // commits from an async `on_complete` callback without changing
-        // commit_fetch semantics.
         if dl.drain_commits() {
             made_progress = true;
         }
     }
 
     LoopControl::Continue { made_progress }
-}
-
-async fn try_poll_demand(dl: &mut HlsScheduler, cancel: &CancellationToken) -> Option<HlsPlan> {
-    tokio::select! {
-        biased;
-        () = cancel.cancelled() => None,
-        plan = dl.poll_demand_next() => plan,
-    }
 }
 
 async fn fetch_and_commit_demand(
