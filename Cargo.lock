@@ -4457,6 +4457,7 @@ dependencies = [
  "cbc",
  "futures",
  "hex",
+ "kithara-abr",
  "kithara-encode",
  "kithara-platform",
  "kithara-storage",

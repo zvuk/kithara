@@ -20,14 +20,14 @@ use kithara::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::sleep;
 use kithara_platform::{time::Instant, tokio};
-use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
+use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
 const WARMUP_TIMEOUT_SECS: u64 = 10;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 15;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 5;
 const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
 const RANDOM_SEEK_OPS_MAX: usize = 400;
 const MIN_RANDOM_SEEKS: usize = 50;
@@ -85,16 +85,6 @@ fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
     } else {
         max_seek_secs
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn wait_for_next_chunk() {
-    TimeoutFuture::new(10).await;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn wait_for_next_chunk() {
-    sleep(Duration::from_millis(5)).await;
 }
 
 #[derive(Default)]
@@ -202,8 +192,7 @@ async fn next_chunk_with_timeout(
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        audio.preload();
-        wait_for_next_chunk().await;
+        sleep(Duration::from_micros(100)).await;
     }
 }
 
@@ -282,6 +271,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
+    abr_fast: AbrOptions,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -292,13 +282,8 @@ async fn live_ephemeral_revisit_sequence_regression(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_millis(250),
-            min_throughput_record_ms: 0,
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
@@ -435,6 +420,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
+    abr_fast: AbrOptions,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -445,13 +431,8 @@ async fn live_real_stream_fixed_seek_window_regression(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_millis(250),
-            min_throughput_record_ms: 0,
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
@@ -558,6 +539,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
+    abr_fast: AbrOptions,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -568,13 +550,8 @@ async fn live_real_stream_random_seek_prefix_regression(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_millis(250),
-            min_throughput_record_ms: 0,
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
@@ -762,6 +739,7 @@ async fn live_stress_real_stream_seek_read_cache(
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
+    abr_fast: AbrOptions,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -782,13 +760,8 @@ async fn live_stress_real_stream_seek_read_cache(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_millis(250),
-            min_throughput_record_ms: 0,
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))

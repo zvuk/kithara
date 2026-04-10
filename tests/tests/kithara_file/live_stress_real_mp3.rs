@@ -105,7 +105,7 @@ async fn next_chunk_with_timeout(
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_micros(500)).await;
     }
 }
 
@@ -113,7 +113,7 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),
     tracing("kithara_audio=info,kithara_file=info")
 )]

@@ -6,7 +6,16 @@ slow-timeout = { period = "120s", terminate-after = 3 }
 # Stress tests that use blocking audio reads (recv_outcome_blocking)
 # need exclusive CPU — run one at a time.
 [[profile.default.overrides]]
-filter = "binary(suite_stress)"
+filter = """
+  binary(suite_stress) & (
+    test(thread_budget) |
+    test(hang_detector) |
+    test(real_time) |
+    test(stress_offline_crossfade_no_gaps) |
+    test(stress_chunk_integrity) |
+    test(stress_seek_abr_audio)
+  )
+"""
 threads-required = "num-cpus"
 
 # Flaky tests: timing-sensitive ABR/seek/ephemeral tests that occasionally

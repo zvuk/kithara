@@ -97,7 +97,7 @@ async fn next_chunk_with_timeout(
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_micros(500)).await;
     }
 }
 

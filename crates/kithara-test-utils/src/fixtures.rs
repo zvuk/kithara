@@ -87,6 +87,48 @@ pub fn cancel_token_cancelled() -> CancellationToken {
     token
 }
 
+#[must_use]
+#[kithara::fixture]
+pub fn abr_switch_trigger() -> kithara_abr::AbrOptions {
+    use std::time::Duration;
+
+    use kithara_abr::{AbrMode, AbrOptions};
+    AbrOptions {
+        down_hysteresis_ratio: 1.0,
+        down_switch_buffer_secs: 0.0,
+        max_bandwidth_bps: None,
+        min_buffer_for_up_switch_secs: 0.0,
+        min_switch_interval: Duration::ZERO,
+        min_throughput_record_ms: 0,
+        mode: AbrMode::Auto(None),
+        sample_window: Duration::from_millis(100),
+        throughput_safety_factor: 1.0,
+        up_hysteresis_ratio: 1.0,
+        variants: Vec::new(),
+    }
+}
+
+#[must_use]
+#[kithara::fixture]
+pub fn abr_fast() -> kithara_abr::AbrOptions {
+    use std::time::Duration;
+
+    use kithara_abr::{AbrMode, AbrOptions};
+    AbrOptions {
+        down_hysteresis_ratio: 0.9,
+        down_switch_buffer_secs: 0.0,
+        max_bandwidth_bps: None,
+        min_buffer_for_up_switch_secs: 0.0,
+        min_switch_interval: Duration::from_secs(1),
+        min_throughput_record_ms: 0,
+        mode: AbrMode::Auto(None),
+        sample_window: Duration::from_millis(200),
+        throughput_safety_factor: 1.0,
+        up_hysteresis_ratio: 2.0,
+        variants: Vec::new(),
+    }
+}
+
 pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
 }

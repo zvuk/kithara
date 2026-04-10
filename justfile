@@ -44,23 +44,22 @@ doc:
 # --- tests ---
 
 # Cargo profile for test binaries: "dev" (debug) or "test-release" (optimised).
-test-cargo-profile := env("TEST_CARGO_PROFILE", "test-release")
-
+# Run all tests in the workspace (excluding fuzzing).
 test *ARGS:
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile {{test-cargo-profile}} {{ARGS}}
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+
+# Run tests for a specific package.
+test-p name *ARGS:
+    cargo nextest run -p {{name}} --cargo-profile test-release {{ARGS}}
 
 test-ci:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast --cargo-profile {{test-cargo-profile}}
+    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast --cargo-profile test-release
 
 test-doc:
     cargo test --doc --workspace --exclude kithara-fuzz
 
-# Fast iteration: debug build, no heavy tests.
-test-fast:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile fast -E 'not binary(suite_heavy)'
-
 test-stress:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile {{test-cargo-profile}}
+    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile test-release
 
 test-all: test test-doc
 
@@ -149,7 +148,7 @@ coverage:
     mkdir -p "$OUTPUT_DIR"; \
     cargo llvm-cov nextest \
       --workspace --exclude kithara-fuzz \
-      --cargo-profile {{test-cargo-profile}} \
+      --cargo-profile test-release \
       --cobertura \
       --output-path "$OUTPUT_DIR/cobertura.xml" \
       --ignore-filename-regex '(tests/|examples/|benches/)' \

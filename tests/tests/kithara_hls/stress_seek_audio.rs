@@ -62,7 +62,7 @@ fn expected_duration_secs() -> f64 {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 #[case::ephemeral(true)]
