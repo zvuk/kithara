@@ -60,7 +60,7 @@ pub struct SegmentLoader {
     downloader: TrackHandle,
     backend: AssetStore<DecryptContext>,
     headers: Option<Headers>,
-    pub(crate) cache: PlaylistCache,
+    cache: PlaylistCache,
     key_manager: Option<Arc<KeyManager>>,
     // Init segment deduplication: first caller downloads, others wait
     // on OnceCell. `DashMap` provides fine-grained locking so parallel
