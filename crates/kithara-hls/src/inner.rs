@@ -17,11 +17,7 @@ use kithara_stream::{
 
 pub(crate) struct HlsPeer;
 
-impl Peer for HlsPeer {
-    fn is_active(&self) -> bool {
-        true
-    }
-}
+impl Peer for HlsPeer {}
 
 use crate::{
     HlsStreamContext,

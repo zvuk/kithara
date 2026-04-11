@@ -91,11 +91,7 @@ fn create_test_peer_handle() -> kithara_stream::dl::PeerHandle {
     use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
 
     struct TestPeer;
-    impl Peer for TestPeer {
-        fn is_active(&self) -> bool {
-            true
-        }
-    }
+    impl Peer for TestPeer {}
     let cancel = CancellationToken::new();
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     dl.register(Arc::new(TestPeer))

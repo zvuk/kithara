@@ -3,6 +3,19 @@
 use kithara_net::{Headers, RangeSpec};
 use url::Url;
 
+/// Scheduling priority for download commands and peers.
+///
+/// Higher-priority commands are processed first. `High` commands
+/// bypass throttle checks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Priority {
+    /// Latency-sensitive: demand segments, imperative `execute()` calls.
+    High = 0,
+    /// Background: batch segment downloads, pre-fetching.
+    #[default]
+    Normal = 1,
+}
+
 /// HTTP method for a [`FetchCmd`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum FetchMethod {

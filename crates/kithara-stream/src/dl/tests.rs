@@ -13,15 +13,9 @@ const POLL_MS: u64 = 50;
 
 // Test helpers
 
-struct MockPeer {
-    active: bool,
-}
+struct MockPeer;
 
-impl Peer for MockPeer {
-    fn is_active(&self) -> bool {
-        self.active
-    }
-}
+impl Peer for MockPeer {}
 
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     let stream =
@@ -70,8 +64,8 @@ async fn body_stream_empty_collects_to_empty() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(DownloaderConfig::default());
-    let peer_a = dl.register(Arc::new(MockPeer { active: true }));
-    let peer_b = dl.register(Arc::new(MockPeer { active: true }));
+    let peer_a = dl.register(Arc::new(MockPeer));
+    let peer_b = dl.register(Arc::new(MockPeer));
 
     peer_a.cancel().cancel();
 
@@ -84,7 +78,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
     let dl = Downloader::new(DownloaderConfig::default());
-    let handle = dl.register(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer));
     let cancel = handle.cancel();
     let clone = handle.clone();
 
@@ -108,7 +102,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         ..NetOptions::default()
     };
     let dl = Downloader::new(DownloaderConfig::default().with_net(net));
-    let handle = dl.register(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer));
 
     let h2 = handle.clone();
     let task = kithara_platform::tokio::task::spawn(async move {
@@ -143,7 +137,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancellationToken::new();
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
-    let handle = dl.register(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer));
 
     cancel.cancel();
     assert!(

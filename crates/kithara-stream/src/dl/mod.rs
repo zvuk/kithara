@@ -12,7 +12,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub use cmd::{FetchCmd, FetchMethod};
+pub use cmd::{FetchCmd, FetchMethod, Priority};
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use peer::{Peer, PeerHandle};

@@ -25,11 +25,7 @@ const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
 
 pub(crate) struct FilePeer;
 
-impl Peer for FilePeer {
-    fn is_active(&self) -> bool {
-        true
-    }
-}
+impl Peer for FilePeer {}
 
 // FileStreamState — creation helper (unchanged API)
 
