@@ -368,4 +368,122 @@ impl SegmentLoader {
         self.load_media_segment_with_source_for_epoch(variant, segment_index, 0)
             .await
     }
+
+    /// Prepare a media segment for download via `poll_next`.
+    ///
+    /// Resolves the URL, checks the disk cache, acquires the
+    /// `AssetResource` (with DRM context if needed), and builds the
+    /// `FetchCmd`. All lookups hit pre-populated caches (playlists,
+    /// keys, size maps) so no network I/O occurs.
+    ///
+    /// Returns `None` if the segment is already cached (no fetch
+    /// needed).
+    ///
+    /// # Errors
+    /// Returns an error when playlist lookup, URL resolution, or DRM
+    /// context resolution fails.
+    pub async fn prepare_media(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> HlsResult<PreparedMedia> {
+        let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
+
+        let segment = playlist.segments.get(segment_index).ok_or_else(|| {
+            HlsError::SegmentNotFound(format!(
+                "segment {segment_index} not found in variant {variant} playlist",
+            ))
+        })?;
+
+        let segment_url = media_url
+            .join(&segment.uri)
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
+
+        // Check availability index first (fast path).
+        let key = ResourceKey::from_url(&segment_url);
+        if let Some(len) = self.backend.final_len(&key) {
+            return Ok(PreparedMedia {
+                url: segment_url,
+                duration: Some(segment.duration),
+                cached_len: Some(len),
+                resource: None,
+            });
+        }
+
+        // Resolve DRM context for encrypted segments.
+        let decrypt_ctx = self
+            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
+            .await?;
+
+        let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
+
+        // Check if committed after acquire.
+        if let ResourceStatus::Committed { final_len } = res.status() {
+            let len = final_len.unwrap_or(0);
+            return Ok(PreparedMedia {
+                url: segment_url,
+                duration: Some(segment.duration),
+                cached_len: Some(len),
+                resource: None,
+            });
+        }
+
+        Ok(PreparedMedia {
+            url: segment_url,
+            duration: Some(segment.duration),
+            cached_len: None,
+            resource: Some(res),
+        })
+    }
+
+    /// Complete a media segment after body has been written by the
+    /// Downloader (via `on_chunk`).
+    ///
+    /// Commits the resource and returns segment metadata.
+    ///
+    /// # Errors
+    /// Returns an error when commit fails or zero bytes were written.
+    pub fn complete_media(
+        &self,
+        prepared: &PreparedMedia,
+        bytes_written: u64,
+    ) -> HlsResult<SegmentMeta> {
+        if bytes_written == 0 && prepared.cached_len.is_none() {
+            return Err(HlsError::SegmentNotFound(format!(
+                "0 bytes downloaded for {}",
+                prepared.url,
+            )));
+        }
+
+        let len = if let Some(cached) = prepared.cached_len {
+            cached
+        } else if let Some(ref res) = prepared.resource {
+            res.commit(Some(bytes_written)).map_err(HlsError::from)?;
+            res.len().unwrap_or(bytes_written)
+        } else {
+            bytes_written
+        };
+
+        Ok(SegmentMeta {
+            url: prepared.url.clone(),
+            duration: prepared.duration,
+            len,
+        })
+    }
+}
+
+/// A media segment prepared for download via `poll_next` / `on_chunk`.
+///
+/// If `cached_len` is `Some`, the segment is already in the disk cache
+/// and no fetch is needed. Otherwise, `resource` holds the open
+/// `AssetResource` for the Downloader to write into via `on_chunk`.
+pub struct PreparedMedia {
+    /// Segment URL.
+    pub url: Url,
+    /// Segment duration from the playlist.
+    pub duration: Option<Duration>,
+    /// Set when cached — no fetch needed.
+    pub cached_len: Option<u64>,
+    /// Open resource for writing. `None` when cached.
+    pub resource: Option<AssetResource<DecryptContext>>,
 }

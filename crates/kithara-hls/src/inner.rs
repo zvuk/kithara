@@ -26,7 +26,7 @@ use crate::{
     error::HlsError,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
-    playlist::PlaylistState,
+    playlist::{PlaylistState, VariantSizeMap},
     scheduler::worker::spawn_hls_worker,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
@@ -173,10 +173,8 @@ impl StreamType for Hls {
             &media_playlists,
         ));
 
-        // Determine initial variant. When a shared ABR controller carries
-        // stale state from a previous stream (e.g., current_variant=1 but
-        // mode=Manual(0)), synchronize before reading the initial variant.
-        // This ensures layout_variant matches the ABR target at startup.
+        // Determine initial variant BEFORE pre-fetch so we know which
+        // variant to prioritise.
         let initial_variant = config.abr.as_ref().map_or(0, |abr| {
             let now = Instant::now();
             let decision = abr.decide(now);
@@ -185,6 +183,15 @@ impl StreamType for Hls {
             }
             abr.get_current_variant_index()
         });
+
+        // Pre-fetch size maps (HEAD) + init segments (GET) — one batch.
+        prefetch_metadata(
+            &peer_handle,
+            &backend,
+            &playlist_state,
+            config.headers.as_ref(),
+        )
+        .await;
 
         // Emit VariantsDiscovered event
         let variant_info = variant_info_from_master(&master);
@@ -227,5 +234,130 @@ impl StreamType for Hls {
             Arc::clone(&source.segments),
             Arc::clone(&source.coord.abr_variant_index),
         ))
+    }
+}
+
+/// Pre-fetch size maps (HEAD) + init segments (GET) for all variants
+/// in a single `batch()` call. One iteration to collect, one batch,
+/// one iteration to distribute.
+async fn prefetch_metadata(
+    peer_handle: &kithara_stream::dl::PeerHandle,
+    _backend: &AssetStore<DecryptContext>,
+    playlist_state: &PlaylistState,
+    headers: Option<&kithara_net::Headers>,
+) {
+    use kithara_stream::dl::{FetchCmd, FetchMethod};
+
+    use crate::playlist::PlaylistAccess;
+
+    struct VariantMeta {
+        variant: usize,
+        probe_start: usize,
+        probe_has_init: bool,
+        probe_num_segments: usize,
+    }
+
+    fn parse_content_length(resp: &kithara_stream::dl::FetchResponse) -> u64 {
+        resp.headers
+            .get("content-length")
+            .or_else(|| resp.headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    let num_variants = playlist_state.num_variants();
+    let mut cmds: Vec<FetchCmd> = Vec::new();
+    let mut metas: Vec<VariantMeta> = Vec::new();
+
+    // Phase 1: one loop — collect HEAD probes + init GETs.
+    for variant in 0..num_variants {
+        let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
+        let init_url = playlist_state.init_url(variant);
+        let needs_size_map = !playlist_state.has_size_map(variant) && num_segments > 0;
+
+        let probe_start = cmds.len();
+        let mut probe_has_init = false;
+
+        if needs_size_map {
+            if let Some(ref url) = init_url {
+                cmds.push(FetchCmd {
+                    method: FetchMethod::Head,
+                    url: url.clone(),
+                    range: None,
+                    headers: headers.cloned(),
+                });
+                probe_has_init = true;
+            }
+            for i in 0..num_segments {
+                if let Some(url) = playlist_state.segment_url(variant, i) {
+                    cmds.push(FetchCmd {
+                        method: FetchMethod::Head,
+                        url,
+                        range: None,
+                        headers: headers.cloned(),
+                    });
+                }
+            }
+        }
+
+        metas.push(VariantMeta {
+            variant,
+            probe_start,
+            probe_has_init,
+            probe_num_segments: if needs_size_map { num_segments } else { 0 },
+        });
+    }
+
+    if cmds.is_empty() {
+        return;
+    }
+
+    // Phase 2: single batch — all HEAD probes in parallel.
+    let results = peer_handle.batch(cmds).await;
+
+    // Phase 3: distribute results → size maps.
+    for meta in &metas {
+        if meta.probe_num_segments > 0 {
+            let mut idx = meta.probe_start;
+            let init_size = if meta.probe_has_init {
+                let s = results
+                    .get(idx)
+                    .and_then(|r| r.as_ref().ok())
+                    .map_or(0, parse_content_length);
+                idx += 1;
+                s
+            } else {
+                0
+            };
+
+            let mut offsets = Vec::with_capacity(meta.probe_num_segments);
+            let mut segment_sizes = Vec::with_capacity(meta.probe_num_segments);
+            let mut cumulative = 0u64;
+
+            for i in 0..meta.probe_num_segments {
+                let media_len = results
+                    .get(idx)
+                    .and_then(|r| r.as_ref().ok())
+                    .map_or(0, parse_content_length);
+                idx += 1;
+                let total_seg = if i == 0 {
+                    init_size + media_len
+                } else {
+                    media_len
+                };
+                offsets.push(cumulative);
+                segment_sizes.push(total_seg);
+                cumulative += total_seg;
+            }
+
+            playlist_state.set_size_map(
+                meta.variant,
+                VariantSizeMap {
+                    segment_sizes,
+                    offsets,
+                    total: cumulative,
+                },
+            );
+        }
     }
 }

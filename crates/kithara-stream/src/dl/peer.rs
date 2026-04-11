@@ -176,8 +176,8 @@ impl PeerHandle {
     /// Individual commands may fail independently. Each slot in the
     /// returned `Vec` contains its own `Result`.
     pub async fn batch(&self, cmds: Vec<FetchCmd>) -> Vec<Result<FetchResponse, NetError>> {
-        let count = cmds.len();
-        let mut receivers = Vec::with_capacity(count);
+        let mut receivers: Vec<Option<oneshot::Receiver<Result<FetchResponse, NetError>>>> =
+            Vec::with_capacity(cmds.len());
 
         for cmd in cmds {
             let cmd_cancel = self.inner.cancel.child_token();
@@ -189,22 +189,19 @@ impl PeerHandle {
                 response: ResponseTarget::Channel(resp_tx),
             };
             if self.inner.cmd_tx.send(internal).await.is_err() {
-                // Channel closed — fill remaining with Cancelled.
                 receivers.push(None);
                 continue;
             }
             receivers.push(Some(resp_rx));
         }
 
-        let mut results = Vec::with_capacity(count);
-        for rx in receivers {
+        // Await all responses concurrently, preserving array order.
+        futures::future::join_all(receivers.into_iter().map(|rx| async move {
             match rx {
-                Some(resp_rx) => {
-                    results.push(resp_rx.await.unwrap_or(Err(NetError::Cancelled)));
-                }
-                None => results.push(Err(NetError::Cancelled)),
+                Some(resp_rx) => resp_rx.await.unwrap_or(Err(NetError::Cancelled)),
+                None => Err(NetError::Cancelled),
             }
-        }
-        results
+        }))
+        .await
     }
 }
