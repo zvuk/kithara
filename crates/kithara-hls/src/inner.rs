@@ -96,9 +96,6 @@ impl StreamType for Hls {
             if let Some(handle) = config.runtime.clone() {
                 dl_config = dl_config.with_runtime(handle);
             }
-            if let Some(pool) = config.pool.clone() {
-                dl_config = dl_config.with_pool(pool);
-            }
             Downloader::new(dl_config)
         });
 

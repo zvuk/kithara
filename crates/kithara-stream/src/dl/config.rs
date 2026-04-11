@@ -1,6 +1,5 @@
 //! Downloader configuration.
 
-use kithara_bufpool::BytePool;
 use kithara_net::NetOptions;
 use kithara_platform::tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
@@ -17,11 +16,6 @@ pub struct DownloaderConfig {
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
     pub runtime: Option<Handle>,
-    /// Byte buffer pool for `FetchMethod::Get` body accumulation.
-    ///
-    /// - `Some(pool)` — use this pool (tests can inject an isolated pool).
-    /// - `None` — falls back to the global `byte_pool()`.
-    pub pool: Option<BytePool>,
 }
 
 impl DownloaderConfig {
@@ -45,13 +39,6 @@ impl DownloaderConfig {
         self.runtime = Some(handle);
         self
     }
-
-    /// Set a custom byte pool (for testing isolation).
-    #[must_use]
-    pub fn with_pool(mut self, pool: BytePool) -> Self {
-        self.pool = Some(pool);
-        self
-    }
 }
 
 impl Default for DownloaderConfig {
@@ -60,7 +47,6 @@ impl Default for DownloaderConfig {
             net: NetOptions::default(),
             cancel: CancellationToken::new(),
             runtime: None,
-            pool: None,
         }
     }
 }

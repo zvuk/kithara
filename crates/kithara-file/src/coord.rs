@@ -82,6 +82,11 @@ impl FileCoord {
     pub(crate) fn take_range_request(&self) -> Option<Range<u64>> {
         self.demand.take()
     }
+
+    /// Borrow the demand notify — callers await `.notified()` directly.
+    pub(crate) fn demand_notify(&self) -> &Notify {
+        &self.downloader_wake
+    }
 }
 
 impl Default for FileCoord {

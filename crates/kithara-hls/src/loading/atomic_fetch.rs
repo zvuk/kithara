@@ -102,10 +102,6 @@ async fn download_atomic_bytes(
         url,
         range: None,
         headers,
-        on_connect: None,
-        writer: None,
-        on_complete: None,
-        throttle: None,
     };
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)

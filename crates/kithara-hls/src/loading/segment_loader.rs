@@ -148,10 +148,6 @@ impl SegmentLoader {
             url: url.clone(),
             range: None,
             headers: self.headers.clone(),
-            on_connect: None,
-            writer: None,
-            on_complete: None,
-            throttle: None,
         };
         let resp = self.downloader.execute(cmd).await.map_err(|e| {
             res.fail(format!("fetch failed: {e}"));

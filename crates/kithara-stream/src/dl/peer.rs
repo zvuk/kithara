@@ -28,8 +28,8 @@ pub(super) struct InternalCmd {
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
 struct PeerInner {
-    /// Keeps `DownloaderInner` (`HttpClient`, pool) alive for this
-    /// peer's lifetime — mirrors `TrackHandle::pool`.
+    /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive
+    /// for this peer's lifetime.
     _pool: Arc<DownloaderInner>,
     cancel: CancellationToken,
     cmd_tx: mpsc::Sender<InternalCmd>,

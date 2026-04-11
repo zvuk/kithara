@@ -18,7 +18,7 @@ use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
-    session::{FileSource, FileStreamState},
+    session::{FilePeer, FileSource, FileStreamState},
 };
 
 /// Marker type for file streaming.
@@ -146,27 +146,20 @@ impl File {
             ));
         }
 
-        // Create source and register with downloader. Download starts
-        // immediately — Content-Length arrives via on_connect callback.
+        // Register a peer and get a PeerHandle for HTTP requests.
+        let peer_handle = downloader.register(Arc::new(FilePeer));
+
+        // Create source — spawns download tasks internally.
         let source = FileSource::remote(
-            state.res.clone(),
+            &state,
             coord,
-            state.bus.clone(),
             cancel,
             url,
             config.headers,
             config.look_ahead_bytes,
+            peer_handle,
         );
 
-        // Register a clone of the source as the protocol stream so the
-        // downloader loop can poll it for `FetchCmd`s. The original
-        // `source` stays with the caller for sync `Source` access; the
-        // returned `TrackHandle` is dropped — the only reason to keep
-        // it would be to call `track.execute*()` from inside File, and
-        // File never does that. The `with_downloader` clone keeps the
-        // download pool alive for the source's lifetime.
-        let _track = downloader.register_stream(source.clone());
-
-        Ok(source.with_downloader(downloader))
+        Ok(source)
     }
 }
