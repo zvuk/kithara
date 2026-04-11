@@ -15,7 +15,7 @@ use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::tokio::sync::OnceCell;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
+use kithara_stream::dl::{FetchCmd, FetchMethod, PeerHandle};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -57,7 +57,7 @@ type SegmentLoad = (bool, SegmentMeta);
 /// media playlists through a shared [`PlaylistCache`].
 #[derive(Clone)]
 pub struct SegmentLoader {
-    downloader: TrackHandle,
+    downloader: PeerHandle,
     backend: AssetStore<DecryptContext>,
     headers: Option<Headers>,
     cache: PlaylistCache,
@@ -73,7 +73,7 @@ pub struct SegmentLoader {
 impl SegmentLoader {
     #[must_use]
     pub fn new(
-        downloader: TrackHandle,
+        downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
         headers: Option<Headers>,
         cache: PlaylistCache,
@@ -97,15 +97,14 @@ impl SegmentLoader {
         self.headers = headers;
     }
 
-    /// Start fetching a segment via the unified [`TrackHandle`].
+    /// Start fetching a segment via the unified [`PeerHandle`].
     ///
     /// Returns `(bytes, was_cached)`:
     /// - `was_cached == true` — resource was already committed in the
     ///   disk cache; no network round-trip occurred.
     /// - `was_cached == false` — fetch went through
-    ///   `TrackHandle::execute(FetchCmd::Stream)` with a writer callback
-    ///   that writes each chunk into the `AssetResource` and commits
-    ///   the resource inline on success.
+    ///   `PeerHandle::execute` and the response body stream was
+    ///   written into the `AssetResource` chunk by chunk.
     ///
     /// When `decrypt_ctx` is `Some`, the resource is opened with a
     /// decrypt context; decryption happens on the fly inside
@@ -133,43 +132,47 @@ impl SegmentLoader {
             return Ok((len, true));
         }
 
-        trace!(url = %url, "start_fetch: downloading via TrackHandle");
+        trace!(url = %url, "start_fetch: downloading via PeerHandle");
         let bytes = self.download_stream_via_downloader(url, &res).await?;
         Ok((bytes, false))
     }
 
-    /// Stream a fetch into an `AssetResource` via the unified [`TrackHandle`].
+    /// Stream a fetch into an `AssetResource` via [`PeerHandle`].
     async fn download_stream_via_downloader(
         &self,
         url: &Url,
         res: &AssetResource<DecryptContext>,
     ) -> HlsResult<u64> {
-        let res_writer = res.clone();
-        let mut offset: u64 = 0;
-        let writer_cb: kithara_stream::dl::WriterFn = Box::new(move |chunk: &[u8]| {
-            let pos = offset;
-            offset += chunk.len() as u64;
-            res_writer
-                .write_at(pos, chunk)
-                .map_err(std::io::Error::other)
-        });
         let cmd = FetchCmd {
-            method: FetchMethod::Stream,
+            method: FetchMethod::default(),
             url: url.clone(),
             range: None,
             headers: self.headers.clone(),
             on_connect: None,
-            writer: Some(writer_cb),
+            writer: None,
             on_complete: None,
             throttle: None,
         };
-        let total = match self.downloader.execute(cmd).await {
-            DlFetchResult::Ok { bytes_written, .. } => bytes_written,
-            DlFetchResult::Err(e) => {
-                res.fail(format!("fetch failed: {e}"));
-                return Err(HlsError::from(e));
-            }
-        };
+        let resp = self.downloader.execute(cmd).await.map_err(|e| {
+            res.fail(format!("fetch failed: {e}"));
+            HlsError::from(e)
+        })?;
+        let res_writer = res.clone();
+        let mut offset: u64 = 0;
+        let total = resp
+            .body
+            .write_all(move |chunk| {
+                let pos = offset;
+                offset += chunk.len() as u64;
+                res_writer
+                    .write_at(pos, chunk)
+                    .map_err(std::io::Error::other)
+            })
+            .await
+            .map_err(|e| {
+                res.fail(format!("body stream failed: {e}"));
+                HlsError::from(e)
+            })?;
         if total == 0 {
             res.fail(format!("0 bytes downloaded: {url}"));
             return Err(HlsError::SegmentNotFound(format!(

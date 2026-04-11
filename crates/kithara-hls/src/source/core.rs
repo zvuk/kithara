@@ -225,7 +225,7 @@ impl HlsSource {
 /// Build an `HlsScheduler` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
-    track: kithara_stream::dl::TrackHandle,
+    track: kithara_stream::dl::PeerHandle,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,

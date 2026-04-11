@@ -106,7 +106,7 @@ async fn empty_stream_completes() {
     inner.lock_sync().done = true;
 
     let dl = Downloader::new(DownloaderConfig::default());
-    let _handle = dl.register(stream);
+    let _handle = dl.register_stream(stream);
 
     sleep(SETTLE_MS).await;
 }
@@ -117,7 +117,7 @@ async fn cancel_stops_loop() {
     let (stream, _inner) = TestStream::new();
 
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
-    let _handle = dl.register(stream);
+    let _handle = dl.register_stream(stream);
 
     cancel.cancel();
     sleep(SETTLE_MS).await;
@@ -137,7 +137,7 @@ async fn on_complete_fires_for_all_commands() {
     }
 
     let dl = Downloader::new(DownloaderConfig::default());
-    let _handle = dl.register(stream);
+    let _handle = dl.register_stream(stream);
 
     sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 3);
@@ -149,7 +149,7 @@ async fn waker_push_after_spawn() {
     let counter = Arc::new(AtomicU64::new(0));
 
     let dl = Downloader::new(DownloaderConfig::default());
-    let _handle = dl.register(stream);
+    let _handle = dl.register_stream(stream);
 
     sleep(POLL_MS).await;
 
@@ -184,8 +184,8 @@ async fn multiple_streams_polled() {
     }
 
     let dl = Downloader::new(DownloaderConfig::default());
-    let _h1 = dl.register(a);
-    let _h2 = dl.register(b);
+    let _h1 = dl.register_stream(a);
+    let _h2 = dl.register_stream(b);
 
     sleep(COMPLETE_MS).await;
     assert_eq!(counter.load(Ordering::Relaxed), 2);
@@ -203,7 +203,7 @@ async fn register_after_first() {
     }
 
     let dl = Downloader::new(DownloaderConfig::default());
-    let _h1 = dl.register(first);
+    let _h1 = dl.register_stream(first);
 
     sleep(POLL_MS).await;
 
@@ -214,7 +214,7 @@ async fn register_after_first() {
         s.queue.push_back(counting_cmd(Arc::clone(&counter)));
         s.done = true;
     }
-    let _h2 = dl.register(second);
+    let _h2 = dl.register_stream(second);
 
     // Complete the first stream.
     {
@@ -262,7 +262,7 @@ async fn execute_returns_promptly_when_track_dropped_mid_fetch() {
 
     // Register a dummy stream to get a TrackHandle.
     let (stream, _inner) = TestStream::new();
-    let handle = dl.register(stream);
+    let handle = dl.register_stream(stream);
 
     // Spawn an execute that will hang on the unreachable address.
     let h2 = handle.clone();
@@ -306,8 +306,8 @@ async fn execute_cancel_is_scoped_to_one_track() {
     let dl = Downloader::new(DownloaderConfig::default());
     let (s1, _i1) = TestStream::new();
     let (s2, _i2) = TestStream::new();
-    let track_a = dl.register(s1);
-    let track_b = dl.register(s2);
+    let track_a = dl.register_stream(s1);
+    let track_b = dl.register_stream(s2);
 
     // Cancel track A.
     track_a.cancel().cancel();
@@ -371,8 +371,8 @@ async fn body_stream_empty_collects_to_empty() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(DownloaderConfig::default());
-    let peer_a = dl.register_peer(Arc::new(MockPeer { active: true }));
-    let peer_b = dl.register_peer(Arc::new(MockPeer { active: true }));
+    let peer_a = dl.register(Arc::new(MockPeer { active: true }));
+    let peer_b = dl.register(Arc::new(MockPeer { active: true }));
 
     peer_a.cancel().cancel();
 
@@ -385,7 +385,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
     let dl = Downloader::new(DownloaderConfig::default());
-    let handle = dl.register_peer(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer { active: true }));
     let cancel = handle.cancel();
     let clone = handle.clone();
 
@@ -409,7 +409,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         ..NetOptions::default()
     };
     let dl = Downloader::new(DownloaderConfig::default().with_net(net));
-    let handle = dl.register_peer(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer { active: true }));
 
     let h2 = handle.clone();
     let task = kithara_platform::tokio::task::spawn(async move {
@@ -448,7 +448,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancellationToken::new();
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
-    let handle = dl.register_peer(Arc::new(MockPeer { active: true }));
+    let handle = dl.register(Arc::new(MockPeer { active: true }));
 
     // Downloader-level cancel should cascade to peer.
     cancel.cancel();

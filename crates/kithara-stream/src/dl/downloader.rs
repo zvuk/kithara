@@ -123,20 +123,10 @@ impl Downloader {
     /// Register a protocol stream as a new track and return its
     /// [`TrackHandle`].
     ///
-    /// Each call creates a fresh per-track state (id + cancellation
-    /// token) — components that should belong to the **same** track must
-    /// share a clone of one handle, not call `register` separately.
-    ///
-    /// Lazily spawns the download loop on the first call. The protocol
-    /// stream is sent into the loop's `SelectAll` set. The returned
-    /// [`TrackHandle`] exposes [`execute`](TrackHandle::execute) for
-    /// direct fetches outside the stream loop.
-    ///
-    /// Protocols that drive all their fetches directly via
-    /// `TrackHandle::execute()` (e.g. the current HLS path) should use
-    /// [`new_track`](Self::new_track) instead — it creates a handle
-    /// without registering a stream in the `SelectAll` set.
-    pub fn register<S>(&self, stream: S) -> TrackHandle
+    /// Legacy API — used by File protocol which yields
+    /// `Stream<Item = FetchCmd>`. New protocols should use
+    /// [`register`](Self::register) with the `Peer` trait instead.
+    pub fn register_stream<S>(&self, stream: S) -> TrackHandle
     where
         S: Stream<Item = FetchCmd> + Send + Unpin + 'static,
     {
@@ -201,7 +191,7 @@ impl Downloader {
     /// Creates a per-peer cancel token (child of the downloader cancel)
     /// and a bounded command channel. The peer loop is lazily spawned
     /// on first call.
-    pub fn register_peer(&self, peer: Arc<dyn Peer>) -> PeerHandle {
+    pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
         self.ensure_peer_loop_spawned();
         let cancel = self.inner.cancel.child_token();
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
@@ -210,7 +200,7 @@ impl Downloader {
             cmd_rx,
         };
         let _ = self.inner.register_peer_tx.send(entry);
-        PeerHandle::new(cancel, cmd_tx)
+        PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx)
     }
 
     /// Ensure the peer loop (`run_v2`) is running.
@@ -235,7 +225,10 @@ impl Downloader {
     /// Polls per-peer command channels via `SelectAll`, establishes
     /// HTTP connections, and sends responses back through oneshot
     /// channels. Each fetch runs as an independent task.
-    #[kithara_hang_detector::hang_watchdog]
+    ///
+    /// No `hang_watchdog` — this is an event-driven loop with expected
+    /// idle periods between command bursts. Protection comes from
+    /// cancel tokens and channel timeouts.
     async fn run_v2(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut cmd_streams: SelectAll<PeerCmdStream> = SelectAll::new();
         let mut has_peers = false;
@@ -254,7 +247,6 @@ impl Downloader {
                         Some(e) => {
                             cmd_streams.push(PeerCmdStream { rx: e.cmd_rx });
                             has_peers = true;
-                            hang_reset!();
                             continue;
                         }
                         None => return,
@@ -268,7 +260,6 @@ impl Downloader {
                         if let Some(e) = entry {
                             cmd_streams.push(PeerCmdStream { rx: e.cmd_rx });
                         }
-                        hang_reset!();
                         continue;
                     },
                     cmd = cmd_streams.next() => {
@@ -283,14 +274,11 @@ impl Downloader {
                             });
                         } else {
                             has_peers = false;
-                            hang_reset!();
                             continue;
                         }
                     },
                 }
             }
-
-            hang_tick!();
         }
     }
 

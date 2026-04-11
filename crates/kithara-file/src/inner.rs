@@ -165,7 +165,7 @@ impl File {
         // it would be to call `track.execute*()` from inside File, and
         // File never does that. The `with_downloader` clone keeps the
         // download pool alive for the source's lifetime.
-        let _track = downloader.register(source.clone());
+        let _track = downloader.register_stream(source.clone());
 
         Ok(source.with_downloader(downloader))
     }

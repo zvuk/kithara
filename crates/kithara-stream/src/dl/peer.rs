@@ -6,7 +6,7 @@ use kithara_net::NetError;
 use kithara_platform::tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::{cmd::FetchCmd, response::FetchResponse};
+use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
 
 /// Protocol-agnostic contract for download orchestration.
 ///
@@ -28,6 +28,9 @@ pub(super) struct InternalCmd {
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
 struct PeerInner {
+    /// Keeps `DownloaderInner` (`HttpClient`, pool) alive for this
+    /// peer's lifetime — mirrors `TrackHandle::pool`.
+    _pool: Arc<DownloaderInner>,
     cancel: CancellationToken,
     cmd_tx: mpsc::Sender<InternalCmd>,
 }
@@ -56,9 +59,17 @@ impl std::fmt::Debug for PeerHandle {
 }
 
 impl PeerHandle {
-    pub(super) fn new(cancel: CancellationToken, cmd_tx: mpsc::Sender<InternalCmd>) -> Self {
+    pub(super) fn new(
+        pool: Arc<DownloaderInner>,
+        cancel: CancellationToken,
+        cmd_tx: mpsc::Sender<InternalCmd>,
+    ) -> Self {
         Self {
-            inner: Arc::new(PeerInner { cancel, cmd_tx }),
+            inner: Arc::new(PeerInner {
+                _pool: pool,
+                cancel,
+                cmd_tx,
+            }),
         }
     }
 

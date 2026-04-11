@@ -12,8 +12,16 @@ use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::time::Instant;
 use kithara_stream::{
     StreamContext, StreamType, Timeline,
-    dl::{Downloader, DownloaderConfig},
+    dl::{Downloader, DownloaderConfig, Peer},
 };
+
+pub(crate) struct HlsPeer;
+
+impl Peer for HlsPeer {
+    fn is_active(&self) -> bool {
+        true
+    }
+}
 
 use crate::{
     HlsStreamContext,
@@ -122,36 +130,31 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
-        // Per-track handle for the SRP-decomposed HLS sub-systems below.
-        // HLS does not yield commands through a `Stream<Item = FetchCmd>`
-        // — every fetch is dispatched directly via `track.execute*()`.
-        // `new_track()` creates the handle without registering a stream,
-        // giving HLS a clean per-track cancel hierarchy without a noop
-        // stream workaround.
-        //
-        // Each component below clones this handle so they all share the
-        // same per-track state (id + cancellation token).
-        let track = downloader.new_track();
+        // Per-peer handle for the SRP-decomposed HLS sub-systems below.
+        // HLS registers as a Peer so the downloader can query active
+        // state for priority. Every fetch is dispatched via
+        // `peer_handle.execute()` — no Stream<Item=FetchCmd> needed.
+        let peer_handle = downloader.register(Arc::new(HlsPeer));
 
         // Build the small SRP-decomposed HLS sub-systems directly. No
         // FetchManager façade.
-        let playlist_cache = PlaylistCache::new(backend.clone(), track.clone());
+        let playlist_cache = PlaylistCache::new(backend.clone(), peer_handle.clone());
         playlist_cache.set_master_url(config.url.clone());
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
-        // KeyManager: own track + backend + headers, no FetchManager.
+        // KeyManager: own peer_handle + backend + headers.
         let key_manager = Arc::new(KeyManager::from_options(
-            track.clone(),
+            peer_handle.clone(),
             backend.clone(),
             config.headers.clone(),
             config.keys.clone(),
         ));
 
-        // SegmentLoader: own track + backend + headers, shares
+        // SegmentLoader: own peer_handle + backend + headers, shares
         // PlaylistCache for media playlist lookups.
         let mut loader = SegmentLoader::new(
-            track.clone(),
+            peer_handle.clone(),
             backend.clone(),
             config.headers.clone(),
             playlist_cache.clone(),
@@ -200,7 +203,7 @@ impl StreamType for Hls {
         // Create HlsScheduler + HlsSource pair
         let (hls_downloader, mut source) = build_pair(
             backend,
-            track.clone(),
+            peer_handle.clone(),
             &master.variants,
             &config,
             Arc::clone(&playlist_state),

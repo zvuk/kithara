@@ -13,7 +13,7 @@ use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
+use kithara_stream::dl::{FetchCmd, FetchMethod, PeerHandle};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -23,18 +23,15 @@ use crate::{HlsError, HlsResult};
 /// cache + unified downloader pipeline.
 ///
 /// Looks the URL up in `backend` first; on hit, returns the cached
-/// bytes. On miss, issues a `Downloader::execute(FetchCmd::Get)` with
-/// the supplied headers, then best-effort writes the result back to
-/// the cache. Concurrent writers may race — whoever commits the
-/// resource first wins, and subsequent writes silently fail (the
-/// bytes are still returned to the caller from the network fetch).
+/// bytes. On miss, issues a `PeerHandle::execute` with the supplied
+/// headers, then best-effort writes the result back to the cache.
 ///
 /// # Errors
 /// Returns an error when the network fetch fails or when the cache
 /// access layer reports an error other than a harmless concurrent
 /// commit.
 pub(crate) async fn fetch_atomic_body(
-    downloader: &TrackHandle,
+    downloader: &PeerHandle,
     backend: &AssetStore<DecryptContext>,
     headers: Option<Headers>,
     url: &Url,
@@ -94,15 +91,14 @@ pub(crate) async fn fetch_atomic_body(
     Ok(bytes)
 }
 
-/// Drive a single `Downloader::execute` call that accumulates the full
-/// body into a `Bytes` buffer.
+/// Fetch a URL and collect the full body into a `Bytes` buffer.
 async fn download_atomic_bytes(
-    downloader: &TrackHandle,
+    downloader: &PeerHandle,
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
     let cmd = FetchCmd {
-        method: FetchMethod::Get,
+        method: FetchMethod::default(),
         url,
         range: None,
         headers,
@@ -111,8 +107,6 @@ async fn download_atomic_bytes(
         on_complete: None,
         throttle: None,
     };
-    match downloader.execute(cmd).await {
-        DlFetchResult::Ok { body, .. } => Ok(body.map(Bytes::from).unwrap_or_default()),
-        DlFetchResult::Err(e) => Err(HlsError::from(e)),
-    }
+    let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
+    resp.body.collect().await.map_err(HlsError::from)
 }

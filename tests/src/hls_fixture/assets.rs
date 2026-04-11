@@ -84,27 +84,30 @@ pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
     kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
 }
 
-/// Create a private test [`TrackHandle`] for direct `execute*()` calls
-/// outside the streaming pipeline. Uses `Downloader::new_track()` so no
-/// stream is registered — the handle exposes `execute*()` against the
-/// same pool without a noop stream workaround.
-fn create_test_track() -> kithara_stream::dl::TrackHandle {
+/// Create a private test [`PeerHandle`] via `Downloader::register`.
+fn create_test_peer_handle() -> kithara_stream::dl::PeerHandle {
+    use std::sync::Arc;
+
+    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
+
+    struct TestPeer;
+    impl Peer for TestPeer {
+        fn is_active(&self) -> bool {
+            true
+        }
+    }
     let cancel = CancellationToken::new();
-    let dl = kithara_stream::dl::Downloader::new(
-        kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
-    );
-    dl.new_track()
+    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    dl.register(Arc::new(TestPeer))
 }
 
 /// Build a test [`PlaylistCache`] backed by the supplied
-/// [`TestAssets`] + a fresh private [`TrackHandle`]. Used by
-/// integration tests that drive playlist parsing without going
-/// through the full `Hls::create` flow.
+/// [`TestAssets`] + a fresh private [`PeerHandle`].
 pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
-    PlaylistCache::new(assets.assets().clone(), create_test_track())
+    PlaylistCache::new(assets.assets().clone(), create_test_peer_handle())
 }
 
-/// Build a test [`KeyManager`] backed by a fresh [`TrackHandle`] and
+/// Build a test [`KeyManager`] backed by a fresh [`PeerHandle`] and
 /// the supplied [`TestAssets`]. Mirrors the production constructor in
 /// `Hls::create` so integration tests exercise the same wiring.
 pub fn test_key_manager(
@@ -114,7 +117,7 @@ pub fn test_key_manager(
     key_request_headers: Option<HashMap<String, String>>,
 ) -> KeyManager {
     KeyManager::new(
-        create_test_track(),
+        create_test_peer_handle(),
         assets.assets().clone(),
         None,
         key_processor,

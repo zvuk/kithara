@@ -51,9 +51,9 @@ fn make_test_loader(
 ) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
     let backend = make_test_backend(cancel);
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-    let track = downloader.new_track();
-    let cache = PlaylistCache::new(backend.clone(), track.clone());
-    let loader = Arc::new(SegmentLoader::new(track, backend.clone(), None, cache));
+    let handle = downloader.register(Arc::new(crate::inner::HlsPeer));
+    let cache = PlaylistCache::new(backend.clone(), handle.clone());
+    let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));
     (backend, loader)
 }
 
@@ -140,8 +140,8 @@ pub fn build_source(
         .downloader
         .clone()
         .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
-    let track = downloader.new_track();
-    let (_downloader, source) = build_pair(backend, track, variants, config, playlist_state, bus);
+    let handle = downloader.register(Arc::new(crate::inner::HlsPeer));
+    let (_downloader, source) = build_pair(backend, handle, variants, config, playlist_state, bus);
     source
 }
 

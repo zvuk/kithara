@@ -13,7 +13,7 @@ use bytes::Bytes;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_stream::dl::TrackHandle;
+use kithara_stream::dl::PeerHandle;
 use url::Url;
 
 use super::atomic_fetch::fetch_atomic_body;
@@ -27,12 +27,12 @@ const IV_SEQUENCE_OFFSET: usize = 8;
 
 /// DRM key fetch + optional processor pipeline.
 ///
-/// Reads through the unified [`TrackHandle`] and persists key bodies in
+/// Reads through the unified [`PeerHandle`] and persists key bodies in
 /// the supplied [`AssetStore`] via the shared
 /// [`fetch_atomic_body`] helper. No dependency on `FetchManager`.
 #[derive(Clone)]
 pub struct KeyManager {
-    downloader: TrackHandle,
+    downloader: PeerHandle,
     backend: AssetStore<DecryptContext>,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
@@ -44,7 +44,7 @@ pub struct KeyManager {
 impl KeyManager {
     #[must_use]
     pub fn new(
-        downloader: TrackHandle,
+        downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         key_processor: Option<KeyProcessor>,
@@ -64,7 +64,7 @@ impl KeyManager {
     /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
     pub fn from_options(
-        downloader: TrackHandle,
+        downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,

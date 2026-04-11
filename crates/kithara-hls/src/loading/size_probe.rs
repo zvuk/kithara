@@ -2,27 +2,27 @@
 
 //! HEAD-probe helper for variant size maps.
 //!
-//! Owns the [`TrackHandle`] handle + base headers needed to issue
+//! Owns the [`PeerHandle`] + base headers needed to issue
 //! `Content-Length` HEAD probes for HLS segments. Used by
 //! [`crate::scheduler::HlsScheduler::calculate_size_map`].
 
 use kithara_net::Headers;
-use kithara_stream::dl::{FetchCmd, FetchMethod, FetchResult as DlFetchResult, TrackHandle};
+use kithara_stream::dl::{FetchCmd, FetchMethod, PeerHandle};
 use url::Url;
 
 use crate::{HlsError, HlsResult};
 
-/// Issues HEAD requests via the unified [`TrackHandle`] to read the
+/// Issues HEAD requests via the unified [`PeerHandle`] to read the
 /// `Content-Length` header for a URL. Stateless apart from the
 /// downloader handle and the base headers it forwards on every probe.
 #[derive(Clone)]
 pub(crate) struct SizeMapProbe {
-    downloader: TrackHandle,
+    downloader: PeerHandle,
     headers: Option<Headers>,
 }
 
 impl SizeMapProbe {
-    pub(crate) fn new(downloader: TrackHandle, headers: Option<Headers>) -> Self {
+    pub(crate) fn new(downloader: PeerHandle, headers: Option<Headers>) -> Self {
         Self {
             downloader,
             headers,
@@ -46,10 +46,8 @@ impl SizeMapProbe {
             on_complete: None,
             throttle: None,
         };
-        let resp_headers = match self.downloader.execute(cmd).await {
-            DlFetchResult::Ok { headers, .. } => headers,
-            DlFetchResult::Err(e) => return Err(HlsError::from(e)),
-        };
+        let resp = self.downloader.execute(cmd).await.map_err(HlsError::from)?;
+        let resp_headers = resp.headers;
         let content_length = resp_headers
             .get("content-length")
             .or_else(|| resp_headers.get("Content-Length"))

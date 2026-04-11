@@ -34,12 +34,11 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
-fn test_track(cancel: &CancellationToken) -> kithara_stream::dl::TrackHandle {
+fn test_peer_handle(cancel: &CancellationToken) -> kithara_stream::dl::PeerHandle {
     let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
     );
-    // `execute*()` calls bypass the loop entirely, so no stream needed.
-    dl.new_track()
+    dl.register(Arc::new(crate::inner::HlsPeer))
 }
 
 type LoaderPair = (
@@ -51,10 +50,10 @@ fn make_test_loader_pair(
     cancel: CancellationToken,
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
-    let track = test_track(&cancel);
-    let cache = crate::loading::PlaylistCache::new(backend.clone(), track.clone());
+    let handle = test_peer_handle(&cancel);
+    let cache = crate::loading::PlaylistCache::new(backend.clone(), handle.clone());
     let loader = Arc::new(crate::loading::SegmentLoader::new(
-        track,
+        handle,
         backend.clone(),
         None,
         cache,
@@ -141,7 +140,7 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
     let playlist_state = Arc::new(PlaylistState::new(variants));
     let parsed = parsed_variants(num_variants);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
@@ -186,7 +185,7 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
@@ -642,7 +641,7 @@ fn demand_range_queues_request_for_unloaded_offset() {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
@@ -685,7 +684,7 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
@@ -878,7 +877,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     );
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_fetch_manager(cancel.clone());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
@@ -952,7 +951,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     )]));
     let parsed = parsed_variants(1);
     let (backend, _loader) = test_disk_fetch_manager(cancel.clone(), dir.path());
-    let track = test_track(&cancel);
+    let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
         ..HlsConfig::default()
