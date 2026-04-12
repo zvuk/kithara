@@ -9,10 +9,10 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_net::{ByteStream, Headers, NetError};
 use kithara_platform::{
+    CancelGroup,
     time::{Duration, sleep},
     tokio,
 };
-use tokio_util::sync::CancellationToken;
 
 /// Response from a fetch — headers available immediately, body as
 /// async stream.
@@ -63,7 +63,7 @@ impl BodyStream {
     /// Wrap an HTTP [`ByteStream`] with per-chunk cancel + timeout.
     pub(super) fn from_http(
         byte_stream: ByteStream,
-        cancel: CancellationToken,
+        cancel: CancelGroup,
         chunk_timeout: Duration,
     ) -> Self {
         Self {
@@ -119,7 +119,7 @@ impl Stream for BodyStream {
 /// State for the cancel+timeout body stream wrapper.
 struct WrapState {
     stream: ByteStream,
-    cancel: CancellationToken,
+    cancel: CancelGroup,
     timeout: Duration,
     done: bool,
 }
@@ -127,7 +127,7 @@ struct WrapState {
 /// Wrap a [`ByteStream`] with per-chunk cancellation and idle timeout.
 fn wrap_with_cancel(
     byte_stream: ByteStream,
-    cancel: CancellationToken,
+    cancel: CancelGroup,
     chunk_timeout: Duration,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>> {
     Box::pin(futures::stream::unfold(

@@ -1,15 +1,19 @@
 //! [`Downloader`] — unified download orchestrator implementation.
 
 use std::{
+    collections::VecDeque,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
 };
 
 use futures::{Stream, StreamExt, stream::SelectAll};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{
-    Mutex,
+    CancelGroup, Mutex,
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},
@@ -17,7 +21,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    cmd::{FetchCmd, FetchMethod},
+    cmd::{FetchCmd, FetchMethod, Priority},
     peer::{InternalCmd, Peer, PeerHandle, ResponseTarget},
     response::{BodyStream, FetchResponse},
 };
@@ -48,52 +52,76 @@ pub(super) struct RegisteredPeerEntry {
 /// Merged stream: polls both the execute/batch channel AND
 /// `Peer::poll_next` for a single peer, yielding `InternalCmd`s
 /// from either source.
-struct MergedPeerStream {
+struct PeerStream {
     rx: mpsc::Receiver<InternalCmd>,
     peer: Arc<dyn Peer>,
-    #[expect(dead_code, reason = "used for poll_next command cancel in Wave 5c")]
     peer_cancel: CancellationToken,
-    /// `poll_next` returned `None` — stream part is done.
     peer_done: bool,
+    buffer: VecDeque<InternalCmd>,
+    in_flight: Arc<AtomicUsize>,
+    waker: Arc<futures::task::AtomicWaker>,
 }
 
-impl Stream for MergedPeerStream {
+impl PeerStream {
+    fn batch_to_buffer(&mut self, batch: Vec<FetchCmd>) {
+        let priority = self.peer.priority();
+        for mut cmd in batch {
+            let epoch_cancel = cmd.cancel.take();
+            let cancel = match epoch_cancel {
+                Some(epoch) => CancelGroup::new(vec![self.peer_cancel.clone(), epoch]),
+                None => CancelGroup::new(vec![self.peer_cancel.child_token()]),
+            };
+            self.in_flight.fetch_add(1, Ordering::Relaxed);
+            self.buffer.push_back(InternalCmd {
+                cmd,
+                cancel,
+                priority,
+                response: ResponseTarget::Streaming {
+                    in_flight: Arc::clone(&self.in_flight),
+                    waker: Arc::clone(&self.waker),
+                },
+            });
+        }
+    }
+}
+
+impl Stream for PeerStream {
     type Item = InternalCmd;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<InternalCmd>> {
         let this = self.get_mut();
+        this.waker.register(cx.waker());
 
-        // Always check the execute/batch channel first (High priority).
+        // 1. Always check the execute/batch channel first (High priority).
         if let Poll::Ready(Some(cmd)) = this.rx.poll_recv(cx) {
             return Poll::Ready(Some(cmd));
         }
 
-        // Then poll the Peer's proactive stream (if still active).
-        if !this.peer_done {
+        // 2. Drain buffered commands, skipping cancelled (stale epoch).
+        while let Some(cmd) = this.buffer.pop_front() {
+            if !cmd.cancel.is_cancelled() {
+                return Poll::Ready(Some(cmd));
+            }
+            deliver_cancelled(cmd.response, cmd.cmd);
+        }
+
+        // 3. Poll the Peer's proactive stream (if still active and under limit).
+        let at_capacity = this.in_flight.load(Ordering::Relaxed) >= this.peer.max_concurrent();
+        if !this.peer_done && !at_capacity {
             match this.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
-                    // TODO(wave5c): wrap batch into InternalCmd sequence
-                    // with ResponseTarget::Streaming and FIFO delivery.
-                    // For now, poll_next defaults to None for all peers,
-                    // so this branch is unreachable until HlsPeer is
-                    // implemented. Stub: drop the batch.
-                    let _ = batch;
-                    return Poll::Pending;
+                    this.batch_to_buffer(batch);
+                    if let Some(cmd) = this.buffer.pop_front() {
+                        return Poll::Ready(Some(cmd));
+                    }
                 }
                 Poll::Ready(None) => {
                     this.peer_done = true;
-                    // Peer stream ended. Channel may still be alive.
                 }
-                Poll::Pending => {
-                    // Waker already registered by poll_recv + poll_next.
-                }
+                Poll::Pending => {}
             }
         }
 
-        // If channel is closed AND peer is done, this stream is done.
-        // poll_recv returning Ready(None) means channel closed.
-        // We already called poll_recv above; if it returned Pending,
-        // the stream is still alive.
         Poll::Pending
     }
 }
@@ -182,16 +210,34 @@ impl Downloader {
     /// idle periods between command bursts. Protection comes from
     /// cancel tokens and channel timeouts.
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
-        let mut streams: SelectAll<MergedPeerStream> = SelectAll::new();
+        let mut streams: SelectAll<PeerStream> = SelectAll::new();
         let mut has_peers = false;
+        let mut throttled: Vec<InternalCmd> = Vec::new();
 
         loop {
+            // Retry throttled commands whose peer priority is no longer Low.
+            let prev = std::mem::take(&mut throttled);
+            for cmd in prev {
+                if cmd.cancel.is_cancelled() {
+                    deliver_cancelled(cmd.response, cmd.cmd);
+                    continue;
+                }
+                if cmd.priority == Priority::Low {
+                    throttled.push(cmd);
+                    continue;
+                }
+                spawn_fetch(&self.inner, cmd);
+            }
+
             while let Ok(entry) = register_rx.try_recv() {
-                streams.push(MergedPeerStream {
+                streams.push(PeerStream {
                     rx: entry.cmd_rx,
                     peer: entry.peer,
                     peer_cancel: self.inner.cancel.child_token(),
                     peer_done: false,
+                    buffer: VecDeque::new(),
+                    in_flight: Arc::new(AtomicUsize::new(0)),
+                    waker: Arc::new(futures::task::AtomicWaker::new()),
                 });
                 has_peers = true;
             }
@@ -202,11 +248,14 @@ impl Downloader {
                     () = self.inner.cancel.cancelled() => return,
                     entry = register_rx.recv() => match entry {
                         Some(e) => {
-                            streams.push(MergedPeerStream {
+                            streams.push(PeerStream {
                                 rx: e.cmd_rx,
                                 peer: e.peer,
                                 peer_cancel: self.inner.cancel.child_token(),
                                 peer_done: false,
+                                buffer: VecDeque::new(),
+                                in_flight: Arc::new(AtomicUsize::new(0)),
+                                waker: Arc::new(futures::task::AtomicWaker::new()),
                             });
                             has_peers = true;
                             continue;
@@ -220,11 +269,14 @@ impl Downloader {
                     () = self.inner.cancel.cancelled() => return,
                     entry = register_rx.recv() => {
                         if let Some(e) = entry {
-                            streams.push(MergedPeerStream {
+                            streams.push(PeerStream {
                                 rx: e.cmd_rx,
                                 peer: e.peer,
                                 peer_cancel: self.inner.cancel.child_token(),
                                 peer_done: false,
+                                buffer: VecDeque::new(),
+                                in_flight: Arc::new(AtomicUsize::new(0)),
+                                waker: Arc::new(futures::task::AtomicWaker::new()),
                             });
                         }
                         continue;
@@ -232,17 +284,17 @@ impl Downloader {
                     cmd = streams.next() => {
                         if let Some(internal) = cmd {
                             if internal.cancel.is_cancelled() {
-                                deliver_cancelled(internal.response);
+                                deliver_cancelled(internal.response, internal.cmd);
                                 continue;
                             }
-                            let client = self.inner.client.clone();
-                            let timeout = self.inner.chunk_timeout;
-                            task::spawn(async move {
-                                let result = establish(
-                                    &client, timeout, &internal.cancel, internal.cmd,
-                                ).await;
-                                deliver(internal.response, result);
-                            });
+                            // Throttle: Low-priority streaming commands → buffer
+                            if internal.priority == Priority::Low {
+                                throttled.push(internal);
+                                continue;
+                            }
+                            spawn_fetch(&self.inner, internal);
+                            // Yield so spawned fetch tasks get scheduled.
+                            task::yield_now().await;
                         } else {
                             has_peers = false;
                             continue;
@@ -261,7 +313,7 @@ impl Downloader {
 async fn establish(
     client: &HttpClient,
     chunk_timeout: Duration,
-    cancel: &CancellationToken,
+    cancel: &CancelGroup,
     cmd: FetchCmd,
 ) -> Result<FetchResponse, NetError> {
     let FetchCmd {
@@ -269,6 +321,7 @@ async fn establish(
         url,
         range,
         headers,
+        ..
     } = cmd;
 
     if method == FetchMethod::Head {
@@ -300,39 +353,75 @@ async fn establish(
     })
 }
 
+/// Spawn an HTTP fetch task for one command.
+fn spawn_fetch(inner: &Arc<DownloaderInner>, internal: InternalCmd) {
+    let client = inner.client.clone();
+    let timeout = inner.chunk_timeout;
+    // Extract writer/on_complete before establish consumes the FetchCmd.
+    let mut cmd = internal.cmd;
+    let writer = cmd.writer.take();
+    let on_complete_cb = cmd.on_complete.take();
+    task::spawn(async move {
+        let result = establish(&client, timeout, &internal.cancel, cmd).await;
+        deliver(internal.response, result, writer, on_complete_cb).await;
+    });
+}
+
 /// Route a fetch result to its target.
-fn deliver(target: ResponseTarget, result: Result<FetchResponse, NetError>) {
+async fn deliver(
+    target: ResponseTarget,
+    result: Result<FetchResponse, NetError>,
+    mut writer: Option<super::cmd::WriterFn>,
+    on_complete_cb: Option<super::cmd::OnCompleteFn>,
+) {
     match target {
         ResponseTarget::Channel(tx) => {
             let _ = tx.send(result);
         }
-        ResponseTarget::Streaming { peer, tag } => {
+        ResponseTarget::Streaming { in_flight, waker } => {
             match result {
                 Ok(resp) => {
-                    peer.on_headers(tag, &resp.headers);
-                    // Body streaming for poll_next commands is handled
-                    // in Wave 5c when HlsPeer implements on_chunk.
-                    // For now, streaming targets don't exist (all peers
-                    // use default poll_next → None).
-                    peer.on_complete(tag, 0, None);
+                    if let Some(ref mut w) = writer {
+                        let write_result = resp.body.write_all(|chunk| w(chunk)).await;
+                        match write_result {
+                            Ok(total) => {
+                                if let Some(cb) = on_complete_cb {
+                                    cb(total, None);
+                                }
+                            }
+                            Err(ref e) => {
+                                if let Some(cb) = on_complete_cb {
+                                    cb(0, Some(e));
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(ref e) => {
-                    peer.on_complete(tag, 0, Some(e));
+                    if let Some(cb) = on_complete_cb {
+                        cb(0, Some(e));
+                    }
                 }
             }
+            in_flight.fetch_sub(1, Ordering::Relaxed);
+            waker.wake();
         }
     }
 }
 
 /// Route a cancellation to its target.
-fn deliver_cancelled(target: ResponseTarget) {
+fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
     let err = NetError::Cancelled;
     match target {
         ResponseTarget::Channel(tx) => {
             let _ = tx.send(Err(err));
         }
-        ResponseTarget::Streaming { peer, tag } => {
-            peer.on_complete(tag, 0, Some(&err));
+        ResponseTarget::Streaming { in_flight, waker } => {
+            if let Some(cb) = cmd.on_complete.take() {
+                cb(0, Some(&err));
+            }
+            in_flight.fetch_sub(1, Ordering::Relaxed);
+            waker.wake();
         }
     }
 }

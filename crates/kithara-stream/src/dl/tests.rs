@@ -7,7 +7,7 @@ use kithara_platform::time::Duration;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, FetchMethod, Peer};
+use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer};
 
 const POLL_MS: u64 = 50;
 
@@ -108,12 +108,9 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let task = kithara_platform::tokio::task::spawn(async move {
         let start = Instant::now();
         let result = h2
-            .execute(FetchCmd {
-                method: FetchMethod::Stream,
-                url: Url::parse("http://192.0.2.1:1/").expect("valid url"),
-                range: None,
-                headers: None,
-            })
+            .execute(FetchCmd::get(
+                Url::parse("http://192.0.2.1:1/").expect("valid url"),
+            ))
             .await;
         (start.elapsed(), result)
     });

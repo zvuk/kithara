@@ -10,7 +10,7 @@ use kithara_platform::{Mutex, time::Duration, tokio};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
-    dl::{FetchCmd, FetchMethod, Peer, PeerHandle},
+    dl::{FetchCmd, Peer, PeerHandle},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -189,12 +189,7 @@ async fn run_full_download(
 
     inner.lock_sync().phase = FilePhase::Downloading;
 
-    let cmd = FetchCmd {
-        method: FetchMethod::default(),
-        url,
-        range: None,
-        headers,
-    };
+    let cmd = FetchCmd::get(url).headers(headers);
 
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
@@ -388,12 +383,7 @@ async fn run_range_download(inner: Arc<Mutex<FileInner>>, peer: PeerHandle, rang
     };
 
     let range_spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
-    let cmd = FetchCmd {
-        method: FetchMethod::default(),
-        url,
-        range: Some(range_spec),
-        headers,
-    };
+    let cmd = FetchCmd::get(url).range(Some(range_spec)).headers(headers);
 
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,

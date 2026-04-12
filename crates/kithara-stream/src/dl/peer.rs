@@ -1,12 +1,11 @@
 //! Peer trait + per-peer handle for the channel-based downloader API.
 
 use std::{
-    io,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
     task::{Context, Poll},
 };
 
-use kithara_net::{Headers, NetError};
+use kithara_net::NetError;
 use kithara_platform::tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -24,63 +23,50 @@ use super::{
 ///
 /// All methods have defaults so that simple peers (File) only need
 /// to exist — the Downloader drives everything through `execute()`.
-/// Complex peers (HLS) override `poll_next` + `on_*` to let the
-/// Downloader drive media segment downloads.
+/// Complex peers (HLS) override `poll_next` to let the Downloader
+/// drive media segment downloads via per-command `writer`/`on_complete`
+/// closures in [`FetchCmd`].
 pub trait Peer: Send + Sync + 'static {
     /// Peer-level priority. `High` = active playback track.
     fn priority(&self) -> Priority {
         Priority::Normal
     }
 
-    /// Should the Downloader pause Normal-priority fetches for this
-    /// peer? `High`-priority commands always pass.
-    fn should_throttle(&self) -> bool {
-        false
+    /// Maximum number of concurrent in-flight commands for this peer.
+    /// The Downloader will not call `poll_next` when in-flight count
+    /// reaches this limit.
+    fn max_concurrent(&self) -> usize {
+        5
     }
 
     /// Yield the next batch of commands for the Downloader to execute.
     ///
-    /// Returns `Ready(Some(batch))` with one or more commands.
-    /// The Downloader executes all commands in the batch in parallel
-    /// and delivers `on_headers`/`on_chunk`/`on_complete` in **array
-    /// order** (FIFO). Next `poll_next` is called only after the
-    /// current batch is fully delivered.
+    /// Returns `Ready(Some(batch))` with one or more self-contained
+    /// [`FetchCmd`]s. Each command carries its own `writer` and
+    /// `on_complete` closures — the Downloader calls them directly.
     ///
     /// Returns `Ready(None)` when the peer has no more work (stream
     /// ended). Returns `Pending` when waiting (throttle, idle).
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         Poll::Ready(None)
     }
-
-    /// Called when the HTTP connection for a batch command is established.
-    fn on_headers(&self, _tag: u64, _headers: &Headers) {}
-
-    /// Called per body chunk as bytes arrive from the network (zero-copy).
-    ///
-    /// # Errors
-    /// Return an I/O error to abort the fetch for this command.
-    fn on_chunk(&self, _tag: u64, _data: &[u8]) -> io::Result<()> {
-        Ok(())
-    }
-
-    /// Called when a batch command completes (success or failure).
-    fn on_complete(&self, _tag: u64, _bytes_written: u64, _error: Option<&NetError>) {}
 }
 
 /// How the Downloader delivers the response for a command.
-#[expect(dead_code, reason = "Streaming variant used in Wave 5c")]
 pub(super) enum ResponseTarget {
     /// Imperative path: send via oneshot (`execute` / `batch`).
     Channel(oneshot::Sender<Result<FetchResponse, NetError>>),
-    /// Streaming path: call Peer callbacks (`poll_next` commands).
-    Streaming { peer: Arc<dyn Peer>, tag: u64 },
+    /// Streaming path: per-command `writer`/`on_complete` in [`FetchCmd`].
+    Streaming {
+        in_flight: Arc<AtomicUsize>,
+        waker: Arc<futures::task::AtomicWaker>,
+    },
 }
 
 /// Per-peer command sent through the channel to the downloader loop.
 pub(super) struct InternalCmd {
     pub(super) cmd: FetchCmd,
-    pub(super) cancel: CancellationToken,
-    #[expect(dead_code, reason = "priority scheduling in Wave 5c")]
+    pub(super) cancel: kithara_platform::CancelGroup,
     pub(super) priority: Priority,
     pub(super) response: ResponseTarget,
 }
@@ -151,11 +137,11 @@ impl PeerHandle {
     /// Returns [`NetError::Cancelled`] when the peer cancel fires,
     /// the downloader shuts down, or the HTTP request itself fails.
     pub async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        let cmd_cancel = self.inner.cancel.child_token();
+        let cancel = kithara_platform::CancelGroup::new(vec![self.inner.cancel.child_token()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let internal = InternalCmd {
             cmd,
-            cancel: cmd_cancel,
+            cancel,
             priority: Priority::High,
             response: ResponseTarget::Channel(resp_tx),
         };
@@ -180,11 +166,11 @@ impl PeerHandle {
             Vec::with_capacity(cmds.len());
 
         for cmd in cmds {
-            let cmd_cancel = self.inner.cancel.child_token();
+            let cancel = kithara_platform::CancelGroup::new(vec![self.inner.cancel.child_token()]);
             let (resp_tx, resp_rx) = oneshot::channel();
             let internal = InternalCmd {
                 cmd,
-                cancel: cmd_cancel,
+                cancel,
                 priority: Priority::High,
                 response: ResponseTarget::Channel(resp_tx),
             };
