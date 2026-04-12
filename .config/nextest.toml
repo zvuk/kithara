@@ -33,7 +33,7 @@ filter = """
   test(test_wait_range_returns_ready_when_data_pushed) |
   test(test_wait_range_transient_eof_with_zero_total_waits_for_data)
 """
-retries = 2
+retries = 1
 
 [profile.ci]
 fail-fast = false
