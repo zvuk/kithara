@@ -296,6 +296,23 @@ impl<R: ResourceExt, L> LeaseResource<R, L> {
     }
 }
 
+impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
+where
+    R: ResourceExt + Clone + Send + Sync + Debug + 'static,
+{
+    /// Pin the underlying cached resource so it is never evicted.
+    pub fn retain(self) -> Self {
+        self.inner.set_retained();
+        self
+    }
+
+    /// Unpin the underlying cached resource.
+    pub fn release(self) -> Self {
+        self.inner.set_released();
+        self
+    }
+}
+
 impl<R, L> ResourceExt for LeaseResource<R, L>
 where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,

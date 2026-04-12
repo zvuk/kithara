@@ -9,6 +9,8 @@ use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
 
+use crate::cache::CachedResource;
+
 /// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
 const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
 
@@ -139,7 +141,7 @@ pub(crate) type DiskStore<Ctx = ()> =
 /// Implements `ResourceExt` for read/write/commit operations.
 /// Both disk and memory variants return this same type.
 pub type AssetResource<Ctx = ()> =
-    LeaseResource<ProcessedResource<StorageResource, Ctx>, LeaseGuard>;
+    LeaseResource<CachedResource<ProcessedResource<StorageResource, Ctx>>, LeaseGuard>;
 
 /// In-memory asset store with disabled decorators.
 ///

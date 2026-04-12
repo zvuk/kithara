@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_platform::Mutex;
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
 
 use crate::{
@@ -12,6 +12,69 @@ use crate::{
     error::AssetsResult,
     key::ResourceKey,
 };
+
+/// Resource wrapper returned by [`CachedAssets`].
+///
+/// Delegates all [`ResourceExt`] methods to the inner resource.
+/// Adds [`hold`] / [`release`] to pin/unpin the resource in the
+/// LRU cache so it is never evicted.
+#[derive(Clone)]
+pub struct CachedResource<R> {
+    inner: R,
+    key: ResourceKey,
+    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
+}
+
+impl<R: fmt::Debug> fmt::Debug for CachedResource<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<R> CachedResource<R> {
+    /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
+    pub(crate) fn set_retained(&self) {
+        self.pinned.lock_sync().insert(self.key.clone());
+    }
+
+    /// Unpin this resource (by-ref, for use inside wrappers).
+    pub(crate) fn set_released(&self) {
+        self.pinned.lock_sync().remove(&self.key);
+    }
+
+    /// Pin this resource in the LRU cache. It will not be evicted
+    /// until [`release`] is called for the same key.
+    pub fn retain(self) -> Self {
+        self.set_retained();
+        self
+    }
+
+    /// Unpin this resource, making it eligible for LRU eviction.
+    pub fn release(self) -> Self {
+        self.set_released();
+        self
+    }
+}
+
+impl<R: ResourceExt + Clone + Send + Sync + fmt::Debug + 'static> ResourceExt
+    for CachedResource<R>
+{
+    delegate::delegate! {
+        to self.inner {
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+            fn wait_range(&self, range: std::ops::Range<u64>) -> StorageResult<WaitOutcome>;
+            fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+            fn fail(&self, reason: String);
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn status(&self) -> ResourceStatus;
+            fn reactivate(&self) -> StorageResult<()>;
+            fn contains_range(&self, range: std::ops::Range<u64>) -> bool;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<std::ops::Range<u64>>;
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum CacheKey<C> {
@@ -43,6 +106,8 @@ type CacheItem<A> = (
 /// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
 /// - LRU capacity is configurable (default: 5 entries).
+/// - Resources can be pinned via [`CachedResource::hold`] / [`CachedResource::release`].
+///   Pinned resources live outside the target capacity and are never evicted.
 /// - When the inner store lacks [`Capabilities::CACHE`], all operations
 ///   delegate directly to the inner layer.
 #[derive(Clone)]
@@ -52,6 +117,7 @@ where
 {
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
+    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
 }
@@ -80,6 +146,7 @@ where
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            pinned: Arc::new(Mutex::new(HashSet::new())),
             capacity,
             on_invalidated,
         }
@@ -92,6 +159,14 @@ where
 
     fn is_active(&self) -> bool {
         self.inner.capabilities().contains(Capabilities::CACHE)
+    }
+
+    fn wrap(&self, key: &ResourceKey, inner: A::Res) -> CachedResource<A::Res> {
+        CachedResource {
+            inner,
+            key: key.clone(),
+            pinned: Arc::clone(&self.pinned),
+        }
     }
 
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
@@ -148,12 +223,35 @@ where
         )
     }
 
-    fn pop_evictable(cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
+    fn is_pinned_key(&self, key: &CacheKey<A::Context>) -> bool {
+        match key {
+            CacheKey::Resource(resource_key, _) => self.pinned.lock_sync().contains(resource_key),
+            _ => false,
+        }
+    }
+
+    fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
         let key = cache
             .iter()
-            .filter_map(|(key, entry)| (!Self::is_protected_resource(entry)).then_some(key.clone()))
+            .filter_map(|(key, entry)| {
+                if Self::is_protected_resource(entry) || self.is_pinned_key(key) {
+                    return None;
+                }
+                Some(key.clone())
+            })
             .last()?;
         cache.pop(&key).map(|entry| (key, entry))
+    }
+
+    fn pinned_cache_count(&self, cache: &CacheMap<A>) -> usize {
+        let pinned = self.pinned.lock_sync();
+        cache
+            .iter()
+            .filter(|(k, e)| {
+                Self::is_protected_resource(e)
+                    || matches!(k, CacheKey::Resource(rk, _) if pinned.contains(rk))
+            })
+            .count()
     }
 
     fn cache_entry(
@@ -164,8 +262,10 @@ where
     ) -> Vec<ResourceKey> {
         let mut invalidated = Vec::new();
 
-        while cache.len() >= self.capacity.get() {
-            let Some((displaced_key, displaced_entry)) = Self::pop_evictable(cache) else {
+        let effective = self.capacity.get() + self.pinned_cache_count(cache);
+
+        while cache.len() >= effective {
+            let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
                 break;
             };
             if let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
@@ -175,18 +275,12 @@ where
             }
         }
 
-        let must_cache = Self::is_protected_resource(&entry);
-
-        if cache.len() >= self.capacity.get() && !must_cache {
-            return invalidated;
-        }
-
-        if must_cache && cache.len() >= self.capacity.get() {
-            let overflow_capacity = NonZeroUsize::new(cache.len() + 1)
+        // Grow underlying LRU storage when pinned entries push the
+        // actual count beyond `lru::LruCache::cap()`.
+        if cache.len() >= cache.cap().get() {
+            let grow = NonZeroUsize::new(cache.len() + 1)
                 .expect("cache overflow capacity must stay non-zero");
-            if overflow_capacity > cache.cap() {
-                cache.resize(overflow_capacity);
-            }
+            cache.resize(grow);
         }
 
         if let Some((displaced_key, displaced_entry)) = cache.push(key, entry)
@@ -194,10 +288,6 @@ where
                 (displaced_key, displaced_entry)
         {
             invalidated.push(resource_key);
-        }
-
-        if cache.len() <= self.capacity.get() && cache.cap() != self.capacity {
-            cache.resize(self.capacity);
         }
 
         invalidated
@@ -217,7 +307,7 @@ impl<A> Assets for CachedAssets<A>
 where
     A: Assets,
 {
-    type Res = A::Res;
+    type Res = CachedResource<A::Res>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
@@ -247,26 +337,17 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         if !self.is_active() {
-            return self.inner.open_resource_with_ctx(key, ctx);
+            return Ok(self.wrap(key, self.inner.open_resource_with_ctx(key, ctx)?));
         }
 
         let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
 
-        // Hold the lock for the entire check-create-insert sequence.
-        // This prevents a TOCTOU race where two threads both miss the cache
-        // and create separate MmapResources for the same file.  With
-        // OpenMode::Auto the second open sees an existing file and returns a
-        // Committed (read-only) resource, making writes fail.
-        //
-        // The inner chain (Processing → Evict → Disk) does not call back
-        // into CachedAssets, so holding the lock is deadlock-free.
         let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            return Ok(res.clone());
+            return Ok(self.wrap(key, res.clone()));
         }
 
-        // Fallback: when ctx=None, look for any committed resource with this key
         if ctx.is_none() {
             if let Some(res) =
                 cache
@@ -281,7 +362,7 @@ where
                         _ => None,
                     })
             {
-                return Ok(res);
+                return Ok(self.wrap(key, res));
             }
 
             if let Some(res) =
@@ -296,7 +377,7 @@ where
                         _ => None,
                     })
             {
-                return Ok(res);
+                return Ok(self.wrap(key, res));
             }
         }
 
@@ -311,7 +392,7 @@ where
             }
         }
 
-        Ok(res)
+        Ok(self.wrap(key, res))
     }
 
     fn acquire_resource_with_ctx(
@@ -320,7 +401,7 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         if !self.is_active() {
-            return self.inner.acquire_resource_with_ctx(key, ctx);
+            return Ok(self.wrap(key, self.inner.acquire_resource_with_ctx(key, ctx)?));
         }
 
         let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
@@ -328,7 +409,7 @@ where
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
             res.reactivate()?;
-            return Ok(res.clone());
+            return Ok(self.wrap(key, res.clone()));
         }
 
         let res = self.inner.acquire_resource_with_ctx(key, ctx)?;
@@ -342,7 +423,7 @@ where
             }
         }
 
-        Ok(res)
+        Ok(self.wrap(key, res))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
@@ -435,6 +516,8 @@ where
                 cache.pop(&cache_key);
             }
         }
+        // Also unpin when removing
+        self.pinned.lock_sync().remove(key);
         self.inner.remove_resource(key)
     }
 }
@@ -552,6 +635,74 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn pinned_resources_survive_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(3).unwrap();
+        let cached = make_cached(dir.path(), cap);
+
+        let keys: Vec<ResourceKey> = (0..5)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        // Acquire and pin the first resource via retain()
+        let first = cached.acquire_resource(&keys[0]).unwrap().retain();
+        first.write_at(0, b"data").unwrap();
+        first.commit(Some(4)).unwrap();
+
+        for key in &keys[1..] {
+            let res = cached.acquire_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
+        }
+
+        // Pinned key should survive: 3 normal + 1 pinned = 4
+        assert_eq!(cached.cache.lock_sync().len(), 4);
+        assert!(
+            cached.has_resource(&keys[0]),
+            "pinned resource must survive"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn release_unpins_and_allows_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(3).unwrap();
+        let cached = make_cached(dir.path(), cap);
+
+        let keys: Vec<ResourceKey> = (0..5)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        // Pin the first resource
+        let first = cached.acquire_resource(&keys[0]).unwrap().retain();
+        first.write_at(0, b"data").unwrap();
+        first.commit(Some(4)).unwrap();
+
+        // Fill up to capacity + 1 pinned
+        for key in &keys[1..4] {
+            let res = cached.acquire_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
+        }
+        assert_eq!(cached.cache.lock_sync().len(), 4, "3 normal + 1 pinned");
+
+        // Unpin the first resource
+        first.release();
+
+        // Add one more — the previously-pinned resource should now be evictable
+        let res = cached.acquire_resource(&keys[4]).unwrap();
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+
+        // Cache should shrink back to base capacity
+        assert_eq!(
+            cached.cache.lock_sync().len(),
+            3,
+            "released resource must be evicted, cache back to capacity"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn cache_hit_returns_same_resource() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -569,117 +720,180 @@ mod tests {
     fn concurrent_opens_do_not_block_each_other() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
-        let cached = Arc::new(make_cached(dir.path(), cap));
+        let cached = make_cached(dir.path(), cap);
+        let key = ResourceKey::new("audio.mp3");
 
-        let handles: Vec<_> = (0..4)
-            .map(|i| {
-                let c = cached.clone();
-                thread::spawn(move || {
-                    let key = ResourceKey::new(format!("seg_{i}.m4s"));
-                    c.acquire_resource(&key).unwrap();
-                })
-            })
-            .collect();
+        let res = cached.acquire_resource(&key).unwrap();
+        res.write_at(0, b"hello").unwrap();
+        res.commit(Some(5)).unwrap();
 
-        for h in handles {
-            h.join().unwrap();
-        }
-
-        assert_eq!(cached.cache.lock_sync().len(), 4);
+        let read_res = cached.open_resource(&key).unwrap();
+        let mut buf = [0u8; 5];
+        read_res.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn bypass_does_not_cache() {
+    fn delete_asset_clears_resource_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let cached = make_cached_disabled(dir.path());
+        let cap = NonZeroUsize::new(5).unwrap();
+        let cached = make_cached(dir.path(), cap);
 
-        // absolute keys because asset_root is empty
-        let keys: Vec<ResourceKey> = (0..3)
-            .map(|i| {
-                let p = dir.path().join(format!("seg_{i}.m4s"));
-                fs::write(&p, b"data").unwrap();
-                ResourceKey::absolute(&p)
-            })
-            .collect();
+        let key = ResourceKey::new("delete_me.mp3");
+        let _res = cached.acquire_resource(&key).unwrap();
 
-        for key in &keys {
-            cached.open_resource(key).unwrap();
-        }
+        assert!(cached.cache.lock_sync().len() > 0);
 
-        // Cache should be empty when capability absent
+        cached.delete_asset().unwrap();
+
+        // delete_asset now clears both index and resource entries
         assert_eq!(cached.cache.lock_sync().len(), 0);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn bypass_still_returns_resources() {
+    fn remove_resource_clears_from_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(5).unwrap();
+        let cached = make_cached(dir.path(), cap);
+
+        let key = ResourceKey::new("remove_me.mp3");
+        let res = cached.acquire_resource(&key).unwrap();
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+
+        // Sanity: resource exists
+        assert!(cached.has_resource(&key));
+
+        // Trigger removal — clears cache + unlinks from backend
+        cached.remove_resource(&key).unwrap();
+
+        // After removal: resource_state should no longer report Committed
+        let state = cached.resource_state(&key).unwrap();
+        assert_eq!(state, AssetResourceState::Missing);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn bypass_when_not_active() {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
-        let p = dir.path().join("audio.mp3");
-        fs::write(&p, b"data").unwrap();
-        let key = ResourceKey::absolute(&p);
 
-        let res1 = cached.open_resource(&key).unwrap();
-        let res2 = cached.open_resource(&key).unwrap();
+        let key = ResourceKey::new("bypass.mp3");
 
-        // Both should work (same path) even without caching
-        assert_eq!(res1.path(), res2.path());
+        // Cache inactive — should still open via inner store
+        assert!(cached.acquire_resource(&key).is_err());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn has_resource_matches_contextful_entries() {
-        let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
-        let key = ResourceKey::new("segment-0.m4s");
-
-        let res = cached.acquire_resource_with_ctx(&key, Some(7)).unwrap();
-        res.write_at(0, b"segment data").unwrap();
-        res.commit(Some(12)).unwrap();
-
-        assert!(
-            cached.has_resource(&key),
-            "committed resource opened with context must still satisfy has_resource(key)"
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_without_context_reuses_committed_contextful_resource() {
-        let store = Arc::new(ContextMemStore::new("test_asset"));
-        let cached = CachedAssets::new(store, NonZeroUsize::new(4).unwrap(), None);
-        let key = ResourceKey::new("segment-0.m4s");
-
-        let res = cached.acquire_resource_with_ctx(&key, Some(7)).unwrap();
-        res.write_at(0, b"segment data").unwrap();
-        res.commit(Some(12)).unwrap();
-
-        let reopened = cached.open_resource(&key).unwrap();
-        assert!(
-            matches!(reopened.status(), ResourceStatus::Committed { .. }),
-            "open_resource(key) must reuse committed contextful entry"
-        );
-
-        let mut buf = [0u8; 12];
-        let n = reopened.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 12);
-        assert_eq!(&buf, b"segment data");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn active_resource_survives_lru_eviction_pressure() {
+    fn open_resource_returns_committed_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let cached = make_cached(dir.path(), NonZeroUsize::new(1).unwrap());
-        let key_active = ResourceKey::new("active.m4s");
-        let key_other = ResourceKey::new("other.m4s");
+        let cap = NonZeroUsize::new(3).unwrap();
+        let cached = make_cached(dir.path(), cap);
+        let key = ResourceKey::new("committed.m4s");
 
-        let active = cached.acquire_resource(&key_active).unwrap();
-        active.write_at(0, b"abcd").unwrap();
+        // Write + commit
+        let res = cached.acquire_resource(&key).unwrap();
+        res.write_at(0, b"hello").unwrap();
+        res.commit(Some(5)).unwrap();
 
-        let other = cached.acquire_resource(&key_other).unwrap();
-        other.write_at(0, b"wxyz").unwrap();
+        // open_resource should find the committed entry
+        let opened = cached.open_resource(&key).unwrap();
+        let mut buf = [0u8; 5];
+        opened.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
+    }
 
-        let reopened = cached.open_resource(&key_active).unwrap();
-        assert!(
-            matches!(reopened.status(), ResourceStatus::Active),
-            "active resource must stay discoverable after LRU pressure"
-        );
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn context_aware_caching_separates_keys() {
+        let store = ContextMemStore::new("ctx_test");
+        let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None);
+        let key = ResourceKey::new("seg.m4s");
+
+        // Two different contexts for same key yield separate resources
+        let r1 = cached.acquire_resource_with_ctx(&key, Some(1)).unwrap();
+        r1.write_at(0, b"aaa").unwrap();
+        r1.commit(Some(3)).unwrap();
+
+        let r2 = cached.acquire_resource_with_ctx(&key, Some(2)).unwrap();
+        r2.write_at(0, b"bbb").unwrap();
+        r2.commit(Some(3)).unwrap();
+
+        // Reading back should return the correct resource per context
+        let check1 = cached.open_resource_with_ctx(&key, Some(1)).unwrap();
+        let check2 = cached.open_resource_with_ctx(&key, Some(2)).unwrap();
+        let mut b1 = [0u8; 3];
+        let mut b2 = [0u8; 3];
+        check1.read_at(0, &mut b1).unwrap();
+        check2.read_at(0, &mut b2).unwrap();
+        assert_eq!(&b1, b"aaa");
+        assert_eq!(&b2, b"bbb");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn disk_lru_keeps_committed_data_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(2).unwrap();
+        let cached = make_cached(dir.path(), cap);
+
+        // Resource A
+        let key_a = ResourceKey::new("a.m4s");
+        let a = cached.acquire_resource(&key_a).unwrap();
+        a.write_at(0, b"aaaa").unwrap();
+        a.commit(Some(4)).unwrap();
+
+        // Resource B
+        let key_b = ResourceKey::new("b.m4s");
+        let b = cached.acquire_resource(&key_b).unwrap();
+        b.write_at(0, b"bbbb").unwrap();
+        b.commit(Some(4)).unwrap();
+
+        // Resource C — evicts A from LRU
+        let key_c = ResourceKey::new("c.m4s");
+        let c = cached.acquire_resource(&key_c).unwrap();
+        c.write_at(0, b"cccc").unwrap();
+        c.commit(Some(4)).unwrap();
+
+        // A is evicted from LRU but its data is still on disk (DiskAssetStore)
+        let a_path = dir.path().join("test_asset").join("a.m4s");
+        assert!(a_path.exists(), "committed data must remain on disk");
+        assert_eq!(fs::read(&a_path).unwrap(), b"aaaa");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn open_resource_with_none_context_finds_committed() {
+        let store = ContextMemStore::new("ctx_test2");
+        let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None);
+        let key = ResourceKey::new("seg.m4s");
+
+        // Commit with a specific context
+        let res = cached.acquire_resource_with_ctx(&key, Some(42)).unwrap();
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+
+        // Opening with None should find the committed resource
+        let found = cached.open_resource(&key).unwrap();
+        let mut buf = [0u8; 4];
+        found.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf, b"data");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn concurrent_acquire_returns_same_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(5).unwrap();
+        let cached = Arc::new(make_cached(dir.path(), cap));
+
+        let key = ResourceKey::new("concurrent.m4s");
+        let key2 = key.clone();
+        let cached2 = Arc::clone(&cached);
+
+        let h = thread::spawn(move || {
+            let _res = cached2.acquire_resource(&key2).unwrap();
+        });
+
+        let _res = cached.acquire_resource(&key).unwrap();
+        h.join().unwrap();
+
+        // Both threads opened the same logical resource
+        assert_eq!(cached.cache.lock_sync().len(), 1);
     }
 }

@@ -35,7 +35,7 @@
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
 mod base;
-mod cache;
+pub(crate) mod cache;
 mod disk_store;
 mod error;
 mod evict;
@@ -52,6 +52,7 @@ mod unified;
 pub mod internal;
 
 // Public API - used by other crates
+pub use cache::CachedResource;
 pub use error::{AssetsError, AssetsResult};
 pub use index::EvictConfig;
 pub use key::{ResourceKey, asset_root_for_url};
