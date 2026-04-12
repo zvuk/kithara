@@ -22,6 +22,7 @@
 //! [`time::sleep`] delegates to `tokio::time::sleep` on native and to
 //! `setTimeout` on wasm32.
 
+mod cancel_group;
 mod maybe_send;
 pub mod sync;
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,6 +34,7 @@ pub mod tokio;
 #[cfg(feature = "internal")]
 pub mod internal;
 
+pub use cancel_group::CancelGroup;
 pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use sync::{
