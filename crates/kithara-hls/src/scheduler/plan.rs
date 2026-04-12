@@ -1,178 +1,18 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
 use kithara_abr::{AbrDecision, ThroughputSample, ThroughputSampleSource};
-use kithara_events::{HlsEvent, SeekEpoch};
-use kithara_platform::{time::Instant, tokio};
-use tokio::task::yield_now as task_yield_now;
-use tracing::{debug, trace};
+use kithara_events::HlsEvent;
+use kithara_platform::time::Instant;
+use tracing::debug;
 
 use super::{
-    helpers::{first_missing_segment, is_cross_codec_switch, should_request_init},
-    state::{HlsScheduler, MAX_LOG_PLANS},
+    helpers::{first_missing_segment, is_cross_codec_switch},
+    state::HlsScheduler,
 };
-use crate::{
-    HlsError,
-    coord::SegmentRequest,
-    ids::{SegmentId, VariantIndex},
-    playlist::PlaylistAccess,
-};
-
-/// Plan descriptor for a single HLS segment download.
-pub(crate) struct HlsPlan {
-    pub(crate) variant: VariantIndex,
-    pub(crate) segment: SegmentId,
-    pub(crate) need_init: bool,
-    pub(crate) seek_epoch: SeekEpoch,
-}
-
-/// Outcome of a single planning pass.
-pub(crate) enum PlanOutcome {
-    /// One or more plans ready to fetch in parallel.
-    Batch(Vec<HlsPlan>),
-    /// No new work this tick, but scheduler is not done.
-    Idle,
-    /// All variants drained — scheduler should exit.
-    Complete,
-    /// Single-step progress (unused by HLS, kept for worker loop contract).
-    #[expect(dead_code, reason = "worker loop handles this variant defensively")]
-    Step,
-}
+use crate::{HlsError, coord::SegmentRequest};
 
 impl HlsScheduler {
-    pub(super) async fn plan_impl(&mut self) -> PlanOutcome {
-        if self.coord.timeline().is_flushing() {
-            task_yield_now().await;
-            return PlanOutcome::Idle;
-        }
-
-        let old_variant = self.abr.get_current_variant_index();
-        let decision = self.make_abr_decision();
-        let variant = self.abr.get_current_variant_index();
-
-        let Some(num_segments) = self.num_segments_for_plan(variant) else {
-            return PlanOutcome::Idle;
-        };
-
-        self.publish_variant_applied(old_variant, variant, &decision);
-
-        if self.handle_tail_state(variant, num_segments) {
-            return PlanOutcome::Idle;
-        }
-
-        let (is_variant_switch, is_midstream_switch) = match self
-            .ensure_variant_ready(variant, self.current_segment_index())
-            .await
-        {
-            Ok(flags) => flags,
-            Err(e) => {
-                self.coord.condvar.notify_all();
-                self.publish_download_error("variant preparation error", &e);
-                return PlanOutcome::Complete;
-            }
-        };
-
-        let old_variant_param = if old_variant != variant {
-            Some(old_variant)
-        } else {
-            None
-        };
-        let is_cross_codec = old_variant_param
-            .is_some_and(|ov| is_cross_codec_switch(&self.playlist_state, ov, variant));
-        let (plans, batch_end) = self.build_batch_plans(
-            variant,
-            num_segments,
-            is_variant_switch,
-            is_midstream_switch,
-            old_variant_param,
-            is_cross_codec,
-        );
-
-        if plans.is_empty() {
-            let advanced = batch_end > self.current_segment_index();
-            self.advance_current_segment_index(batch_end);
-            self.coord.condvar.notify_all();
-            if advanced {
-                self.coord.reader_advanced.notify_one();
-            }
-            return PlanOutcome::Idle;
-        }
-
-        PlanOutcome::Batch(plans)
-    }
-
-    pub(super) async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
-        if self.coord.timeline().is_flushing() {
-            task_yield_now().await;
-            return None;
-        }
-
-        let req = self.next_valid_demand_request()?;
-        trace!(
-            variant = req.variant,
-            segment_index = req.segment_index,
-            "processing on-demand segment request"
-        );
-
-        let (req, num_segments) = self.num_segments_for_demand(req)?;
-        if Self::demand_request_out_of_range(&req, num_segments) {
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-            return None;
-        }
-
-        if self.is_below_switch_floor(req.variant, req.segment_index) {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                floor = self.gap_scan_start_segment(),
-                "dropping demand below switched-layout floor"
-            );
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-            return None;
-        }
-
-        if self.segment_loaded_for_demand(
-            req.variant,
-            req.segment_index,
-            "segment loaded at stale offset, refreshing demand request",
-            "segment already loaded, skipping",
-        ) {
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-            return None;
-        }
-
-        let Some((is_variant_switch, is_midstream_switch)) = self
-            .prepare_variant_for_demand(req.variant, req.segment_index)
-            .await
-        else {
-            self.coord.clear_pending_segment_request(req);
-            return None;
-        };
-
-        if self.should_skip_pre_switch_variant(req.variant, req.segment_index, is_midstream_switch)
-        {
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-            return None;
-        }
-
-        if self.segment_loaded_for_demand(
-            req.variant,
-            req.segment_index,
-            "segment loaded with stale offset after metadata calc, refreshing",
-            "segment loaded from cache after metadata calc",
-        ) {
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-            return None;
-        }
-
-        Some(self.build_demand_plan(&req, is_variant_switch))
-    }
-
-    pub(super) fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
+    pub(crate) fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
         loop {
             let req = self.coord.take_segment_request()?;
             let current_epoch = self.coord.timeline().seek_epoch();
@@ -201,175 +41,7 @@ impl HlsScheduler {
         }
     }
 
-    fn num_segments_for_demand(&mut self, req: SegmentRequest) -> Option<(SegmentRequest, usize)> {
-        if let Some(value) = self.num_segments(req.variant) {
-            return Some((req, value));
-        }
-
-        self.publish_download_error(
-            "missing variant in playlist state for demand",
-            &HlsError::VariantNotFound(format!("variant {}", req.variant)),
-        );
-        self.coord.requeue_segment_request(req);
-        self.coord.condvar.notify_all();
-        None
-    }
-
-    fn demand_request_out_of_range(req: &SegmentRequest, num_segments: usize) -> bool {
-        if req.segment_index < num_segments {
-            return false;
-        }
-        debug!(
-            variant = req.variant,
-            segment_index = req.segment_index,
-            num_segments,
-            "segment index out of range"
-        );
-        true
-    }
-
-    pub(super) fn segment_loaded_for_demand(
-        &self,
-        variant: usize,
-        segment_index: usize,
-        _stale_reason: &str,
-        loaded_reason: &str,
-    ) -> bool {
-        let seg_data = {
-            let segments = self.segments.lock_sync();
-            if variant != segments.layout_variant() || !segments.is_visible(variant, segment_index)
-            {
-                return false;
-            }
-            segments
-                .variant_segments(variant)
-                .and_then(|vs| vs.get(segment_index))
-                .cloned()
-        };
-        let Some(data) = seg_data else {
-            return false;
-        };
-
-        if !self.segment_resources_available(&data) {
-            debug!(
-                variant,
-                segment_index, "segment metadata present but resources evicted, need re-download"
-            );
-            return false;
-        }
-
-        trace!(
-            variant,
-            segment_index,
-            reason = loaded_reason,
-            "demand segment already loaded"
-        );
-        true
-    }
-
-    async fn prepare_variant_for_demand(
-        &mut self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Option<(bool, bool)> {
-        match self.ensure_variant_ready(variant, segment_index).await {
-            Ok(flags) => Some(flags),
-            Err(e) => {
-                self.publish_download_error("variant preparation error in poll_demand", &e);
-                self.coord.condvar.notify_all();
-                None
-            }
-        }
-    }
-
-    fn should_skip_pre_switch_variant(
-        &self,
-        variant: usize,
-        _segment_index: usize,
-        is_midstream_switch: bool,
-    ) -> bool {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
-            return false;
-        }
-        let layout = self.segments.lock_sync().layout_variant();
-        if variant == layout {
-            return false;
-        }
-        let current_variant = self.abr.get_current_variant_index();
-        if variant == current_variant {
-            return false;
-        }
-        debug!(
-            variant,
-            current_variant, "skipping stale segment from pre-switch variant"
-        );
-        true
-    }
-
-    pub(super) fn build_demand_plan(
-        &mut self,
-        req: &SegmentRequest,
-        is_variant_switch: bool,
-    ) -> HlsPlan {
-        self.bus.publish(HlsEvent::SegmentStart {
-            variant: req.variant,
-            segment_index: req.segment_index,
-            byte_offset: self.coord.timeline().download_position(),
-        });
-
-        let has_init = self.variant_has_init(req.variant);
-        let need_init = has_init
-            && (self.force_init_for_seek
-                || should_request_init(
-                    self.switch_needs_init(req.variant, req.segment_index, is_variant_switch),
-                    SegmentId::Media(req.segment_index),
-                )
-                || self.demand_init_evicted(req.variant, req.segment_index));
-        if need_init {
-            self.force_init_for_seek = false;
-        }
-
-        HlsPlan {
-            variant: req.variant,
-            segment: SegmentId::Media(req.segment_index),
-            need_init,
-            seek_epoch: req.seek_epoch,
-        }
-    }
-
-    pub(super) async fn ensure_variant_ready(
-        &mut self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Result<(bool, bool), HlsError> {
-        let (is_variant_switch, is_midstream_switch) =
-            self.classify_variant_transition(variant, segment_index);
-        self.handle_midstream_switch(is_midstream_switch);
-
-        if !self.playlist_state.has_size_map(variant)
-            && let Err(e) =
-                Self::calculate_size_map(&self.playlist_state, &self.size_probe, variant).await
-        {
-            debug!(?e, variant, "failed to calculate variant size map");
-        }
-
-        {
-            let mut segments = self.segments.lock_sync();
-            if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
-                segments.set_expected_sizes(variant, sizes);
-            }
-        }
-        if is_variant_switch {
-            self.download_variant = variant;
-        }
-
-        let (cached_count, cached_end_offset) = self.populate_cached_segments_if_needed(variant);
-        self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
-
-        Ok((is_variant_switch, is_midstream_switch))
-    }
-
-    pub(super) fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
+    pub(crate) fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
         if let Some(value) = self.num_segments(variant) {
             return Some(value);
         }
@@ -382,7 +54,7 @@ impl HlsScheduler {
         None
     }
 
-    pub(super) fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
+    pub(crate) fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
         if self.current_segment_index() < num_segments {
             return false;
         }
@@ -391,18 +63,25 @@ impl HlsScheduler {
         if timeline_seek_epoch != self.active_seek_epoch {
             self.coord.timeline().set_eof(false);
             self.coord.condvar.notify_all();
-            return true;
+            return false;
         }
 
-        if self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            let rewind_variant = self.rewind_reference_variant(variant);
+        // Always check for invalidated/missing segments at tail — not just
+        // after midstream switches. LRU eviction or DRM re-processing can
+        // invalidate committed segments behind the cursor.
+        {
+            let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
+                self.rewind_reference_variant(variant)
+            } else {
+                variant
+            };
             if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
-                return true;
+                return false;
             }
         }
 
-        let current_variant = self.layout_variant();
-        if current_variant != variant {
+        let layout = self.layout_variant();
+        if layout != variant {
             let new_variant_empty = self
                 .segments
                 .lock_sync()
@@ -410,7 +89,7 @@ impl HlsScheduler {
                 .is_none_or(crate::stream_index::VariantSegments::is_empty);
             if new_variant_empty {
                 debug!(
-                    current_variant,
+                    layout,
                     new_variant = variant,
                     num_segments,
                     "ABR variant switch in tail state (no segments yet); \
@@ -420,6 +99,29 @@ impl HlsScheduler {
                 self.coord.condvar.notify_all();
                 return false;
             }
+
+            // ABR variant done, but reader is still on the old layout
+            // variant. Check if the layout variant has gaps that need
+            // filling so the reader can make progress.
+            let layout_num = self.num_segments(layout).unwrap_or(0);
+            let layout_gap = {
+                let segs = self.segments.lock_sync();
+                first_missing_segment(&segs, layout, 0, layout_num, self.backend.is_ephemeral())
+            };
+            if let Some(gap_seg) = layout_gap {
+                debug!(
+                    layout,
+                    gap_seg, variant, "tail: ABR variant done, filling layout variant gap"
+                );
+                self.filling_layout_gap = true;
+                self.download_variant = layout;
+                self.reset_cursor(gap_seg);
+                self.coord.condvar.notify_all();
+                return false;
+            }
+            self.filling_layout_gap = false;
+        } else {
+            self.filling_layout_gap = false;
         }
 
         let stream_end = self.effective_total_bytes().unwrap_or(0);
@@ -457,6 +159,7 @@ impl HlsScheduler {
                 variant,
                 self.gap_scan_start_segment(),
                 num_segments,
+                self.backend.is_ephemeral(),
             )
         };
         let Some(segment_index) = missing_segment else {
@@ -474,7 +177,7 @@ impl HlsScheduler {
         true
     }
 
-    pub(super) fn publish_variant_applied(
+    pub(crate) fn publish_variant_applied(
         &self,
         old_variant: usize,
         variant: usize,
@@ -496,95 +199,7 @@ impl HlsScheduler {
         });
     }
 
-    pub(super) fn build_batch_plans(
-        &mut self,
-        variant: usize,
-        num_segments: usize,
-        is_variant_switch: bool,
-        is_midstream_switch: bool,
-        old_variant: Option<usize>,
-        is_cross_codec: bool,
-    ) -> (Vec<HlsPlan>, usize) {
-        let reader_seg = self.reader_segment_hint(variant);
-        let post_seek_probe_only = self.active_seek_epoch > 0
-            && self.coord.timeline().seek_epoch() == self.active_seek_epoch
-            && reader_seg == self.gap_scan_start_segment()
-            && self.current_segment_index() > reader_seg;
-        if post_seek_probe_only {
-            return (Vec::new(), self.current_segment_index());
-        }
-
-        let mut batch_end = (self.current_segment_index() + self.prefetch_count).min(num_segments);
-        if let Some(limit) = self.look_ahead_segments {
-            batch_end = batch_end.min(reader_seg.saturating_add(limit).saturating_add(1));
-        }
-        let seek_epoch = self.coord.timeline().seek_epoch();
-        if self.active_seek_epoch > 0 && seek_epoch == self.active_seek_epoch {
-            batch_end = batch_end.min(self.current_segment_index().saturating_add(1));
-        }
-        let mut plans = Vec::new();
-        let has_init = self.variant_has_init(variant);
-        let mut need_init = has_init
-            && (self.force_init_for_seek
-                || self.switch_needs_init(
-                    variant,
-                    self.current_segment_index(),
-                    is_variant_switch,
-                ));
-
-        for seg_idx in self.current_segment_index()..batch_end {
-            if self.should_skip_planned_segment(
-                variant,
-                seg_idx,
-                is_midstream_switch,
-                old_variant,
-                is_cross_codec,
-            ) {
-                continue;
-            }
-
-            self.bus.publish(HlsEvent::SegmentStart {
-                variant,
-                segment_index: seg_idx,
-                byte_offset: self.coord.timeline().download_position(),
-            });
-
-            let segment = SegmentId::Media(seg_idx);
-            let plan_need_init = has_init && should_request_init(need_init, segment);
-            plans.push(HlsPlan {
-                variant,
-                segment,
-                need_init: plan_need_init,
-                seek_epoch,
-            });
-            if plan_need_init {
-                self.force_init_for_seek = false;
-            }
-            need_init = false;
-        }
-
-        if !plans.is_empty() && plans.len() <= MAX_LOG_PLANS {
-            let first = plans
-                .first()
-                .map_or(0, |p| p.segment.media_index().unwrap_or(0));
-            let last = plans
-                .last()
-                .map_or(0, |p| p.segment.media_index().unwrap_or(0));
-            debug!(
-                variant,
-                current_segment_index = self.current_segment_index(),
-                batch_end,
-                first_segment = first,
-                last_segment = last,
-                count = plans.len(),
-                "built batch plans"
-            );
-        }
-
-        (plans, batch_end)
-    }
-
-    pub(super) fn should_skip_planned_segment(
+    pub(crate) fn should_skip_planned_segment(
         &mut self,
         variant: usize,
         seg_idx: usize,
@@ -609,6 +224,11 @@ impl HlsScheduler {
             if let Some(data) = old_data
                 && self.segment_resources_available(&data)
             {
+                // Copy segment entry to new variant's byte map so offsets
+                // remain contiguous after an ABR switch.
+                self.segments
+                    .lock_sync()
+                    .commit_segment(variant, seg_idx, data);
                 self.advance_current_segment_index(seg_idx + 1);
                 return true;
             }
@@ -639,11 +259,18 @@ impl HlsScheduler {
             return false;
         }
 
+        // Don't skip if we are intentionally downloading this variant
+        // (e.g., layout gap-fill sets download_variant to the layout
+        // variant even though ABR moved on).
+        if self.download_variant == variant {
+            return false;
+        }
+
         let current = self.abr.get_current_variant_index();
         variant != current
     }
 
-    pub(super) fn make_abr_decision(&mut self) -> AbrDecision {
+    pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
         if self.abr.is_locked() && !self.coord.timeline().is_seek_pending() {
             self.abr.unlock();
         }

@@ -17,8 +17,8 @@ use tracing::{debug, trace};
 use super::{
     core::HlsSource,
     types::{
-        DemandRequestOutcome, ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR,
-        WAIT_RANGE_MAX_METADATA_MISS_SPINS, WAIT_RANGE_SLEEP_MS,
+        ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR, WAIT_RANGE_MAX_METADATA_MISS_SPINS,
+        WAIT_RANGE_SLEEP_MS,
     },
 };
 use crate::{
@@ -40,118 +40,17 @@ impl Source for HlsSource {
         &self.coord
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "lock must be held for condvar wait"
-    )]
     #[kithara_hang_detector::hang_watchdog(timeout = wait_range_hang_timeout(timeout))]
     fn wait_range(
         &mut self,
         range: Range<u64>,
         timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
-        let mut metadata_miss_count: usize = 0;
         let mut wait_seek_epoch: Option<u64> = None;
+        let mut metadata_miss_count: u32 = 0;
         let started_at = Instant::now();
 
         loop {
-            let mut segments = self.segments.lock_sync();
-            let seek_epoch = self.coord.timeline().seek_epoch();
-            match wait_seek_epoch {
-                Some(epoch) if epoch != seek_epoch => {
-                    metadata_miss_count = 0;
-                    wait_seek_epoch = Some(seek_epoch);
-                    if !self.coord.timeline().is_seek_pending() {
-                        return Ok(WaitOutcome::Interrupted);
-                    }
-                }
-                None => wait_seek_epoch = Some(seek_epoch),
-                _ => {}
-            }
-
-            // Compute phase inline — priority order matches SourcePhase::classify.
-            let cancelled = self.coord.cancel.is_cancelled();
-            let stopped = self.coord.stopped.load(Ordering::Acquire);
-            let range_ready = self.range_ready_from_segments(&segments, &range);
-            let seeking = self.coord.timeline().is_flushing();
-            let past_eof = self.is_past_eof(&segments, &range);
-            let waiting_demand = self.coord.has_pending_segment_request(seek_epoch);
-            let waiting_metadata = metadata_miss_count > 0 && !waiting_demand;
-
-            if range_ready {
-                hang_reset!();
-            }
-
-            // Priority dispatch (highest wins).
-            if cancelled || (stopped && !range_ready) {
-                return if stopped && past_eof {
-                    Ok(WaitOutcome::Eof)
-                } else {
-                    Err(StreamError::Source(HlsError::Cancelled))
-                };
-            }
-            if range_ready {
-                self.coord
-                    .had_midstream_switch
-                    .store(false, Ordering::Release);
-                return Ok(WaitOutcome::Ready);
-            }
-            if seeking {
-                return Ok(WaitOutcome::Interrupted);
-            }
-            if past_eof {
-                debug!(
-                    range_start = range.start,
-                    max_end = segments.max_end_offset(),
-                    known_total = segments.effective_total(self.playlist_state.as_ref()),
-                    num_committed = segments.num_committed(),
-                    "wait_range: EOF"
-                );
-                return Ok(WaitOutcome::Eof);
-            }
-
-            // Waiting sub-states — log and continue spinning.
-            let phase = if waiting_metadata {
-                SourcePhase::WaitingMetadata
-            } else if waiting_demand {
-                SourcePhase::WaitingDemand
-            } else {
-                SourcePhase::Waiting
-            };
-            trace!(
-                range_start = range.start,
-                range_end = range.end,
-                ?phase,
-                "wait_range: spinning"
-            );
-
-            drop(segments);
-
-            // Re-issue the demand on each spin so a stale pending request for
-            // the same epoch gets replaced by the segment that owns this range.
-            // During a stale EOF + zero-total reset window, demand resolution
-            // can legitimately observe an empty layout before fresh metadata
-            // arrives; treat that as a transient gap instead of a terminal miss.
-            match self.request_on_demand_segment(range.start, seek_epoch) {
-                DemandRequestOutcome::Requested { .. } | DemandRequestOutcome::TransientGap => {
-                    metadata_miss_count = 0;
-                }
-                DemandRequestOutcome::MetadataMiss { variant, reason } => {
-                    self.metadata_miss(
-                        range.start,
-                        seek_epoch,
-                        variant,
-                        &mut metadata_miss_count,
-                        WAIT_RANGE_MAX_METADATA_MISS_SPINS,
-                        reason.label(),
-                    )
-                    .map_err(|error| StreamError::Source(HlsError::SegmentNotFound(error)))?;
-                }
-            }
-
-            // Honour the overall time budget.  Placed after decision logic
-            // and on-demand requests so that errors (e.g. SegmentNotFound)
-            // always take priority over the timeout fallback.
             if started_at.elapsed() > timeout {
                 return Err(StreamError::Source(HlsError::Timeout(format!(
                     "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={timeout:?}",
@@ -161,13 +60,103 @@ impl Source for HlsSource {
                 ))));
             }
 
-            segments = self.segments.lock_sync();
+            // Phase 1: check state under segments lock.
+            let seek_epoch;
+            let range_ready;
+            let cancelled;
+            let stopped;
+            let seeking;
+            let past_eof;
+            {
+                let segments = self.segments.lock_sync();
+                seek_epoch = self.coord.timeline().seek_epoch();
+                match wait_seek_epoch {
+                    Some(epoch) if epoch != seek_epoch => {
+                        wait_seek_epoch = Some(seek_epoch);
+                        if !self.coord.timeline().is_seek_pending() {
+                            return Ok(WaitOutcome::Interrupted);
+                        }
+                    }
+                    None => wait_seek_epoch = Some(seek_epoch),
+                    _ => {}
+                }
 
-            hang_tick!();
-            yield_now();
-            let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
-            let (_segments, _wait_result) =
-                self.coord.condvar.wait_sync_timeout(segments, deadline);
+                cancelled = self.coord.cancel.is_cancelled();
+                stopped = self.coord.stopped.load(Ordering::Acquire);
+                range_ready = self.range_ready_from_segments(&segments, &range);
+                seeking = self.coord.timeline().is_flushing();
+                past_eof = self.is_past_eof(&segments, &range);
+
+                if !range_ready && !cancelled && !stopped && !seeking && !past_eof {
+                    trace!(
+                        range_start = range.start,
+                        range_end = range.end,
+                        layout_variant = segments.layout_variant(),
+                        found_seg = segments
+                            .find_at_offset(range.start)
+                            .map(|s| s.segment_index),
+                        max_end = segments.max_end_offset(),
+                        num_committed = segments.num_committed(),
+                        elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        "wait_range: not ready"
+                    );
+                }
+            } // segments lock dropped
+
+            // Phase 2: early returns (no lock held).
+            if range_ready {
+                hang_reset!();
+                self.coord
+                    .had_midstream_switch
+                    .store(false, Ordering::Release);
+                return Ok(WaitOutcome::Ready);
+            }
+            if cancelled || (stopped && !range_ready) {
+                return if stopped && past_eof {
+                    Ok(WaitOutcome::Eof)
+                } else {
+                    Err(StreamError::Source(HlsError::Cancelled))
+                };
+            }
+            if seeking {
+                return Ok(WaitOutcome::Interrupted);
+            }
+            if past_eof {
+                debug!(range_start = range.start, "wait_range: EOF");
+                return Ok(WaitOutcome::Eof);
+            }
+
+            // Phase 3: demand push every iteration (no lock held).
+            // queue_segment_request_for_offset resolves the correct
+            // variant (layout) and segment via committed data or
+            // playlist metadata. DemandSlot::submit is idempotent.
+            if self.queue_segment_request_for_offset(range.start, seek_epoch) {
+                metadata_miss_count = 0;
+            } else {
+                metadata_miss_count += 1;
+                if metadata_miss_count >= WAIT_RANGE_MAX_METADATA_MISS_SPINS {
+                    let variant = self.resolve_current_variant();
+                    self.bus.publish(HlsEvent::SeekMetadataMiss {
+                        seek_epoch,
+                        offset: range.start,
+                        variant,
+                    });
+                    return Err(StreamError::Source(HlsError::SegmentNotFound(format!(
+                        "seek metadata miss: offset={} variant={variant}",
+                        range.start,
+                    ))));
+                }
+            }
+
+            // Phase 4: condvar wait (re-lock).
+            {
+                let segments = self.segments.lock_sync();
+                hang_tick!();
+                yield_now();
+                let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
+                let (_segments, _wait_result) =
+                    self.coord.condvar.wait_sync_timeout(segments, deadline);
+            }
 
             if self.coord.timeline().is_flushing() {
                 return Ok(WaitOutcome::Interrupted);
@@ -492,7 +481,7 @@ impl Source for HlsSource {
             })
             .or_else(|| {
                 self.resolve_segment_for_offset(landed_offset, fallback_variant)
-                    .map(|resolved| (fallback_variant, Self::segment_index(resolved)))
+                    .map(|seg_idx| (fallback_variant, seg_idx))
             });
         // `apply_seek_plan(...)` already established the authoritative layout
         // for this seek. Rewriting `variant_map` again at the landed offset

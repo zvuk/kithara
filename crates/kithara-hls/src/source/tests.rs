@@ -8,9 +8,8 @@ use std::{
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_platform::{
-    Mutex,
     time::Duration,
     tokio::time::{Duration as TokioDuration, timeout},
 };
@@ -23,7 +22,7 @@ use url::Url;
 
 use super::{
     core::{HlsSource, build_pair},
-    types::{DemandRequestOutcome, ReadSegment, SeekLayout},
+    types::{ReadSegment, SeekLayout},
 };
 use crate::{
     HlsError,
@@ -38,7 +37,7 @@ fn test_peer_handle(cancel: &CancellationToken) -> kithara_stream::dl::PeerHandl
     let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
     );
-    dl.register(Arc::new(crate::inner::HlsPeer))
+    dl.register(Arc::new(crate::inner::HlsPeer::new()))
 }
 
 type LoaderPair = (
@@ -126,10 +125,6 @@ fn make_variant_state_with_segments(id: usize, segments: usize) -> VariantState 
             .collect(),
         size_map: None,
     }
-}
-
-fn make_variant_state(id: usize) -> VariantState {
-    make_variant_state_with_segments(id, 1)
 }
 
 fn build_test_source_with_segments(num_variants: usize, segments_per_variant: usize) -> HlsSource {
@@ -486,8 +481,8 @@ async fn on_demand_request_notifies_downloader_once() {
     let source = build_test_source(1);
     let wake = source.coord.reader_advanced.notified();
 
-    let outcome = source.request_on_demand_segment(0, 7);
-    assert_eq!(outcome, DemandRequestOutcome::Requested { queued: true });
+    let queued = source.push_segment_request(0, 0, 7);
+    assert!(queued, "push_segment_request must succeed");
 
     let req = source
         .coord
@@ -510,13 +505,13 @@ fn on_demand_request_returns_false_when_dedupe_suppresses_enqueue() {
         segment_index: 0,
         seek_epoch: 7,
     };
-    source.coord.requeue_segment_request(request);
+    source.coord.enqueue_segment_request(request);
 
-    let outcome = source.request_on_demand_segment(0, 7);
+    let queued = source.push_segment_request(0, 0, 7);
 
     assert!(
-        matches!(outcome, DemandRequestOutcome::Requested { queued: false }),
-        "request_on_demand_segment must report dedupe when enqueue is suppressed"
+        !queued,
+        "push_segment_request must report dedupe when enqueue is suppressed"
     );
     assert_eq!(
         source.coord.take_segment_request(),
@@ -568,7 +563,7 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
         segment_index: 0,
         seek_epoch: 0,
     };
-    source.coord.requeue_segment_request(request);
+    source.coord.enqueue_segment_request(request);
 
     let coord = Arc::clone(&source.coord);
     let join = thread::spawn(move || {
@@ -598,7 +593,7 @@ fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
     let mut source = build_source_with_size_map(&[100, 100, 100]);
     source.coord.stopped.store(false, Ordering::Release);
 
-    source.coord.requeue_segment_request(SegmentRequest {
+    source.coord.enqueue_segment_request(SegmentRequest {
         variant: 0,
         segment_index: 2,
         seek_epoch: 0,
@@ -751,12 +746,12 @@ fn layout_variant_preserves_total_length() {
 #[kithara::test]
 fn set_seek_epoch_drains_pending_segment_requests() {
     let mut source = build_test_source(1);
-    source.coord.requeue_segment_request(SegmentRequest {
+    source.coord.enqueue_segment_request(SegmentRequest {
         variant: 0,
         segment_index: 1,
         seek_epoch: 3,
     });
-    source.coord.requeue_segment_request(SegmentRequest {
+    source.coord.enqueue_segment_request(SegmentRequest {
         variant: 0,
         segment_index: 2,
         seek_epoch: 4,
@@ -1122,29 +1117,19 @@ fn hls_phase_parameterless_waiting_when_no_segments() {
 }
 
 #[kithara::test]
-fn fallback_seek_event_fires_at_most_once_per_offset() {
+fn queue_segment_request_resolves_offset_to_segment() {
     let source = build_test_source(1);
     source.coord.stopped.store(false, Ordering::Release);
-    let mut rx = source.bus.subscribe();
+    set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
 
-    // Call request_on_demand_segment 50 times at offset=0.
-    // Without dedup this would publish 50 Seek events.
-    for _ in 0..50 {
-        let _ = source.request_on_demand_segment(0, 0);
-    }
+    // Offset 50 should resolve to segment 0, variant 0.
+    let queued = source.queue_segment_request_for_offset(50, 0);
+    assert!(queued, "must queue a segment request for a valid offset");
 
-    // Count Seek events with stage "wait_range_metadata_fallback".
-    let mut fallback_count = 0usize;
-    while let Ok(event) = rx.try_recv() {
-        if let kithara_events::Event::Hls(HlsEvent::Seek { stage, .. }) = event
-            && stage == "wait_range_metadata_fallback"
-        {
-            fallback_count += 1;
-        }
-    }
-
-    assert!(
-        fallback_count <= 1,
-        "fallback seek event must fire at most once per (variant, offset), got {fallback_count}"
-    );
+    let req = source
+        .coord
+        .take_segment_request()
+        .expect("request must be queued");
+    assert_eq!(req.variant, 0);
+    assert_eq!(req.segment_index, 0);
 }

@@ -1,16 +1,13 @@
 use std::{
     collections::HashSet,
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
 };
 
 use kithara_abr::{AbrController, AbrOptions, Variant};
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::Mutex;
 use kithara_stream::Timeline;
 
@@ -18,16 +15,16 @@ use crate::{
     coord::HlsCoord,
     ids::{SegmentIndex, VariantIndex},
     playlist::{PlaylistAccess, PlaylistState},
-    scheduler::{DownloadCursor, HlsScheduler, worker::WorkerGuard},
+    scheduler::{DownloadCursor, HlsScheduler},
     stream_index::StreamIndex,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
 ///
 /// Reads bytes directly from the [`AssetStore`] backend — segment
-/// downloading is the worker's job, not the source's. Holds an
-/// optional [`WorkerGuard`] that cancels+joins the background
-/// download worker when the source is dropped.
+/// downloading is the Downloader's job via `poll_next`, not the
+/// source's. Holds an optional [`PeerHandle`](kithara_stream::dl::PeerHandle)
+/// that cancels in-flight fetches when the source is dropped.
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) backend: AssetStore<DecryptContext>,
@@ -36,18 +33,14 @@ pub struct HlsSource {
     pub(crate) bus: EventBus,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     pub(crate) variant_fence: Option<VariantIndex>,
-    /// Worker guard. Dropped with this source, cancelling the worker.
-    pub(crate) _worker: Option<WorkerGuard>,
-    /// Dedup key for `wait_range_metadata_fallback` events. Encodes
-    /// `(variant << 48) | offset` so the event fires at most once per
-    /// unique (variant, offset) pair during a spin-wait loop.
-    pub(crate) last_fallback_key: AtomicU64,
+    /// Peer handle. Dropped with this source, cancelling the peer.
+    pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
 }
 
 impl HlsSource {
-    /// Set the worker guard (called after the worker is spawned).
-    pub(crate) fn set_worker(&mut self, guard: WorkerGuard) {
-        self._worker = Some(guard);
+    /// Set the peer handle (called after the peer is activated).
+    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
+        self._peer_handle = Some(handle);
     }
 
     /// Current variant for source operations (read, seek, demand).
@@ -212,20 +205,98 @@ impl HlsSource {
         true
     }
 
-    pub(super) fn is_transient_empty_eof(&self, segments: &StreamIndex) -> bool {
-        self.coord.timeline().eof() && segments.effective_total(self.playlist_state.as_ref()) == 0
+    pub(super) fn push_segment_request(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        seek_epoch: u64,
+    ) -> bool {
+        self.coord
+            .enqueue_segment_request(crate::coord::SegmentRequest {
+                segment_index,
+                variant,
+                seek_epoch,
+            })
     }
 
-    pub(super) fn is_transient_demand_gap(&self) -> bool {
+    /// Try to resolve and enqueue a segment request for `range_start`.
+    /// Returns `true` if a segment could be resolved (even if the request
+    /// was already pending). Returns `false` only when no resolution path
+    /// can map the offset to a segment — a true metadata miss.
+    pub(super) fn queue_segment_request_for_offset(
+        &self,
+        range_start: u64,
+        seek_epoch: u64,
+    ) -> bool {
+        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+            self.push_segment_request(variant, segment_index, seek_epoch);
+            return true;
+        }
+        let variant = self.resolve_current_variant();
+        // Exact resolution: committed data or playlist metadata.
+        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
+            self.push_segment_request(variant, segment_index, seek_epoch);
+            return true;
+        }
+        if let Some(segment_index) = self
+            .playlist_state
+            .find_segment_at_offset(variant, range_start)
+        {
+            self.push_segment_request(variant, segment_index, seek_epoch);
+            return true;
+        }
+        // Fallback estimation — no size map available.
+        if let Some(segment_index) = self.fallback_segment_index_for_offset(variant, range_start) {
+            self.bus.publish(HlsEvent::Seek {
+                stage: "wait_range_metadata_fallback",
+                seek_epoch,
+                variant,
+                offset: range_start,
+                from_segment_index: segment_index,
+                to_segment_index: segment_index,
+            });
+            self.push_segment_request(variant, segment_index, seek_epoch);
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn resolve_segment_for_offset(
+        &self,
+        range_start: u64,
+        variant: VariantIndex,
+    ) -> Option<SegmentIndex> {
+        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
+            return Some(segment_index);
+        }
+        if let Some(segment_index) = self
+            .playlist_state
+            .find_segment_at_offset(variant, range_start)
+        {
+            return Some(segment_index);
+        }
+        self.fallback_segment_index_for_offset(variant, range_start)
+    }
+
+    pub(super) fn loaded_segment_ready(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> bool {
         let segments = self.segments.lock_sync();
-        self.is_transient_empty_eof(&segments)
+        if !segments.is_visible(variant, segment_index) {
+            return false;
+        }
+        segments
+            .range_for(variant, segment_index)
+            .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
     }
 }
 
 /// Build an `HlsScheduler` + `HlsSource` pair from config.
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
-    track: kithara_stream::dl::PeerHandle,
+    _track: kithara_stream::dl::PeerHandle,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,
@@ -273,11 +344,9 @@ pub(crate) fn build_pair(
         None
     };
 
-    let size_probe = crate::loading::SizeMapProbe::new(track, config.headers.clone());
     let downloader = HlsScheduler {
         active_seek_epoch: 0,
         backend: backend.clone(),
-        size_probe,
         playlist_state: Arc::clone(&playlist_state),
         cursor: DownloadCursor::fill(0),
         force_init_for_seek: false,
@@ -290,7 +359,8 @@ pub(crate) fn build_pair(
         look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
         download_variant: initial_variant,
-        commit_queue: std::collections::VecDeque::new(),
+        filling_layout_gap: false,
+        demand_throttle_until: None,
     };
 
     let source = HlsSource {
@@ -300,8 +370,7 @@ pub(crate) fn build_pair(
         playlist_state,
         bus,
         variant_fence: None,
-        _worker: None,
-        last_fallback_key: AtomicU64::new(u64::MAX),
+        _peer_handle: None,
     };
 
     (downloader, source)

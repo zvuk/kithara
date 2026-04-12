@@ -6,12 +6,12 @@ use crate::{
     stream_index::SegmentRef,
 };
 
-pub(super) const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 25;
 /// Condvar sleep per spin in `wait_range`. Kept short so the audio worker
 /// can round-robin between tracks without one slow source starving others.
 /// Previous value 50ms caused audible glitches during multi-track mixing.
 pub(super) const WAIT_RANGE_SLEEP_MS: u64 = 2;
 pub(super) const WAIT_RANGE_HANG_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
+pub(super) const WAIT_RANGE_MAX_METADATA_MISS_SPINS: u32 = 25;
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
 pub(crate) enum SeekLayout {
@@ -19,40 +19,6 @@ pub(crate) enum SeekLayout {
     Preserve,
     /// Different variant — reset `StreamIndex`, rebuild layout.
     Reset,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum ResolvedSegment {
-    Committed(SegmentIndex),
-    Layout(SegmentIndex),
-    Fallback(SegmentIndex),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MetadataMissReason {
-    VariantOutOfRange,
-    UnresolvedOffset,
-}
-
-impl MetadataMissReason {
-    pub(crate) const fn label(self) -> Option<&'static str> {
-        match self {
-            Self::VariantOutOfRange => Some("variant_out_of_range"),
-            Self::UnresolvedOffset => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DemandRequestOutcome {
-    Requested {
-        queued: bool,
-    },
-    TransientGap,
-    MetadataMiss {
-        variant: VariantIndex,
-        reason: MetadataMissReason,
-    },
 }
 
 /// Snapshot of segment data needed for reading, copied out of the lock.

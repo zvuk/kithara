@@ -29,9 +29,19 @@ pub(crate) fn first_missing_segment(
     variant: VariantIndex,
     start_segment: SegmentIndex,
     num_segments: usize,
+    ephemeral: bool,
 ) -> Option<SegmentIndex> {
     let start = start_segment.min(num_segments);
-    (start..num_segments).find(|&segment_index| !state.is_segment_loaded(variant, segment_index))
+    (start..num_segments).find(|&segment_index| {
+        if ephemeral {
+            // Ephemeral: invalidated = data gone, treat as missing.
+            !state.is_segment_loaded(variant, segment_index)
+        } else {
+            // Disk: invalidated segments still have data on disk,
+            // only truly absent segments are missing.
+            !state.has_stored_segment(variant, segment_index)
+        }
+    })
 }
 
 pub(crate) fn classify_layout_transition(

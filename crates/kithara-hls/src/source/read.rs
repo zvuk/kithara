@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use kithara_assets::ResourceKey;
-use kithara_events::HlsEvent;
 use kithara_storage::ResourceExt;
 
 use super::{core::HlsSource, types::ReadSegment};
@@ -18,6 +17,11 @@ impl HlsSource {
         range: &Range<u64>,
     ) -> bool {
         let Some(seg_ref) = segments.find_at_offset(range.start) else {
+            tracing::trace!(
+                range_start = range.start,
+                layout = segments.layout_variant(),
+                "range_ready: find_at_offset=None"
+            );
             return false;
         };
 
@@ -29,12 +33,19 @@ impl HlsSource {
         let init_end = seg_ref.data.init_len.min(local_end);
         if local_start < init_end {
             let Some(ref init_url) = seg_ref.data.init_url else {
+                tracing::trace!(seg = seg_ref.segment_index, "range_ready: no init_url");
                 return false;
             };
             if !self
                 .backend
                 .contains_range(&ResourceKey::from_url(init_url), local_start..init_end)
             {
+                tracing::trace!(
+                    seg = seg_ref.segment_index,
+                    local_start,
+                    init_end,
+                    "range_ready: init not in backend"
+                );
                 return false;
             }
         }
@@ -49,6 +60,13 @@ impl HlsSource {
                 media_start..media_end,
             )
         {
+            tracing::trace!(
+                seg = seg_ref.segment_index,
+                variant = seg_ref.variant,
+                media_start, media_end,
+                url = %seg_ref.data.media_url,
+                "range_ready: media not in backend"
+            );
             return false;
         }
 
@@ -133,48 +151,6 @@ impl HlsSource {
 
         let bytes_read = resource.read_at(media_offset, buf)?;
         Ok(Some(bytes_read))
-    }
-
-    pub(super) fn metadata_miss(
-        &self,
-        range_start: u64,
-        seek_epoch: u64,
-        current_variant: VariantIndex,
-        metadata_miss_count: &mut usize,
-        max_metadata_miss_spins: usize,
-        reason: Option<&str>,
-    ) -> Result<bool, String> {
-        *metadata_miss_count = metadata_miss_count.saturating_add(1);
-        self.bus.publish(HlsEvent::SeekMetadataMiss {
-            seek_epoch,
-            offset: range_start,
-            variant: current_variant,
-        });
-        self.coord.reader_advanced.notify_one();
-
-        if *metadata_miss_count < max_metadata_miss_spins {
-            return Ok(false);
-        }
-
-        let error = reason.map_or_else(
-            || {
-                format!(
-                    "seek metadata miss: offset={} variant={} epoch={} misses={}",
-                    range_start, current_variant, seek_epoch, *metadata_miss_count
-                )
-            },
-            |reason| {
-                format!(
-                    "seek metadata miss: offset={} variant={} epoch={} reason={}",
-                    range_start, current_variant, seek_epoch, reason
-                )
-            },
-        );
-        self.bus.publish(HlsEvent::Error {
-            error: error.clone(),
-            recoverable: false,
-        });
-        Err(error)
     }
 
     pub(super) fn fallback_segment_index_for_offset(

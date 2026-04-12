@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::HashSet,
     sync::{Arc, atomic::Ordering},
 };
 
@@ -13,13 +13,11 @@ use tracing::debug;
 use super::{
     cursor::DownloadCursor,
     helpers::{classify_layout_transition, is_cross_codec_switch},
-    trait_impl::HlsFetch,
 };
 use crate::{
     HlsError,
     coord::HlsCoord,
     ids::{SegmentIndex, VariantIndex},
-    loading::SizeMapProbe,
     playlist::{PlaylistAccess, PlaylistState},
     stream_index::{SegmentData, StreamIndex},
 };
@@ -29,8 +27,6 @@ pub(crate) struct HlsScheduler {
     pub(crate) active_seek_epoch: SeekEpoch,
     /// Direct disk-cache access — no `FetchManager` wrapper.
     pub(crate) backend: AssetStore<DecryptContext>,
-    /// HEAD-probe helper for size-map building.
-    pub(crate) size_probe: SizeMapProbe,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
     pub(crate) force_init_for_seek: bool,
@@ -51,51 +47,27 @@ pub(crate) struct HlsScheduler {
     /// classification instead of shared `layout_variant` to avoid racing
     /// with the decoder thread.
     pub(crate) download_variant: VariantIndex,
-    /// Queue of fetch results waiting to be committed. Workers enqueue
-    /// completed fetches via [`Self::enqueue_commit`] and drain them via
-    /// [`Self::drain_commits`]. Current callers drain synchronously in
-    /// the same loop iteration; Phase 4c will extend this so async
-    /// `on_complete` callbacks (from a `Stream<FetchCmd>` adapter) can
-    /// push commit entries from a different context.
-    pub(crate) commit_queue: VecDeque<HlsFetch>,
+    /// True while `poll_next` is filling a layout-variant gap after ABR moved
+    /// to a different variant. Prevents ABR from overriding the variant
+    /// on subsequent `poll_next` cycles (avoids hot loop: ABR cached commit
+    /// → tail gap detect → reset → ABR override → repeat).
+    pub(crate) filling_layout_gap: bool,
+    /// After a demand, caps cursor advancement so prefetch doesn't evict
+    /// the demanded segment from an ephemeral LRU. Set to
+    /// `demand_seg + look_ahead_segments` when a demand is processed;
+    /// cleared on the next seek (new epoch) or when reader advances past.
+    pub(crate) demand_throttle_until: Option<usize>,
 }
-
-/// Maximum number of plans to log at debug level.
-pub(super) const MAX_LOG_PLANS: usize = 4;
 
 /// Maximum initial segment index for verbose logging.
 pub(super) const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
 impl HlsScheduler {
-    /// Push a fetch result onto the commit queue for later draining.
-    ///
-    /// Callers enqueue fetches that have completed successfully; each
-    /// queued fetch is committed in FIFO order when [`drain_commits`] is
-    /// invoked. Order within a batch is the responsibility of the
-    /// caller (e.g. `handle_batch` enqueues in plan order).
-    ///
-    /// [`drain_commits`]: Self::drain_commits
-    pub(crate) fn enqueue_commit(&mut self, fetch: HlsFetch) {
-        self.commit_queue.push_back(fetch);
-    }
-
-    /// Drain the commit queue — runs `commit_fetch` for every queued
-    /// entry in FIFO order. Returns `true` if any commits were drained
-    /// (so callers can track "made progress" for the worker loop).
-    pub(crate) fn drain_commits(&mut self) -> bool {
-        let mut drained = false;
-        while let Some(fetch) = self.commit_queue.pop_front() {
-            self.commit_fetch(fetch);
-            drained = true;
-        }
-        drained
-    }
-
-    pub(super) fn layout_variant(&self) -> VariantIndex {
+    pub(crate) fn layout_variant(&self) -> VariantIndex {
         self.segments.lock_sync().layout_variant()
     }
 
-    pub(super) fn current_segment_index(&self) -> SegmentIndex {
+    pub(crate) fn current_segment_index(&self) -> SegmentIndex {
         self.cursor.fill_next()
     }
 
@@ -111,19 +83,19 @@ impl HlsScheduler {
         (total > 0).then_some(total)
     }
 
-    pub(super) fn gap_scan_start_segment(&self) -> SegmentIndex {
+    pub(crate) fn gap_scan_start_segment(&self) -> SegmentIndex {
         self.cursor.fill_floor()
     }
 
-    pub(super) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
+    pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
         self.cursor.reset_fill(segment_index);
     }
 
-    pub(super) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
+    pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
         self.cursor.advance_fill_to(segment_index);
     }
 
-    pub(super) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
+    pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
         self.cursor.rewind_fill_to(segment_index);
     }
 
@@ -162,26 +134,25 @@ impl HlsScheduler {
         ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
     }
 
-    pub(super) fn is_stale_cross_codec_fetch(&self, fetch: &HlsFetch) -> bool {
+    pub(super) fn is_stale_cross_codec(&self, variant: VariantIndex, seg_idx: usize) -> bool {
         let Some((current_variant, anchor_offset)) = self.switched_layout_anchor() else {
             return false;
         };
-        if fetch.variant == current_variant
-            || !is_cross_codec_switch(&self.playlist_state, current_variant, fetch.variant)
+        if variant == current_variant
+            || !is_cross_codec_switch(&self.playlist_state, current_variant, variant)
         {
             return false;
         }
 
-        let seg_idx = fetch.segment.media_index().unwrap_or(0);
         let fetch_offset = self
             .playlist_state
-            .segment_byte_offset(fetch.variant, seg_idx)
+            .segment_byte_offset(variant, seg_idx)
             .unwrap_or_else(|| self.coord.timeline().download_position());
 
         fetch_offset >= anchor_offset
     }
 
-    pub(super) fn classify_variant_transition(
+    pub(crate) fn classify_variant_transition(
         &self,
         variant: usize,
         segment_index: usize,
@@ -232,6 +203,7 @@ impl HlsScheduler {
         }
 
         self.download_variant = variant;
+        self.filling_layout_gap = false;
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -246,7 +218,7 @@ impl HlsScheduler {
         }
     }
 
-    pub(super) fn switch_needs_init(
+    pub(crate) fn switch_needs_init(
         &self,
         variant: usize,
         _segment_index: usize,
@@ -260,18 +232,18 @@ impl HlsScheduler {
         previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
     }
 
-    pub(super) fn variant_has_init(&self, variant: usize) -> bool {
+    pub(crate) fn variant_has_init(&self, variant: usize) -> bool {
         self.playlist_state.init_url(variant).is_some()
     }
 
-    pub(super) fn publish_download_error(&self, context: &str, error: &HlsError) {
+    pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
         self.bus.publish(HlsEvent::DownloadError {
             error: format!("{context}: {error}"),
         });
     }
 
-    pub(super) fn reader_segment_hint(&self, variant: usize) -> usize {
+    pub(crate) fn reader_segment_hint(&self, variant: usize) -> usize {
         let reader_offset = self.coord.timeline().byte_position();
         self.playlist_state
             .find_segment_at_offset(variant, reader_offset)
@@ -289,23 +261,5 @@ impl HlsScheduler {
         }
         self.backend
             .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
-    }
-
-    pub(super) fn demand_init_evicted(&self, variant: usize, segment_index: usize) -> bool {
-        let segments = self.segments.lock_sync();
-        let Some(data) = segments.stored_segment(variant, segment_index) else {
-            return false;
-        };
-        let init_len = data.init_len;
-        if init_len == 0 {
-            return false;
-        }
-        let Some(init_url) = data.init_url.clone() else {
-            return false;
-        };
-        drop(segments);
-        !self
-            .backend
-            .contains_range(&ResourceKey::from_url(&init_url), 0..init_len)
     }
 }

@@ -2,10 +2,7 @@
 
 use std::{
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize},
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 pub use kithara_abr::{AbrMode, AbrOptions};
@@ -51,7 +48,7 @@ fn make_test_loader(
 ) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
     let backend = make_test_backend(cancel);
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-    let handle = downloader.register(Arc::new(crate::inner::HlsPeer));
+    let handle = downloader.register(Arc::new(crate::inner::HlsPeer::new()));
     let cache = PlaylistCache::new(backend.clone(), handle.clone());
     let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));
     (backend, loader)
@@ -80,8 +77,7 @@ pub fn make_test_source_with_backend(
         playlist_state,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
-        _worker: None,
-        last_fallback_key: AtomicU64::new(u64::MAX),
+        _peer_handle: None,
     }
 }
 
@@ -140,7 +136,7 @@ pub fn build_source(
         .downloader
         .clone()
         .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
-    let handle = downloader.register(Arc::new(crate::inner::HlsPeer));
+    let handle = downloader.register(Arc::new(crate::inner::HlsPeer::new()));
     let (_downloader, source) = build_pair(backend, handle, variants, config, playlist_state, bus);
     source
 }

@@ -108,6 +108,14 @@ impl VariantSegments {
         was_available
     }
 
+    /// Whether a segment is available (not invalidated).
+    #[must_use]
+    pub fn is_available(&self, segment_index: SegmentIndex) -> bool {
+        self.segments
+            .get(&segment_index)
+            .is_some_and(|slot| slot.available)
+    }
+
     /// Whether a segment is committed.
     #[must_use]
     pub fn contains(&self, segment_index: SegmentIndex) -> bool {
@@ -333,7 +341,11 @@ impl StreamIndex {
     pub fn find_at_offset_in(&self, variant: VariantIndex, offset: u64) -> Option<SegmentRef<'_>> {
         let byte_map = self.variant_byte_maps.get(variant)?;
         let (range, &seg_idx) = byte_map.get_key_value(&offset)?;
-        let data = self.variants[variant].get(seg_idx)?;
+        // Use get_stored (ignores `available` flag) so the reader can
+        // resolve byte offsets for segments temporarily invalidated by
+        // LRU eviction. Actual data availability is checked downstream
+        // by range_ready / contains_range on the backend.
+        let data = self.variants[variant].get_stored(seg_idx)?;
         Some(SegmentRef {
             variant,
             segment_index: seg_idx,
@@ -419,6 +431,17 @@ impl StreamIndex {
         self.variants
             .get(variant)
             .is_some_and(|vs| vs.contains(segment_index))
+    }
+
+    /// Whether a segment has stored data (regardless of `available` flag).
+    ///
+    /// Unlike `is_segment_loaded`, this returns true for segments that
+    /// were temporarily invalidated by LRU eviction. Used by the
+    /// scheduler to avoid re-downloading segments whose data is still
+    /// on disk.
+    #[must_use]
+    pub fn has_stored_segment(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        self.stored_segment(variant, segment_index).is_some()
     }
 
     /// Whether the entire byte range is covered by committed segments
@@ -610,8 +633,9 @@ impl StreamIndex {
         }
 
         // Reinsert with correct offsets.
-        // For uncommitted segments, advance offset by expected size so that
-        // subsequent committed segments appear at their canonical byte offset.
+        // Insert entries for ALL segments (committed + estimated) so that
+        // find_at_offset works even when segments commit out of order.
+        // range_ready_from_segments validates actual data availability.
         for seg_idx in from_segment..num_segments {
             let stored_len = variants.get_stored(seg_idx).map(SegmentData::total_len);
             let total_len = stored_len
@@ -620,10 +644,8 @@ impl StreamIndex {
             if total_len == 0 {
                 continue;
             }
-            if stored_len.is_some() && variants.contains(seg_idx) {
-                let end = offset + total_len;
-                byte_map.insert(offset..end, seg_idx);
-            }
+            let end = offset + total_len;
+            byte_map.insert(offset..end, seg_idx);
             offset += total_len;
         }
     }
@@ -901,10 +923,13 @@ mod tests {
         assert!(!idx.is_segment_loaded(0, 1));
         assert!(idx.is_segment_loaded(0, 0));
         assert!(idx.is_segment_loaded(0, 2));
-        assert!(
-            idx.find_at_offset(150).is_none(),
-            "invalidated segment must leave a hole in the byte layout"
-        );
+        // Invalidated segment stays in byte map for offset routing
+        // (demand resolution needs the mapping). Actual data
+        // availability is checked by range_ready / contains_range.
+        let seg = idx
+            .find_at_offset(150)
+            .expect("invalidated segment keeps offset mapping for demand routing");
+        assert_eq!(seg.segment_index, 1);
         let seg = idx
             .find_at_offset(250)
             .expect("segment 2 must keep its original offset");
@@ -943,9 +968,14 @@ mod tests {
             "resource invalidation must report that it removed coverage"
         );
         assert!(
-            idx.find_at_offset(0).is_none(),
-            "invalidated resource must disappear from visible byte layout"
+            !idx.is_segment_loaded(0, 0),
+            "invalidated segment must not be loaded"
         );
+        // Offset mapping preserved for demand routing.
+        let seg = idx
+            .find_at_offset(0)
+            .expect("invalidated segment keeps offset mapping");
+        assert_eq!(seg.segment_index, 0);
     }
 
     #[kithara::test]
@@ -990,9 +1020,14 @@ mod tests {
 
         assert!(removed);
         assert!(
-            idx.find_at_offset(150).is_none(),
-            "the invalidated segment must leave a hole"
+            !idx.is_segment_loaded(0, 1),
+            "invalidated segment must not be loaded"
         );
+        // Offset mapping preserved for demand routing.
+        let seg = idx
+            .find_at_offset(150)
+            .expect("invalidated segment keeps offset mapping");
+        assert_eq!(seg.segment_index, 1);
         let seg = idx
             .find_at_offset(250)
             .expect("segment 2 must keep its original offset");

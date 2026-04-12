@@ -23,8 +23,7 @@ use super::atomic_fetch::fetch_atomic_body;
 use crate::{
     HlsError, HlsResult,
     parsing::{
-        MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
-        parse_media_playlist,
+        MasterPlaylist, MediaPlaylist, VariantId, parse_master_playlist, parse_media_playlist,
     },
 };
 
@@ -52,7 +51,6 @@ pub struct PlaylistCache {
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
-    num_variants_cache: Arc<RwLock<Option<usize>>>,
 }
 
 #[derive(Default, Clone)]
@@ -71,7 +69,6 @@ impl PlaylistCache {
             config: Arc::new(RwLock::new(PlaylistConfig::default())),
             master: Arc::new(OnceCell::new()),
             media: Arc::new(DashMap::new()),
-            num_variants_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -85,15 +82,6 @@ impl PlaylistCache {
 
     pub fn set_headers(&self, headers: Option<Headers>) {
         self.config.lock_sync_write().headers = headers;
-    }
-
-    /// Builder-style override of the base URL — used by integration
-    /// tests that want to verify URL resolution without going through
-    /// the full `Hls::create` flow.
-    #[must_use]
-    pub fn with_base_url(self, url: Option<Url>) -> Self {
-        self.set_base_url(url);
-        self
     }
 
     #[must_use]
@@ -150,26 +138,6 @@ impl PlaylistCache {
         Ok(playlist.clone())
     }
 
-    #[must_use]
-    pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
-        self.master.get().map(|m| m.variants.clone())
-    }
-
-    /// Variant count derived from the master playlist, cached after the
-    /// first successful read.
-    #[must_use]
-    pub fn num_variants(&self) -> usize {
-        if let Some(cached) = *self.num_variants_cache.lock_sync_read() {
-            return cached;
-        }
-        if let Some(variants) = self.master_variants() {
-            let count = variants.len();
-            *self.num_variants_cache.lock_sync_write() = Some(count);
-            return count;
-        }
-        0
-    }
-
     /// Resolve a possibly-relative target URL against `base`, honoring
     /// any override base URL configured on the cache.
     ///
@@ -208,6 +176,22 @@ impl PlaylistCache {
         let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
 
         Ok((media_url, playlist))
+    }
+
+    /// Synchronous access to an already-loaded media playlist.
+    ///
+    /// Returns `None` if the master or media playlist hasn't been loaded
+    /// yet. After `Hls::create()` all playlists are pre-populated so
+    /// this always succeeds during playback.
+    #[must_use]
+    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<(Url, MediaPlaylist)> {
+        let master_url = self.config.lock_sync_read().master_url.clone()?;
+        let master = self.master.get()?;
+        let variant_stream = master.variants.get(variant)?;
+        let media_url = self.resolve_url(&master_url, &variant_stream.uri).ok()?;
+        let cell = self.media.get(&VariantId(variant))?;
+        let playlist = cell.get()?;
+        Some((media_url, playlist.clone()))
     }
 
     async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>

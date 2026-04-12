@@ -1,4 +1,3 @@
-use futures::future::join_all;
 use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_platform::Mutex;
@@ -6,75 +5,12 @@ use tracing::debug;
 
 use super::state::HlsScheduler;
 use crate::{
-    HlsError,
     coord::HlsCoord,
-    loading::SizeMapProbe,
-    playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
+    playlist::{PlaylistAccess, PlaylistState},
     stream_index::{SegmentData, StreamIndex},
 };
 
 impl HlsScheduler {
-    pub(super) async fn calculate_size_map(
-        playlist_state: &PlaylistState,
-        size_probe: &SizeMapProbe,
-        variant: usize,
-    ) -> Result<(), HlsError> {
-        if playlist_state.has_size_map(variant) {
-            return Ok(());
-        }
-
-        let init_url = playlist_state.init_url(variant);
-        let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
-
-        let init_size = if let Some(ref url) = init_url {
-            size_probe.get_content_length(url).await.unwrap_or(0)
-        } else {
-            0
-        };
-
-        let media_urls: Vec<_> = (0..num_segments)
-            .filter_map(|i| playlist_state.segment_url(variant, i))
-            .collect();
-        let media_futs: Vec<_> = media_urls
-            .iter()
-            .map(|url| size_probe.get_content_length(url))
-            .collect();
-        let media_lengths = join_all(media_futs).await;
-
-        let mut offsets = Vec::with_capacity(num_segments);
-        let mut segment_sizes = Vec::with_capacity(num_segments);
-        let mut cumulative = 0u64;
-
-        for (i, result) in media_lengths.into_iter().enumerate() {
-            let media_len = result.unwrap_or(0);
-            let total_seg = if i == 0 {
-                init_size + media_len
-            } else {
-                media_len
-            };
-            offsets.push(cumulative);
-            segment_sizes.push(total_seg);
-            cumulative += total_seg;
-        }
-
-        debug!(
-            variant,
-            total = cumulative,
-            num_segments = segment_sizes.len(),
-            "calculated variant size map"
-        );
-
-        playlist_state.set_size_map(
-            variant,
-            VariantSizeMap {
-                segment_sizes,
-                offsets,
-                total: cumulative,
-            },
-        );
-        Ok(())
-    }
-
     pub(crate) fn populate_cached_segments(
         segments: &Mutex<StreamIndex>,
         coord: &HlsCoord,
@@ -195,7 +131,7 @@ impl HlsScheduler {
         (count, cumulative_offset)
     }
 
-    pub(super) fn populate_cached_segments_if_needed(&self, variant: usize) -> (usize, u64) {
+    pub(crate) fn populate_cached_segments_if_needed(&self, variant: usize) -> (usize, u64) {
         Self::populate_cached_segments(
             &self.segments,
             &self.coord,
@@ -205,7 +141,7 @@ impl HlsScheduler {
         )
     }
 
-    pub(super) fn apply_cached_segment_progress(
+    pub(crate) fn apply_cached_segment_progress(
         &mut self,
         variant: usize,
         cached_count: usize,

@@ -2,63 +2,80 @@ use std::sync::atomic::Ordering;
 
 use kithara_events::HlsEvent;
 
-use super::{helpers::first_missing_segment, state::HlsScheduler, trait_impl::HlsFetch};
-use crate::stream_index::SegmentData;
+use super::{helpers::first_missing_segment, state::HlsScheduler};
+use crate::{loading::SegmentMeta, playlist::PlaylistAccess, stream_index::SegmentData};
 
 impl HlsScheduler {
     pub(super) fn commit_segment(
         &mut self,
-        dl: HlsFetch,
-        _is_variant_switch: bool,
-        _is_midstream_switch: bool,
+        variant: usize,
+        seg_idx: usize,
+        media: &SegmentMeta,
+        init_len: u64,
+        init_url: Option<url::Url>,
+        duration: std::time::Duration,
     ) {
-        let seg_idx = dl.segment.media_index().unwrap_or(0);
-
-        self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
+        self.record_throughput(media.len, duration, media.duration);
 
         self.bus.publish(HlsEvent::SegmentComplete {
-            variant: dl.variant,
+            variant,
             segment_index: seg_idx,
-            bytes_transferred: dl.media.len,
-            cached: dl.media_cached,
-            duration: dl.duration,
+            bytes_transferred: media.len,
+            cached: false,
+            duration,
         });
 
-        let fresh_init_len = dl.init_len;
-
-        let actual_init_len = if fresh_init_len == 0 {
+        let actual_init_len = if init_len == 0 {
             let segments = self.segments.lock_sync();
             segments
-                .stored_segment(dl.variant, seg_idx)
+                .stored_segment(variant, seg_idx)
                 .map_or(0, |existing| existing.init_len)
         } else {
-            fresh_init_len
+            init_len
         };
 
-        let media_len = dl.media.len;
+        let media_len = media.len;
         let actual_size = actual_init_len + media_len;
 
+        // Log HEAD-estimated vs actual sizes for diagnostics.
+        let expected_size = self
+            .playlist_state
+            .segment_size(variant, seg_idx)
+            .unwrap_or(0);
+        if expected_size != actual_size {
+            tracing::debug!(
+                variant,
+                seg_idx,
+                expected_size,
+                actual_size,
+                actual_init_len,
+                media_len,
+                delta = (actual_size as i64) - (expected_size as i64),
+                "commit: size mismatch HEAD vs actual"
+            );
+        }
+
         let init_url = if actual_init_len > 0 {
-            dl.init_url.or_else(|| {
+            init_url.or_else(|| {
                 let segments = self.segments.lock_sync();
                 segments
-                    .stored_segment(dl.variant, seg_idx)
+                    .stored_segment(variant, seg_idx)
                     .and_then(|existing| existing.init_url.clone())
             })
         } else {
-            dl.init_url
+            init_url
         };
 
         let data = SegmentData {
             init_len: actual_init_len,
             media_len,
             init_url,
-            media_url: dl.media.url.clone(),
+            media_url: media.url.clone(),
         };
 
         self.segments
             .lock_sync()
-            .commit_segment(dl.variant, seg_idx, data);
+            .commit_segment(variant, seg_idx, data);
 
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
@@ -66,12 +83,10 @@ impl HlsScheduler {
         self.coord.timeline().set_download_position(next_download);
 
         self.playlist_state
-            .reconcile_segment_size(dl.variant, seg_idx, actual_size);
+            .reconcile_segment_size(variant, seg_idx, actual_size);
 
-        if let Some(sizes) = self.playlist_state.segment_sizes(dl.variant) {
-            self.segments
-                .lock_sync()
-                .set_expected_sizes(dl.variant, sizes);
+        if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+            self.segments.lock_sync().set_expected_sizes(variant, sizes);
         }
 
         self.bus.publish(HlsEvent::DownloadProgress {
@@ -82,7 +97,7 @@ impl HlsScheduler {
         self.coord.condvar.notify_all();
     }
 
-    pub(super) fn handle_midstream_switch(&mut self, is_midstream_switch: bool) {
+    pub(crate) fn handle_midstream_switch(&mut self, is_midstream_switch: bool) {
         if !is_midstream_switch {
             return;
         }
@@ -91,7 +106,14 @@ impl HlsScheduler {
         let num_segments = self.num_segments(old_variant).unwrap_or(0);
         let cursor_pos = {
             let state = self.segments.lock_sync();
-            first_missing_segment(&state, old_variant, 0, num_segments).unwrap_or(num_segments)
+            first_missing_segment(
+                &state,
+                old_variant,
+                0,
+                num_segments,
+                self.backend.is_ephemeral(),
+            )
+            .unwrap_or(num_segments)
         };
 
         self.cursor.reopen_fill(cursor_pos, cursor_pos);

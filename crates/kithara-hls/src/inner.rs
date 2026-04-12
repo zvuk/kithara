@@ -2,22 +2,565 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::{
+    io,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::{Context, Poll, Waker},
+};
 
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::time::Instant;
+use kithara_net::NetError;
+use kithara_platform::{Mutex, time::Instant};
+use kithara_storage::ResourceExt;
 use kithara_stream::{
     StreamContext, StreamType, Timeline,
-    dl::{Downloader, DownloaderConfig, Peer},
+    dl::{Downloader, DownloaderConfig, FetchCmd, OnCompleteFn, Peer, Priority, WriterFn},
 };
+use tracing::debug;
 
-pub(crate) struct HlsPeer;
+use crate::{ids::SegmentId, scheduler::HlsScheduler};
 
-impl Peer for HlsPeer {}
+/// All mutable state behind a single Mutex.
+struct HlsState {
+    scheduler: HlsScheduler,
+    loader: Arc<SegmentLoader>,
+    waker: Option<Waker>,
+    epoch_cancel: tokio_util::sync::CancellationToken,
+}
+
+/// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
+/// After `activate()`: Downloader drives segment downloads via
+/// self-contained `FetchCmd` closures (`writer` + `on_complete`).
+pub(crate) struct HlsPeer {
+    state: Arc<Mutex<Option<HlsState>>>,
+    /// Waker stored before activation (poll_next called but state is None).
+    pending_waker: Mutex<Option<Waker>>,
+    /// Cancels the waker-forwarding micro-task on drop.
+    wake_cancel: tokio_util::sync::CancellationToken,
+}
+
+impl HlsPeer {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(None)),
+            pending_waker: Mutex::new(None),
+            wake_cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
+        let reader_advanced = scheduler.coord.reader_advanced.clone();
+        let cancel = scheduler.coord.cancel.clone();
+
+        {
+            let mut guard = self.state.lock_sync();
+            *guard = Some(HlsState {
+                scheduler,
+                loader,
+                waker: None,
+                epoch_cancel: tokio_util::sync::CancellationToken::new(),
+            });
+        }
+
+        // Wake pending waker from pre-activation poll_next calls.
+        if let Some(waker) = self.pending_waker.lock_sync().take() {
+            waker.wake();
+        }
+
+        // Waker forwarding: translate Notify → stored waker.
+        let peer = Arc::clone(self);
+        let wake_cancel = self.wake_cancel.clone();
+        kithara_platform::tokio::task::spawn(async move {
+            loop {
+                kithara_platform::tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return,
+                    () = wake_cancel.cancelled() => return,
+                    () = reader_advanced.notified() => {
+                        let guard = peer.state.lock_sync();
+                        if let Some(ref state) = *guard
+                            && let Some(waker) = state.waker.as_ref()
+                        {
+                            waker.wake_by_ref();
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+impl Peer for HlsPeer {
+    fn priority(&self) -> Priority {
+        let should_throttle = {
+            let guard = self.state.lock_sync();
+            let Some(ref state) = *guard else {
+                return Priority::Normal;
+            };
+            state.scheduler.should_throttle()
+        };
+        if should_throttle {
+            Priority::Low
+        } else {
+            Priority::Normal
+        }
+    }
+
+    fn max_concurrent(&self) -> usize {
+        let guard = self.state.lock_sync();
+        let Some(ref state) = *guard else {
+            return 1;
+        };
+        let count = state.scheduler.prefetch_count;
+        drop(guard);
+        count
+    }
+
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        let mut guard = self.state.lock_sync();
+        let Some(ref mut state) = *guard else {
+            *self.pending_waker.lock_sync() = Some(cx.waker().clone());
+            return Poll::Pending;
+        };
+
+        state.waker = Some(cx.waker().clone());
+        let sched = &mut state.scheduler;
+
+        debug!(
+            download_variant = sched.download_variant,
+            cursor = sched.current_segment_index(),
+            "poll_next: entry"
+        );
+
+        // 1. Demand processing (seek or gap-fill).
+        //    `demand_segment` tracks a same-epoch demand target so the
+        //    batch loop can force re-download even if the segment
+        //    appears cached (ephemeral LRU race: data evicted between
+        //    poll_next check and reader read).
+        //    `demand_variant_override` forces the batch loop to use the
+        //    demanded variant when ABR has moved to a different one
+        //    (layout gap-fill: reader on v0, ABR on v3).
+        let mut demand_segment: Option<usize> = None;
+        let mut demand_variant_override: Option<usize> = None;
+        if let Some(req) = sched.next_valid_demand_request() {
+            if req.seek_epoch != sched.active_seek_epoch {
+                // New seek epoch — full reset.
+                state.epoch_cancel.cancel();
+                state.epoch_cancel = tokio_util::sync::CancellationToken::new();
+                sched.demand_throttle_until = None;
+
+                let (is_variant_switch, _is_midstream_switch) =
+                    sched.classify_variant_transition(req.variant, req.segment_index);
+                sched.handle_midstream_switch(_is_midstream_switch);
+                if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
+                    sched
+                        .segments
+                        .lock_sync()
+                        .set_expected_sizes(req.variant, sizes);
+                }
+                if is_variant_switch {
+                    sched.download_variant = req.variant;
+                }
+                let (cached_count, cached_end_offset) =
+                    sched.populate_cached_segments_if_needed(req.variant);
+                sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
+
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            // Same-epoch demand (read_at gap-fill or evicted segment
+            // re-fetch). Rewind cursor to the demanded segment.
+            demand_segment = Some(req.segment_index);
+            if req.segment_index < sched.current_segment_index() {
+                debug!(
+                    variant = req.variant,
+                    segment = req.segment_index,
+                    cursor = sched.current_segment_index(),
+                    "poll_next: same-epoch demand behind cursor, rewinding"
+                );
+                sched.rewind_current_segment_index(req.segment_index);
+            }
+            // If demand is for a different variant than the current
+            // download_variant (ABR switched away from layout), override
+            // the variant for THIS poll_next cycle to fill the gap.
+            if req.variant != sched.download_variant {
+                demand_variant_override = Some(req.variant);
+            }
+        }
+
+        // 2. Flushing gate (prefetch only, demand bypasses above).
+        if sched.coord.timeline().is_flushing() {
+            debug!("poll_next: flushing, returning Pending");
+            return Poll::Pending;
+        }
+
+        // 3. ABR decision.
+        let old_variant = sched.abr.get_current_variant_index();
+        let decision = sched.make_abr_decision();
+        let mut variant = sched.abr.get_current_variant_index();
+
+        // Demand variant override: reader needs data from layout variant
+        // while ABR moved to a different one. Use the demanded variant
+        // for this poll_next cycle so the batch loop fills the gap.
+        if let Some(dv) = demand_variant_override {
+            if dv != variant {
+                debug!(
+                    demand_variant = dv,
+                    abr_variant = variant,
+                    "poll_next: demand override — filling layout gap"
+                );
+                variant = dv;
+            }
+        }
+
+        // Layout gap-fill override: handle_tail_state previously redirected
+        // download_variant to the layout variant to fill gaps. ABR must not
+        // override it until the gap is filled, otherwise the batch loop
+        // commits cached ABR segments and handle_tail_state resets the
+        // cursor again (hot loop).
+        if sched.filling_layout_gap && sched.download_variant != variant {
+            debug!(
+                layout_variant = sched.download_variant,
+                abr_variant = variant,
+                "poll_next: continuing layout gap-fill"
+            );
+            variant = sched.download_variant;
+        }
+
+        let Some(num_segments) = sched.num_segments_for_plan(variant) else {
+            debug!(variant, "poll_next: no num_segments, Pending");
+            return Poll::Pending;
+        };
+
+        sched.publish_variant_applied(old_variant, variant, &decision);
+
+        // 4. Tail check.
+        if sched.handle_tail_state(variant, num_segments) {
+            debug!(
+                variant,
+                num_segments,
+                cursor = sched.current_segment_index(),
+                reader_pos = sched.coord.timeline().byte_position(),
+                eof = sched.coord.timeline().eof(),
+                "poll_next: tail state, Pending"
+            );
+            return Poll::Pending;
+        }
+
+        // 5. Variant readiness (sync).
+        let (is_variant_switch, is_midstream_switch) =
+            sched.classify_variant_transition(variant, sched.current_segment_index());
+        // Demand-driven variant override is a temporary gap-fill, not
+        // a real ABR midstream switch.  handle_midstream_switch would
+        // reset the cursor to the first missing segment of the OLD
+        // variant, destroying the demand cursor position.
+        if demand_variant_override.is_none() {
+            sched.handle_midstream_switch(is_midstream_switch);
+        }
+        if is_variant_switch {
+            sched.download_variant = variant;
+        }
+        if let Some(sizes) = sched.playlist_state.segment_sizes(variant) {
+            sched
+                .segments
+                .lock_sync()
+                .set_expected_sizes(variant, sizes);
+        }
+        let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(variant);
+        sched.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
+
+        // Demand cursor protection: variant readiness may advance the
+        // cursor past the demand target via cached-segment pre-population
+        // or midstream switch reset.  Restore cursor so the batch loop
+        // starts at (or before) the demanded segment.
+        if let Some(ds) = demand_segment {
+            if sched.current_segment_index() > ds {
+                debug!(
+                    demand = ds,
+                    cursor = sched.current_segment_index(),
+                    "poll_next: demand cursor protection, resetting"
+                );
+                sched.reset_cursor(ds);
+            }
+        }
+
+        // 5b. Ephemeral demand throttle: after processing a demand,
+        // cap how far the cursor can advance so prefetch doesn't evict
+        // the demanded segment from the LRU cache.  The cap is lifted
+        // on new-epoch seeks (line 154) or when the reader catches up.
+        if let Some(ds) = demand_segment {
+            let ahead = sched.look_ahead_segments.unwrap_or(sched.prefetch_count);
+            sched.demand_throttle_until = Some(ds + ahead);
+        }
+        if demand_segment.is_none() {
+            if let Some(cap) = sched.demand_throttle_until {
+                if sched.current_segment_index() >= cap {
+                    return Poll::Pending;
+                }
+            }
+        }
+
+        // 6. Fill batch up to prefetch_count.
+        let mut cmds = Vec::new();
+        let seek_epoch = sched.coord.timeline().seek_epoch();
+        let has_init = sched.variant_has_init(variant);
+        let mut need_init = has_init
+            && (sched.force_init_for_seek
+                || sched.switch_needs_init(
+                    variant,
+                    sched.current_segment_index(),
+                    is_variant_switch,
+                ));
+
+        for batch_i in 0..sched.prefetch_count {
+            let seg_idx = sched.current_segment_index();
+            if seg_idx >= num_segments {
+                break;
+            }
+
+            // Skip cached — but never skip the demanded segment.
+            // Reader demand means "I cannot read this segment right
+            // now", so force re-download even if it looks cached
+            // (ephemeral LRU may have evicted the data between
+            // poll_next's check and the reader's read).
+            let is_demanded = demand_segment == Some(seg_idx);
+            let skipped = !is_demanded
+                && sched.should_skip_planned_segment(
+                    variant,
+                    seg_idx,
+                    is_midstream_switch,
+                    if old_variant != variant {
+                        Some(old_variant)
+                    } else {
+                        None
+                    },
+                    old_variant != variant
+                        && crate::scheduler::helpers::is_cross_codec_switch(
+                            &sched.playlist_state,
+                            old_variant,
+                            variant,
+                        ),
+                );
+            if skipped {
+                debug!(
+                    variant,
+                    seg_idx,
+                    batch_i,
+                    cursor_after = sched.current_segment_index(),
+                    "poll_next: skipped segment"
+                );
+                continue;
+            }
+
+            sched.bus.publish(HlsEvent::SegmentStart {
+                variant,
+                segment_index: seg_idx,
+                byte_offset: sched.coord.timeline().download_position(),
+            });
+
+            let plan_need_init = has_init
+                && crate::scheduler::helpers::should_request_init(
+                    need_init,
+                    SegmentId::Media(seg_idx),
+                );
+            if plan_need_init {
+                sched.force_init_for_seek = false;
+            }
+            need_init = false;
+
+            // Prepare segment (sync — playlists + keys pre-fetched).
+            let prepared = match state.loader.prepare_media_sync(variant, seg_idx) {
+                Ok(p) => p,
+                Err(e) => {
+                    sched.publish_download_error("prepare_media_sync", &e);
+                    sched.advance_current_segment_index(seg_idx + 1);
+                    continue;
+                }
+            };
+
+            // Cached hit — commit directly.
+            if let Some(cached_len) = prepared.cached_len {
+                let init_meta = if plan_need_init {
+                    state.loader.get_init_segment_cached(variant)
+                } else {
+                    None
+                };
+                let init_len = init_meta.as_ref().map_or(0, |m| m.len);
+                let init_url = init_meta.map(|m| m.url);
+
+                let meta = match state.loader.complete_media(&prepared, cached_len) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        sched.publish_download_error("complete_media cached", &e);
+                        sched.advance_current_segment_index(seg_idx + 1);
+                        continue;
+                    }
+                };
+
+                let cursor_before = sched.current_segment_index();
+                sched.commit_fetch_inline(
+                    variant,
+                    seg_idx,
+                    seek_epoch,
+                    meta,
+                    init_len,
+                    init_url,
+                    std::time::Duration::ZERO,
+                );
+                // Ensure cursor advances even if commit_fetch_inline
+                // dropped the commit (stale epoch, cross-codec, etc.).
+                sched.advance_current_segment_index(seg_idx + 1);
+                debug!(
+                    variant,
+                    seg_idx,
+                    batch_i,
+                    cached_len,
+                    cursor_before,
+                    cursor_after = sched.current_segment_index(),
+                    "poll_next: cached commit"
+                );
+                continue;
+            }
+
+            // Build self-contained FetchCmd for network download.
+            let resource = prepared
+                .resource
+                .clone()
+                .expect("non-cached PreparedMedia must have resource");
+
+            let init_meta = if plan_need_init {
+                state.loader.get_init_segment_cached(variant)
+            } else {
+                None
+            };
+            let init_len = init_meta.as_ref().map_or(0, |m| m.len);
+            let init_url = init_meta.map(|m| m.url);
+            let url = prepared.url.clone();
+
+            // Writer closure: captures resource + offset.
+            let offset = Arc::new(AtomicU64::new(0));
+            let res_w = resource.clone();
+            let off_w = Arc::clone(&offset);
+            let writer: WriterFn = Box::new(move |data: &[u8]| {
+                let pos = off_w.fetch_add(data.len() as u64, Ordering::Relaxed);
+                res_w.write_at(pos, data).map_err(io::Error::other)
+            });
+
+            // on_complete closure: captures Arc<Mutex<HlsState>> + segment metadata.
+            let state_arc = Arc::clone(&self.state);
+            let start = Instant::now();
+            let on_complete: OnCompleteFn = Box::new(
+                move |bytes_written: u64, error: Option<&NetError>| {
+                    if let Some(e) = error {
+                        // "cannot write to committed resource" means another
+                        // on_complete already committed this segment (race
+                        // between parallel fetches after rewind). Not a real
+                        // error — the segment is ready.
+                        let is_already_committed =
+                            e.to_string().contains("cannot write to committed resource");
+                        let mut guard = state_arc.lock_sync();
+                        let Some(ref mut st) = *guard else {
+                            return;
+                        };
+                        if !is_already_committed {
+                            debug!(variant, seg_idx, error = %e, "segment fetch failed, rewinding cursor");
+                            st.scheduler.rewind_current_segment_index(seg_idx);
+                        }
+                        if let Some(waker) = st.waker.as_ref() {
+                            waker.wake_by_ref();
+                        }
+                        return;
+                    }
+                    // Complete media OUTSIDE HlsState lock so DRM
+                    // processing + invalidation callback don't race with
+                    // commit_fetch_inline for the segments lock.
+                    let loader = {
+                        let guard = state_arc.lock_sync();
+                        let Some(ref st) = *guard else {
+                            return;
+                        };
+                        Arc::clone(&st.loader)
+                    };
+                    let meta = loader.complete_media(&prepared, bytes_written);
+                    let mut guard = state_arc.lock_sync();
+                    let Some(ref mut st) = *guard else {
+                        return;
+                    };
+                    if let Ok(meta) = meta {
+                        st.scheduler.commit_fetch_inline(
+                            variant,
+                            seg_idx,
+                            seek_epoch,
+                            meta,
+                            init_len,
+                            init_url.clone(),
+                            start.elapsed(),
+                        );
+                    }
+                    if let Some(waker) = st.waker.as_ref() {
+                        waker.wake_by_ref();
+                    }
+                },
+            );
+
+            cmds.push(
+                FetchCmd::get(url)
+                    .cancel(Some(state.epoch_cancel.clone()))
+                    .writer(writer)
+                    .on_complete(on_complete),
+            );
+
+            sched.advance_current_segment_index(seg_idx + 1);
+
+            // Stop the batch after the demanded segment so that
+            // subsequent prefetch downloads don't evict it from an
+            // ephemeral LRU cache before the reader can consume it.
+            if is_demanded {
+                break;
+            }
+        }
+
+        if cmds.is_empty() {
+            if sched.current_segment_index() >= num_segments {
+                // Delegate to handle_tail_state which handles EOF,
+                // missing-segment rewind, layout gap-fill, and
+                // demand-driven wake. Peer stays alive for re-fetch
+                // after seek or LRU eviction (lifetime = cancel token).
+                if !sched.handle_tail_state(variant, num_segments) {
+                    // Cursor was rewound (gap-fill or ABR reset) —
+                    // wake immediately to build FetchCmds.
+                    cx.waker().wake_by_ref();
+                }
+                return Poll::Pending;
+            }
+            // Cached segments committed, wake to re-poll.
+            debug!(
+                variant,
+                cursor = sched.current_segment_index(),
+                num_segments,
+                "poll_next: all cached, re-polling"
+            );
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+
+        debug!(
+            variant,
+            count = cmds.len(),
+            cursor = sched.current_segment_index(),
+            "poll_next: returning {} FetchCmds",
+            cmds.len()
+        );
+        Poll::Ready(Some(cmds))
+    }
+}
 
 use crate::{
     HlsStreamContext,
@@ -27,7 +570,6 @@ use crate::{
     loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
     playlist::{PlaylistState, VariantSizeMap},
-    scheduler::worker::spawn_hls_worker,
     source::{HlsSource, build_pair},
     stream_index::StreamIndex,
 };
@@ -35,7 +577,7 @@ use crate::{
 /// Marker type for HLS streaming.
 pub struct Hls;
 
-type InvalidationTarget = (Arc<kithara_platform::Mutex<StreamIndex>>, Arc<HlsCoord>);
+type InvalidationTarget = (Arc<Mutex<StreamIndex>>, Arc<HlsCoord>);
 
 fn make_invalidation_callback(
     target: Arc<StdMutex<Option<InvalidationTarget>>>,
@@ -123,11 +665,9 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
-        // Per-peer handle for the SRP-decomposed HLS sub-systems below.
-        // HLS registers as a Peer so the downloader can query active
-        // state for priority. Every fetch is dispatched via
-        // `peer_handle.execute()` — no Stream<Item=FetchCmd> needed.
-        let peer_handle = downloader.register(Arc::new(HlsPeer));
+        // Register HlsPeer — inactive until activate().
+        let hls_peer = Arc::new(HlsPeer::new());
+        let peer_handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn Peer>);
 
         // Build the small SRP-decomposed HLS sub-systems directly. No
         // FetchManager façade.
@@ -152,7 +692,7 @@ impl StreamType for Hls {
             config.headers.clone(),
             playlist_cache.clone(),
         );
-        loader.set_key_manager(key_manager);
+        loader.set_key_manager(Arc::clone(&key_manager));
         let loader = Arc::new(loader);
 
         // Load master playlist via PlaylistCache.
@@ -193,6 +733,10 @@ impl StreamType for Hls {
         )
         .await;
 
+        // Pre-fetch init segments + DRM keys so poll_next can resolve
+        // everything synchronously.
+        prefetch_init_and_keys(&loader, &key_manager, &media_playlists).await;
+
         // Emit VariantsDiscovered event
         let variant_info = variant_info_from_master(&master);
         bus.publish(HlsEvent::VariantsDiscovered {
@@ -214,16 +758,9 @@ impl StreamType for Hls {
             .expect("HLS invalidation target lock poisoned") =
             Some((Arc::clone(&source.segments), Arc::clone(&source.coord)));
 
-        // Spawn the download worker (async task or dedicated thread).
-        // The WorkerGuard is stored in HlsSource — dropping the source
-        // cancels the worker via its child cancel token.
-        let guard = spawn_hls_worker(
-            hls_downloader,
-            Arc::clone(&loader),
-            &cancel,
-            config.runtime.clone(),
-        );
-        source.set_worker(guard);
+        // Activate the peer — Downloader starts driving poll_next.
+        hls_peer.activate(hls_downloader, Arc::clone(&loader));
+        source.set_peer_handle(peer_handle);
 
         Ok(source)
     }
@@ -246,7 +783,7 @@ async fn prefetch_metadata(
     playlist_state: &PlaylistState,
     headers: Option<&kithara_net::Headers>,
 ) {
-    use kithara_stream::dl::{FetchCmd, FetchMethod};
+    use kithara_stream::dl::FetchCmd;
 
     use crate::playlist::PlaylistAccess;
 
@@ -269,7 +806,6 @@ async fn prefetch_metadata(
     let mut cmds: Vec<FetchCmd> = Vec::new();
     let mut metas: Vec<VariantMeta> = Vec::new();
 
-    // Phase 1: one loop — collect HEAD probes + init GETs.
     for variant in 0..num_variants {
         let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
         let init_url = playlist_state.init_url(variant);
@@ -280,22 +816,12 @@ async fn prefetch_metadata(
 
         if needs_size_map {
             if let Some(ref url) = init_url {
-                cmds.push(FetchCmd {
-                    method: FetchMethod::Head,
-                    url: url.clone(),
-                    range: None,
-                    headers: headers.cloned(),
-                });
+                cmds.push(FetchCmd::head(url.clone()).headers(headers.cloned()));
                 probe_has_init = true;
             }
             for i in 0..num_segments {
                 if let Some(url) = playlist_state.segment_url(variant, i) {
-                    cmds.push(FetchCmd {
-                        method: FetchMethod::Head,
-                        url,
-                        range: None,
-                        headers: headers.cloned(),
-                    });
+                    cmds.push(FetchCmd::head(url).headers(headers.cloned()));
                 }
             }
         }
@@ -312,10 +838,8 @@ async fn prefetch_metadata(
         return;
     }
 
-    // Phase 2: single batch — all HEAD probes in parallel.
     let results = peer_handle.batch(cmds).await;
 
-    // Phase 3: distribute results → size maps.
     for meta in &metas {
         if meta.probe_num_segments > 0 {
             let mut idx = meta.probe_start;
@@ -358,6 +882,78 @@ async fn prefetch_metadata(
                     total: cumulative,
                 },
             );
+        }
+    }
+}
+
+/// Pre-fetch init segments and DRM keys into [`AssetStore`] so that
+/// the playback-phase state machine can resolve everything
+/// synchronously (no `execute()` from `poll_next`).
+async fn prefetch_init_and_keys(
+    loader: &Arc<SegmentLoader>,
+    key_manager: &Arc<KeyManager>,
+    media_playlists: &[(url::Url, crate::parsing::MediaPlaylist)],
+) {
+    use std::collections::HashSet;
+
+    use crate::parsing::EncryptionMethod;
+
+    let num_variants = media_playlists.len();
+
+    // Init segments — one per variant that has an init segment.
+    let init_futs: Vec<_> = (0..num_variants)
+        .filter(|&v| {
+            media_playlists
+                .get(v)
+                .and_then(|(_, pl)| pl.init_segment.as_ref())
+                .is_some()
+        })
+        .map(|variant| {
+            let loader = Arc::clone(loader);
+            async move { (variant, loader.load_init_segment(variant).await) }
+        })
+        .collect();
+
+    // DRM keys — collect unique key URLs across all variants.
+    let mut key_urls: HashSet<url::Url> = HashSet::new();
+    for (media_url, playlist) in media_playlists {
+        for segment in &playlist.segments {
+            if let Some(ref seg_key) = segment.key
+                && matches!(seg_key.method, EncryptionMethod::Aes128)
+                && let Some(ref key_info) = seg_key.key_info
+            {
+                if let Ok(seg_url) = media_url.join(&segment.uri)
+                    && let Ok(key_url) = KeyManager::resolve_key_url(key_info, &seg_url)
+                {
+                    key_urls.insert(key_url);
+                }
+            }
+        }
+    }
+
+    let key_futs: Vec<_> = key_urls
+        .into_iter()
+        .map(|url| {
+            let km = Arc::clone(key_manager);
+            async move { (url.clone(), km.get_raw_key(&url, None).await) }
+        })
+        .collect();
+
+    // Execute init + key fetches concurrently.
+    let (init_results, key_results) = futures::future::join(
+        futures::future::join_all(init_futs),
+        futures::future::join_all(key_futs),
+    )
+    .await;
+
+    for (variant, result) in init_results {
+        if let Err(e) = result {
+            tracing::warn!(variant, error = %e, "failed to pre-fetch init segment");
+        }
+    }
+    for (url, result) in key_results {
+        if let Err(e) = result {
+            tracing::warn!(url = %url, error = %e, "failed to pre-fetch DRM key");
         }
     }
 }

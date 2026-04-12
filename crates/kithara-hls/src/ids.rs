@@ -16,13 +16,3 @@ pub(crate) enum SegmentId {
     /// Media segment at the given index.
     Media(SegmentIndex),
 }
-
-impl SegmentId {
-    /// Extract the media segment index, or `None` for init segments.
-    pub(crate) fn media_index(self) -> Option<SegmentIndex> {
-        match self {
-            Self::Media(i) => Some(i),
-            Self::Init => None,
-        }
-    }
-}

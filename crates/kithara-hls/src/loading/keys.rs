@@ -13,6 +13,7 @@ use bytes::Bytes;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
+use kithara_storage::ResourceExt;
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 
@@ -110,6 +111,37 @@ impl KeyManager {
         .await?;
 
         self.process_key(raw_key, fetch_url, iv)
+    }
+
+    /// Synchronous cache-only key lookup.
+    ///
+    /// Reads the raw key bytes from [`AssetStore`] without network I/O.
+    /// Returns an error if the key is not in the cache (pre-fetch missed
+    /// or evicted).
+    pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
+        let mut fetch_url = url.clone();
+        if let Some(ref params) = self.key_query_params {
+            let mut pairs = fetch_url.query_pairs_mut();
+            for (key, value) in params {
+                pairs.append_pair(key, value);
+            }
+        }
+
+        let key = kithara_assets::ResourceKey::from_url(&fetch_url);
+        let res = self
+            .backend
+            .open_resource(&key)
+            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {fetch_url} — {e}")))?;
+        let mut buf = kithara_bufpool::byte_pool().get();
+        let n = res.read_into(&mut buf).map_err(|e| {
+            HlsError::KeyProcessing(format!("failed to read cached key: {fetch_url} — {e}"))
+        })?;
+        if n == 0 {
+            return Err(HlsError::KeyProcessing(format!(
+                "cached key is empty: {fetch_url}",
+            )));
+        }
+        Ok(Bytes::copy_from_slice(&buf[..n]))
     }
 
     /// Merge key-specific request headers on top of the base headers.

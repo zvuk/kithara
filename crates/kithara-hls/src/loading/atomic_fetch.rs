@@ -13,7 +13,7 @@ use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{FetchCmd, FetchMethod, PeerHandle};
+use kithara_stream::dl::{FetchCmd, PeerHandle};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -43,13 +43,14 @@ pub(crate) async fn fetch_atomic_body(
         let mut buf = byte_pool().get();
         let n = res.read_into(&mut buf)?;
         if n > 0 {
+            let _pinned = res.retain();
             debug!(
                 url = %url,
                 asset_root = %backend.asset_root(),
                 rel_path = %rel_path,
                 bytes = n,
                 resource_kind,
-                "kithara-hls: cache hit"
+                "kithara-hls: cache hit (pinned)"
             );
             return Ok(Bytes::copy_from_slice(&buf));
         }
@@ -63,7 +64,7 @@ pub(crate) async fn fetch_atomic_body(
         "kithara-hls: cache miss -> fetching from network"
     );
 
-    let res = backend.acquire_resource(&key)?;
+    let res = backend.acquire_resource(&key)?.retain();
     let bytes = download_atomic_bytes(downloader, url.clone(), headers).await?;
 
     // Best-effort cache write. Concurrent callers may race: all miss
@@ -97,12 +98,7 @@ async fn download_atomic_bytes(
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
-    let cmd = FetchCmd {
-        method: FetchMethod::default(),
-        url,
-        range: None,
-        headers,
-    };
+    let cmd = FetchCmd::get(url).headers(headers);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
 }

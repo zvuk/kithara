@@ -346,6 +346,7 @@ pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
 }
 
 #[cfg(test)]
+#[allow(dead_code, unused_imports)]
 mod tests {
     use kithara_test_utils::kithara;
 

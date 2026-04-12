@@ -15,7 +15,7 @@ use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::tokio::sync::OnceCell;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::dl::{FetchCmd, FetchMethod, PeerHandle};
+use kithara_stream::dl::{FetchCmd, PeerHandle};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -38,16 +38,6 @@ pub struct SegmentMeta {
     pub len: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SegmentFetchKey {
-    decrypt_ctx: Option<DecryptContext>,
-    key: ResourceKey,
-}
-
-/// Cached result of an in-flight or completed media segment fetch:
-/// `(was_cached, meta)`.
-type SegmentLoad = (bool, SegmentMeta);
-
 // SegmentLoader
 
 /// HLS segment loader.
@@ -66,8 +56,6 @@ pub struct SegmentLoader {
     // on OnceCell. `DashMap` provides fine-grained locking so parallel
     // variants do not serialize on a single `RwLock`.
     init_segments: Arc<DashMap<usize, Arc<OnceCell<SegmentMeta>>>>,
-    // Media segment deduplication for active network fetches only.
-    media_segments: Arc<DashMap<SegmentFetchKey, Arc<OnceCell<SegmentLoad>>>>,
 }
 
 impl SegmentLoader {
@@ -85,16 +73,11 @@ impl SegmentLoader {
             cache,
             key_manager: None,
             init_segments: Arc::new(DashMap::new()),
-            media_segments: Arc::new(DashMap::new()),
         }
     }
 
     pub fn set_key_manager(&mut self, km: Arc<KeyManager>) {
         self.key_manager = Some(km);
-    }
-
-    pub fn set_headers(&mut self, headers: Option<Headers>) {
-        self.headers = headers;
     }
 
     /// Start fetching a segment via the unified [`PeerHandle`].
@@ -143,12 +126,7 @@ impl SegmentLoader {
         url: &Url,
         res: &AssetResource<DecryptContext>,
     ) -> HlsResult<u64> {
-        let cmd = FetchCmd {
-            method: FetchMethod::default(),
-            url: url.clone(),
-            range: None,
-            headers: self.headers.clone(),
-        };
+        let cmd = FetchCmd::get(url.clone()).headers(self.headers.clone());
         let resp = self.downloader.execute(cmd).await.map_err(|e| {
             res.fail(format!("fetch failed: {e}"));
             HlsError::from(e)
@@ -177,18 +155,6 @@ impl SegmentLoader {
         }
         res.commit(Some(total)).map_err(HlsError::from)?;
         Ok(res.len().unwrap_or(total))
-    }
-
-    fn media_segment_cell(&self, key: SegmentFetchKey) -> Arc<OnceCell<SegmentLoad>> {
-        self.media_segments
-            .entry(key)
-            .or_insert_with(|| Arc::new(OnceCell::new()))
-            .clone()
-    }
-
-    fn clear_media_segment_cell(&self, key: &SegmentFetchKey, cell: &Arc<OnceCell<SegmentLoad>>) {
-        self.media_segments
-            .remove_if(key, |_, current| Arc::ptr_eq(current, cell));
     }
 
     /// Resolve decryption context for a segment.
@@ -263,6 +229,12 @@ impl SegmentLoader {
 
         let (init_len, _was_cached) = self.start_fetch(&init_url, decrypt_ctx).await?;
 
+        // Pin init segment so the ephemeral LRU never evicts it.
+        let init_key = ResourceKey::from_url(&init_url);
+        if let Ok(res) = self.backend.open_resource(&init_key) {
+            let _pinned = res.retain();
+        }
+
         Ok(SegmentMeta {
             url: init_url,
             duration: None,
@@ -302,92 +274,60 @@ impl SegmentLoader {
         Ok(meta.clone())
     }
 
-    /// Load a media segment for the supplied seek epoch.
+    /// Synchronous DRM context resolution using pre-fetched keys.
     ///
-    /// # Errors
-    /// Returns an error when playlist resolution, DRM context, or
-    /// the segment download fails.
-    pub async fn load_media_segment_with_source_for_epoch(
+    /// Reads key bytes from [`AssetStore`] (disk cache). Returns `None`
+    /// for unencrypted segments.
+    fn resolve_decrypt_context_sync(
         &self,
-        variant: usize,
-        segment_index: usize,
-        _seek_epoch: u64,
-    ) -> HlsResult<(SegmentMeta, bool)> {
-        let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
-
-        let segment = playlist.segments.get(segment_index).ok_or_else(|| {
-            HlsError::SegmentNotFound(format!(
-                "segment {segment_index} not found in variant {variant} playlist",
-            ))
-        })?;
-
-        let segment_url = media_url
-            .join(&segment.uri)
-            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
-
-        // Resolve DRM context for encrypted segments
-        let decrypt_ctx = self
-            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
-            .await?;
-        let fetch_key = SegmentFetchKey {
-            decrypt_ctx: decrypt_ctx.clone(),
-            key: ResourceKey::from_url(&segment_url),
+        key: Option<&SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<Option<DecryptContext>> {
+        let Some(seg_key) = key else {
+            return Ok(None);
         };
-        let cell = self.media_segment_cell(fetch_key.clone());
+        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+            return Ok(None);
+        }
+        let Some(ref key_info) = seg_key.key_info else {
+            return Ok(None);
+        };
+        let Some(ref km) = self.key_manager else {
+            return Err(HlsError::KeyProcessing(
+                "encrypted segment but no KeyManager configured".to_string(),
+            ));
+        };
 
-        let load = cell
-            .get_or_try_init(|| async {
-                let (segment_len, cached) = self.start_fetch(&segment_url, decrypt_ctx).await?;
+        let iv = KeyManager::derive_iv(key_info, sequence);
+        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
+        let raw_key = km.get_cached_key(&key_url)?;
 
-                Ok::<_, HlsError>((
-                    cached,
-                    SegmentMeta {
-                        url: segment_url.clone(),
-                        duration: Some(segment.duration),
-                        len: segment_len,
-                    },
-                ))
-            })
-            .await;
-        self.clear_media_segment_cell(&fetch_key, &cell);
+        if raw_key.len() != AES_KEY_LEN {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                raw_key.len()
+            )));
+        }
 
-        let (cached, meta) = load?;
-        Ok((meta.clone(), *cached))
+        let mut key_bytes = [0u8; AES_KEY_LEN];
+        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
+        Ok(Some(DecryptContext::new(key_bytes, iv)))
     }
 
-    /// Convenience wrapper for `load_media_segment_with_source_for_epoch`
-    /// with epoch 0.
+    /// Synchronous media segment preparation using pre-fetched data.
     ///
-    /// # Errors
-    /// Returns an error when the underlying load fails.
-    pub async fn load_media_segment_with_source(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> HlsResult<(SegmentMeta, bool)> {
-        self.load_media_segment_with_source_for_epoch(variant, segment_index, 0)
-            .await
-    }
-
-    /// Prepare a media segment for download via `poll_next`.
-    ///
-    /// Resolves the URL, checks the disk cache, acquires the
-    /// `AssetResource` (with DRM context if needed), and builds the
-    /// `FetchCmd`. All lookups hit pre-populated caches (playlists,
-    /// keys, size maps) so no network I/O occurs.
-    ///
-    /// Returns `None` if the segment is already cached (no fetch
-    /// needed).
-    ///
-    /// # Errors
-    /// Returns an error when playlist lookup, URL resolution, or DRM
-    /// context resolution fails.
-    pub async fn prepare_media(
+    /// All lookups (playlist, DRM keys) hit pre-populated caches.
+    /// Called from `poll_next` — must not perform any async I/O.
+    pub fn prepare_media_sync(
         &self,
         variant: usize,
         segment_index: usize,
     ) -> HlsResult<PreparedMedia> {
-        let (media_url, playlist) = self.cache.load_media_playlist(variant).await?;
+        let (media_url, playlist) =
+            self.cache.get_media_playlist_sync(variant).ok_or_else(|| {
+                HlsError::VariantNotFound(format!("variant {variant} playlist not pre-loaded",))
+            })?;
 
         let segment = playlist.segments.get(segment_index).ok_or_else(|| {
             HlsError::SegmentNotFound(format!(
@@ -399,7 +339,6 @@ impl SegmentLoader {
             .join(&segment.uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
 
-        // Check availability index first (fast path).
         let key = ResourceKey::from_url(&segment_url);
         if let Some(len) = self.backend.final_len(&key) {
             return Ok(PreparedMedia {
@@ -410,15 +349,16 @@ impl SegmentLoader {
             });
         }
 
-        // Resolve DRM context for encrypted segments.
-        let decrypt_ctx = self
-            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
-            .await?;
+        let decrypt_ctx = self.resolve_decrypt_context_sync(
+            segment.key.as_ref(),
+            &segment_url,
+            segment.sequence,
+        )?;
 
         let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
 
-        // Check if committed after acquire.
-        if let ResourceStatus::Committed { final_len } = res.status() {
+        let status = res.status();
+        if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             return Ok(PreparedMedia {
                 url: segment_url,
@@ -428,12 +368,33 @@ impl SegmentLoader {
             });
         }
 
+        tracing::trace!(
+            url = %segment_url,
+            ?status,
+            "prepare_media_sync: resource not cached, will download"
+        );
+
         Ok(PreparedMedia {
             url: segment_url,
             duration: Some(segment.duration),
             cached_len: None,
             resource: Some(res),
         })
+    }
+
+    /// Read init segment metadata from cache (no network I/O).
+    ///
+    /// Returns `None` if the init segment hasn't been pre-fetched yet
+    /// or if the resource was evicted from the ephemeral LRU.
+    #[must_use]
+    pub fn get_init_segment_cached(&self, variant: usize) -> Option<SegmentMeta> {
+        let meta = self.init_segments.get(&variant)?.get()?.clone();
+        if self.backend.is_ephemeral()
+            && !self.backend.has_resource(&ResourceKey::from_url(&meta.url))
+        {
+            return None;
+        }
+        Some(meta)
     }
 
     /// Complete a media segment after body has been written by the
@@ -443,6 +404,7 @@ impl SegmentLoader {
     ///
     /// # Errors
     /// Returns an error when commit fails or zero bytes were written.
+    #[expect(clippy::unused_self, reason = "called via loader instance in inner.rs")]
     pub fn complete_media(
         &self,
         prepared: &PreparedMedia,
