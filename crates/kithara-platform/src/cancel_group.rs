@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::BitOr, sync::Arc};
 
 use futures::future::select_all;
 use tokio_util::sync::CancellationToken;
@@ -8,6 +8,13 @@ use tokio_util::sync::CancellationToken;
 /// Fires when **any** source token is cancelled. No spawn — uses
 /// sync polling for `is_cancelled()` and `select_all` for the
 /// async `cancelled()` future.
+///
+/// Supports composition via `|`:
+/// ```ignore
+/// let cancel = token_a | token_b;
+/// let cancel = group | extra_token;
+/// let cancel = group1 | group2;
+/// ```
 #[derive(Clone)]
 pub struct CancelGroup {
     sources: Arc<[CancellationToken]>,
@@ -41,6 +48,60 @@ impl CancelGroup {
         }
         select_all(futs).await;
     }
+
+    fn tokens(&self) -> &[CancellationToken] {
+        &self.sources
+    }
+}
+
+// ── From ────────────────────────────────────────────────────────
+
+impl From<CancellationToken> for CancelGroup {
+    fn from(token: CancellationToken) -> Self {
+        Self::new(vec![token])
+    }
+}
+
+impl From<Vec<CancellationToken>> for CancelGroup {
+    fn from(tokens: Vec<CancellationToken>) -> Self {
+        Self::new(tokens)
+    }
+}
+
+// ── BitOr: group | group ───────────────────────────────────────
+
+impl BitOr for CancelGroup {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        let mut tokens = self.tokens().to_vec();
+        tokens.extend_from_slice(rhs.tokens());
+        Self::new(tokens)
+    }
+}
+
+// ── BitOr: group | token ───────────────────────────────────────
+
+impl BitOr<CancellationToken> for CancelGroup {
+    type Output = Self;
+
+    fn bitor(self, rhs: CancellationToken) -> Self {
+        let mut tokens = self.tokens().to_vec();
+        tokens.push(rhs);
+        Self::new(tokens)
+    }
+}
+
+// ── BitOr: token | group ───────────────────────────────────────
+
+impl BitOr<CancelGroup> for CancellationToken {
+    type Output = CancelGroup;
+
+    fn bitor(self, rhs: CancelGroup) -> CancelGroup {
+        let mut tokens = vec![self];
+        tokens.extend_from_slice(rhs.tokens());
+        CancelGroup::new(tokens)
+    }
 }
 
 #[cfg(test)]
@@ -54,7 +115,6 @@ mod tests {
 
     // ── Helpers ──────────────────────────────────────────────────
 
-    /// Token descriptor for test parametrization.
     #[derive(Clone, Debug)]
     enum Src {
         Fresh,
@@ -62,7 +122,6 @@ mod tests {
         PreCancelled,
     }
 
-    /// What to cancel to trigger the group.
     #[derive(Clone, Debug)]
     enum Act {
         Source(usize),
@@ -235,5 +294,84 @@ mod tests {
         tok.cancel();
         assert!(group.is_cancelled());
         assert!(cloned.is_cancelled());
+    }
+
+    // ── BitOr composition tests ─────────────────────────────────
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn token_bitor_token() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let group = CancelGroup::from(a.clone()) | b.clone();
+
+        assert!(!group.is_cancelled());
+        a.cancel();
+        assert!(group.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_bitor_token() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let group = CancelGroup::from(a.clone()) | b.clone();
+
+        assert!(!group.is_cancelled());
+        b.cancel();
+        assert!(group.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn token_bitor_group() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let group = a.clone() | CancelGroup::from(b.clone());
+
+        assert!(!group.is_cancelled());
+        a.cancel();
+        assert!(group.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_bitor_group() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let g1 = CancelGroup::from(a.clone());
+        let g2 = CancelGroup::from(b.clone());
+        let merged = g1 | g2;
+
+        assert!(!merged.is_cancelled());
+        b.cancel();
+        assert!(merged.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn chained_bitor() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let c = CancellationToken::new();
+        let group = CancelGroup::from(a.clone()) | b.clone() | c.clone();
+
+        assert!(!group.is_cancelled());
+        c.cancel();
+        assert!(group.is_cancelled());
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn bitor_async_cancelled() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let group = CancelGroup::from(a.clone()) | b.clone();
+
+        let g2 = group.clone();
+        let handle = tokio::spawn(async move { g2.cancelled().await });
+        tokio::task::yield_now().await;
+
+        assert!(!group.is_cancelled());
+        b.cancel();
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("cancelled() must resolve")
+            .expect("task must not panic");
     }
 }
