@@ -33,12 +33,13 @@ pub mod internal;
 mod context;
 mod coord;
 mod ids;
-mod inner;
 pub(crate) mod loading;
 mod parsing;
+mod peer;
 pub(crate) mod playlist;
 pub(crate) mod scheduler;
 mod source;
+mod stream;
 pub(crate) mod stream_index;
 
 // Public API re-exports
@@ -46,5 +47,5 @@ pub(crate) mod stream_index;
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
-pub use inner::Hls;
 pub use kithara_abr::{AbrMode, AbrOptions};
+pub use stream::Hls;

@@ -37,7 +37,7 @@ fn test_peer_handle(cancel: &CancellationToken) -> kithara_stream::dl::PeerHandl
     let dl = kithara_stream::dl::Downloader::new(
         kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
     );
-    dl.register(Arc::new(crate::inner::HlsPeer::new()))
+    dl.register(Arc::new(crate::peer::HlsPeer::new()))
 }
 
 type LoaderPair = (
