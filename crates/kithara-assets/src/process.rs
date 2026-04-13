@@ -484,4 +484,68 @@ mod tests {
         assert_eq!(buf, already_processed);
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
+
+    /// Cache fall-through: `open_resource(key)` (ctx=None) must not return
+    /// an uncommitted DRM-style entry that a concurrent
+    /// `acquire_resource_with_ctx(key, Some(ctx))` parked in the cache.
+    ///
+    /// Reading such an entry trips the guard
+    /// `"processed resource is not readable before commit"` (see
+    /// [`ProcessedResource::read_at`]).
+    #[kithara::test]
+    fn red_test_fixed_seek_window_open_resource_returns_uncommitted_processed_entry() {
+        use crate::{AssetStoreBuilder, ResourceKey};
+
+        #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
+        struct DrmCtx {
+            xor_key: u8,
+        }
+
+        let process_fn: ProcessChunkFn<DrmCtx> = Arc::new(
+            |input: &[u8], output: &mut [u8], ctx: &mut DrmCtx, _is_last: bool| {
+                for (i, &b) in input.iter().enumerate() {
+                    output[i] = b ^ ctx.xor_key;
+                }
+                Ok(input.len())
+            },
+        );
+
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("drm-fallthrough"))
+            .process_fn(process_fn)
+            .ephemeral(true)
+            .build();
+
+        let key = ResourceKey::new("segment.m4s");
+        let ctx = DrmCtx { xor_key: 0x42 };
+
+        // Writer acquires with ctx and streams some bytes but does NOT commit.
+        // This parks a ProcessedResource with ctx=Some, processed=false in the cache.
+        let writer = store
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+            .expect("acquire with ctx must succeed");
+        let payload = b"uncommitted encrypted bytes";
+        writer
+            .write_at(0, payload)
+            .expect("writer must be able to stream bytes before commit");
+
+        // Reader asks for the same key without ctx. Cache fall-through at
+        // cache.rs:351-382 returns the same uncommitted ctx-bearing entry.
+        let reader = store
+            .open_resource(&key)
+            .expect("open_resource (ctx=None) must succeed");
+
+        let mut buf = vec![0u8; payload.len()];
+        let outcome = reader.read_at(0, &mut buf);
+
+        if let Err(err) = &outcome {
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("processed resource is not readable before commit"),
+                "RED: open_resource(ctx=None) fell through to an uncommitted \
+                 ProcessedResource<ctx=Some> entry; reads must not hit the \
+                 pre-commit guard: {msg}"
+            );
+        }
+    }
 }

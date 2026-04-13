@@ -472,12 +472,32 @@ impl Source for HlsSource {
         // `apply_seek_plan(...)` already established the authoritative layout
         // for this seek. Rewriting `variant_map` again at the landed offset
         // collapses mixed auto-switch layouts during replay from the prefix.
+        //
+        // When `landed_segment` is None the landed byte position couldn't be
+        // mapped to any known segment — this happens after DRM padding
+        // removal shrinks the size map below the decoder's byte position.
+        // Without recovery the reader has no segment to demand and stalls
+        // until timeout. Fall back to the anchor's authoritative
+        // (variant, segment_index) so the reader can resume.
+        let landed_segment = landed_segment.or_else(|| {
+            let anchor = anchor?;
+            let variant = anchor.variant_index?;
+            let segment_index = anchor.segment_index? as usize;
+            debug!(
+                seek_epoch,
+                variant,
+                segment_index,
+                landed_offset,
+                "commit_seek_landing: landed offset unresolvable, falling back to anchor"
+            );
+            Some((variant, segment_index))
+        });
         let Some((variant, segment_index)) = landed_segment else {
             debug!(
                 seek_epoch,
                 variant = fallback_variant,
                 landed_offset,
-                "commit_seek_landing: could not resolve landed segment"
+                "commit_seek_landing: could not resolve landed segment and no anchor fallback"
             );
             self.coord.condvar.notify_all();
             self.coord.reader_advanced.notify_one();

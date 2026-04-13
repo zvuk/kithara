@@ -1133,3 +1133,115 @@ fn queue_segment_request_resolves_offset_to_segment() {
     assert_eq!(req.variant, 0);
     assert_eq!(req.segment_index, 0);
 }
+
+/// RED test #2 (integration: live_ephemeral_revisit_sequence_regression_drm_sw)
+///
+/// After DRM padding removal shrinks a variant's `size_map.total`, the
+/// decoder can land at a `byte_position` that is >= the new total. Both
+/// `layout_segment_for_offset` and `resolve_segment_for_offset` then
+/// return `None`, and the current `commit_seek_landing` silently bails:
+/// no `SegmentRequest` is enqueued, no `variant_fence` is set. The reader
+/// then has no recovery path and `wait_range` loops until timeout.
+#[kithara::test]
+fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total() {
+    let mut source = build_test_source_with_segments(1, 4);
+
+    // DRM padding shrinks each segment: size_map totals 396 bytes.
+    set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100, 99, 97]);
+
+    // Anchor says seek target was segment 2 at byte offset 200.
+    let anchor = make_anchor(0, 2, 200);
+    source.apply_seek_plan(&anchor, &SeekLayout::Preserve);
+
+    // Decoder lands at byte_position = 397 — past size_map.total (396).
+    // Mirrors the production log: `landed_offset=27229732` with
+    // find_segment_at_offset returning None because the FLAC size_map
+    // shrank below that offset after DRM padding removal.
+    source.coord.timeline().set_byte_position(397);
+
+    // Pre-condition: no segment requests are queued.
+    assert_eq!(source.coord.take_segment_request(), None);
+
+    source.commit_seek_landing(Some(anchor));
+
+    // Either a concrete demand or a variant fence MUST be produced so
+    // the reader has a recovery path. Today: both are empty → hang.
+    let has_request = source.coord.take_segment_request().is_some();
+    let has_fence = source.variant_fence.is_some();
+    assert!(
+        has_request || has_fence,
+        "commit_seek_landing must enqueue a recovery SegmentRequest or \
+         set variant_fence when landed_offset ({}) is past the shrunk \
+         size_map total; otherwise the reader stalls on wait_range",
+        397,
+    );
+}
+
+/// RED test #1 (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
+///
+/// When the scheduler re-acquires a DRM resource (via `acquire_resource_with_ctx`)
+/// for a previously-committed segment — e.g. after LRU eviction pressure —
+/// the fresh `ProcessedResource` starts in `processed=false` state until the
+/// new download commits. Meanwhile, the reader's `open_resource(key)` (ctx=None)
+/// can end up holding that uncommitted entry, and `read_at` propagates
+/// `StorageError::Failed("processed resource is not readable before commit")`
+/// as a hard Err, poisoning the decoder FSM (`TrackState::Failed`). The reader
+/// then sees `is_eof()==true` and the test panics with "stopped early at idx".
+#[kithara::test]
+fn red_test_drm_hw_read_at_returns_retry_when_drm_resource_reacquired_uncommitted() {
+    use kithara_stream::ReadOutcome;
+
+    let mut source = build_test_source_with_segments(1, 1);
+    let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid segment URL");
+    let media_key = ResourceKey::from_url(&media_url);
+    let payload = vec![0xABu8; 4096];
+
+    // Step 1: acquire with DRM ctx, write, COMMIT → readable committed resource.
+    {
+        let res = source
+            .backend
+            .acquire_resource_with_ctx(&media_key, Some(DecryptContext::default()))
+            .expect("acquire committed");
+        res.write_at(0, &payload).expect("write");
+        res.commit(Some(payload.len() as u64)).expect("commit");
+    }
+    source.segments.lock_sync().commit_segment(
+        0,
+        0,
+        SegmentData {
+            init_len: 0,
+            media_len: payload.len() as u64,
+            init_url: None,
+            media_url: media_url.clone(),
+        },
+    );
+
+    // Sanity: first read succeeds against the committed resource.
+    let mut buf = vec![0u8; 64];
+    let first = source.read_at(0, &mut buf).expect("first read_at");
+    assert_eq!(first, ReadOutcome::Data(64));
+
+    // Step 2: simulate scheduler-driven re-fetch — a new DRM acquire
+    // displaces the committed cached resource with a fresh uncommitted one
+    // (mirrors the cache_capacity pressure in the ephemeral DRM scenario).
+    let _fresh = source
+        .backend
+        .acquire_resource_with_ctx(&media_key, Some(DecryptContext::default()))
+        .expect("reacquire fresh uncommitted");
+
+    // Step 3: the reader's next read_at. Since the fresh ProcessedResource
+    // is uncommitted (`processed=false`), reading it returns
+    // StorageError::Failed("... not readable before commit"), which source
+    // propagates as hard Err. The expected behaviour is `ReadOutcome::Retry`.
+    let mut buf2 = vec![0u8; 64];
+    let outcome = source
+        .read_at(0, &mut buf2)
+        .expect("read_at must not return hard error for uncommitted DRM reacquire");
+    assert_eq!(
+        outcome,
+        ReadOutcome::Retry,
+        "expected Retry when the DRM resource was reacquired and not yet \
+         committed; got {outcome:?}. Current code returns Err → decoder FSM \
+         goes Failed → is_eof()==true → test sees 'stopped early'"
+    );
+}

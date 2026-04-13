@@ -216,6 +216,7 @@ impl Peer for HlsPeer {
 
 // --- poll_next helper types and functions ---
 
+#[cfg_attr(test, derive(Debug))]
 enum DemandResult {
     ResetAndPend,
     Demand {
@@ -227,6 +228,14 @@ enum DemandResult {
 
 fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     let sched = &mut state.scheduler;
+
+    // Flushing gate: don't consume demands while the timeline is flushing.
+    // `poll_next`'s downstream flushing gate would return `Poll::Pending`
+    // right after, so draining the slot here would lose the demand — the
+    // scheduler never emits a FetchCmd for it and the seek deadlocks.
+    if sched.coord.timeline().is_flushing() {
+        return DemandResult::None;
+    }
 
     let Some(req) = sched.next_valid_demand_request() else {
         return DemandResult::None;
@@ -261,13 +270,30 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     // Same-epoch demand.
     let mut variant_override = None;
     if req.segment_index < sched.current_segment_index() {
-        debug!(
-            variant = req.variant,
-            segment = req.segment_index,
-            cursor = sched.current_segment_index(),
-            "poll_next: same-epoch demand behind cursor, rewinding"
-        );
-        sched.rewind_current_segment_index(req.segment_index);
+        // Skip rewind if the demanded segment is already committed —
+        // re-fetching it creates a hot loop:  rewind → re-issue FetchCmd →
+        // commit-error ("cannot write to committed resource") → reader
+        // wakes, re-demands → rewind → …
+        let already_loaded = sched
+            .segments
+            .lock_sync()
+            .is_segment_loaded(req.variant, req.segment_index);
+        if !already_loaded {
+            debug!(
+                variant = req.variant,
+                segment = req.segment_index,
+                cursor = sched.current_segment_index(),
+                "poll_next: same-epoch demand behind cursor, rewinding"
+            );
+            sched.rewind_current_segment_index(req.segment_index);
+        } else {
+            debug!(
+                variant = req.variant,
+                segment = req.segment_index,
+                cursor = sched.current_segment_index(),
+                "poll_next: same-epoch demand already committed, skipping rewind"
+            );
+        }
     }
     if req.variant != sched.download_variant {
         variant_override = Some(req.variant);
@@ -584,4 +610,253 @@ fn build_fetch_cmd(
         .cancel(Some(state.epoch_cancel.clone()))
         .writer(writer)
         .on_complete(on_complete)
+}
+
+#[cfg(test)]
+mod tests {
+    //! RED tests confirming specific root causes of integration-test failures.
+
+    use std::{sync::Arc, task::Context, time::Duration};
+
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+    use kithara_drm::DecryptContext;
+    use kithara_events::EventBus;
+    use kithara_storage::ResourceExt;
+    use kithara_stream::{
+        TransferCoordination,
+        dl::{Downloader, DownloaderConfig},
+    };
+    use kithara_test_utils::kithara;
+    use tokio_util::sync::CancellationToken;
+    use url::Url;
+
+    use super::{HlsPeer, HlsState, process_demand};
+    use crate::{
+        config::HlsConfig,
+        coord::SegmentRequest,
+        loading::PlaylistCache,
+        parsing::{VariantId, VariantStream},
+        playlist::{PlaylistState, SegmentState, VariantState},
+        source::build_pair,
+        stream_index::SegmentData,
+    };
+
+    const NUM_VARIANTS: usize = 2;
+    const NUM_SEGMENTS: usize = 40;
+
+    fn make_variant_state(id: usize) -> VariantState {
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        VariantState {
+            id,
+            uri: base
+                .join(&format!("v{id}.m3u8"))
+                .expect("valid playlist URL"),
+            bandwidth: Some(128_000),
+            codec: None,
+            container: None,
+            init_url: None,
+            segments: (0..NUM_SEGMENTS)
+                .map(|index| SegmentState {
+                    index,
+                    url: base
+                        .join(&format!("seg-{id}-{index}.m4s"))
+                        .expect("valid segment URL"),
+                    duration: Duration::from_secs(4),
+                    key: None,
+                })
+                .collect(),
+            size_map: None,
+        }
+    }
+
+    fn make_hls_state() -> HlsState {
+        let cancel = CancellationToken::new();
+        let passthrough: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(cancel.clone())
+            .process_fn(passthrough)
+            .build();
+
+        let playlist_state = Arc::new(PlaylistState::new(
+            (0..NUM_VARIANTS).map(make_variant_state).collect(),
+        ));
+        let parsed: Vec<VariantStream> = (0..NUM_VARIANTS)
+            .map(|i| VariantStream {
+                id: VariantId(i),
+                uri: format!("v{i}.m3u8"),
+                bandwidth: Some(128_000),
+                name: None,
+                codec: None,
+            })
+            .collect();
+        let downloader =
+            Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+        let peer = Arc::new(HlsPeer::new());
+        let handle = downloader.register(peer);
+        let cache = PlaylistCache::new(backend.clone(), handle.clone());
+        let loader = Arc::new(crate::loading::SegmentLoader::new(
+            handle.clone(),
+            backend.clone(),
+            None,
+            cache,
+        ));
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let (scheduler, _source) = build_pair(
+            backend,
+            handle,
+            &parsed,
+            &config,
+            playlist_state,
+            EventBus::new(16),
+        );
+        HlsState {
+            scheduler,
+            loader,
+            waker: None,
+            epoch_cancel: CancellationToken::new(),
+        }
+    }
+
+    fn enqueue_demand(state: &HlsState, variant: usize, segment_index: usize) {
+        let seek_epoch = state.scheduler.coord.timeline().seek_epoch();
+        state
+            .scheduler
+            .coord
+            .enqueue_segment_request(SegmentRequest {
+                segment_index,
+                variant,
+                seek_epoch,
+            });
+    }
+
+    fn commit_segment_in_index(state: &HlsState, variant: usize, seg_idx: usize, media_len: u64) {
+        let url = Url::parse(&format!("https://example.com/seg-{variant}-{seg_idx}.m4s"))
+            .expect("valid url");
+        // Also write a dummy resource so `segment_resources_available` is true.
+        let key = ResourceKey::from_url(&url);
+        let res = state
+            .scheduler
+            .backend
+            .acquire_resource(&key)
+            .expect("acquire");
+        res.write_at(0, &vec![0u8; media_len as usize])
+            .expect("write");
+        res.commit(None).expect("commit");
+
+        state.scheduler.segments.lock_sync().commit_segment(
+            variant,
+            seg_idx,
+            SegmentData {
+                init_len: 0,
+                media_len,
+                init_url: None,
+                media_url: url,
+            },
+        );
+    }
+
+    /// RED test #5 (integration: live_stress_real_stream_seek_read_cache_drm_ephemeral)
+    ///
+    /// `process_demand` calls `next_valid_demand_request` (which `take()`s
+    /// the demand slot) BEFORE the flushing gate runs. If the timeline is
+    /// flushing (new seek just started), poll_next returns `Poll::Pending`
+    /// after the demand was already drained — so no `FetchCmd` is emitted
+    /// and the reader never gets data: deadlock.
+    ///
+    /// Invariant under test: a demand submitted while `is_flushing()` is
+    /// true must NOT be silently consumed by `process_demand`.
+    #[kithara::test]
+    fn red_test_seek_read_cache_demand_not_lost_under_flushing_gate() {
+        let mut state = make_hls_state();
+        // Simulate audio.seek(): bump epoch, set flushing=true.
+        let new_epoch = state
+            .scheduler
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(2));
+        assert!(
+            state.scheduler.coord.timeline().is_flushing(),
+            "precondition: flushing must be set"
+        );
+
+        // Enqueue a demand with the new epoch (post-seek).
+        state
+            .scheduler
+            .coord
+            .enqueue_segment_request(SegmentRequest {
+                segment_index: 1,
+                variant: 0,
+                seek_epoch: new_epoch,
+            });
+
+        // Call process_demand — this is what poll_next does first, BEFORE
+        // the flushing gate. Today it consumes the demand via take().
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let _ = process_demand(&mut state, &mut cx);
+
+        // The demand must NOT have been drained: poll_next's flushing gate
+        // will now return Pending without producing a FetchCmd, so the
+        // demand must survive for the next poll cycle — otherwise the
+        // reader's seek deadlocks (no one will fetch the target segment).
+        let still_pending = state.scheduler.coord.demand().peek();
+        assert!(
+            still_pending.is_some(),
+            "demand was drained while is_flushing()==true; poll_next's \
+             flushing gate will now return Pending without issuing a \
+             FetchCmd, so the fetch is never scheduled — the seek deadlocks"
+        );
+    }
+
+    /// RED test #6 (integration: stress_seek_lifecycle_with_zero_reset_mmap)
+    ///
+    /// `process_demand` unconditionally rewinds the cursor when
+    /// `req.segment_index < current_segment_index`, even if that segment
+    /// is already committed in the StreamIndex. This drives a hot loop:
+    /// demand → rewind → `build_batch` re-issues FetchCmd → commit
+    /// (on_complete wakes reader) → reader re-demands → rewind → ...
+    ///
+    /// Invariant under test: when the demand targets an already-committed
+    /// segment, the cursor must NOT regress.
+    #[kithara::test]
+    fn red_test_seek_lifecycle_mmap_no_cursor_regress_on_committed_segment() {
+        let mut state = make_hls_state();
+
+        // Commit segment 22 on variant 0 (both in StreamIndex + AssetStore).
+        commit_segment_in_index(&state, 0, 22, 100);
+
+        // Cursor is past segment 22 (downloading segment 23 next). floor=20
+        // mirrors the production log: `cursor::rewind_fill_to from=23 to=22
+        // floor=20 target=22` — seg 22 is above the floor so the unconditional
+        // rewind in process_demand actually reduces the cursor.
+        state.scheduler.cursor.reopen_fill(20, 23);
+        let cursor_before = state.scheduler.current_segment_index();
+        assert_eq!(cursor_before, 23);
+
+        // Reader enqueues a demand for segment 22 (e.g. after waking from
+        // a read barrier). Same variant as download_variant (default 0).
+        enqueue_demand(&state, 0, 22);
+
+        // Call process_demand — the buggy branch rewinds cursor 23 → 22.
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let _ = process_demand(&mut state, &mut cx);
+
+        let cursor_after = state.scheduler.current_segment_index();
+        assert_eq!(
+            cursor_after, cursor_before,
+            "cursor must not regress onto already-committed segment 22 \
+             (was {cursor_before}, now {cursor_after}); unconditional \
+             rewind creates hot loop: rewind → re-fetch → commit errors \
+             with 'cannot write to committed resource' → reader re-demands"
+        );
+    }
 }
