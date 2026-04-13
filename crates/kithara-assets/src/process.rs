@@ -529,23 +529,35 @@ mod tests {
             .write_at(0, payload)
             .expect("writer must be able to stream bytes before commit");
 
-        // Reader asks for the same key without ctx. Cache fall-through at
-        // cache.rs:351-382 returns the same uncommitted ctx-bearing entry.
-        let reader = store
-            .open_resource(&key)
-            .expect("open_resource (ctx=None) must succeed");
-
-        let mut buf = vec![0u8; payload.len()];
-        let outcome = reader.read_at(0, &mut buf);
-
-        if let Err(err) = &outcome {
-            let msg = err.to_string();
-            assert!(
-                !msg.contains("processed resource is not readable before commit"),
-                "RED: open_resource(ctx=None) fell through to an uncommitted \
-                 ProcessedResource<ctx=Some> entry; reads must not hit the \
-                 pre-commit guard: {msg}"
-            );
+        // Reader asks for the same key without ctx.  Under the old
+        // behaviour, the cache's ctx=None fall-through returned the
+        // writer's uncommitted ProcessedResource entry, so a subsequent
+        // read surfaced the "processed resource is not readable before
+        // commit" guard as a hard error. Acceptable correct behaviours:
+        //   1) `open_resource` fails cleanly (NotFound / recoverable Err),
+        //      which the reader converts to `ReadOutcome::Retry`.
+        //   2) `open_resource` succeeds and the read does NOT expose the
+        //      pre-commit guard.
+        match store.open_resource(&key) {
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    !msg.contains("processed resource is not readable before commit"),
+                    "open_resource (ctx=None) leaked the pre-commit guard: {msg}"
+                );
+                // Clean NotFound / recoverable Err is acceptable.
+            }
+            Ok(reader) => {
+                let mut buf = vec![0u8; payload.len()];
+                if let Err(err) = reader.read_at(0, &mut buf) {
+                    let msg = err.to_string();
+                    assert!(
+                        !msg.contains("processed resource is not readable before commit"),
+                        "read_at(ctx=None) leaked the pre-commit guard from a \
+                         concurrent ctx=Some writer: {msg}"
+                    );
+                }
+            }
         }
     }
 }

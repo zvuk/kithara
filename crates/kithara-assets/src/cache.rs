@@ -349,6 +349,14 @@ where
         }
 
         if ctx.is_none() {
+            // Read-path (`open_resource`) must only reuse *committed* cache
+            // entries carrying a different context (e.g. DRM writer committed
+            // the resource with `ctx=Some(..)`; reader arrives with
+            // `ctx=None`). Falling back to any entry — including an
+            // uncommitted one still being streamed by a ctx=Some writer —
+            // would surface the `ProcessedResource` pre-commit read guard
+            // ("processed resource is not readable before commit") as a hard
+            // error in the reader path, poisoning the decoder FSM.
             if let Some(res) =
                 cache
                     .iter()
@@ -356,21 +364,6 @@ where
                         (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
                             if resource_key == key
                                 && matches!(res.status(), ResourceStatus::Committed { .. }) =>
-                        {
-                            Some(res.clone())
-                        }
-                        _ => None,
-                    })
-            {
-                return Ok(self.wrap(key, res));
-            }
-
-            if let Some(res) =
-                cache
-                    .iter()
-                    .find_map(|(candidate_key, entry)| match (candidate_key, entry) {
-                        (CacheKey::Resource(resource_key, _), CacheEntry::Resource(res))
-                            if resource_key == key =>
                         {
                             Some(res.clone())
                         }
