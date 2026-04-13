@@ -191,7 +191,8 @@ hls_m3u8 = "0.5.1"
 # iterators
 fallible-iterator = "0.3"
 
-# decoding
+# decoding / mp4 parsing
+re_mp4 = "0.4.0"
 symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
