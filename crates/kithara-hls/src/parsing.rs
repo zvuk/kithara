@@ -137,6 +137,8 @@ pub struct MediaSegment {
     pub duration: Duration,
     /// Optional encryption information effective for this segment.
     pub key: Option<SegmentKey>,
+    /// Byte length from `#EXT-X-BYTERANGE` if present in the playlist.
+    pub byte_range_len: Option<u64>,
 }
 
 /// Detect container format from URI extension.
@@ -276,6 +278,7 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
                 uri: seg.uri().to_string(),
                 duration: seg.duration.duration(),
                 key: seg_key,
+                byte_range_len: seg.byte_range.as_ref().map(|br| br.len() as u64),
             }
         })
         .collect();

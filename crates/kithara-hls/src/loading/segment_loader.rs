@@ -400,6 +400,23 @@ impl SegmentLoader {
         Some(meta)
     }
 
+    /// Read init segment bytes from the asset store into `buf`.
+    ///
+    /// Returns number of bytes read, or `None` if the init segment
+    /// isn't cached or can't be read.
+    pub fn read_init_bytes(&self, variant: usize, buf: &mut Vec<u8>) -> Option<usize> {
+        use kithara_storage::ResourceExt;
+        let meta = self.get_init_segment_cached(variant)?;
+        let key = ResourceKey::from_url(&meta.url);
+        let resource = self.backend.open_resource(&key).ok()?;
+        buf.clear();
+        let n = resource.read_into(buf).ok()?;
+        if n == 0 {
+            return None;
+        }
+        Some(n)
+    }
+
     /// Complete a media segment after body has been written by the
     /// Downloader (via `on_chunk`).
     ///
