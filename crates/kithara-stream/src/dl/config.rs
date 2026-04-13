@@ -1,7 +1,7 @@
 //! Downloader configuration.
 
 use kithara_net::NetOptions;
-use kithara_platform::tokio::runtime::Handle;
+use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use tokio_util::sync::CancellationToken;
 
 /// Configuration for [`Downloader`](super::Downloader).
@@ -16,6 +16,11 @@ pub struct DownloaderConfig {
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
     pub runtime: Option<Handle>,
+    /// Maximum number of concurrent in-flight fetch commands.
+    pub max_concurrent: usize,
+    /// Throttle delay for demand (low-priority) processing.
+    /// Gives urgent work a chance to preempt before demand batch runs.
+    pub demand_throttle: Duration,
 }
 
 impl DownloaderConfig {
@@ -47,6 +52,8 @@ impl Default for DownloaderConfig {
             net: NetOptions::default(),
             cancel: CancellationToken::new(),
             runtime: None,
+            max_concurrent: 5,
+            demand_throttle: Duration::ZERO,
         }
     }
 }

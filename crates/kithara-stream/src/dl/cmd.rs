@@ -9,18 +9,15 @@ use url::Url;
 
 /// Scheduling priority for download commands and peers.
 ///
-/// Higher-priority commands are processed first. `High` commands
-/// bypass throttle checks.
+/// Used in a 2×2 slot map: (peer priority) × (cmd priority).
+/// `High` commands and peers are processed before `Low`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Priority {
-    /// Latency-sensitive: demand segments, imperative `execute()` calls.
+    /// Latency-sensitive: demand segments, `execute`/`batch` calls, seek.
     High = 0,
-    /// Background: batch segment downloads, pre-fetching.
+    /// Background: prefetch, idle downloads.
     #[default]
-    Normal = 1,
-    /// Throttled: peer is ahead of the reader. Downloader defers execution
-    /// until `peer.priority()` rises above `Low`.
-    Low = 2,
+    Low = 1,
 }
 
 /// HTTP method for a [`FetchCmd`].

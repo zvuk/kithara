@@ -319,6 +319,9 @@ impl SegmentLoader {
     ///
     /// All lookups (playlist, DRM keys) hit pre-populated caches.
     /// Called from `poll_next` — must not perform any async I/O.
+    ///
+    /// # Errors
+    /// Returns an error when the playlist or DRM key lookup fails.
     pub fn prepare_media_sync(
         &self,
         variant: usize,
@@ -404,7 +407,6 @@ impl SegmentLoader {
     ///
     /// # Errors
     /// Returns an error when commit fails or zero bytes were written.
-    #[expect(clippy::unused_self, reason = "called via loader instance in inner.rs")]
     pub fn complete_media(
         &self,
         prepared: &PreparedMedia,

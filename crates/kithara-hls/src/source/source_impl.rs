@@ -97,7 +97,8 @@ impl Source for HlsSource {
                             .map(|s| s.segment_index),
                         max_end = segments.max_end_offset(),
                         num_committed = segments.num_committed(),
-                        elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        elapsed_ms =
+                            u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                         "wait_range: not ready"
                     );
                 }

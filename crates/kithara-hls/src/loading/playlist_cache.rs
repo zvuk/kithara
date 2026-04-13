@@ -189,9 +189,8 @@ impl PlaylistCache {
         let master = self.master.get()?;
         let variant_stream = master.variants.get(variant)?;
         let media_url = self.resolve_url(&master_url, &variant_stream.uri).ok()?;
-        let cell = self.media.get(&VariantId(variant))?;
-        let playlist = cell.get()?;
-        Some((media_url, playlist.clone()))
+        let playlist = self.media.get(&VariantId(variant))?.get()?.clone();
+        Some((media_url, playlist))
     }
 
     async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>

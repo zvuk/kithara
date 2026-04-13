@@ -75,8 +75,8 @@ async fn resolve_url_with_base_override(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/custom/base/");
-    let fetch_manager =
-        test_playlist_cache(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager.set_base_url(Some(base_url.clone()));
 
     let relative_url = "video/480p/playlist.m3u8";
     let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
@@ -185,8 +185,8 @@ async fn resolve_multiple_relative_urls(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/base/");
-    let fetch_manager =
-        test_playlist_cache(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager.set_base_url(Some(base_url.clone()));
 
     // Test different relative URLs
     let test_cases = vec![
@@ -230,8 +230,8 @@ async fn fetch_manager_with_different_base_urls(
 
     // Test with base URL
     let base_url = server.url("/custom/base/");
-    let fetch_manager_with_base =
-        test_playlist_cache(&assets_fixture, net_fixture).with_base_url(Some(base_url));
+    let fetch_manager_with_base = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager_with_base.set_base_url(Some(base_url));
 
     // Fetch should still work with base URL
     let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;

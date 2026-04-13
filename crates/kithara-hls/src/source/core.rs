@@ -355,7 +355,6 @@ pub(crate) fn build_pair(
         coord: Arc::clone(&coord),
         segments: Arc::clone(&segments),
         bus: bus.clone(),
-        look_ahead_bytes: config.look_ahead_bytes,
         look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
         download_variant: initial_variant,

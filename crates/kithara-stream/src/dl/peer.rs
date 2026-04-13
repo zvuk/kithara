@@ -1,7 +1,7 @@
 //! Peer trait + per-peer handle for the channel-based downloader API.
 
 use std::{
-    sync::{Arc, atomic::AtomicUsize},
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -29,14 +29,7 @@ use super::{
 pub trait Peer: Send + Sync + 'static {
     /// Peer-level priority. `High` = active playback track.
     fn priority(&self) -> Priority {
-        Priority::Normal
-    }
-
-    /// Maximum number of concurrent in-flight commands for this peer.
-    /// The Downloader will not call `poll_next` when in-flight count
-    /// reaches this limit.
-    fn max_concurrent(&self) -> usize {
-        5
+        Priority::Low
     }
 
     /// Yield the next batch of commands for the Downloader to execute.
@@ -57,10 +50,7 @@ pub(super) enum ResponseTarget {
     /// Imperative path: send via oneshot (`execute` / `batch`).
     Channel(oneshot::Sender<Result<FetchResponse, NetError>>),
     /// Streaming path: per-command `writer`/`on_complete` in [`FetchCmd`].
-    Streaming {
-        in_flight: Arc<AtomicUsize>,
-        waker: Arc<futures::task::AtomicWaker>,
-    },
+    Streaming,
 }
 
 /// Per-peer command sent through the channel to the downloader loop.
@@ -69,6 +59,9 @@ pub(super) struct InternalCmd {
     pub(super) cancel: kithara_platform::CancelGroup,
     pub(super) priority: Priority,
     pub(super) response: ResponseTarget,
+    /// Arena index of the owning peer. `None` when sent from `PeerHandle`
+    /// (filled in by Registry on receipt).
+    pub(super) peer: Option<thunderdome::Index>,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
@@ -144,6 +137,7 @@ impl PeerHandle {
             cancel,
             priority: Priority::High,
             response: ResponseTarget::Channel(resp_tx),
+            peer: None,
         };
         self.inner
             .cmd_tx
@@ -173,6 +167,7 @@ impl PeerHandle {
                 cancel,
                 priority: Priority::High,
                 response: ResponseTarget::Channel(resp_tx),
+                peer: None,
             };
             if self.inner.cmd_tx.send(internal).await.is_err() {
                 receivers.push(None);

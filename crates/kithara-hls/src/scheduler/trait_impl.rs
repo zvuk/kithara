@@ -20,12 +20,16 @@ impl HlsScheduler {
     /// Commit a completed fetch with individual arguments.
     ///
     /// Used by `HlsPeer::on_complete` — the Downloader-driven path.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "segment commit requires all metadata"
+    )]
     pub(crate) fn commit_fetch_inline(
         &mut self,
         variant: VariantIndex,
         seg_idx: usize,
         seek_epoch: kithara_events::SeekEpoch,
-        media: crate::loading::SegmentMeta,
+        media: &crate::loading::SegmentMeta,
         init_len: u64,
         init_url: Option<url::Url>,
         duration: std::time::Duration,
@@ -111,39 +115,5 @@ impl HlsScheduler {
         });
 
         self.commit_segment(variant, seg_idx, media, init_len, init_url, duration);
-    }
-
-    /// Whether the downloader should pause because it is too far ahead
-    /// of the reader (byte-based or segment-based backpressure).
-    pub(crate) fn should_throttle(&self) -> bool {
-        if self.coord.timeline().is_flushing() {
-            return false;
-        }
-
-        let current_variant = self.abr.get_current_variant_index();
-        if !self
-            .segments
-            .lock_sync()
-            .is_segment_loaded(current_variant, self.current_segment_index())
-        {
-            return false;
-        }
-
-        if let Some(limit) = self.look_ahead_bytes {
-            let reader_pos = self.coord.timeline().byte_position();
-            let downloaded = self.segments.lock_sync().max_end_offset();
-            if downloaded.saturating_sub(reader_pos) > limit {
-                return true;
-            }
-        }
-
-        if let Some(limit) = self.look_ahead_segments {
-            let reader_seg = self.reader_segment_hint(current_variant);
-            if self.current_segment_index() > reader_seg + limit {
-                return true;
-            }
-        }
-
-        false
     }
 }

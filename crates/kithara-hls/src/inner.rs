@@ -40,7 +40,7 @@ struct HlsState {
 /// self-contained `FetchCmd` closures (`writer` + `on_complete`).
 pub(crate) struct HlsPeer {
     state: Arc<Mutex<Option<HlsState>>>,
-    /// Waker stored before activation (poll_next called but state is None).
+    /// Waker stored before activation (`poll_next` called but state is None).
     pending_waker: Mutex<Option<Waker>>,
     /// Cancels the waker-forwarding micro-task on drop.
     wake_cancel: tokio_util::sync::CancellationToken,
@@ -99,30 +99,14 @@ impl HlsPeer {
 
 impl Peer for HlsPeer {
     fn priority(&self) -> Priority {
-        let should_throttle = {
-            let guard = self.state.lock_sync();
-            let Some(ref state) = *guard else {
-                return Priority::Normal;
-            };
-            state.scheduler.should_throttle()
-        };
-        if should_throttle {
-            Priority::Low
-        } else {
-            Priority::Normal
-        }
+        Priority::Low
     }
 
-    fn max_concurrent(&self) -> usize {
-        let guard = self.state.lock_sync();
-        let Some(ref state) = *guard else {
-            return 1;
-        };
-        let count = state.scheduler.prefetch_count;
-        drop(guard);
-        count
-    }
-
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "HLS scheduler poll_next is inherently complex"
+    )]
+    #[expect(clippy::significant_drop_tightening)]
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let mut guard = self.state.lock_sync();
         let Some(ref mut state) = *guard else {
@@ -209,15 +193,15 @@ impl Peer for HlsPeer {
         // Demand variant override: reader needs data from layout variant
         // while ABR moved to a different one. Use the demanded variant
         // for this poll_next cycle so the batch loop fills the gap.
-        if let Some(dv) = demand_variant_override {
-            if dv != variant {
-                debug!(
-                    demand_variant = dv,
-                    abr_variant = variant,
-                    "poll_next: demand override — filling layout gap"
-                );
-                variant = dv;
-            }
+        if let Some(dv) = demand_variant_override
+            && dv != variant
+        {
+            debug!(
+                demand_variant = dv,
+                abr_variant = variant,
+                "poll_next: demand override — filling layout gap"
+            );
+            variant = dv;
         }
 
         // Layout gap-fill override: handle_tail_state previously redirected
@@ -280,15 +264,15 @@ impl Peer for HlsPeer {
         // cursor past the demand target via cached-segment pre-population
         // or midstream switch reset.  Restore cursor so the batch loop
         // starts at (or before) the demanded segment.
-        if let Some(ds) = demand_segment {
-            if sched.current_segment_index() > ds {
-                debug!(
-                    demand = ds,
-                    cursor = sched.current_segment_index(),
-                    "poll_next: demand cursor protection, resetting"
-                );
-                sched.reset_cursor(ds);
-            }
+        if let Some(ds) = demand_segment
+            && sched.current_segment_index() > ds
+        {
+            debug!(
+                demand = ds,
+                cursor = sched.current_segment_index(),
+                "poll_next: demand cursor protection, resetting"
+            );
+            sched.reset_cursor(ds);
         }
 
         // 5b. Ephemeral demand throttle: after processing a demand,
@@ -299,12 +283,11 @@ impl Peer for HlsPeer {
             let ahead = sched.look_ahead_segments.unwrap_or(sched.prefetch_count);
             sched.demand_throttle_until = Some(ds + ahead);
         }
-        if demand_segment.is_none() {
-            if let Some(cap) = sched.demand_throttle_until {
-                if sched.current_segment_index() >= cap {
-                    return Poll::Pending;
-                }
-            }
+        if demand_segment.is_none()
+            && let Some(cap) = sched.demand_throttle_until
+            && sched.current_segment_index() >= cap
+        {
+            return Poll::Pending;
         }
 
         // 6. Fill batch up to prefetch_count.
@@ -409,7 +392,7 @@ impl Peer for HlsPeer {
                     variant,
                     seg_idx,
                     seek_epoch,
-                    meta,
+                    &meta,
                     init_len,
                     init_url,
                     std::time::Duration::ZERO,
@@ -493,7 +476,7 @@ impl Peer for HlsPeer {
                     let Some(ref mut st) = *guard else {
                         return;
                     };
-                    if let Ok(meta) = meta {
+                    if let Ok(ref meta) = meta {
                         st.scheduler.commit_fetch_inline(
                             variant,
                             seg_idx,
@@ -921,12 +904,10 @@ async fn prefetch_init_and_keys(
             if let Some(ref seg_key) = segment.key
                 && matches!(seg_key.method, EncryptionMethod::Aes128)
                 && let Some(ref key_info) = seg_key.key_info
+                && let Ok(seg_url) = media_url.join(&segment.uri)
+                && let Ok(key_url) = KeyManager::resolve_key_url(key_info, &seg_url)
             {
-                if let Ok(seg_url) = media_url.join(&segment.uri)
-                    && let Ok(key_url) = KeyManager::resolve_key_url(key_info, &seg_url)
-                {
-                    key_urls.insert(key_url);
-                }
+                key_urls.insert(key_url);
             }
         }
     }

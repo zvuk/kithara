@@ -35,8 +35,6 @@ pub(crate) struct HlsScheduler {
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     pub(crate) bus: EventBus,
-    /// Backpressure threshold (bytes). None = no byte-based backpressure.
-    pub(crate) look_ahead_bytes: Option<u64>,
     /// Backpressure threshold (segments ahead of reader). None = no limit.
     /// For ephemeral backends, derived from cache capacity to prevent
     /// evicting segments the reader still needs.
@@ -241,13 +239,6 @@ impl HlsScheduler {
         self.bus.publish(HlsEvent::DownloadError {
             error: format!("{context}: {error}"),
         });
-    }
-
-    pub(crate) fn reader_segment_hint(&self, variant: usize) -> usize {
-        let reader_offset = self.coord.timeline().byte_position();
-        self.playlist_state
-            .find_segment_at_offset(variant, reader_offset)
-            .unwrap_or_else(|| self.current_segment_index())
     }
 
     pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {

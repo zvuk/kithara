@@ -118,6 +118,9 @@ impl KeyManager {
     /// Reads the raw key bytes from [`AssetStore`] without network I/O.
     /// Returns an error if the key is not in the cache (pre-fetch missed
     /// or evicted).
+    ///
+    /// # Errors
+    /// Returns an error when the key is missing from cache or the read fails.
     pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
         if let Some(ref params) = self.key_query_params {
