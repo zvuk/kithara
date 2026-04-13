@@ -20,6 +20,12 @@ pub struct Timeline {
     pending_seek_epoch: Arc<AtomicU64>,
     total_duration_ns: Arc<AtomicU64>,
 
+    /// Byte offset at the start of the most recent `Stream::read()` call.
+    /// Used by `StreamContext::segment_index()` to resolve which segment
+    /// the last-read data belongs to — `byte_position` has already advanced
+    /// past the data boundary by the time the decoder queries metadata.
+    segment_position: Arc<AtomicU64>,
+
     // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
     seek_epoch: Arc<AtomicU64>,
     flushing: Arc<AtomicBool>,
@@ -46,6 +52,7 @@ impl Timeline {
             eof: Arc::new(AtomicBool::new(false)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
+            segment_position: Arc::new(AtomicU64::new(0)),
             seek_epoch: Arc::new(AtomicU64::new(0)),
             flushing: Arc::new(AtomicBool::new(false)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
@@ -60,6 +67,15 @@ impl Timeline {
 
     pub fn set_byte_position(&self, position: u64) {
         self.byte_position.store(position, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn segment_position(&self) -> u64 {
+        self.segment_position.load(Ordering::Acquire)
+    }
+
+    pub fn set_segment_position(&self, position: u64) {
+        self.segment_position.store(position, Ordering::Release);
     }
 
     #[must_use]

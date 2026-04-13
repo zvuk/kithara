@@ -248,6 +248,7 @@ impl<T: StreamType> Read for Stream<T> {
                         return Err(IoError::other("seek pending"));
                     }
                     hang_reset!();
+                    timeline.set_segment_position(pos);
                     timeline.set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
