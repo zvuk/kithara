@@ -209,7 +209,14 @@ impl Peer for HlsPeer {
         // override it until the gap is filled, otherwise the batch loop
         // commits cached ABR segments and handle_tail_state resets the
         // cursor again (hot loop).
-        if sched.filling_layout_gap && sched.download_variant != variant {
+        //
+        // An explicit reader demand takes precedence — the reader cannot
+        // make progress without the demanded data, so overriding it back
+        // to the gap-fill variant creates an infinite loop.
+        if sched.filling_layout_gap
+            && demand_variant_override.is_none()
+            && sched.download_variant != variant
+        {
             debug!(
                 layout_variant = sched.download_variant,
                 abr_variant = variant,
