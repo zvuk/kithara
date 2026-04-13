@@ -7,7 +7,7 @@ use std::{
 use kithara_abr::{AbrController, AbrOptions, Variant};
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_platform::Mutex;
 use kithara_stream::Timeline;
 
@@ -245,19 +245,9 @@ impl HlsSource {
             self.push_segment_request(variant, segment_index, seek_epoch);
             return true;
         }
-        // Fallback estimation — no size map available.
-        if let Some(segment_index) = self.fallback_segment_index_for_offset(variant, range_start) {
-            self.bus.publish(HlsEvent::Seek {
-                stage: "wait_range_metadata_fallback",
-                seek_epoch,
-                variant,
-                offset: range_start,
-                from_segment_index: segment_index,
-                to_segment_index: segment_index,
-            });
-            self.push_segment_request(variant, segment_index, seek_epoch);
-            return true;
-        }
+        // No resolution path found — size map not ready yet.
+        // The caller's condvar loop will retry once the scheduler
+        // commits data and notifies.
         false
     }
 
@@ -269,13 +259,8 @@ impl HlsSource {
         if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
             return Some(segment_index);
         }
-        if let Some(segment_index) = self
-            .playlist_state
+        self.playlist_state
             .find_segment_at_offset(variant, range_start)
-        {
-            return Some(segment_index);
-        }
-        self.fallback_segment_index_for_offset(variant, range_start)
     }
 
     pub(super) fn loaded_segment_ready(

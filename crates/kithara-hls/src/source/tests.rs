@@ -556,7 +556,7 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
 
 #[kithara::test]
 fn wait_range_reissues_request_after_pending_request_is_cleared() {
-    let mut source = build_test_source(1);
+    let mut source = build_source_with_size_map(&[100]);
     source.coord.stopped.store(false, Ordering::Release);
     let request = SegmentRequest {
         variant: 0,

@@ -61,12 +61,6 @@ pub enum HlsEvent {
         variant: usize,
         segment_index: usize,
     },
-    /// Seek-time metadata lookup failed in `wait_range`.
-    SeekMetadataMiss {
-        seek_epoch: SeekEpoch,
-        offset: u64,
-        variant: usize,
-    },
     /// Targeted seek diagnostics for debugging index drift.
     Seek {
         stage: &'static str,

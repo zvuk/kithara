@@ -8,7 +8,7 @@ use std::{
 
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_hls::internal::{
     AbrMode, AbrOptions, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData,
     SegmentLoader, SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap,
@@ -16,7 +16,6 @@ use kithara_hls::internal::{
     make_test_segment_loader, make_test_source as make_internal_test_source,
     make_test_source_with_backend as make_internal_test_source_with_backend,
     set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
-    subscribe_source_events,
 };
 use kithara_platform::{
     Mutex,
@@ -1744,105 +1743,30 @@ async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change(
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
+async fn test_wait_range_without_size_map_does_not_enqueue_request() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
-    let source = make_test_source(Arc::clone(&shared), cancel.clone());
-
-    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
-    assert_eq!(request.variant, 0);
-    assert_eq!(request.segment_index, 0);
-}
-
-#[kithara::test(tokio, browser)]
-async fn test_wait_range_without_size_map_emits_seek_fallback_diagnostic() {
-    let cancel = CancellationToken::new();
-    let ps = playlist_state_without_size_map();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
-    let source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let mut events = subscribe_source_events(&source);
-
-    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
-    assert_eq!(request.variant, 0);
-    assert_eq!(request.segment_index, 0);
-
-    let diag = timeout(Duration::from_secs(1), async {
-        loop {
-            match events.recv().await {
-                Ok(Event::Hls(HlsEvent::Seek {
-                    stage,
-                    seek_epoch,
-                    variant,
-                    offset,
-                    from_segment_index,
-                    to_segment_index,
-                })) if stage == "wait_range_metadata_fallback" => {
-                    break (
-                        stage,
-                        seek_epoch,
-                        variant,
-                        offset,
-                        from_segment_index,
-                        to_segment_index,
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    panic!("expected seek fallback diagnostic, got channel error: {error}")
-                }
-            }
-        }
-    })
-    .await
-    .expect("seek fallback diagnostic should arrive");
-
-    assert_eq!(diag.0, "wait_range_metadata_fallback");
-    assert_eq!(diag.1, 0);
-    assert_eq!(diag.2, 0);
-    assert_eq!(diag.3, 0);
-    assert_eq!(diag.4, 0);
-    assert_eq!(diag.5, 0);
-}
-
-#[kithara::test(tokio, browser)]
-async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
-    let cancel = CancellationToken::new();
-    let ps = dummy_playlist_state();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let mut events = subscribe_source_events(&source);
 
-    let handle = spawn_blocking(move || source.wait_range(1024..2048, Duration::from_secs(1)));
-    let mut saw_metadata_miss = false;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        if let Ok(Ok(Event::Hls(HlsEvent::SeekMetadataMiss { .. }))) =
-            timeout(Duration::from_millis(50), events.recv()).await
-        {
-            saw_metadata_miss = true;
-            break;
-        }
-    }
+    let handle = spawn_blocking(move || source.wait_range(0..128, Duration::from_millis(150)));
 
-    let result = timeout(Duration::from_secs(3), handle)
+    let result = timeout(Duration::from_secs(2), handle)
         .await
-        .expect("wait_range should fail fast")
+        .expect("wait_range should complete")
         .expect("wait_range task should not panic");
 
+    assert!(
+        shared.segment_requests.pop().is_none(),
+        "no request should be enqueued without size map"
+    );
     match result {
-        Err(StreamError::Source(HlsError::SegmentNotFound(message))) => {
-            assert!(
-                message.contains("seek metadata miss"),
-                "unexpected error message: {message}"
-            );
+        Err(StreamError::Source(HlsError::Timeout(msg))) => {
+            assert!(msg.contains("budget exceeded"), "unexpected: {msg}");
         }
-        other => panic!("unexpected wait_range result: {other:?}"),
+        other => panic!("expected Timeout, got: {other:?}"),
     }
-
-    assert!(saw_metadata_miss, "expected SeekMetadataMiss diagnostic");
 }
 
 #[kithara::test(

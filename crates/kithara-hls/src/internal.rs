@@ -146,11 +146,6 @@ pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {
 }
 
 #[must_use]
-pub fn subscribe_source_events(source: &HlsSource) -> kithara_events::EventReceiver {
-    source.bus.subscribe()
-}
-
-#[must_use]
 pub fn source_can_cross_variant(
     source: &HlsSource,
     from_variant: usize,

@@ -11,7 +11,6 @@ use crate::{
 /// Previous value 50ms caused audible glitches during multi-track mixing.
 pub(super) const WAIT_RANGE_SLEEP_MS: u64 = 2;
 pub(super) const WAIT_RANGE_HANG_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
-pub(super) const WAIT_RANGE_MAX_METADATA_MISS_SPINS: u32 = 25;
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
 pub(crate) enum SeekLayout {

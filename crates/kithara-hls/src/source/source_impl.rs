@@ -16,10 +16,7 @@ use tracing::{debug, trace};
 
 use super::{
     core::HlsSource,
-    types::{
-        ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR, WAIT_RANGE_MAX_METADATA_MISS_SPINS,
-        WAIT_RANGE_SLEEP_MS,
-    },
+    types::{ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR, WAIT_RANGE_SLEEP_MS},
 };
 use crate::{
     HlsError,
@@ -47,7 +44,6 @@ impl Source for HlsSource {
         timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
         let mut wait_seek_epoch: Option<u64> = None;
-        let mut metadata_miss_count: u32 = 0;
         let started_at = Instant::now();
 
         loop {
@@ -131,22 +127,11 @@ impl Source for HlsSource {
             // queue_segment_request_for_offset resolves the correct
             // variant (layout) and segment via committed data or
             // playlist metadata. DemandSlot::submit is idempotent.
-            if self.queue_segment_request_for_offset(range.start, seek_epoch) {
-                metadata_miss_count = 0;
-            } else {
-                metadata_miss_count += 1;
-                if metadata_miss_count >= WAIT_RANGE_MAX_METADATA_MISS_SPINS {
-                    let variant = self.resolve_current_variant();
-                    self.bus.publish(HlsEvent::SeekMetadataMiss {
-                        seek_epoch,
-                        offset: range.start,
-                        variant,
-                    });
-                    return Err(StreamError::Source(HlsError::SegmentNotFound(format!(
-                        "seek metadata miss: offset={} variant={variant}",
-                        range.start,
-                    ))));
-                }
+            if !self.queue_segment_request_for_offset(range.start, seek_epoch) {
+                trace!(
+                    range_start = range.start,
+                    seek_epoch, "wait_range: metadata not yet available, waiting"
+                );
             }
 
             // Phase 4: condvar wait (re-lock).

@@ -153,31 +153,6 @@ impl HlsSource {
         Ok(Some(bytes_read))
     }
 
-    pub(super) fn fallback_segment_index_for_offset(
-        &self,
-        variant: VariantIndex,
-        offset: u64,
-    ) -> Option<SegmentIndex> {
-        let num_segments = self.playlist_state.num_segments(variant)?;
-        if num_segments == 0 {
-            return None;
-        }
-
-        if let Some(total) = self.effective_total_bytes()
-            && total > 0
-        {
-            if offset >= total {
-                return None;
-            }
-            let estimate = ((u128::from(offset) * num_segments as u128) / u128::from(total))
-                .min((num_segments - 1) as u128);
-            return Some(estimate as usize);
-        }
-
-        let hinted = self.current_segment_index().unwrap_or(0);
-        Some(hinted.min(num_segments - 1))
-    }
-
     /// Check committed `StreamIndex` for the segment covering `range_start`.
     /// Returns `Some(segment_index)` if a request should be issued.
     pub(super) fn committed_segment_for_offset(
