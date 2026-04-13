@@ -205,30 +205,22 @@ impl HlsScheduler {
         seg_idx: usize,
         is_midstream_switch: bool,
         old_variant: Option<usize>,
-        is_cross_codec: bool,
     ) -> bool {
-        if let Some(old_var) = old_variant
-            && !is_cross_codec
-        {
-            let old_data = {
+        // If the old variant already has this segment loaded with
+        // available resources, skip the download — the reader will
+        // demand the correct variant's data on-demand when it needs it.
+        // Do NOT copy old-variant SegmentData (wrong media_url) into
+        // the new variant's StreamIndex.
+        if let Some(old_var) = old_variant {
+            let old_loaded = {
                 let segments = self.segments.lock_sync();
-                if segments.is_segment_loaded(old_var, seg_idx) {
-                    segments
+                segments.is_segment_loaded(old_var, seg_idx)
+                    && segments
                         .variant_segments(old_var)
                         .and_then(|vs| vs.get(seg_idx))
-                        .cloned()
-                } else {
-                    None
-                }
+                        .is_some_and(|data| self.segment_resources_available(data))
             };
-            if let Some(data) = old_data
-                && self.segment_resources_available(&data)
-            {
-                // Copy segment entry to new variant's byte map so offsets
-                // remain contiguous after an ABR switch.
-                self.segments
-                    .lock_sync()
-                    .commit_segment(variant, seg_idx, data);
+            if old_loaded {
                 self.advance_current_segment_index(seg_idx + 1);
                 return true;
             }

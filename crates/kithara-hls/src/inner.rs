@@ -324,12 +324,6 @@ impl Peer for HlsPeer {
                     } else {
                         None
                     },
-                    old_variant != variant
-                        && crate::scheduler::helpers::is_cross_codec_switch(
-                            &sched.playlist_state,
-                            old_variant,
-                            variant,
-                        ),
                 );
             if skipped {
                 debug!(
