@@ -141,9 +141,24 @@ impl Registry {
     }
 
     /// Single tick: poll peers, process urgent, then demand with throttle.
-    pub(super) async fn tick(&mut self, inner: &DownloaderInner) {
+    ///
+    /// Accepts `register_rx` so that new peer registrations are handled
+    /// inside `poll_fn` rather than in a competing `select!` arm.
+    /// This guarantees that `process()` runs to completion — a `select!`
+    /// branch for registrations would drop `tick()` mid-batch, losing
+    /// unspawned `FetchCmd`s.
+    pub(super) async fn tick(
+        &mut self,
+        inner: &DownloaderInner,
+        register_rx: &mut mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
         // Wait until at least one slot has work.
         poll_fn(|cx| {
+            // Drain registrations inside the poll loop so new peers
+            // wake poll_fn without interrupting batch execution.
+            while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
+                self.add(entry, &inner.cancel);
+            }
             self.poll_peers(cx, inner);
             if self.has_slot_work() {
                 Poll::Ready(())

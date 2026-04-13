@@ -496,6 +496,13 @@ impl Source for HlsSource {
             });
         }
         self.coord.condvar.notify_all();
+        // Trigger queue rebuild with the correct byte_position.
+        // At this point the decoder has already seeked and updated
+        // byte_position. Without this, the queue stays stale from
+        // the initial seek-epoch rebuild (which ran before
+        // byte_position was updated) — see queue test
+        // `seek_flow_stale_plan_no_recovery_path`.
+        self.coord.reader_advanced.notify_one();
 
         if previous_hint != segment_index {
             self.bus.publish(HlsEvent::Seek {

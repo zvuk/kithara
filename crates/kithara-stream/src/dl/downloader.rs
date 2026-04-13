@@ -118,23 +118,19 @@ impl Downloader {
     ///
     /// Drives the [`Registry`] which owns peers, routes commands through
     /// a 2×2 priority slot map, and executes batches via [`BatchGroup`].
+    ///
+    /// Registrations are polled inside `tick()` so that `process()` is
+    /// never dropped mid-batch by a competing `select!` arm (cancellation-
+    /// safety: dropping `process()` loses unspawned `FetchCmd`s whose
+    /// `on_complete` callbacks will never fire).
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut registry = Registry::new();
 
         loop {
-            // Drain pending registrations (non-blocking).
-            while let Ok(entry) = register_rx.try_recv() {
-                registry.add(entry, &self.inner.cancel);
-            }
-
             tokio::select! {
                 biased;
                 () = self.inner.cancel.cancelled() => return,
-                entry = register_rx.recv() => match entry {
-                    Some(e) => { registry.add(e, &self.inner.cancel); }
-                    None => return,
-                },
-                () = registry.tick(&self.inner) => {},
+                () = registry.tick(&self.inner, &mut register_rx) => {},
             }
 
             registry.reschedule();
