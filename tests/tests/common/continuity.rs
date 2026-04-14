@@ -1,11 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 use std::fmt;
 
-use kithara::{events::AudioEvent, play::internal::offline::OfflinePlayer};
+use kithara::{
+    events::{AudioEvent, Event, EventReceiver},
+    play::internal::offline::OfflinePlayer,
+};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
-    tokio::sync::broadcast,
 };
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
@@ -25,7 +27,7 @@ pub(crate) struct OutputGapStats {
 impl OutputGapStats {
     #[must_use]
     pub(crate) fn block_duration_for(block_frames: usize, sample_rate: u32) -> Duration {
-        Duration::from_secs_f64(block_frames as f64 / sample_rate as f64)
+        Duration::from_secs_f64(block_frames as f64 / f64::from(sample_rate))
     }
 
     #[must_use]
@@ -37,7 +39,7 @@ impl OutputGapStats {
 impl fmt::Display for OutputGapStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let silence_ms =
-            self.max_silence_run as f64 * self.block_budget().as_secs_f64() * 1000.0;
+            f64::from(self.max_silence_run) * self.block_budget().as_secs_f64() * 1000.0;
         write!(
             f,
             "{}: {} blocks, silence={} ({:.1}ms) max_render={:?} slow={}",
@@ -61,9 +63,9 @@ pub(crate) struct PlaybackProgressProbe {
 }
 
 impl PlaybackProgressProbe {
-    pub(crate) fn drain(&mut self, rx: &mut broadcast::Receiver<AudioEvent>) {
+    pub(crate) fn drain(&mut self, rx: &mut EventReceiver) {
         while let Ok(event) = rx.try_recv() {
-            if let AudioEvent::PlaybackProgress { position_ms, .. } = event {
+            if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event {
                 let now = Instant::now();
                 if let Some(last) = self.last_event_at {
                     let gap = now.duration_since(last);

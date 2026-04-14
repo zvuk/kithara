@@ -30,7 +30,7 @@ async fn fetch_master_playlist_from_network(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8");
     let master_playlist = fetch_manager.master_playlist(&master_url).await?;
 
@@ -50,7 +50,7 @@ async fn fetch_media_playlist_from_network(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let media_url = server.url("/v0.m3u8");
 
     let media_playlist = fetch_manager
@@ -75,8 +75,8 @@ async fn resolve_url_with_base_override(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/custom/base/");
-    let fetch_manager =
-        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager.set_base_url(Some(base_url.clone()));
 
     let relative_url = "video/480p/playlist.m3u8";
     let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
@@ -102,7 +102,7 @@ async fn fetch_media_playlist_for_different_variants(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
 
     // Test variant 0
     let media_url_0 = server.url("/v0.m3u8");
@@ -133,7 +133,7 @@ async fn fetch_manager_caching_behavior(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8");
 
     // First fetch
@@ -160,7 +160,7 @@ async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
-    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
 
     // Try to fetch from invalid URL
     let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
@@ -185,8 +185,8 @@ async fn resolve_multiple_relative_urls(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/base/");
-    let fetch_manager =
-        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
+    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager.set_base_url(Some(base_url.clone()));
 
     // Test different relative URLs
     let test_cases = vec![
@@ -223,15 +223,15 @@ async fn fetch_manager_with_different_base_urls(
 ) -> HlsResult<()> {
     let server = test_server.await;
     // Test with no base URL
-    let fetch_manager_no_base = test_fetch_manager(&assets_fixture, net_fixture.clone());
+    let fetch_manager_no_base = test_playlist_cache(&assets_fixture, net_fixture.clone());
     let master_url = server.url("/master.m3u8");
     let master_no_base = fetch_manager_no_base.master_playlist(&master_url).await?;
     assert_eq!(master_no_base.variants.len(), 3);
 
     // Test with base URL
     let base_url = server.url("/custom/base/");
-    let fetch_manager_with_base =
-        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url));
+    let fetch_manager_with_base = test_playlist_cache(&assets_fixture, net_fixture);
+    fetch_manager_with_base.set_base_url(Some(base_url));
 
     // Fetch should still work with base URL
     let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;

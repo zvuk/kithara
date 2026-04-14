@@ -7,6 +7,7 @@ use kithara::{
     bufpool::byte_pool,
     storage::ResourceExt,
 };
+use kithara_assets::internal::schema::PinsIndexFile;
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
@@ -28,22 +29,28 @@ fn mp3_bytes() -> Vec<u8> {
     v
 }
 
-#[derive(serde::Deserialize)]
-#[expect(dead_code, reason = "fields deserialized from binary")]
-struct PinsIndexFile {
-    version: u32,
-    pinned: Vec<String>,
-}
-
 fn read_pins_file(root: &Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.bin");
     if !path.exists() {
         return None;
     }
     let bytes = fs::read(&path).expect("pins index file should be readable if exists");
-    let file: PinsIndexFile =
-        postcard::from_bytes(&bytes).expect("pins index must be valid postcard if exists");
-    Some(file.pinned)
+    if bytes.is_empty() {
+        return Some(Vec::new());
+    }
+    let archived = rkyv::check_archived_root::<PinsIndexFile>(&bytes)
+        .expect("pins index must be valid rkyv if exists");
+
+    use rkyv::Deserialize;
+    let pins_file: PinsIndexFile = archived.deserialize(&mut rkyv::Infallible).unwrap();
+
+    let mut pinned = Vec::new();
+    for (k, v) in pins_file.pinned.iter() {
+        if *v {
+            pinned.push(k.to_string());
+        }
+    }
+    Some(pinned)
 }
 
 fn asset_store_with_root(

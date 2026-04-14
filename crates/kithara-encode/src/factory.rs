@@ -1,13 +1,12 @@
 use kithara_stream::AudioCodec;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ffmpeg::FfmpegEncoder;
 use crate::{
     error::{EncodeError, EncodeResult},
     traits::InnerEncoder,
     types::{BytesEncodeRequest, EncodedBytes, EncodedTrack, PackagedEncodeRequest},
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::ffmpeg::FfmpegEncoder;
 
 /// Factory for creating encoded outputs with runtime codec selection.
 pub struct EncoderFactory;

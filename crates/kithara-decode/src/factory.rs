@@ -284,7 +284,7 @@ impl DecoderFactory {
         match ext.to_lowercase().as_str() {
             "mp3" => Some(ContainerFormat::MpegAudio),
             "aac" => Some(ContainerFormat::Adts),
-            "m4a" | "mp4" => Some(ContainerFormat::Fmp4),
+            "m4a" | "mp4" => Some(ContainerFormat::Mp4),
             "flac" => Some(ContainerFormat::Flac),
             "ogg" | "oga" => Some(ContainerFormat::Ogg),
             "wav" | "wave" => Some(ContainerFormat::Wav),
@@ -302,7 +302,7 @@ impl DecoderFactory {
             "audio/flac" => Some(ContainerFormat::Flac),
             "audio/ogg" => Some(ContainerFormat::Ogg),
             "audio/wav" | "audio/wave" | "audio/x-wav" => Some(ContainerFormat::Wav),
-            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Fmp4),
+            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
             _ => None,
         }
     }
@@ -311,9 +311,10 @@ impl DecoderFactory {
     fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
         match container {
             ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
-            ContainerFormat::Adts | ContainerFormat::Fmp4 | ContainerFormat::MpegTs => {
-                Some(AudioCodec::AacLc)
-            }
+            ContainerFormat::Adts
+            | ContainerFormat::Mp4
+            | ContainerFormat::Fmp4
+            | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
             ContainerFormat::Flac => Some(AudioCodec::Flac),
             ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
             ContainerFormat::Wav => Some(AudioCodec::Pcm),
@@ -675,6 +676,7 @@ mod tests {
     #[case(ContainerFormat::MpegAudio, AudioCodec::Mp3)]
     #[case(ContainerFormat::Ogg, AudioCodec::Vorbis)]
     #[case(ContainerFormat::Wav, AudioCodec::Pcm)]
+    #[case(ContainerFormat::Mp4, AudioCodec::AacLc)]
     #[case(ContainerFormat::Fmp4, AudioCodec::AacLc)]
     #[case(ContainerFormat::Caf, AudioCodec::Alac)]
     fn test_probe_from_container(#[case] container: ContainerFormat, #[case] expected: AudioCodec) {
@@ -731,8 +733,8 @@ mod tests {
     #[kithara::test]
     #[case("mp3", Some(ContainerFormat::MpegAudio))]
     #[case("aac", Some(ContainerFormat::Adts))]
-    #[case("m4a", Some(ContainerFormat::Fmp4))]
-    #[case("mp4", Some(ContainerFormat::Fmp4))]
+    #[case("m4a", Some(ContainerFormat::Mp4))]
+    #[case("mp4", Some(ContainerFormat::Mp4))]
     #[case("flac", Some(ContainerFormat::Flac))]
     #[case("wav", Some(ContainerFormat::Wav))]
     #[case("unknown", None)]
@@ -749,8 +751,8 @@ mod tests {
     #[kithara::test]
     #[case("audio/mpeg", Some(ContainerFormat::MpegAudio))]
     #[case("audio/aac", Some(ContainerFormat::Adts))]
-    #[case("audio/mp4", Some(ContainerFormat::Fmp4))]
-    #[case("audio/x-m4a", Some(ContainerFormat::Fmp4))]
+    #[case("audio/mp4", Some(ContainerFormat::Mp4))]
+    #[case("audio/x-m4a", Some(ContainerFormat::Mp4))]
     #[case("audio/flac", Some(ContainerFormat::Flac))]
     #[case("audio/ogg", Some(ContainerFormat::Ogg))]
     #[case("text/plain", None)]
@@ -841,14 +843,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_create_with_probe_maps_m4a_to_fmp4_container_hint() {
+    fn test_create_with_probe_maps_m4a_to_mp4_container_hint() {
         let probe_hint = ProbeHint {
             extension: Some("m4a".into()),
             container: DecoderFactory::container_from_extension("m4a"),
             ..Default::default()
         };
 
-        assert_eq!(probe_hint.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(probe_hint.container, Some(ContainerFormat::Mp4));
         assert_eq!(
             DecoderFactory::probe_codec(&probe_hint).expect("m4a should map to AAC"),
             AudioCodec::AacLc

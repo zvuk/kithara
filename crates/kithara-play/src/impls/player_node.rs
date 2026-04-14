@@ -165,7 +165,7 @@ mod tests {
         // Verify the channel is connected
         tx.try_push(cmd).ok();
         let mut guard = node.cmd_rx.lock_sync();
-        let received = (*guard).as_mut().and_then(|cmd_rx| cmd_rx.try_pop());
+        let received = (*guard).as_mut().and_then(Consumer::try_pop);
         assert!(received.is_some());
     }
 

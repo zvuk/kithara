@@ -14,6 +14,9 @@
 
 use std::sync::Arc;
 
+use kithara_stream::AudioCodec;
+#[cfg(target_arch = "wasm32")]
+use reqwest::Client;
 use thiserror::Error;
 use url::Url;
 
@@ -30,8 +33,6 @@ use crate::{
         hls_media_path_from_ref, hls_segment_path_from_ref,
     },
 };
-#[cfg(target_arch = "wasm32")]
-use reqwest::Client;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -258,17 +259,8 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn packaged_audio_sine_aac_lc(
-        self,
-        sample_rate: u32,
-        channels: u16,
-        freq_hz: f64,
-    ) -> Self {
-        self.packaged_audio_signal_aac_lc(
-            sample_rate,
-            channels,
-            PackagedSignal::Sine { freq_hz },
-        )
+    pub fn packaged_audio_sine_aac_lc(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sine { freq_hz })
     }
 
     #[must_use]
@@ -279,7 +271,7 @@ impl HlsFixtureBuilder {
         signal: PackagedSignal,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::AacLc,
+            codec: AudioCodec::AacLc,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -298,7 +290,7 @@ impl HlsFixtureBuilder {
         patterns: Vec<PcmPattern>,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::AacLc,
+            codec: AudioCodec::AacLc,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -315,17 +307,8 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn packaged_audio_sine_flac(
-        self,
-        sample_rate: u32,
-        channels: u16,
-        freq_hz: f64,
-    ) -> Self {
-        self.packaged_audio_signal_flac(
-            sample_rate,
-            channels,
-            PackagedSignal::Sine { freq_hz },
-        )
+    pub fn packaged_audio_sine_flac(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sine { freq_hz })
     }
 
     #[must_use]
@@ -336,7 +319,7 @@ impl HlsFixtureBuilder {
         signal: PackagedSignal,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::Flac,
+            codec: AudioCodec::Flac,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
@@ -355,7 +338,7 @@ impl HlsFixtureBuilder {
         patterns: Vec<PcmPattern>,
     ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
-            codec: kithara_stream::AudioCodec::Flac,
+            codec: AudioCodec::Flac,
             sample_rate,
             channels,
             timescale: Some(sample_rate),

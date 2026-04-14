@@ -11,8 +11,8 @@ use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    DemandSlot, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
-    StreamResult, StreamType, Timeline, TransferCoordination,
+    NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -106,34 +106,18 @@ struct ScriptSource {
 
 #[derive(Default)]
 struct ScriptCoord {
-    demand: DemandSlot<()>,
     timeline: Timeline,
 }
 
-impl TransferCoordination<()> for ScriptCoord {
+impl TransferCoordination for ScriptCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<()> {
-        &self.demand
     }
 }
 
 impl Source for ScriptSource {
     type Error = io::Error;
-    type Topology = ();
-    type Layout = ();
     type Coord = ScriptCoord;
-    type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -177,12 +161,9 @@ struct DummyType;
 impl StreamType for DummyType {
     type Config = ScriptSource;
     type Coord = ScriptCoord;
-    type Demand = ();
     type Error = io::Error;
     type Events = ();
-    type Layout = ();
     type Source = ScriptSource;
-    type Topology = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         Ok(config)
@@ -208,7 +189,6 @@ fuzz_target!(|input: Input| {
     let timeline = Timeline::new();
     let source = ScriptSource {
         coord: ScriptCoord {
-            demand: DemandSlot::new(),
             timeline: timeline.clone(),
         },
         data: input.data,

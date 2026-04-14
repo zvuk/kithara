@@ -9,7 +9,7 @@ use std::{
 };
 
 use kithara::{
-    abr::AbrMode,
+    abr::{AbrController, AbrMode, AbrOptions},
     play::{Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -124,6 +124,18 @@ impl AudioPlayerItem {
             return;
         }
 
+        // Pre-create the event bus and subscribe the bridge BEFORE spawning
+        // the load task. Otherwise `VariantsDiscovered` — emitted inside
+        // `Stream::open` on the same bus — is lost, because tokio broadcast
+        // does not replay history to late subscribers.
+        {
+            let mut bus = self.bus.lock_sync();
+            if bus.is_none() {
+                *bus = Some(kithara_events::EventBus::default());
+            }
+        }
+        self.restart_bridge();
+
         let config = match self.build_resource_config() {
             Ok(c) => c,
             Err(e) => {
@@ -136,8 +148,13 @@ impl AudioPlayerItem {
         crate::FFI_RUNTIME.spawn(async move {
             match Self::load_resource(config).await {
                 Ok(resource) => {
+                    let duration = resource.duration().map(|d| d.as_secs_f64());
                     *self.resource.lock_sync() = Some(resource);
-                    self.restart_bridge();
+                    if let Some(observer) = self.observer()
+                        && let Some(seconds) = duration
+                    {
+                        observer.on_event(FfiItemEvent::DurationChanged { seconds });
+                    }
                 }
                 Err(e) => {
                     self.report_error(&e);
@@ -173,6 +190,10 @@ impl AudioPlayerItem {
         self.observer.lock_sync().clone()
     }
 
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "nested lock access reads clearer as if/else than map_or_else"
+    )]
     fn restart_bridge(&self) {
         let observer = self.observer();
         let Some(observer) = observer else {
@@ -180,15 +201,24 @@ impl AudioPlayerItem {
             return;
         };
 
-        let Some((rx, duration_seconds)) = ({
+        // Prefer item.bus (available before resource load — catches
+        // `VariantsDiscovered` published during `Stream::open`). Fall back
+        // to resource.subscribe() only if the bus hasn't been attached yet.
+        let rx_and_duration = if let Some(ref bus) = *self.bus.lock_sync() {
+            let duration = self
+                .resource
+                .lock_sync()
+                .as_ref()
+                .and_then(|r| r.duration().map(|d| d.as_secs_f64()));
+            Some((bus.subscribe(), duration))
+        } else {
             let resource = self.resource.lock_sync();
-            resource.as_ref().map(|resource| {
-                (
-                    resource.subscribe(),
-                    resource.duration().map(|duration| duration.as_secs_f64()),
-                )
-            })
-        }) else {
+            resource
+                .as_ref()
+                .map(|r| (r.subscribe(), r.duration().map(|d| d.as_secs_f64())))
+        };
+
+        let Some((rx, duration_seconds)) = rx_and_duration else {
             *self.event_bridge.lock_sync() = None;
             return;
         };
@@ -260,9 +290,9 @@ impl AudioPlayerItem {
             if let Some(ref ctrl) = config.abr {
                 ctrl.set_mode(abr_mode);
             } else {
-                config.abr = Some(kithara::abr::AbrController::new(kithara::abr::AbrOptions {
+                config.abr = Some(AbrController::new(AbrOptions {
                     mode: abr_mode,
-                    ..kithara::abr::AbrOptions::default()
+                    ..AbrOptions::default()
                 }));
             }
         }

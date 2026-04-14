@@ -60,18 +60,7 @@ pub struct SignalSourceError;
 
 impl<S: signal::SignalFn> Source for SignalSource<S> {
     type Error = SignalSourceError;
-    type Topology = ();
-    type Layout = ();
     type Coord = MemoryCoord;
-    type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -132,13 +121,13 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        Some(MediaInfo {
-            channels: Some(self.pcm.channels()),
-            codec: Some(AudioCodec::Pcm),
-            container: Some(ContainerFormat::Wav),
-            sample_rate: Some(self.pcm.sample_rate()),
-            ..MediaInfo::default()
-        })
+        Some(
+            MediaInfo::default()
+                .with_channels(self.pcm.channels())
+                .with_codec(AudioCodec::Pcm)
+                .with_container(ContainerFormat::Wav)
+                .with_sample_rate(self.pcm.sample_rate()),
+        )
     }
 }
 
@@ -147,10 +136,7 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
 impl<S: signal::SignalFn> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
-    type Topology = ();
-    type Layout = ();
     type Coord = MemoryCoord;
-    type Demand = ();
     type Source = SignalSource<S>;
     type Error = io::Error;
 

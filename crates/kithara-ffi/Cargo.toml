@@ -39,6 +39,10 @@ default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
+# Dev-only conveniences enabled in xcframework builds for demo/staging.
+# Currently: accepts TLS certs with invalid hostname / CA / expiry.
+# Not for production use.
+dev = []
 
 [dev-dependencies]
 futures = { workspace = true }

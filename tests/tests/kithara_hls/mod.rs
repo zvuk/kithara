@@ -3,6 +3,7 @@
 mod abr_switch_playback;
 mod abr_integration;
 mod basic_playback;
+mod config_with_downloader;
 mod deferred_abr;
 mod deferred_abr_debug;
 mod drm_stream_integrity;

@@ -21,6 +21,8 @@ mod kithara_hls {
     mod abr_mode_switch;
     mod abr_switch_playback;
     mod live_stress_real_stream;
+    mod red_flaky_small_cache_hot_refetch;
+    mod red_leak_native_drm_seek_resume;
     mod stress_seek_abr;
     mod stress_seek_abr_audio;
     mod stress_seek_audio;

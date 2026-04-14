@@ -5,18 +5,21 @@ use std::{
     fs,
     io::{self, Error as IoError, ErrorKind},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use kithara_storage::{
-    MmapOptions, MmapResource, OpenMode, Resource, StorageError, StorageResource,
+    Atomic, AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
+    ResourceStatus, StorageError, StorageResource,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssetResourceState,
     base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
+    index::AvailabilityIndex,
     key::ResourceKey,
+    state::AssetResourceState,
 };
 
 /// Initial mmap file size for index resources (4 KB).
@@ -31,20 +34,50 @@ pub struct DiskAssetStore {
     root_dir: PathBuf,
     asset_root: String,
     cancel: CancellationToken,
+    availability: AvailabilityIndex,
 }
 
 impl DiskAssetStore {
-    /// Create a store rooted at `root_dir` for a specific `asset_root`.
+    /// Create a store rooted at `root_dir` for a specific `asset_root`
+    /// with its own unshared [`AvailabilityIndex`]. Convenient for
+    /// tests and the `internal` feature surface; production
+    /// construction (via `AssetStoreBuilder::build`) uses
+    /// [`DiskAssetStore::with_availability`] to share the aggregate
+    /// with the enum variant.
     pub fn new<P: Into<PathBuf>, S: Into<String>>(
         root_dir: P,
         asset_root: S,
         cancel: CancellationToken,
     ) -> Self {
-        Self {
+        Self::with_availability(root_dir, asset_root, cancel, AvailabilityIndex::new())
+    }
+
+    /// Like [`DiskAssetStore::new`] but shares the given aggregate
+    /// availability handle. Observer callbacks fired by this store's
+    /// resources mutate the shared handle, so queries through the
+    /// owning [`crate::AssetStore`] see the updates immediately.
+    ///
+    /// If `_index/availability.bin` exists under `root_dir`, the
+    /// constructor best-effort seeds the shared [`AvailabilityIndex`]
+    /// from it. A missing / empty / corrupt file is silently treated
+    /// as an empty seed (same policy as `LruIndex::load` and
+    /// `PinsIndex::load`). Errors from the underlying resource read
+    /// itself are swallowed here — a broken cache must not prevent
+    /// store construction.
+    pub(crate) fn with_availability<P: Into<PathBuf>, S: Into<String>>(
+        root_dir: P,
+        asset_root: S,
+        cancel: CancellationToken,
+        availability: AvailabilityIndex,
+    ) -> Self {
+        let store = Self {
             root_dir: root_dir.into(),
             asset_root: asset_root.into(),
             cancel,
-        }
+            availability,
+        };
+        let _ = store.seed_availability_from_disk();
+        store
     }
 
     #[must_use]
@@ -77,15 +110,86 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
-    fn open_storage_resource(&self, path: PathBuf, mode: OpenMode) -> AssetsResult<MmapResource> {
-        Ok(Resource::open(
+    fn availability_index_path(&self) -> PathBuf {
+        self.root_dir.join("_index").join("availability.bin")
+    }
+
+    /// Open `_index/availability.bin` as a raw `MmapResource`. Used by
+    /// [`Self::checkpoint`] and [`Self::seed_availability_from_disk`]
+    /// to persist / hydrate the [`AvailabilityIndex`].
+    fn open_availability_index_resource(&self) -> AssetsResult<MmapResource> {
+        self.open_index_resource(self.availability_index_path())
+    }
+
+    /// Hydrate the shared [`AvailabilityIndex`] from disk if a
+    /// persisted snapshot exists. Called exactly once, from
+    /// [`Self::with_availability`] at construction time.
+    ///
+    /// If `_index/availability.bin` is absent, this is a no-op. A
+    /// corrupt / wrong-version payload is silently dropped by
+    /// `AvailabilityIndex::load_from` and the aggregate stays empty.
+    fn seed_availability_from_disk(&self) -> AssetsResult<()> {
+        if !self.availability_index_path().exists() {
+            return Ok(());
+        }
+        let res = self.open_availability_index_resource()?;
+        let atomic = Atomic::new(res);
+        self.availability.load_from(&atomic)
+    }
+
+    /// Persist the current [`AvailabilityIndex`] snapshot to
+    /// `_index/availability.bin` via an `Atomic` tempfile swap. Called
+    /// from [`crate::AssetStore::checkpoint`]. No [`Drop`] hook is
+    /// used — checkpointing is always explicit (closes attempt #1's
+    /// landmine L3).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the index resource cannot be opened
+    /// or the atomic write fails.
+    pub(crate) fn checkpoint(&self) -> AssetsResult<()> {
+        let res = self.open_availability_index_resource()?;
+        let atomic = Atomic::new(res);
+        self.availability.persist_to(&atomic)
+    }
+
+    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
+        crate::index::ScopedAvailabilityObserver::new(
+            self.asset_root.clone(),
+            key.clone(),
+            self.availability.clone(),
+        )
+    }
+
+    fn open_storage_resource(
+        &self,
+        key: &ResourceKey,
+        path: PathBuf,
+        mode: OpenMode,
+    ) -> AssetsResult<MmapResource> {
+        let resource = Resource::open_with_observer(
             self.cancel.clone(),
             MmapOptions {
                 path,
                 initial_len: None,
                 mode,
             },
-        )?)
+            Some(self.scoped_observer(key)),
+        )?;
+        // Seed aggregate from the driver's initial state for files
+        // already committed on disk. `MmapDriver::open` populates
+        // `available = 0..file_len` for existing files, so a caller
+        // that never goes through `write_at` / `commit` (e.g. a
+        // pre-existing packaged fixture) would otherwise be invisible
+        // to `AssetStore::contains_range`. Closes landmine L2 for
+        // everything that flows through this open path.
+        if let ResourceStatus::Committed {
+            final_len: Some(len),
+        } = resource.status()
+        {
+            self.availability.record_commit(&self.asset_root, key, len);
+        }
+        Ok(resource)
     }
 
     fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
@@ -131,7 +235,7 @@ impl Assets for DiskAssetStore {
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
-        let mmap = self.open_storage_resource(path, OpenMode::ReadOnly)?;
+        let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
         Ok(StorageResource::Mmap(mmap))
     }
 
@@ -146,7 +250,7 @@ impl Assets for DiskAssetStore {
         } else {
             OpenMode::Auto
         };
-        let mmap = self.open_storage_resource(path, mode)?;
+        let mmap = self.open_storage_resource(key, path, mode)?;
         Ok(StorageResource::Mmap(mmap))
     }
 

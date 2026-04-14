@@ -6,7 +6,7 @@
 //!   1. All segments for variant 0 are cached (read to EOF)
 //!   2. ABR switches variant 0 → variant 1
 //!   3. Seek to middle of stream triggers on-demand request for variant 1 segment
-//!   4. `handle_midstream_switch()` drains ALL segment_requests — including the
+//!   4. `handle_midstream_switch()` drains ALL `segment_requests` — including the
 //!      current-epoch on-demand request
 //!   5. Program hangs — request never served
 //!

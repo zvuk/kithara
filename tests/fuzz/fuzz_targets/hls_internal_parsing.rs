@@ -2,14 +2,13 @@
 
 use arbitrary::Arbitrary;
 use kithara_hls::internal::{
-    VariantId, parse_master_playlist, parse_media_playlist, variant_info_from_master,
+    parse_master_playlist, parse_media_playlist, variant_info_from_master,
 };
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
 struct Input {
     data: Vec<u8>,
-    variant_id: u16,
 }
 
 fuzz_target!(|input: Input| {
@@ -21,5 +20,5 @@ fuzz_target!(|input: Input| {
         assert_eq!(infos.len(), master.variants.len());
     }
 
-    let _ = parse_media_playlist(&data, VariantId(usize::from(input.variant_id)));
+    let _ = parse_media_playlist(&data);
 });

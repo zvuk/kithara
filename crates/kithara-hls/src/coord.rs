@@ -5,10 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize},
 };
 
-use kithara_platform::{
-    Condvar, tokio,
-    tokio::sync::{Notify, futures::Notified},
-};
+use kithara_platform::{Condvar, tokio::sync::Notify};
 use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
 use tokio_util::sync::CancellationToken;
 
@@ -27,7 +24,12 @@ pub struct HlsCoord {
     pub cancel: CancellationToken,
     pub condvar: Condvar,
     pub had_midstream_switch: AtomicBool,
-    pub reader_advanced: Notify,
+    /// `Arc<Notify>` so the handle can be cloned out to components that
+    /// need an owned `'static` wake primitive (e.g. a future
+    /// `Stream<Item = FetchCmd>` adapter that registers the notify in
+    /// its own `poll_next` context). All existing `.notify_one()` and
+    /// `.notified()` calls continue to work via `Deref` to [`Notify`].
+    pub reader_advanced: Arc<Notify>,
     pub stopped: AtomicBool,
     timeline: Timeline,
     demand: DemandSlot<SegmentRequest>,
@@ -45,7 +47,7 @@ impl HlsCoord {
             cancel,
             condvar: Condvar::new(),
             had_midstream_switch: AtomicBool::new(false),
-            reader_advanced: Notify::new(),
+            reader_advanced: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             timeline,
             demand: DemandSlot::new(),
@@ -58,25 +60,18 @@ impl HlsCoord {
         inserted
     }
 
-    pub(crate) fn has_pending_segment_request(&self, seek_epoch: u64) -> bool {
-        self.demand
-            .peek()
-            .is_some_and(|request| request.seek_epoch == seek_epoch)
-    }
-
     pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {
         if self.demand.peek() == Some(request) {
             self.demand.clear();
         }
     }
 
-    pub(crate) fn take_segment_request(&self) -> Option<SegmentRequest> {
+    pub fn take_segment_request(&self) -> Option<SegmentRequest> {
         self.demand.take()
     }
 
-    pub(crate) fn requeue_segment_request(&self, request: SegmentRequest) {
-        self.demand.replace(request);
-        self.reader_advanced.notify_one();
+    pub fn peek_segment_request(&self) -> Option<SegmentRequest> {
+        self.demand.peek()
     }
 
     pub(crate) fn clear_segment_requests(&self) {
@@ -87,18 +82,10 @@ impl HlsCoord {
     pub(crate) fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
-
-    pub(crate) fn notified_reader_advanced(&self) -> Notified<'_> {
-        self.reader_advanced.notified()
-    }
 }
 
-impl TransferCoordination<SegmentRequest> for HlsCoord {
+impl TransferCoordination for HlsCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<SegmentRequest> {
-        &self.demand
     }
 }

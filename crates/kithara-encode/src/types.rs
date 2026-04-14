@@ -1,5 +1,7 @@
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
+const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
+
 /// PCM source for encoder requests.
 pub trait PcmSource: Send + Sync {
     fn sample_rate(&self) -> u32;
@@ -33,7 +35,7 @@ impl BytesEncodeTarget {
             Self::Mp3 => ContainerFormat::MpegAudio,
             Self::Flac => ContainerFormat::Flac,
             Self::Aac => ContainerFormat::Adts,
-            Self::M4a => ContainerFormat::Fmp4,
+            Self::M4a => ContainerFormat::Mp4,
         }
     }
 
@@ -60,7 +62,7 @@ impl BytesEncodeTarget {
     #[must_use]
     pub const fn default_bit_rate(self) -> Option<u64> {
         match self {
-            Self::Mp3 | Self::Aac | Self::M4a => Some(128_000),
+            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
             Self::Flac => None,
         }
     }
@@ -133,7 +135,7 @@ mod tests {
     fn bytes_target_maps_to_expected_media_info() {
         let info = BytesEncodeTarget::M4a.media_info(44_100, 2);
         assert_eq!(info.codec, Some(AudioCodec::AacLc));
-        assert_eq!(info.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(info.container, Some(ContainerFormat::Mp4));
         assert_eq!(info.sample_rate, Some(44_100));
         assert_eq!(info.channels, Some(2));
     }

@@ -15,16 +15,17 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration};
+use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
     coordination::TransferCoordination,
-    layout::LayoutIndex,
     source::{ReadOutcome, Source, VariantChangeError},
-    topology::Topology,
 };
+
+/// Timeout for seek `wait_range` calls before returning an error.
+const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Defines a stream type and how to create it.
 ///
@@ -35,22 +36,11 @@ use crate::{
 pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
-    /// Read-only media structure for this stream type.
-    type Topology: Topology;
-    /// Committed placement of logical items in the virtual byte space.
-    type Layout: LayoutIndex;
     /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination<Self::Demand>;
-    /// On-demand request type used by the stream-specific coordinator.
-    type Demand: Clone + Send + Sync + 'static;
+    type Coord: TransferCoordination;
 
     /// Source implementing `Source`.
-    type Source: Source<
-            Topology = Self::Topology,
-            Layout = Self::Layout,
-            Coord = Self::Coord,
-            Demand = Self::Demand,
-        >;
+    type Source: Source<Coord = Self::Coord>;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -101,6 +91,9 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
+        // Yield so background tasks (Downloader loop) spawned during
+        // create() get a chance to start on current-thread runtimes.
+        task::yield_now().await;
         Ok(Self { source })
     }
 
@@ -211,10 +204,7 @@ impl<T: StreamType> Read for Stream<T> {
                         }
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(
-                                ErrorKind::Interrupted,
-                                "data not ready",
-                            ));
+                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
                         }
                         hang_tick!();
                         yield_now();
@@ -230,10 +220,7 @@ impl<T: StreamType> Read for Stream<T> {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(
-                                ErrorKind::Interrupted,
-                                "data not ready",
-                            ));
+                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
                         }
                         hang_tick!();
                         yield_now();
@@ -259,6 +246,7 @@ impl<T: StreamType> Read for Stream<T> {
                         return Err(IoError::other("seek pending"));
                     }
                     hang_reset!();
+                    timeline.set_segment_position(pos);
                     timeline.set_byte_position(pos.saturating_add(n as u64));
                     return Ok(n);
                 }
@@ -280,10 +268,14 @@ impl<T: StreamType> Seek for Stream<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let timeline = self.source.timeline();
         let current = timeline.byte_position();
+
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => i128::from(p),
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
+                if self.source.len().is_none() {
+                    let _ = self.source.wait_range(0..1, SEEK_WAIT_TIMEOUT);
+                }
                 let Some(len) = self.source.len() else {
                     return Err(IoError::new(
                         ErrorKind::Unsupported,
@@ -302,8 +294,11 @@ impl<T: StreamType> Seek for Stream<T> {
         }
 
         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        // new_pos is verified non-negative above; i128 to u64 is safe after bounds check
         let new_pos = new_pos as u64;
+
+        let _ = self
+            .source
+            .wait_range(new_pos..new_pos.saturating_add(1), SEEK_WAIT_TIMEOUT);
 
         if let Some(len) = self.source.len()
             && new_pos > len
@@ -328,7 +323,7 @@ mod tests {
     use kithara_storage::WaitOutcome;
 
     use super::*;
-    use crate::{DemandSlot, ReadOutcome, Source, SourcePhase};
+    use crate::{ReadOutcome, Source, SourcePhase};
 
     mod kithara {
         pub(crate) use kithara_test_macros::test;
@@ -336,17 +331,12 @@ mod tests {
 
     #[derive(Default)]
     struct TestCoord {
-        demand: DemandSlot<()>,
         timeline: Timeline,
     }
 
-    impl TransferCoordination<()> for TestCoord {
+    impl TransferCoordination for TestCoord {
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
-        }
-
-        fn demand(&self) -> &DemandSlot<()> {
-            &self.demand
         }
     }
 
@@ -367,10 +357,7 @@ mod tests {
         ) -> Self {
             Self {
                 anchor: None,
-                coord: TestCoord {
-                    demand: DemandSlot::new(),
-                    timeline,
-                },
+                coord: TestCoord { timeline },
                 data,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
@@ -380,18 +367,7 @@ mod tests {
 
     impl Source for ScriptSource {
         type Error = io::Error;
-        type Topology = ();
-        type Layout = ();
         type Coord = TestCoord;
-        type Demand = ();
-
-        fn topology(&self) -> &Self::Topology {
-            &()
-        }
-
-        fn layout(&self) -> &Self::Layout {
-            &()
-        }
 
         fn coord(&self) -> &Self::Coord {
             &self.coord
@@ -446,12 +422,9 @@ mod tests {
     impl StreamType for DummyType {
         type Config = ();
         type Coord = TestCoord;
-        type Demand = ();
         type Error = io::Error;
         type Events = ();
-        type Layout = ();
         type Source = ScriptSource;
-        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(IoError::other("not used in unit tests"))
@@ -463,12 +436,9 @@ mod tests {
     impl StreamType for SeekDuringWaitType {
         type Config = ();
         type Coord = TestCoord;
-        type Demand = ();
         type Error = io::Error;
         type Events = ();
-        type Layout = ();
         type Source = SeekDuringWaitSource;
-        type Topology = ();
 
         async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
             Err(IoError::other("not used in unit tests"))
@@ -482,18 +452,7 @@ mod tests {
 
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
-        type Topology = ();
-        type Layout = ();
         type Coord = TestCoord;
-        type Demand = ();
-
-        fn topology(&self) -> &Self::Topology {
-            &()
-        }
-
-        fn layout(&self) -> &Self::Layout {
-            &()
-        }
 
         fn coord(&self) -> &Self::Coord {
             &self.coord
@@ -566,7 +525,6 @@ mod tests {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
             coord: TestCoord {
-                demand: DemandSlot::new(),
                 timeline: timeline.clone(),
             },
             read_calls: 0,

@@ -14,10 +14,7 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{
-    Timeline, coordination::TransferCoordination, error::StreamResult, layout::LayoutIndex,
-    media::MediaInfo, topology::Topology,
-};
+use crate::{Timeline, coordination::TransferCoordination, error::StreamResult, media::MediaInfo};
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -35,8 +32,6 @@ pub enum SourcePhase {
     Ready,
     /// Active seek in progress — decoder should be interrupted.
     Seeking,
-    /// Stopped before EOF — terminal unless range is ready (drain).
-    Stopped,
     /// Default: data not yet available, no specific sub-state.
     #[default]
     Waiting,
@@ -79,13 +74,29 @@ impl StdError for VariantChangeError {}
 ///
 /// Represents a deterministic mapping from target playback time to a byte
 /// position and segment context inside the source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, derive_setters::Setters)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct SourceSeekAnchor {
     pub byte_offset: u64,
     pub segment_start: Duration,
     pub segment_end: Option<Duration>,
     pub segment_index: Option<u32>,
     pub variant_index: Option<usize>,
+}
+
+impl SourceSeekAnchor {
+    /// Create a minimal anchor with just a byte offset and segment start
+    /// time. Optional fields default to `None`; set them via the
+    /// `with_*` builders.
+    #[must_use]
+    pub fn new(byte_offset: u64, segment_start: Duration) -> Self {
+        Self {
+            byte_offset,
+            segment_start,
+            ..Self::default()
+        }
+    }
 }
 
 /// Sync random-access source.
@@ -100,30 +111,15 @@ pub struct SourceSeekAnchor {
     unimock(
         api = SourceMock,
         type Error = std::io::Error;
-        type Topology = ();
-        type Layout = ();
         type Coord = ();
-        type Demand = ();
     )
 )]
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
     /// Error type.
     type Error: StdError + Send + Sync + 'static;
-    /// Read-only media structure for this source.
-    type Topology: Topology;
-    /// Committed placement of logical items in the virtual byte space.
-    type Layout: LayoutIndex;
     /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination<Self::Demand>;
-    /// On-demand request type used by the source-specific coordinator.
-    type Demand: Clone + Send + Sync + 'static;
-
-    /// Read-only media structure for this source.
-    fn topology(&self) -> &Self::Topology;
-
-    /// Committed placement handle for this source.
-    fn layout(&self) -> &Self::Layout;
+    type Coord: TransferCoordination;
 
     /// Shared runtime coordination for this source.
     fn coord(&self) -> &Self::Coord;
@@ -174,6 +170,9 @@ pub trait Source: Send + 'static {
     }
 
     /// Total length if known.
+    ///
+    /// Streaming sources may block briefly until the HTTP response headers
+    /// arrive (Content-Length discovery).
     fn len(&self) -> Option<u64>;
 
     /// Get media info if available.
@@ -289,8 +288,6 @@ pub trait Source: Send + 'static {
 
 #[cfg(test)]
 mod tests {
-    use crate::DemandSlot;
-
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
@@ -299,17 +296,12 @@ mod tests {
 
     #[derive(Default)]
     struct TestCoord {
-        demand: DemandSlot<()>,
         timeline: Timeline,
     }
 
-    impl TransferCoordination<()> for TestCoord {
+    impl TransferCoordination for TestCoord {
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
-        }
-
-        fn demand(&self) -> &DemandSlot<()> {
-            &self.demand
         }
     }
 
@@ -334,10 +326,7 @@ mod tests {
         }
         impl Source for ReadySource {
             type Error = std::io::Error;
-            type Topology = ();
-            type Layout = ();
             type Coord = TestCoord;
-            type Demand = ();
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,
@@ -357,14 +346,6 @@ mod tests {
             }
             fn len(&self) -> Option<u64> {
                 Some(100)
-            }
-
-            fn topology(&self) -> &Self::Topology {
-                &()
-            }
-
-            fn layout(&self) -> &Self::Layout {
-                &()
             }
 
             fn coord(&self) -> &Self::Coord {

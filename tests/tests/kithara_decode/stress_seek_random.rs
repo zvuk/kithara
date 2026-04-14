@@ -91,7 +91,7 @@ async fn stress_random_seek_read_synthetic_wav() {
     // ~0.5% of total duration, clamped to [0.05s, 0.5s].
     let chunk_duration_secs = (total_secs * 0.005).clamp(0.05, 0.5);
     let chunk_samples =
-        (chunk_duration_secs * spec.sample_rate as f64 * spec.channels as f64) as usize;
+        (chunk_duration_secs * f64::from(spec.sample_rate) * f64::from(spec.channels)) as usize;
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     // Steps 5-7: Run seek+read loop in blocking thread

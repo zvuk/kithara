@@ -19,7 +19,7 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
+use kithara_test_utils::{TestServerHelper, TestTempDir, abr_fast, temp_dir};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -40,6 +40,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
+    abr_fast: AbrOptions,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -50,7 +51,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
+            ..abr_fast
         });
     let config = AudioConfig::<Hls>::new(hls_config);
 
@@ -82,7 +83,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 
         info!("Phase 1: warmup — reading PCM samples");
         let mut warmup_samples = 0u64;
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < Duration::from_secs(2) {
             let n = audio.read(&mut buf);
             if n == 0 {
                 break;
@@ -95,9 +96,8 @@ async fn stress_seek_during_abr_switch_real_decoder(
             "Warmup done"
         );
 
-        // Phase 2: 20 seconds of rapid seeking
-        info!("Phase 2: stress seeking for 20 seconds");
-        let seek_start = Instant::now();
+        // Phase 2: 200 rapid random seeks
+        info!("Phase 2: 200 rapid random seeks");
         let mut seek_count = 0u64;
         let mut samples_after_seek = 0u64;
         let mut seek_errors = 0u64;
@@ -110,11 +110,8 @@ async fn stress_seek_during_abr_switch_real_decoder(
             205.0, 55.0, 120.0, 185.0, 20.0, 150.0,
         ];
 
-        let mut pos_idx = 0;
-        while seek_start.elapsed() < Duration::from_secs(20) {
-            let pos = positions_secs[pos_idx % positions_secs.len()];
-            pos_idx += 1;
-
+        for i in 0..200 {
+            let pos = positions_secs[i % positions_secs.len()];
             let position = Duration::from_secs_f64(pos);
             match audio.seek(position) {
                 Ok(()) => {
@@ -132,9 +129,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
                     info!(?e, pos, "seek error");
                 }
             }
-
-            // Small pause between seeks (simulate real user interaction)
-            thread::sleep(Duration::from_millis(50));
         }
 
         info!(
@@ -185,6 +179,7 @@ async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
+    abr_fast: AbrOptions,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -192,7 +187,7 @@ async fn seek_sequence_from_log_real_stream(
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
+            ..abr_fast
         });
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)

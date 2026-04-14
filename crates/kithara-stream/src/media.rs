@@ -8,6 +8,8 @@ use derive_setters::Setters;
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerFormat {
+    /// Standard MP4 (ISO/IEC 14496-12)
+    Mp4,
     /// Fragmented MP4 (fMP4) - common for HLS
     Fmp4,
     /// MPEG Transport Stream
@@ -62,6 +64,7 @@ pub enum AudioCodec {
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
     pub channels: Option<u16>,

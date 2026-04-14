@@ -16,10 +16,10 @@ use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
-use kithara_stream::{
-    Fetch, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
-};
+use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
+
+use crate::pipeline::fetch::Fetch;
 
 /// Nanoseconds per second for frame/duration conversion.
 const NANOS_PER_SEC: u128 = 1_000_000_000;
@@ -284,9 +284,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Applying format change: old decoder finished, seeking to new segment start"
         );
 
-        // Switch layout and clear variant fence so the new decoder reads
-        // from the correct variant's byte map.
-        self.shared_stream.commit_variant_layout();
+        // Layout already switched by step_recreating_decoder before the
+        // readiness gate. Clear variant fence so the new decoder reads
+        // from the correct variant's segments.
         self.shared_stream.clear_variant_fence();
 
         if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
@@ -517,7 +517,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 warn!(offset, "track failed: decoder recreation failed");
             }
             TrackFailure::SourceCancelled => warn!("track failed: source cancelled"),
-            TrackFailure::SourceStopped => warn!("track failed: source stopped"),
         }
     }
 
@@ -1258,17 +1257,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 };
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         match self.decode_one_step() {
@@ -1313,17 +1306,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 };
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
         let request = applying.request;
         let applied = match applying.mode {
@@ -1378,10 +1365,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.state = TrackState::Failed(TrackFailure::SourceCancelled);
                 return TrackStep::Failed;
             }
-            SourcePhase::Stopped => {
-                self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                return TrackStep::Failed;
-            }
             SourcePhase::Eof => {
                 self.state = TrackState::AtEof;
                 return TrackStep::Eof;
@@ -1428,6 +1411,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             TrackState::RecreatingDecoder(recreate) => recreate.clone(),
             _ => return TrackStep::StateChanged,
         };
+        // Switch layout BEFORE the readiness gate so the gate checks the
+        // target variant's data, not the old variant's. The old decoder
+        // is no longer reading at this point (FSM left Decoding state).
+        self.shared_stream.commit_variant_layout();
         if !self.source_is_ready_for_boundary(recreate.offset) {
             let phase = self.source_phase_for_boundary(recreate.offset);
             if let Some(reason) = map_source_phase(phase) {
@@ -1445,17 +1432,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.submit_demand_for_current_state();
                 return TrackStep::Blocked(reason);
             }
-            match phase {
-                SourcePhase::Cancelled => {
-                    self.state = TrackState::Failed(TrackFailure::SourceCancelled);
-                    return TrackStep::Failed;
-                }
-                SourcePhase::Stopped => {
-                    self.state = TrackState::Failed(TrackFailure::SourceStopped);
-                    return TrackStep::Failed;
-                }
-                _ => return TrackStep::Blocked(WaitingReason::Waiting),
+            if phase == SourcePhase::Cancelled {
+                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                return TrackStep::Failed;
             }
+            return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
@@ -1477,11 +1458,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             self.apply_format_change(&recreate.media_info, recreate.offset)
         } else {
-            // Switch layout to the target variant BEFORE decoder creation so
-            // stream.len() returns the new variant's total and the new decoder
-            // reads from the correct byte map. This is safe because the old
-            // decoder is no longer reading at this point.
-            self.shared_stream.commit_variant_layout();
+            // Layout already switched by step_recreating_decoder before the
+            // readiness gate.
             self.shared_stream.clear_variant_fence();
             if let Err(err) = self.shared_stream.seek(SeekFrom::Start(recreate.offset)) {
                 warn!(

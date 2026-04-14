@@ -41,7 +41,8 @@ impl HttpClient {
         #[cfg(not(target_arch = "wasm32"))]
         let builder = builder
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
-            .danger_accept_invalid_certs(options.insecure);
+            .danger_accept_invalid_certs(options.insecure)
+            .read_timeout(options.request_timeout);
         let inner = builder.build().expect("failed to build reqwest client");
         Self { inner, options }
     }
@@ -82,6 +83,13 @@ impl HttpClient {
         headers: Option<Headers>,
     ) -> NetResult<crate::ByteStream> {
         <Self as Net>::get_range(self, url, range, headers).await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
+        <Self as Net>::head(self, url, headers).await
     }
 
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).

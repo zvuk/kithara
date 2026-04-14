@@ -23,24 +23,14 @@ fn audio() -> EmbeddedAudio {
 
 #[kithara::fixture]
 fn wav_media_info() -> MediaInfo {
-    MediaInfo {
-        channels: None,
-        codec: None,
-        container: Some(ContainerFormat::Wav),
-        sample_rate: None,
-        variant_index: None,
-    }
+    MediaInfo::default().with_container(ContainerFormat::Wav)
 }
 
 #[kithara::fixture]
 fn mp3_media_info() -> MediaInfo {
-    MediaInfo {
-        channels: None,
-        codec: Some(AudioCodec::Mp3),
-        container: Some(ContainerFormat::MpegAudio),
-        sample_rate: None,
-        variant_index: None,
-    }
+    MediaInfo::default()
+        .with_codec(AudioCodec::Mp3)
+        .with_container(ContainerFormat::MpegAudio)
 }
 
 // Basic Decode Tests

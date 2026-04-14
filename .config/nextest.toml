@@ -3,30 +3,6 @@ fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 3 }
 
-# Stress tests that use blocking audio reads (recv_outcome_blocking)
-# need exclusive CPU — run one at a time.
-[[profile.default.overrides]]
-filter = "binary(suite_stress)"
-threads-required = "num-cpus"
-
-# Flaky tests: timing-sensitive ABR/seek/ephemeral tests that occasionally
-# fail under CPU contention.  One retry is enough to confirm a real failure
-# vs a transient scheduling glitch.
-[[profile.default.overrides]]
-filter = """
-  test(drm_stream_byte_integrity) |
-  test(stress_chunk_integrity) |
-  test(stress_seek_lifecycle) |
-  test(live_stress_real_stream) |
-  test(stream_continues_after_seek) |
-  test(seek_sequence_from_log_real_stream_drm) |
-  test(stress_random_seek_read_hls) |
-  test(decoder_file_seek_multiple) |
-  test(test_wait_range_returns_ready_when_data_pushed) |
-  test(test_wait_range_transient_eof_with_zero_total_waits_for_data)
-"""
-retries = 5
-
 [profile.ci]
 fail-fast = false
 test-threads = "num-cpus"

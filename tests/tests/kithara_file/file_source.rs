@@ -184,7 +184,7 @@ async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Seek from end (-5 bytes)
+        // Seek from end — wait_range inside seek() ensures len() is known.
         let pos = stream.seek(SeekFrom::End(-5)).unwrap();
         // Test data: b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345" = 27 bytes
         assert_eq!(pos, 22);
@@ -215,7 +215,8 @@ async fn stream_file_seek_past_eof_fails(
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Attempt to seek past EOF
+        // wait_range inside seek() ensures len() is known, then rejects past-EOF.
+        // Attempt to seek past EOF �� length is known.
         let result = stream.seek(SeekFrom::Start(1000));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);

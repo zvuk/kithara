@@ -73,7 +73,7 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         "--lib-type",
         "static",
         "-F",
-        "backend-uniffi,apple",
+        "backend-uniffi,apple,dev",
         "--swift-tools-version",
         "6.0",
         "-y",

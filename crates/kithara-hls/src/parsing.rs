@@ -44,8 +44,6 @@ pub struct CodecInfo {
 /// Supported HLS encryption methods (as parsed from playlists).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncryptionMethod {
-    /// No encryption.
-    None,
     /// AES-128 CBC encryption of the whole segment.
     Aes128,
     /// Sample-based AES encryption.
@@ -63,10 +61,6 @@ pub struct KeyInfo {
     pub uri: Option<String>,
     /// The initialization vector (IV), if specified.
     pub iv: Option<[u8; IV_LEN]>,
-    /// The key format, e.g., "identity".
-    pub key_format: Option<String>,
-    /// The key format version(s).
-    pub key_format_versions: Option<String>,
 }
 
 /// The effective encryption key for a specific segment.
@@ -137,14 +131,14 @@ pub struct MediaPlaylist {
 pub struct MediaSegment {
     /// Sequence number of the segment (media-sequence + index in playlist).
     pub sequence: u64,
-    /// The variant this segment belongs to.
-    pub variant_id: VariantId,
     /// URL of the segment (absolute or relative to playlist URI).
     pub uri: String,
     /// Duration of the segment if known.
     pub duration: Duration,
     /// Optional encryption information effective for this segment.
     pub key: Option<SegmentKey>,
+    /// Byte length from `#EXT-X-BYTERANGE` if present in the playlist.
+    pub byte_range_len: Option<u64>,
 }
 
 /// Detect container format from URI extension.
@@ -221,7 +215,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
 ///
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
-pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<MediaPlaylist> {
+pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
     fn map_encryption_method(m: HlsEncryptionMethod) -> EncryptionMethod {
         match m {
             HlsEncryptionMethod::Aes128 => EncryptionMethod::Aes128,
@@ -242,8 +236,6 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
             method,
             uri: Some(uri.to_string()),
             iv: k.iv.to_slice(),
-            key_format: k.format.as_ref().map(ToString::to_string),
-            key_format_versions: k.versions.as_ref().map(ToString::to_string),
         })
     }
 
@@ -283,10 +275,10 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
 
             MediaSegment {
                 sequence: media_sequence + index as u64,
-                variant_id,
                 uri: seg.uri().to_string(),
                 duration: seg.duration.duration(),
                 key: seg_key,
+                byte_range_len: seg.byte_range.as_ref().map(|br| br.len() as u64),
             }
         })
         .collect();
@@ -357,6 +349,7 @@ pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
 }
 
 #[cfg(test)]
+#[allow(dead_code, unused_imports)]
 mod tests {
     use kithara_test_utils::kithara;
 
@@ -366,16 +359,6 @@ mod tests {
     #[kithara::fixture]
     fn variant_id_42() -> VariantId {
         VariantId(42)
-    }
-
-    #[kithara::fixture]
-    fn variant_id_5() -> VariantId {
-        VariantId(5)
-    }
-
-    #[kithara::fixture]
-    fn variant_id_0() -> VariantId {
-        VariantId(0)
     }
 
     #[kithara::fixture]
@@ -470,11 +453,8 @@ audio_flac.m3u8"
     }
 
     #[kithara::test(wasm)]
-    fn test_parse_simple_media_playlist(
-        simple_media_playlist_data: &[u8],
-        variant_id_0: VariantId,
-    ) {
-        let result = parse_media_playlist(simple_media_playlist_data, variant_id_0);
+    fn test_parse_simple_media_playlist(simple_media_playlist_data: &[u8]) {
+        let result = parse_media_playlist(simple_media_playlist_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist: {:?}",
@@ -487,21 +467,16 @@ audio_flac.m3u8"
         assert_eq!(media.media_sequence, 0);
         assert!(media.end_list);
 
-        assert_eq!(media.segments[0].variant_id.0, 0);
         assert_eq!(media.segments[0].uri, "segment0.ts");
         assert_eq!(media.segments[0].sequence, 0);
 
-        assert_eq!(media.segments[1].variant_id.0, 0);
         assert_eq!(media.segments[1].uri, "segment1.ts");
         assert_eq!(media.segments[1].sequence, 1);
     }
 
     #[kithara::test(wasm)]
-    fn test_parse_media_playlist_with_init_segment(
-        media_playlist_with_init_data: &[u8],
-        variant_id_0: VariantId,
-    ) {
-        let result = parse_media_playlist(media_playlist_with_init_data, variant_id_0);
+    fn test_parse_media_playlist_with_init_segment(media_playlist_with_init_data: &[u8]) {
+        let result = parse_media_playlist(media_playlist_with_init_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist with init: {:?}",
@@ -535,20 +510,6 @@ audio_flac.m3u8"
 
         let master = result.unwrap();
         assert_eq!(master.variants.len(), 0);
-    }
-
-    #[kithara::test(wasm)]
-    fn test_media_playlist_variant_id_preserved(
-        simple_media_playlist_data: &[u8],
-        variant_id_5: VariantId,
-    ) {
-        let result = parse_media_playlist(simple_media_playlist_data, variant_id_5);
-        assert!(result.is_ok());
-
-        let media = result.unwrap();
-        assert_eq!(media.segments.len(), 2);
-        assert_eq!(media.segments[0].variant_id.0, 5);
-        assert_eq!(media.segments[1].variant_id.0, 5);
     }
 
     #[kithara::test(wasm)]
@@ -626,18 +587,16 @@ audio_flac.m3u8"
     }
 
     #[kithara::test(wasm)]
-    #[case(0u32, 0u64, "segment.ts", 4.0)]
-    #[case(5u32, 1u64, "segment1.m4s", 6.0)]
-    #[case(10u32, 2u64, "chunk.ts", 2.5)]
+    #[case(0u64, "segment.ts", 4.0)]
+    #[case(1u64, "segment1.m4s", 6.0)]
+    #[case(2u64, "chunk.ts", 2.5)]
     fn test_playlist_struct_debug_segment(
-        #[case] variant_id: u32,
         #[case] sequence: u64,
         #[case] uri: &str,
         #[case] duration_secs: f64,
     ) {
         let segment = MediaSegment {
             sequence,
-            variant_id: VariantId(variant_id as usize),
             uri: uri.to_string(),
             duration: Duration::from_secs_f64(duration_secs),
             key: None,
@@ -679,9 +638,8 @@ audio_flac.m3u8"
         #[case] data: &[u8],
         #[case] expected_segments: usize,
         #[case] expected_endlist: bool,
-        variant_id_0: VariantId,
     ) {
-        let result = parse_media_playlist(data, variant_id_0);
+        let result = parse_media_playlist(data);
         assert!(
             result.is_ok(),
             "Failed to parse playlist: {:?}",
@@ -694,22 +652,22 @@ audio_flac.m3u8"
     }
 
     #[kithara::test(wasm)]
-    fn test_allow_cache_no(variant_id_0: VariantId) {
+    fn test_allow_cache_no() {
         let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:NO\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
-        let media = parse_media_playlist(data, variant_id_0).unwrap();
+        let media = parse_media_playlist(data).unwrap();
         assert!(!media.allow_cache, "allow_cache should be false");
     }
 
     #[kithara::test(wasm)]
-    fn test_allow_cache_default(simple_media_playlist_data: &[u8], variant_id_0: VariantId) {
-        let media = parse_media_playlist(simple_media_playlist_data, variant_id_0).unwrap();
+    fn test_allow_cache_default(simple_media_playlist_data: &[u8]) {
+        let media = parse_media_playlist(simple_media_playlist_data).unwrap();
         assert!(media.allow_cache, "allow_cache should be true by default");
     }
 
     #[kithara::test(wasm)]
-    fn test_allow_cache_yes(variant_id_0: VariantId) {
+    fn test_allow_cache_yes() {
         let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:YES\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
-        let media = parse_media_playlist(data, variant_id_0).unwrap();
+        let media = parse_media_playlist(data).unwrap();
         assert!(media.allow_cache, "allow_cache should be true for YES");
     }
 }

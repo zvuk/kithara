@@ -13,6 +13,10 @@ pub(crate) fn configure_resource(config: &mut ResourceConfig, store: &StoreOptio
     if let Some(ref dir) = store.cache_dir {
         config.store.cache_dir = PathBuf::from(dir);
     }
+    #[cfg(feature = "dev")]
+    {
+        config.net.insecure = true;
+    }
 }
 
 #[cfg(test)]

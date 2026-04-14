@@ -8,6 +8,8 @@ use std::{
 };
 
 use derive_setters::Setters;
+#[cfg(feature = "hls")]
+use kithara_abr::{AbrController, AbrOptions, ThroughputEstimator};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
@@ -21,6 +23,8 @@ use kithara_hls::{HlsConfig, KeyOptions};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::tokio::runtime;
+#[cfg(feature = "file")]
+use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -102,7 +106,7 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 pub struct ResourceConfig {
     /// ABR controller (shared across tracks in a player).
     #[cfg(feature = "hls")]
-    pub abr: Option<kithara_abr::AbrController<kithara_abr::ThroughputEstimator>>,
+    pub abr: Option<AbrController<ThroughputEstimator>>,
     /// Unified event bus for streaming, decode, and audio events.
     ///
     /// When set, the bus is propagated to the underlying stream and audio
@@ -297,9 +301,10 @@ impl ResourceConfig {
             }
         };
 
+        let dl = Downloader::new(DownloaderConfig::default().with_net(self.net));
         let mut file_config = FileConfig::new(file_src)
             .with_store(self.store)
-            .with_net(self.net);
+            .with_downloader(dl);
 
         if let Some(bytes) = self.look_ahead_bytes {
             file_config = file_config.with_look_ahead_bytes(bytes);
@@ -319,8 +324,6 @@ impl ResourceConfig {
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
-        file_config.runtime = self.runtime.clone();
-
         let mut config = AudioConfig::<kithara_file::File>::new(file_config);
 
         // Apply audio settings from ResourceConfig.
@@ -374,9 +377,9 @@ impl ResourceConfig {
             #[expect(clippy::cast_sign_loss)]
             #[expect(clippy::cast_possible_truncation)]
             let cap = self.preferred_peak_bitrate as u64;
-            let ctrl = hls_config.abr.get_or_insert_with(|| {
-                kithara_abr::AbrController::new(kithara_abr::AbrOptions::default())
-            });
+            let ctrl = hls_config
+                .abr
+                .get_or_insert_with(|| AbrController::new(AbrOptions::default()));
             ctrl.set_max_bandwidth_bps(Some(cap));
         }
 

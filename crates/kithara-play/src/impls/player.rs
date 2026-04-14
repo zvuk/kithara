@@ -11,6 +11,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
+use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_events::EventBus;
@@ -44,7 +45,7 @@ const MIN_PLAYBACK_RATE: f32 = 0.01;
 pub struct PlayerConfig {
     /// Shared ABR controller. When `None`, a default one is created.
     #[derivative(Debug = "ignore")]
-    pub abr: Option<kithara_abr::AbrController<kithara_abr::ThroughputEstimator>>,
+    pub abr: Option<AbrController<ThroughputEstimator>>,
     /// Root event bus for this player.
     ///
     /// When set, all player/engine/resource events are published here.
@@ -120,9 +121,7 @@ impl PlayerImpl {
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
-            config.abr = Some(kithara_abr::AbrController::new(
-                kithara_abr::AbrOptions::default(),
-            ));
+            config.abr = Some(AbrController::new(AbrOptions::default()));
         }
 
         Self {
@@ -566,12 +565,12 @@ impl PlayerImpl {
 
     /// Get the shared ABR controller (if configured).
     #[must_use]
-    pub fn abr(&self) -> Option<&kithara_abr::AbrController<kithara_abr::ThroughputEstimator>> {
+    pub fn abr(&self) -> Option<&AbrController<ThroughputEstimator>> {
         self.config.abr.as_ref()
     }
 
     /// Change ABR mode at runtime. Takes effect on next `decide()`.
-    pub fn set_abr_mode(&self, mode: kithara_abr::AbrMode) {
+    pub fn set_abr_mode(&self, mode: AbrMode) {
         if let Some(ref ctrl) = self.config.abr {
             ctrl.set_mode(mode);
         }

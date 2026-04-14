@@ -193,19 +193,17 @@ async fn test_audio_playback_progress_uses_output_commit() {
     let mut saw_progress = false;
     let deadline = Instant::now() + Duration::from_millis(300);
     while Instant::now() < deadline {
-        match timeout(Duration::from_millis(40), events.recv()).await {
-            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
-                position_ms,
-                total_ms,
-                seek_epoch,
-            }))) => {
-                assert!(position_ms > 0);
-                assert!(total_ms.is_some());
-                assert_eq!(seek_epoch, 0);
-                saw_progress = true;
-                break;
-            }
-            _ => {}
+        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            seek_epoch,
+        }))) = timeout(Duration::from_millis(40), events.recv()).await
+        {
+            assert!(position_ms > 0);
+            assert!(total_ms.is_some());
+            assert_eq!(seek_epoch, 0);
+            saw_progress = true;
+            break;
         }
     }
 
@@ -230,12 +228,11 @@ async fn test_seek_emits_matching_playback_progress() {
     let deadline = Instant::now() + Duration::from_millis(300);
     let mut matched_epoch = None;
     while Instant::now() < deadline {
-        match timeout(Duration::from_millis(40), events.recv()).await {
-            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) => {
-                matched_epoch = Some(seek_epoch);
-                break;
-            }
-            _ => {}
+        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
+            timeout(Duration::from_millis(40), events.recv()).await
+        {
+            matched_epoch = Some(seek_epoch);
+            break;
         }
     }
 

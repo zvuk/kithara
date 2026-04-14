@@ -2,12 +2,12 @@
 //!
 //! Same ABR scenario as `stress_seek_abr_audio` (ascending V0, descending V1,
 //! delayed V0 → ABR switch to V1), but reads whole `PcmChunk` values instead
-//! of raw f32 samples. This gives access to `PcmMeta` (frame_offset, timestamp,
-//! segment_index, variant_index, epoch) for precise root-cause diagnosis.
+//! of raw f32 samples. This gives access to `PcmMeta` (`frame_offset`, timestamp,
+//! `segment_index`, `variant_index`, epoch) for precise root-cause diagnosis.
 //!
 //! Four-phase verification:
 //! 1. **Warmup**: read chunks until ABR switches from V0 (ascending) to V1 (descending)
-//! 2. **Post-switch**: 50 sequential V1 chunks with frame_offset continuity
+//! 2. **Post-switch**: 50 sequential V1 chunks with `frame_offset` continuity
 //! 3. **Random seeks**: 200 seek + 5 chunk reads with continuity + saw-tooth checks
 //! 4. **EOF**: seek near end, drain to EOF
 
@@ -97,7 +97,7 @@ async fn next_chunk_with_timeout(
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_micros(500)).await;
     }
 }
 
@@ -143,7 +143,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     );
 
     // Spawn HLS server
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,

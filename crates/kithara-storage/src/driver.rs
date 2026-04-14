@@ -139,6 +139,23 @@ pub struct DriverState {
     pub final_len: Option<u64>,
 }
 
+/// Observer notified when a [`Resource<D>`] gains bytes or finalizes.
+///
+/// Fires after the state lock is released so observer implementations
+/// are free to take their own locks without risking deadlocks against
+/// `wait_range` waiters. Storage knows nothing about resource keys —
+/// implementations capture any attribution context themselves (see
+/// `kithara-assets::index::ScopedAvailabilityObserver`).
+pub trait AvailabilityObserver: Send + Sync {
+    /// Record that `range` has just become available.
+    fn on_write(&self, range: Range<u64>);
+
+    /// Record that the resource has been committed with `final_len`
+    /// bytes. Only fires for `commit(Some(final_len))`; `commit(None)`
+    /// is silent.
+    fn on_commit(&self, final_len: u64);
+}
+
 /// Common state tracked by `Resource<D>`.
 struct CommonState {
     available: RangeSet<u64>,
@@ -153,6 +170,7 @@ struct Inner<D: DriverIo> {
     state: Mutex<CommonState>,
     condvar: Condvar,
     cancel: CancellationToken,
+    observer: Option<Arc<dyn AvailabilityObserver>>,
 }
 
 /// Generic storage resource parameterized by backend driver.
@@ -182,12 +200,28 @@ impl<D: DriverIo + Debug> Debug for Resource<D> {
 }
 
 impl<D: Driver> Resource<D> {
-    /// Create a resource from driver options.
+    /// Create a resource from driver options with no availability observer.
     ///
     /// # Errors
     ///
     /// Returns error if the driver cannot be opened (e.g. file I/O failure).
     pub fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
+        Self::open_with_observer(cancel, opts, None)
+    }
+
+    /// Create a resource with an optional [`AvailabilityObserver`]. The
+    /// observer (if any) fires after every successful `write_at` and
+    /// after a successful `commit` that supplies a final length. Hooks
+    /// run after the state lock is released.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the driver cannot be opened (e.g. file I/O failure).
+    pub fn open_with_observer(
+        cancel: CancellationToken,
+        opts: D::Options,
+        observer: Option<Arc<dyn AvailabilityObserver>>,
+    ) -> StorageResult<Self> {
         let (driver, init) = D::open(opts)?;
         Ok(Self {
             inner: Arc::new(Inner {
@@ -200,6 +234,7 @@ impl<D: Driver> Resource<D> {
                 }),
                 condvar: Condvar::new(),
                 cancel,
+                observer,
             }),
         })
     }
@@ -281,7 +316,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         // Update common state and wake waiters.
         {
             let mut state = self.inner.state.lock_sync();
-            state.available.insert(range);
+            state.available.insert(range.clone());
 
             // Invalidate evicted ranges for ring buffer drivers.
             if let Some(window) = self.inner.driver.valid_window() {
@@ -297,6 +332,13 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             }
         }
         self.inner.condvar.notify_all();
+
+        // Observer fires outside the state lock — implementations are
+        // free to take their own locks without deadlocking against
+        // `wait_range` waiters on the same resource.
+        if let Some(observer) = self.inner.observer.as_ref() {
+            observer.on_write(range);
+        }
 
         Ok(())
     }
@@ -410,6 +452,15 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             }
         }
         self.inner.condvar.notify_all();
+
+        // Observer fires outside the state lock and only when the
+        // caller supplied a final length — `commit(None)` is silent.
+        if let Some(len) = final_len
+            && let Some(observer) = self.inner.observer.as_ref()
+        {
+            observer.on_commit(len);
+        }
+
         Ok(())
     }
 

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use kithara::abr::AbrMode;
 use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
@@ -54,6 +55,7 @@ impl ItemEventBridge {
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             let mut last_buffered = None;
+            let mut variants: Vec<crate::types::FfiVariant> = Vec::new();
             loop {
                 tokio::select! {
                     () = cancel.cancelled() => break,
@@ -64,6 +66,7 @@ impl ItemEventBridge {
                                 &event,
                                 &mut duration_seconds,
                                 &mut last_buffered,
+                                &mut variants,
                             ),
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,
@@ -79,6 +82,7 @@ impl ItemEventBridge {
         event: &Event,
         duration_seconds: &mut Option<f64>,
         last_buffered: &mut Option<f64>,
+        variants: &mut Vec<crate::types::FfiVariant>,
     ) {
         if let Some(duration) = Self::duration_from_event(event)
             && duration_seconds.is_none_or(|current| (current - duration).abs() > UPDATE_THRESHOLD)
@@ -94,7 +98,7 @@ impl ItemEventBridge {
             observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
         }
 
-        Self::dispatch_variant_events(observer, event);
+        Self::dispatch_variant_events(observer, event, variants);
 
         if let Some(error) = Self::error_from_event(event) {
             observer.on_event(FfiItemEvent::StatusChanged {
@@ -151,40 +155,64 @@ impl ItemEventBridge {
         clippy::cast_possible_truncation,
         reason = "variant index/count fits u32"
     )]
-    fn dispatch_variant_events(observer: &Arc<dyn ItemObserver>, event: &Event) {
+    fn dispatch_variant_events(
+        observer: &Arc<dyn ItemObserver>,
+        event: &Event,
+        variants: &mut Vec<crate::types::FfiVariant>,
+    ) {
         match event {
-            Event::Hls(HlsEvent::VariantsDiscovered { variants, .. }) => {
-                let ffi_variants = variants
+            Event::Hls(HlsEvent::VariantsDiscovered {
+                variants: v,
+                initial_variant,
+            }) => {
+                let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
-                    .map(|v| crate::types::FfiVariant {
-                        index: v.index as u32,
-                        bandwidth_bps: v.bandwidth_bps.unwrap_or(0),
-                        name: v.name.clone(),
+                    .map(|vi| crate::types::FfiVariant {
+                        index: vi.index as u32,
+                        bandwidth_bps: vi.bandwidth_bps.unwrap_or(0),
+                        name: vi.name.clone(),
                     })
                     .collect();
+                variants.clone_from(&ffi_variants);
                 observer.on_event(FfiItemEvent::VariantsDiscovered {
                     variants: ffi_variants,
                 });
+                // Synthesize initial VariantApplied so the UI immediately
+                // knows the current quality without waiting for an ABR change.
+                let initial_u32 = *initial_variant as u32;
+                if let Some(initial) = variants.iter().find(|v| v.index == initial_u32) {
+                    observer.on_event(FfiItemEvent::VariantApplied {
+                        variant: initial.clone(),
+                    });
+                }
             }
             Event::Hls(HlsEvent::AbrModeChanged {
-                mode: kithara::abr::AbrMode::Manual(idx),
+                mode: AbrMode::Manual(idx),
             }) => {
-                observer.on_event(FfiItemEvent::VariantSelected {
-                    variant: crate::types::FfiVariant {
-                        index: *idx as u32,
+                let idx_u32 = *idx as u32;
+                let variant = variants
+                    .iter()
+                    .find(|v| v.index == idx_u32)
+                    .cloned()
+                    .unwrap_or(crate::types::FfiVariant {
+                        index: idx_u32,
                         bandwidth_bps: 0,
                         name: None,
-                    },
-                });
+                    });
+                observer.on_event(FfiItemEvent::VariantSelected { variant });
             }
             Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
-                observer.on_event(FfiItemEvent::VariantApplied {
-                    variant: crate::types::FfiVariant {
-                        index: *to_variant as u32,
+                let idx_u32 = *to_variant as u32;
+                let variant = variants
+                    .iter()
+                    .find(|v| v.index == idx_u32)
+                    .cloned()
+                    .unwrap_or(crate::types::FfiVariant {
+                        index: idx_u32,
                         bandwidth_bps: 0,
                         name: None,
-                    },
-                });
+                    });
+                observer.on_event(FfiItemEvent::VariantApplied { variant });
             }
             _ => {}
         }

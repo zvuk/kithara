@@ -21,9 +21,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, DemandSlot, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
-    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
-    TransferCoordination,
+    AudioCodec, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
+    Stream, StreamError, StreamResult, StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -56,26 +55,18 @@ struct TestSource {
 }
 
 struct TestCoord {
-    demand: DemandSlot<()>,
     timeline: Timeline,
 }
 
 impl TestCoord {
     fn new(timeline: Timeline) -> Self {
-        Self {
-            demand: DemandSlot::new(),
-            timeline,
-        }
+        Self { timeline }
     }
 }
 
-impl TransferCoordination<()> for TestCoord {
+impl TransferCoordination for TestCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<()> {
-        &self.demand
     }
 }
 
@@ -110,18 +101,7 @@ impl TestSource {
 
 impl Source for TestSource {
     type Error = io::Error;
-    type Topology = ();
-    type Layout = ();
     type Coord = TestCoord;
-    type Demand = ();
-
-    fn topology(&self) -> &Self::Topology {
-        &()
-    }
-
-    fn layout(&self) -> &Self::Layout {
-        &()
-    }
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -269,10 +249,7 @@ struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
-    type Topology = ();
-    type Layout = ();
     type Coord = TestCoord;
-    type Demand = ();
     type Source = TestSource;
     type Error = io::Error;
     type Events = ();
@@ -586,13 +563,12 @@ fn seek_uses_exact_target_after_anchor_preparation_without_decoder_recreate() {
     {
         let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
@@ -662,13 +638,12 @@ fn seek_waits_for_anchor_range_before_calling_decoder_seek() {
         let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.ready_until = Some(128);
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     timeline(&source).set_byte_position(2000);
@@ -738,13 +713,12 @@ fn seek_anchor_does_not_move_stream_before_exact_decoder_seek_from_eof() {
         let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.ready_until = Some(2_000);
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 512,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(512, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     timeline(&source).set_byte_position(2_000);
@@ -806,13 +780,12 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.format_change_range = Some(120..980);
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
@@ -878,13 +851,12 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.format_change_range = None;
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
@@ -928,13 +900,12 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     {
         let mut s = state.lock_sync();
         s.media_info = Some(aac_variant_info(1));
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
@@ -987,13 +958,10 @@ fn seek_anchor_commits_actual_landed_offset_to_source() {
         vec![],
     );
 
-    let anchor = SourceSeekAnchor {
-        byte_offset: 500,
-        segment_start: Duration::from_secs(8),
-        segment_end: Some(Duration::from_secs(12)),
-        segment_index: Some(3),
-        variant_index: Some(1),
-    };
+    let anchor = SourceSeekAnchor::new(500, Duration::from_secs(8))
+        .with_segment_end(Duration::from_secs(12))
+        .with_segment_index(3)
+        .with_variant_index(1);
     {
         let mut s = state.lock_sync();
         s.media_info = Some(aac_variant_info(1));
@@ -1057,13 +1025,12 @@ fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
 
     {
         let mut s = state.lock_sync();
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
@@ -1201,13 +1168,12 @@ fn same_codec_seek_with_stale_base_offset_does_not_recreate_decoder() {
     {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 0,
-            segment_start: Duration::ZERO,
-            segment_end: Some(Duration::from_secs(6)),
-            segment_index: Some(0),
-            variant_index: Some(3),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(0, Duration::ZERO)
+                .with_segment_end(Duration::from_secs(6))
+                .with_segment_index(0)
+                .with_variant_index(3),
+        );
     }
 
     let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(250));
@@ -1619,7 +1585,7 @@ const V1_SAMPLE_SIZE: usize = 16;
 // -- Byte-level encoding (what Source delivers) --
 
 fn encode_v0_sample(variant: u8, segment: u8, gsi: u16) -> [u8; 4] {
-    let val: u32 = (variant as u32) << 24 | (segment as u32) << 16 | (gsi as u32);
+    let val: u32 = u32::from(variant) << 24 | u32::from(segment) << 16 | u32::from(gsi);
     val.to_be_bytes()
 }
 
@@ -1627,12 +1593,12 @@ fn decode_v0_sample(bytes: [u8; 4]) -> (u32, u32, u64) {
     let val = u32::from_be_bytes(bytes);
     let variant = (val >> 24) & 0xFF;
     let segment = (val >> 16) & 0xFF;
-    let gsi = (val & 0xFFFF) as u64;
+    let gsi = u64::from(val & 0xFFFF);
     (variant, segment, gsi)
 }
 
 fn encode_v1_sample(variant: u32, segment: u32, gsi: u64) -> [u8; 16] {
-    let val: u128 = (variant as u128) << 96 | (segment as u128) << 64 | (gsi as u128);
+    let val: u128 = u128::from(variant) << 96 | u128::from(segment) << 64 | u128::from(gsi);
     val.to_be_bytes()
 }
 
@@ -1673,7 +1639,7 @@ fn generate_encoded_stream(segments: &[(u32, u32, u64, usize)]) -> Vec<u8> {
 // -- PCM f32 bit-packing (what decoder outputs) --
 
 fn encode_pcm_sample(variant_segment: u8, sample_index: u32) -> f32 {
-    let exponent = (variant_segment as u32 + 1) & 0xFF;
+    let exponent = (u32::from(variant_segment) + 1) & 0xFF;
     let bits: u32 = (exponent << 23) | (sample_index & 0x7F_FFFF);
     f32::from_bits(bits)
 }
@@ -2144,7 +2110,7 @@ fn seek_during_active_decode_completes_without_hang() {
 /// Integration test: multiple rapid seeks via Timeline all complete.
 ///
 /// Simulates rapid slider scrubbing: 10 seeks in a row, each followed
-/// by apply_pending_seek + a few decode cycles. None should hang.
+/// by `apply_pending_seek` + a few decode cycles. None should hang.
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn rapid_seeks_via_timeline_all_complete() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
@@ -2231,13 +2197,12 @@ fn stress_variant_only_seeks_do_not_recreate_decoder() {
     {
         let mut s = state.lock_sync();
         s.media_info = Some(aac_variant_info(1));
-        s.seek_anchor = Some(SourceSeekAnchor {
-            byte_offset: 500,
-            segment_start: Duration::from_secs(8),
-            segment_end: Some(Duration::from_secs(12)),
-            segment_index: Some(3),
-            variant_index: Some(1),
-        });
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(500, Duration::from_secs(8))
+                .with_segment_end(Duration::from_secs(12))
+                .with_segment_index(3)
+                .with_variant_index(1),
+        );
     }
 
     const SEEK_ITERATIONS: usize = 200;

@@ -5,7 +5,7 @@
 //! resolution. The `PlaylistAccess` trait provides a testable read interface.
 
 use kithara_platform::{RwLock, time::Duration};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SourceSeekAnchor, Topology};
+use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
 use crate::{
@@ -31,12 +31,12 @@ pub struct SegmentState {
 /// Per-variant size information (from HEAD requests or download).
 ///
 /// Uses a 0-based offset model: the first segment starts at offset 0 and
-/// includes init data. `segment_sizes[0]` = `init_size` + `media_len_0`.
+/// includes init data, so `segment_sizes[0]` already folds the init
+/// size into the segment-0 total.
 #[derive(Debug, Clone)]
 pub struct VariantSizeMap {
-    /// Size of the init segment in bytes.
-    pub init_size: u64,
-    /// Per-segment total sizes in bytes. `segment_sizes[0]` includes `init_size`.
+    /// Per-segment total sizes in bytes. `segment_sizes[0]` includes the
+    /// init segment size for fMP4 variants.
     pub segment_sizes: Vec<u64>,
     /// Cumulative byte offsets. `offsets[0]` = 0, `offsets[i]` = sum of `segment_sizes[0..i]`.
     pub offsets: Vec<u64>,
@@ -213,19 +213,26 @@ impl PlaylistState {
             })
             .max()
     }
+
+    /// Number of variants in the master playlist.
+    #[must_use]
+    pub fn num_variants(&self) -> usize {
+        self.variants.len()
+    }
+
+    /// Number of segments in a variant's media playlist.
+    #[must_use]
+    pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        Some(state.segments.len())
+    }
 }
 
 // PlaylistAccess trait
 
 /// Read-only access to parsed playlist data.
-#[cfg_attr(test, unimock::unimock(api = PlaylistAccessMock))]
 pub(crate) trait PlaylistAccess: Send + Sync {
-    /// Number of variants in the master playlist.
-    fn num_variants(&self) -> usize;
-
-    /// Number of segments in a variant's media playlist.
-    fn num_segments(&self, variant: VariantIndex) -> Option<usize>;
-
     /// Audio codec for a variant.
     fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec>;
 
@@ -264,16 +271,6 @@ pub(crate) trait PlaylistAccess: Send + Sync {
 }
 
 impl PlaylistAccess for PlaylistState {
-    fn num_variants(&self) -> usize {
-        self.variants.len()
-    }
-
-    fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        Some(state.segments.len())
-    }
-
     fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
@@ -390,46 +387,6 @@ impl PlaylistAccess for PlaylistState {
     }
 }
 
-impl Topology for PlaylistState {
-    fn num_variants(&self) -> usize {
-        PlaylistAccess::num_variants(self)
-    }
-
-    fn num_segments(&self, variant: usize) -> Option<usize> {
-        PlaylistAccess::num_segments(self, variant)
-    }
-
-    fn media_info(&self, variant: usize) -> Option<MediaInfo> {
-        let codec = self.variant_codec(variant);
-        let container = self.variant_container(variant);
-        let variant = u32::try_from(variant).ok()?;
-        Some(MediaInfo::new(codec, container).with_variant_index(variant))
-    }
-
-    fn seek_anchor(&self, variant: usize, target: Duration) -> Option<SourceSeekAnchor> {
-        let (segment_index, segment_start, segment_end) =
-            self.find_seek_point_for_time(variant, target)?;
-        let byte_offset = self.segment_byte_offset(variant, segment_index)?;
-        #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
-        let segment_index = segment_index as u32;
-        Some(SourceSeekAnchor {
-            byte_offset,
-            segment_start,
-            segment_end: Some(segment_end),
-            segment_index: Some(segment_index),
-            variant_index: Some(variant),
-        })
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.track_duration()
-    }
-
-    fn total_len(&self, variant: usize) -> Option<u64> {
-        self.total_variant_size(variant)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
@@ -493,7 +450,6 @@ mod tests {
             cumulative += total;
         }
         VariantSizeMap {
-            init_size,
             segment_sizes,
             offsets,
             total: cumulative,
@@ -517,13 +473,13 @@ mod tests {
     fn test_playlist_state_basic_access() {
         let state = PlaylistState::new(vec![make_variant(0, 5), make_variant(1, 3)]);
 
-        assert_eq!(PlaylistAccess::num_variants(&state), 2);
-        assert_eq!(PlaylistAccess::num_segments(&state, 0), Some(5));
-        assert_eq!(PlaylistAccess::num_segments(&state, 1), Some(3));
+        assert_eq!(state.num_variants(), 2);
+        assert_eq!(state.num_segments(0), Some(5));
+        assert_eq!(state.num_segments(1), Some(3));
 
         // Out of bounds
-        assert_eq!(PlaylistAccess::num_segments(&state, 2), None);
-        assert_eq!(PlaylistAccess::num_segments(&state, 99), None);
+        assert_eq!(state.num_segments(2), None);
+        assert_eq!(state.num_segments(99), None);
     }
 
     // Test 2: variant info
@@ -740,17 +696,17 @@ mod tests {
             segments: vec![
                 MediaSegment {
                     sequence: 0,
-                    variant_id: VariantId(0),
                     uri: "segment-0.m4s".to_string(),
                     duration: Duration::from_secs(4),
                     key: None,
+                    byte_range_len: None,
                 },
                 MediaSegment {
                     sequence: 1,
-                    variant_id: VariantId(0),
                     uri: "segment-1.m4s".to_string(),
                     duration: Duration::from_secs(4),
                     key: None,
+                    byte_range_len: None,
                 },
             ],
             target_duration: Some(Duration::from_secs(4)),
@@ -769,10 +725,10 @@ mod tests {
         let state = PlaylistState::from_parsed(&variants, &media_playlists);
 
         // Verify variant count
-        assert_eq!(PlaylistAccess::num_variants(&state), 1);
+        assert_eq!(state.num_variants(), 1);
 
         // Verify segment count
-        assert_eq!(PlaylistAccess::num_segments(&state, 0), Some(2));
+        assert_eq!(state.num_segments(0), Some(2));
 
         // Verify codec and container
         assert_eq!(state.variant_codec(0), Some(AudioCodec::AacLc));

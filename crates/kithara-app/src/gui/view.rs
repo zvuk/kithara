@@ -80,6 +80,10 @@ const DJ_HINT_FONT: f32 = 13.0;
 const SETTINGS_BODY_FONT: f32 = 13.0;
 const EMPTY_PLAYLIST_FONT: f32 = 14.0;
 
+// ABR button
+const ABR_BUTTON_PADDING_Y: u16 = 2;
+const ABR_BUTTON_PADDING_X: u16 = 6;
+
 // Slider
 const SLIDER_RAIL_WIDTH: f32 = 4.0;
 const SLIDER_RAIL_RADIUS: f32 = 4.0;
@@ -922,7 +926,7 @@ fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Ele
     let text_color = if active { p.accent } else { p.muted };
     button(text(label.to_string()).size(CAPTION_FONT).color(text_color))
         .on_press(msg)
-        .padding(Padding::from([2, 6]))
+        .padding(Padding::from([ABR_BUTTON_PADDING_Y, ABR_BUTTON_PADDING_X]))
         .style(ghost_button_style(p))
         .into()
 }

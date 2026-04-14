@@ -50,11 +50,9 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
             2,
             PackagedSignal::Sawtooth,
         ),
-        AudioCodec::Flac => builder.packaged_audio_signal_flac(
-            CONTINUITY_SAMPLE_RATE,
-            2,
-            PackagedSignal::Sawtooth,
-        ),
+        AudioCodec::Flac => {
+            builder.packaged_audio_signal_flac(CONTINUITY_SAMPLE_RATE, 2, PackagedSignal::Sawtooth)
+        }
         other => panic!("unsupported packaged single-variant codec: {other:?}"),
     }
 }
@@ -747,7 +745,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let store = StoreOptions::new(temp_dir.path());
 
     let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec).await;
-    let mut progress_rx = progress_audio.decode_events();
+    let mut progress_rx = progress_audio.events();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut total_samples = 0u64;
     let mut buf = [0.0f32; 4096];
@@ -896,7 +894,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 ///
 /// Tests MP3→HLS, HLS→MP3, MP3→MP3 transitions with offline render.
 /// Measures per-block render time and silence gaps.
-/// Every render() call must be complete within the audio block budget
+/// Every `render()` call must be complete within the audio block budget
 /// (~11.6ms at 512 frames / 44100Hz), and no silence gaps > 1 block
 /// are allowed during crossfade.
 #[kithara::test(
@@ -909,7 +907,7 @@ async fn stress_offline_crossfade_no_gaps() {
 
     const BLOCK: usize = 512;
     const SR: u32 = 44100;
-    let block_budget = Duration::from_secs_f64(BLOCK as f64 / SR as f64);
+    let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
     let hls_server = open_audio_hls_server().await;
     let store = store_options(&temp_dir(), true);
@@ -958,23 +956,24 @@ async fn stress_offline_crossfade_no_gaps() {
 
     // Scenario 1: MP3 to HLS
     let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
 
     let hls_1 = make_hls(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
     // Scenario 2: HLS to MP3
     let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
     // Scenario 3: MP3 to MP3
     let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
 
@@ -995,13 +994,13 @@ async fn stress_offline_crossfade_no_gaps() {
     for iter in 0..5 {
         // HLS phase
         let hls_n = make_hls(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
         // Crossfade HLS→MP3
         let mp3_n = make_mp3(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
         let sm = render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR);
 
@@ -1030,7 +1029,7 @@ async fn stress_offline_crossfade_no_gaps() {
             "{}: silence gap {} blocks ({:.1}ms) — audio underrun during crossfade",
             s.label,
             s.max_silence_run,
-            s.max_silence_run as f64 * BLOCK as f64 / SR as f64 * 1000.0,
+            f64::from(s.max_silence_run) * BLOCK as f64 / f64::from(SR) * 1000.0,
         );
         assert!(
             s.slow_renders <= 1,
@@ -1197,8 +1196,8 @@ async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir:
     );
 }
 
-/// Reproduces EXACTLY the app flow: PlayerImpl + prepare_config + Resource::new +
-/// select_item + duration_seconds(). This is what the GUI reads.
+/// Reproduces EXACTLY the app flow: `PlayerImpl` + `prepare_config` + `Resource::new` +
+/// `select_item` + `duration_seconds()`. This is what the GUI reads.
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(30)),

@@ -20,7 +20,6 @@ use kithara_platform::{
     time::Instant,
     tokio::sync::Notify,
 };
-use kithara_stream::Fetch;
 use ringbuf::{
     HeapCons, HeapProd,
     traits::{Consumer, Producer},
@@ -34,7 +33,7 @@ use super::{
     types::{ServiceClass, StepResult, TrackId, TrackIdGen},
     wake::WorkerWake,
 };
-use crate::pipeline::track_fsm::TrackStep;
+use crate::pipeline::{fetch::Fetch, track_fsm::TrackStep};
 
 /// Threshold for warning about slow `step_track` calls.
 const STEP_WARN_THRESHOLD: Duration = Duration::from_millis(10);
@@ -582,7 +581,7 @@ mod tests {
     use kithara_platform::{
         thread::sleep as thread_sleep, time::timeout as platform_timeout, tokio::sync::Notify,
     };
-    use kithara_stream::{Fetch, Timeline};
+    use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
     use ringbuf::{HeapRb, traits::Split};
     use tokio_util::sync::CancellationToken;
@@ -996,11 +995,11 @@ mod tests {
     /// A slow/blocked track must not starve a producing track.
     ///
     /// Reproduces the production bug: HLS track waiting for network data
-    /// blocks the shared worker's step_track() call, causing MP3 track
+    /// blocks the shared worker's `step_track()` call, causing MP3 track
     /// audio to stutter.
     ///
-    /// The mock simulates a track whose step_track() blocks the thread
-    /// for 50ms (like a real wait_range() call waiting for network data).
+    /// The mock simulates a track whose `step_track()` blocks the thread
+    /// for 50ms (like a real `wait_range()` call waiting for network data).
     /// The worker must still deliver chunks to the ready track at a
     /// rate sufficient for glitch-free playback.
     #[kithara::test]
@@ -1071,10 +1070,10 @@ mod tests {
         handle.shutdown();
     }
 
-    /// A track that blocks inside step_track() (simulating Symphonia read
+    /// A track that blocks inside `step_track()` (simulating Symphonia read
     /// waiting on network data) must not starve other tracks.
     ///
-    /// This is the REAL production bug: HLS decode path enters wait_range()
+    /// This is the REAL production bug: HLS decode path enters `wait_range()`
     /// which blocks the entire worker thread. MP3 track's ringbuf drains
     /// during the block, causing audio underrun.
     ///
@@ -1160,7 +1159,7 @@ mod tests {
     /// The shared worker must NOT busy-spin after producing chunks.
     ///
     /// Reproduces production bug: MP3 (fast local file) + HLS (network)
-    /// on shared worker. Worker busy-loops on MP3 with yield_now(),
+    /// on shared worker. Worker busy-loops on MP3 with `yield_now()`,
     /// starving the tokio runtime. HLS downloader can't run → HLS track
     /// gets no data → audio glitches.
     ///

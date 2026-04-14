@@ -31,12 +31,8 @@ fn test_progressive_file_timeline_monotonic() {
 
         // Timestamp matches frame_offset / sample_rate
         let expected_ts =
-            Duration::from_secs_f64(meta.frame_offset as f64 / meta.spec.sample_rate as f64);
-        let diff = if meta.timestamp > expected_ts {
-            meta.timestamp - expected_ts
-        } else {
-            expected_ts - meta.timestamp
-        };
+            Duration::from_secs_f64(meta.frame_offset as f64 / f64::from(meta.spec.sample_rate));
+        let diff = meta.timestamp.abs_diff(expected_ts);
         assert!(
             diff < Duration::from_micros(100),
             "timestamp drift: {diff:?}"
@@ -120,7 +116,7 @@ mod hls_timeline {
             create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
 
         let segment_duration =
-            D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+            D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,
@@ -176,13 +172,9 @@ mod hls_timeline {
                 );
 
                 let expected_ts = Duration::from_secs_f64(
-                    meta.frame_offset as f64 / meta.spec.sample_rate as f64,
+                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
                 );
-                let diff = if meta.timestamp > expected_ts {
-                    meta.timestamp - expected_ts
-                } else {
-                    expected_ts - meta.timestamp
-                };
+                let diff = meta.timestamp.abs_diff(expected_ts);
                 assert!(
                     diff < Duration::from_millis(1),
                     "timestamp drift: {diff:?} at chunk {chunk_count}"
@@ -197,10 +189,10 @@ mod hls_timeline {
                     "variant_index should be Some for HLS at chunk {chunk_count}"
                 );
 
-                if let Some(seg) = meta.segment_index {
-                    if seg > max_segment_index {
-                        max_segment_index = seg;
-                    }
+                if let Some(seg) = meta.segment_index
+                    && seg > max_segment_index
+                {
+                    max_segment_index = seg;
                 }
 
                 assert_eq!(

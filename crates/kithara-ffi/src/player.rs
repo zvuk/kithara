@@ -10,6 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use kithara::{
+    abr::AbrMode,
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
     play::{PlayerConfig, PlayerImpl},
@@ -193,6 +194,105 @@ impl AudioPlayer {
             .collect()
     }
 
+    pub fn item_count(&self) -> u32 {
+        u32::try_from(self.queue.lock_sync().len()).unwrap_or(u32::MAX)
+    }
+
+    /// Replace the item at `index` with a freshly-loaded one.
+    ///
+    /// Use before [`Self::select_item`] to re-play a track whose resource
+    /// was consumed by a prior playback. The new item must already have a
+    /// loaded resource (`item.load()` finished).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+    /// or [`FfiError::NotReady`] if `item` has not finished loading.
+    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
+    pub fn replace_item(
+        self: &Arc<Self>,
+        index: u32,
+        item: Arc<AudioPlayerItem>,
+    ) -> Result<(), FfiError> {
+        let mut queue = self.queue.lock_sync();
+        let ffi_idx = index as usize;
+        if ffi_idx >= queue.len() {
+            return Err(FfiError::InvalidArgument {
+                reason: format!("item index {ffi_idx} out of range (len: {})", queue.len()),
+            });
+        }
+
+        {
+            let player = self.inner.lock_sync();
+            *item.bus.lock_sync() = Some(player.bus().scoped());
+            *item.worker.lock_sync() = Some(player.worker().clone());
+            *item.runtime.lock_sync() = player.runtime().cloned();
+        }
+        *item.key_options.lock_sync() = self.key_options();
+
+        let resource = item.take_resource()?;
+
+        let was_inserted = queue[ffi_idx].inserted_into_engine.load(Ordering::Acquire);
+        let eng_idx = engine_index(&queue, ffi_idx);
+
+        {
+            let player = self.inner.lock_sync();
+            if was_inserted {
+                player.replace_item(eng_idx, resource);
+            } else {
+                player.insert(resource, Some(eng_idx));
+            }
+        }
+
+        let new_entry = Arc::new(QueueEntry {
+            item: Arc::clone(&item),
+            inserted_into_engine: AtomicBool::new(true),
+        });
+        queue[ffi_idx] = new_entry;
+        drop(queue);
+
+        Ok(())
+    }
+
+    /// Select an item in the queue and optionally start playback.
+    ///
+    /// Applies the configured crossfade duration during the transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+    /// [`FfiError::NotReady`] if the item has not been inserted into the
+    /// engine yet, or [`FfiError::Internal`] if the underlying player
+    /// fails to select.
+    pub fn select_item(&self, index: u32, autoplay: bool) -> Result<(), FfiError> {
+        let queue = self.queue.lock_sync();
+        let ffi_idx = index as usize;
+        let entry = queue
+            .get(ffi_idx)
+            .ok_or_else(|| FfiError::InvalidArgument {
+                reason: format!("item index {ffi_idx} out of range (len: {})", queue.len()),
+            })?;
+        if !entry.inserted_into_engine.load(Ordering::Acquire) {
+            return Err(FfiError::NotReady);
+        }
+        let eng_idx = engine_index(&queue, ffi_idx);
+        drop(queue);
+        self.inner
+            .lock_sync()
+            .select_item(eng_idx, autoplay)
+            .map_err(|e| FfiError::Internal {
+                description: e.to_string(),
+            })
+    }
+
+    pub fn crossfade_duration(&self) -> f32 {
+        self.inner.lock_sync().crossfade_duration()
+    }
+
+    pub fn set_crossfade_duration(&self, seconds: f32) {
+        self.inner.lock_sync().set_crossfade_duration(seconds);
+    }
+
     pub fn default_rate(&self) -> f32 {
         self.inner.lock_sync().default_rate()
     }
@@ -203,9 +303,9 @@ impl AudioPlayer {
 
     pub fn set_abr_mode(&self, mode: crate::types::FfiAbrMode) {
         let abr_mode = match mode {
-            crate::types::FfiAbrMode::Auto => kithara::abr::AbrMode::Auto(None),
+            crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
             crate::types::FfiAbrMode::Manual { variant_index } => {
-                kithara::abr::AbrMode::Manual(variant_index as usize)
+                AbrMode::Manual(variant_index as usize)
             }
         };
         self.inner.lock_sync().set_abr_mode(abr_mode);

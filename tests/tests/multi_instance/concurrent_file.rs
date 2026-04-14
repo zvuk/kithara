@@ -109,7 +109,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 
 /// 2 concurrent File instances on a shared pool.
 ///
-/// Each Audio instance uses 2 pool threads (downloader + audio_loop),
+/// Each Audio instance uses 2 pool threads (downloader + `audio_loop`),
 /// so pool size must be >= 2 * N to avoid starvation.
 #[kithara::test(
     tokio,

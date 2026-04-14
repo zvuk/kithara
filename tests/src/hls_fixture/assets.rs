@@ -3,12 +3,13 @@
 //! Provides `TestAssets` and helper functions for creating test assets.
 //! On native: disk-backed with temp directory. On WASM: ephemeral (in-memory).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    internal::FetchManager,
+    hls::KeyProcessor,
+    internal::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
 use kithara_test_utils::TestTempDir;
@@ -78,15 +79,47 @@ pub fn create_test_net() -> HttpClient {
     HttpClient::new(net_opts)
 }
 
-pub fn test_fetch_manager(assets: &TestAssets, net: HttpClient) -> FetchManager<HttpClient> {
-    FetchManager::new(assets.assets().clone(), net, CancellationToken::new())
+/// Create a private test [`Downloader`] with a fresh cancel token.
+pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
+    kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
 }
 
-pub fn test_fetch_manager_shared(
+/// Create a private test [`PeerHandle`] via `Downloader::register`.
+fn create_test_peer_handle() -> kithara_stream::dl::PeerHandle {
+    use std::sync::Arc;
+
+    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
+
+    struct TestPeer;
+    impl Peer for TestPeer {}
+    let cancel = CancellationToken::new();
+    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    dl.register(Arc::new(TestPeer))
+}
+
+/// Build a test [`PlaylistCache`] backed by the supplied
+/// [`TestAssets`] + a fresh private [`PeerHandle`].
+pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
+    PlaylistCache::new(assets.assets().clone(), create_test_peer_handle())
+}
+
+/// Build a test [`KeyManager`] backed by a fresh [`PeerHandle`] and
+/// the supplied [`TestAssets`]. Mirrors the production constructor in
+/// `Hls::create` so integration tests exercise the same wiring.
+pub fn test_key_manager(
     assets: &TestAssets,
-    net: HttpClient,
-) -> Arc<FetchManager<HttpClient>> {
-    Arc::new(test_fetch_manager(assets, net))
+    key_processor: Option<KeyProcessor>,
+    key_query_params: Option<HashMap<String, String>>,
+    key_request_headers: Option<HashMap<String, String>>,
+) -> KeyManager {
+    KeyManager::new(
+        create_test_peer_handle(),
+        assets.assets().clone(),
+        None,
+        key_processor,
+        key_query_params,
+        key_request_headers,
+    )
 }
 
 /// Fixture: test assets

@@ -15,6 +15,8 @@ use firewheel::nodes::volume_pan::VolumePanNode;
 use firewheel::{FirewheelConfig, Volume, channel_config::ChannelCount, diff::Memo, node::NodeID};
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::thread::{Thread, park_timeout};
 use kithara_platform::{
     Mutex,
     sync::mpsc,
@@ -43,8 +45,13 @@ const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 /// Capacity of the session command ring buffer.
 const SESSION_CMD_RINGBUF_CAPACITY: usize = 64;
 
-/// Sleep duration between command loop iterations (microseconds).
-const CMD_LOOP_SLEEP_US: u64 = 100;
+/// Fallback park timeout when no commands arrive (milliseconds).
+/// The engine thread parks and wakes instantly on command push via `unpark()`.
+/// This timeout is a safety net for spurious wakeups and periodic housekeeping.
+const ENGINE_PARK_TIMEOUT_MS: u64 = 50;
+
+/// Back-off sleep when the command ring buffer is full (milliseconds).
+const CMD_PUSH_BACKOFF_MS: u64 = 1;
 
 /// Gain applied during soft ducking.
 const DUCKING_GAIN_SOFT: f32 = 0.4;
@@ -198,6 +205,8 @@ enum Reply {
 pub(crate) struct SessionClient {
     #[cfg(not(target_arch = "wasm32"))]
     cmd_tx: Mutex<HeapProd<CmdMsg>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    engine_thread: Thread,
     /// `true` = main thread (direct state access via thread-local).
     /// `false` = Worker (remote channel proxy).
     #[cfg(target_arch = "wasm32")]
@@ -210,10 +219,13 @@ impl SessionClient {
         let mut pending = msg;
         loop {
             match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.engine_thread.unpark();
+                    return Ok(());
+                }
                 Err(returned) => {
                     pending = returned;
-                    thread_sleep(Duration::from_micros(CMD_LOOP_SLEEP_US));
+                    thread_sleep(Duration::from_millis(CMD_PUSH_BACKOFF_MS));
                 }
             }
         }
@@ -395,13 +407,16 @@ impl SessionClient {
 fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
     let mut state = SessionState::new();
     loop {
-        if let Some(msg) = cmd_rx.try_pop() {
+        let mut processed = false;
+        while let Some(msg) = cmd_rx.try_pop() {
             let CmdMsg { cmd, reply_tx } = msg;
             let reply = run_cmd(&mut state, cmd);
             let _ = reply_tx.send_sync(reply);
-            continue;
+            processed = true;
         }
-        thread_sleep(Duration::from_micros(CMD_LOOP_SLEEP_US));
+        if !processed {
+            park_timeout(Duration::from_millis(ENGINE_PARK_TIMEOUT_MS));
+        }
     }
 }
 
@@ -412,11 +427,13 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
         SESSION_CLIENT
             .get_or_init(|| {
                 let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
-                let _ = spawn_named("kithara-engine", move || {
+                let handle = spawn_named("kithara-engine", move || {
                     engine_thread(cmd_rx);
                 });
+                let engine_thread = handle.thread().clone();
                 Arc::new(SessionClient {
                     cmd_tx: Mutex::new(cmd_tx),
+                    engine_thread,
                 })
             })
             .clone()

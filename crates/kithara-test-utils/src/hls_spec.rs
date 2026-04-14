@@ -96,9 +96,7 @@ pub(crate) enum ResolvedPackagedSignal {
     Sawtooth,
     SawtoothDescending,
     Silence,
-    Sine {
-        freq_hz: f64,
-    },
+    Sine { freq_hz: f64 },
     Pattern(PcmPattern),
 }
 
@@ -378,9 +376,7 @@ fn resolve_packaged_audio(
     }
 
     let base_signal = match &packaged.source {
-        PackagedAudioSource::Signal(signal) => {
-            resolved_signal(*signal, packaged.sample_rate)?
-        }
+        PackagedAudioSource::Signal(signal) => resolved_signal(*signal, packaged.sample_rate)?,
         PackagedAudioSource::PerVariantPcm { .. } => {
             ResolvedPackagedSignal::Pattern(PcmPattern::Ascending)
         }
@@ -511,16 +507,14 @@ impl ResolvedEncryption {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use std::collections::HashMap;
 
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara_stream::AudioCodec;
 
     use super::*;
     use crate::{
-        fixture_protocol::{
-            InitMode, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
-        },
+        fixture_protocol::{InitMode, PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
         hls_blob_store::blob_key,
     };
 
@@ -583,9 +577,7 @@ mod tests {
                 channels: 2,
                 timescale: None,
                 bit_rate: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sine {
-                    freq_hz: 50_000.0,
-                }),
+                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()

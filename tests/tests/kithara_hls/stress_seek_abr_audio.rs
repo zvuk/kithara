@@ -84,7 +84,8 @@ async fn stress_seek_abr_audio() {
     );
 
     // Spawn HLS server
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
@@ -141,7 +142,7 @@ async fn stress_seek_abr_audio() {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =
-            (chunk_duration_secs * spec.sample_rate as f64 * channels as f64) as usize;
+            (chunk_duration_secs * f64::from(spec.sample_rate) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
 
         // Phase 1: Warmup + ABR switch detection

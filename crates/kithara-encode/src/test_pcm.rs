@@ -4,6 +4,9 @@ use std::mem::size_of;
 
 use crate::PcmSource;
 
+const SAWTOOTH_PERIOD: usize = 65_536;
+const SAWTOOTH_CENTER: i32 = 32_768;
+
 /// Interleaved PCM buffer: each frame repeats one 16-bit little-endian sawtooth sample per channel.
 pub(crate) struct SawtoothPcmFixture {
     sample_rate: u32,
@@ -30,10 +33,10 @@ impl SawtoothPcmFixture {
         }
     }
 
-    /// One sample of a 16-bit little-endian sawtooth, repeating every `65_536` frames.
+    /// One sample of a 16-bit little-endian sawtooth, repeating every [`SAWTOOTH_PERIOD`] frames.
     fn sawtooth_sample_i16(frame: usize) -> i16 {
-        let phase = frame % 65_536;
-        let centered = i32::try_from(phase).expect("65_536-phase fits i32") - 32_768;
+        let phase = frame % SAWTOOTH_PERIOD;
+        let centered = i32::try_from(phase).expect("phase fits i32") - SAWTOOTH_CENTER;
         i16::try_from(centered).expect("sawtooth centered value fits i16")
     }
 }

@@ -1,33 +1,18 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use kithara_bufpool::BytePool;
 use kithara_storage::{Atomic, ResourceExt};
 
-use crate::{base::Assets, error::AssetsResult};
-
-/// Minimal persisted representation of the pins index.
-///
-/// This struct is intentionally private to keep the on-disk JSON schema as an implementation detail
-/// of this crate.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
-struct PinsIndexFile {
-    version: u32,
-    pinned: Vec<String>,
-}
+use super::schema::PinsIndexFile;
+use crate::{
+    base::Assets,
+    error::{AssetsError, AssetsResult},
+};
 
 /// `PinsIndex` is a small facade over a storage resource that persists a set of pinned
 /// `asset_root`s.
-///
-/// ## Normative
-/// - The set is stored as a `HashSet<String>` in-memory.
-/// - Every mutation (`insert`/`remove`) persists the full set immediately.
-/// - The underlying storage uses whole-object read/write via `read_into`/`write_all`.
-///
-/// ## Key selection
-/// `PinsIndex` does **not** form keys. The concrete [`Assets`] implementation decides where this
-/// index lives by implementing [`Assets::open_pins_index_resource`].
 pub(crate) struct PinsIndex<R: ResourceExt> {
     res: Atomic<R>,
     pool: BytePool,
@@ -42,52 +27,54 @@ impl<R: ResourceExt> PinsIndex<R> {
     }
 
     /// Open a `PinsIndex` for the given base assets store.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the pins index resource cannot be opened.
     pub(crate) fn open<A: Assets<IndexRes = R>>(assets: &A, pool: BytePool) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
         Ok(Self::new(res, pool))
     }
 
     /// Load the pins set from storage.
-    ///
-    /// Empty, missing, or corrupted data is treated as an empty set (best-effort).
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if reading from the underlying storage resource fails.
     pub(crate) fn load(&self) -> AssetsResult<HashSet<String>> {
         let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
+        tracing::debug!("PinsIndex::load read {} bytes", n);
 
         if n == 0 {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = match postcard::from_bytes(&buf[..n]) {
-            Ok(file) => file,
-            Err(_) => return Ok(HashSet::new()),
+        let archived = match rkyv::check_archived_root::<PinsIndexFile>(&buf[..n]) {
+            Ok(archived) => archived,
+            Err(e) => {
+                tracing::debug!("Failed to validate pins index: {}", e);
+                return Ok(HashSet::new());
+            }
         };
 
-        Ok(file.pinned.into_iter().collect())
+        let mut pinned = HashSet::new();
+        for (k, v) in &archived.pinned {
+            if *v {
+                pinned.insert(k.as_str().to_string());
+            }
+        }
+        Ok(pinned)
     }
 
-    /// Persist the given set to storage (crash-safe via atomic write-rename).
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if serialization or writing to storage fails.
+    /// Persist the provided pins set.
     pub(crate) fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
-        // Stored as a list for stable serialization; treated as a set by higher layers.
+        let mut map = BTreeMap::new();
+        for pin in pins {
+            map.insert(pin.clone(), true);
+        }
         let file = PinsIndexFile {
             version: 1,
-            pinned: pins.iter().cloned().collect(),
+            pinned: map,
         };
 
-        let bytes = postcard::to_allocvec(&file)?;
+        let bytes = rkyv::to_bytes::<_, 4096>(&file).map_err(|e| {
+            AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
+        })?;
         self.res.write_all(&bytes)?;
+
         Ok(())
     }
 }
@@ -99,15 +86,14 @@ mod tests {
 
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
-    use tempfile::TempDir;
+    use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    // Helper to create MmapResource for tests
-    fn create_test_resource(dir: &TempDir) -> MmapResource {
-        let path = dir.path().join("pins.bin");
-        Resource::open(
+    fn make_test_index(dir: &tempfile::TempDir, name: &str) -> PinsIndex<MmapResource> {
+        let path = dir.path().join(name);
+        let res = Resource::open(
             CancellationToken::new(),
             MmapOptions {
                 path,
@@ -115,124 +101,101 @@ mod tests {
                 mode: OpenMode::ReadWrite,
             },
         )
-        .unwrap()
+        .unwrap();
+        PinsIndex::new(res, crate::byte_pool().clone())
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_pins_index_new() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-
-        let index = PinsIndex::new(res, crate::byte_pool().clone());
-
-        // Index created successfully, load should return empty set
-        let pins = index.load().unwrap();
-        assert!(pins.is_empty());
+        let temp_dir = tempdir().unwrap();
+        let idx = make_test_index(&temp_dir, "pins.bin");
+        let pins = idx.load().unwrap();
+        assert!(pins.is_empty(), "new index should have no pins");
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_load_empty_resource() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res, crate::byte_pool().clone());
-
-        let pins = index.load().unwrap();
-
-        assert!(pins.is_empty());
+        let temp_dir = tempdir().unwrap();
+        let idx = make_test_index(&temp_dir, "empty.bin");
+        let pins = idx.load().unwrap();
+        assert!(pins.is_empty(), "empty file should yield empty set");
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn test_load_invalid_json() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
+    fn test_load_invalid_data() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("invalid.bin");
+        std::fs::write(&path, b"not valid rkyv data").unwrap();
 
-        // Write invalid JSON
-        res.write_all(b"not valid json").unwrap();
-
+        let res: MmapResource = Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode: OpenMode::ReadWrite,
+            },
+        )
+        .unwrap();
         let index = PinsIndex::new(res, crate::byte_pool().clone());
-        let pins = index.load().unwrap();
 
-        // Should return empty set on invalid JSON (best-effort)
-        assert!(pins.is_empty());
+        let pins = index.load().unwrap();
+        assert!(
+            pins.is_empty(),
+            "invalid file should gracefully yield empty set"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_store_and_load() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res, crate::byte_pool().clone());
+        let temp_dir = tempdir().unwrap();
+        let idx = make_test_index(&temp_dir, "pins.bin");
 
-        let mut pins = HashSet::new();
-        pins.insert("asset1".to_string());
-        pins.insert("asset2".to_string());
+        let mut to_store = HashSet::new();
+        to_store.insert("asset1".to_string());
+        to_store.insert("asset2".to_string());
 
-        index.store(&pins).unwrap();
+        idx.store(&to_store).unwrap();
 
-        let loaded = index.load().unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert!(loaded.contains("asset1"));
-        assert!(loaded.contains("asset2"));
+        let loaded = idx.load().unwrap();
+        assert_eq!(loaded, to_store);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_persistence_across_instances() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("pins.bin");
+        let temp_dir = tempdir().unwrap();
 
-        // First instance
         {
-            let res: MmapResource = Resource::open(
-                CancellationToken::new(),
-                MmapOptions {
-                    path: path.clone(),
-                    initial_len: Some(4096),
-                    mode: OpenMode::ReadWrite,
-                },
-            )
-            .unwrap();
-            let index = PinsIndex::new(res, crate::byte_pool().clone());
-
+            let idx = make_test_index(&temp_dir, "shared.bin");
             let mut pins = HashSet::new();
-            pins.insert("persisted-asset".to_string());
-            index.store(&pins).unwrap();
+            pins.insert("persistent_asset".to_string());
+            idx.store(&pins).unwrap();
         }
 
-        // Second instance (new resource, same path)
         {
-            let res: MmapResource = Resource::open(
-                CancellationToken::new(),
-                MmapOptions {
-                    path,
-                    initial_len: Some(4096),
-                    mode: OpenMode::ReadWrite,
-                },
-            )
-            .unwrap();
-            let index = PinsIndex::new(res, crate::byte_pool().clone());
-
-            let pins = index.load().unwrap();
+            let idx2 = make_test_index(&temp_dir, "shared.bin");
+            let pins = idx2.load().unwrap();
+            assert!(pins.contains("persistent_asset"));
             assert_eq!(pins.len(), 1);
-            assert!(pins.contains("persisted-asset"));
         }
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_pins_index_file_format() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res.clone(), crate::byte_pool().clone());
+        let temp_dir = tempdir().unwrap();
+        let idx = make_test_index(&temp_dir, "format.bin");
 
         let mut pins = HashSet::new();
         pins.insert("asset".to_string());
-        index.store(&pins).unwrap();
+        idx.store(&pins).unwrap();
 
-        // Read raw bytes and deserialize using postcard
         let mut buf = crate::byte_pool().get();
-        let n = res.read_into(&mut buf).unwrap();
-        let file: PinsIndexFile = postcard::from_bytes(&buf[..n]).unwrap();
+        let n = idx.res.read_into(&mut buf).unwrap();
+        tracing::debug!("Bytes read: {}", n);
 
-        assert_eq!(file.version, 1);
-        assert_eq!(file.pinned.len(), 1);
-        assert!(file.pinned.contains(&"asset".to_string()));
+        let archived = rkyv::check_archived_root::<PinsIndexFile>(&buf[..n]).unwrap();
+
+        assert_eq!(archived.version, 1);
+        assert_eq!(archived.pinned.len(), 1);
+        assert!(archived.pinned.get("asset").unwrap());
     }
 }

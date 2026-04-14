@@ -107,7 +107,10 @@ impl RetryPolicy {
 #[derive(Clone, Derivative)]
 #[derivative(Default)]
 pub struct NetOptions {
-    /// Max idle connections per host. Set to 0 to disable pooling and reduce memory.
+    /// Max idle connections per host. Enables HTTP keep-alive connection
+    /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
+    /// Set to 0 to disable pooling.
+    #[derivative(Default(value = "8"))]
     pub pool_max_idle_per_host: usize,
     /// Hard timeout per request. Connection is aborted after this duration.
     #[derivative(Default(value = "Duration::from_secs(10)"))]

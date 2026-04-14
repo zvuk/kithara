@@ -9,6 +9,7 @@ use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::tokio as platform_tokio;
+use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -61,6 +62,7 @@ impl KeyOptions {
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct HlsConfig {
     /// Pre-created ABR controller. When `None`, `build_pair()` creates
     /// one from default `AbrOptions`.
@@ -118,6 +120,15 @@ pub struct HlsConfig {
         value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"
     ))]
     pub url: Url,
+    /// Shared downloader (created lazily if not provided).
+    ///
+    /// Currently unread — added ahead of the phase02 HLS migration that
+    /// routes fetches through the unified downloader. Mirrors the
+    /// `FileConfig::downloader` field so that once the HLS path consumes
+    /// this field it can share a `Downloader` across multiple tracks.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub downloader: Option<Downloader>,
 }
 
 impl HlsConfig {
@@ -140,6 +151,22 @@ impl HlsConfig {
     /// Set name for cache disambiguation.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Set shared downloader.
+    ///
+    /// When not provided, the HLS path will create a private downloader
+    /// during `Hls::create`. Supply a shared instance here to run
+    /// multiple HLS tracks on one download pool (and to share it with
+    /// `File` tracks if desired).
+    ///
+    /// Currently the field is not yet consumed by the HLS path — it is
+    /// added ahead of the phase02 migration commits that wire the HLS
+    /// fetchers through the unified downloader.
+    #[must_use]
+    pub fn with_downloader(mut self, dl: Downloader) -> Self {
+        self.downloader = Some(dl);
         self
     }
 }

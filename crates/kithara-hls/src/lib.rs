@@ -1,20 +1,8 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
 #![allow(
-    dead_code,
-    reason = "internal HLS orchestration types are consumed via integration tests and `internal` feature"
-)]
-#![allow(
     unreachable_pub,
-    reason = "public visibility is used for `internal` re-exports without widening stable API"
-)]
-#![allow(
-    unused_imports,
-    reason = "imports differ between feature combinations and test wiring"
-)]
-#![allow(
-    unfulfilled_lint_expectations,
-    reason = "some expect attributes only trigger under specific feature sets"
+    reason = "many helpers are `pub` so the `internal` feature can re-export them without widening the stable API surface"
 )]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
@@ -44,14 +32,14 @@ pub mod internal;
 
 mod context;
 mod coord;
-mod downloader;
-mod fetch;
 mod ids;
-mod inner;
-mod keys;
+pub(crate) mod loading;
 mod parsing;
+mod peer;
 pub(crate) mod playlist;
+pub(crate) mod scheduler;
 mod source;
+mod stream;
 pub(crate) mod stream_index;
 
 // Public API re-exports
@@ -59,5 +47,5 @@ pub(crate) mod stream_index;
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
-pub use inner::Hls;
 pub use kithara_abr::{AbrMode, AbrOptions};
+pub use stream::Hls;

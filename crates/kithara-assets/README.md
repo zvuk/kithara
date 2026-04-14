@@ -104,10 +104,28 @@ Three index types are persisted under `_index/` for crash recovery:
 <tr><th>Index</th><th>File</th><th>Purpose</th></tr>
 <tr><td>Pins</td><td><code>_index/pins.bin</code></td><td>Persists pinned asset roots</td></tr>
 <tr><td>LRU</td><td><code>_index/lru.bin</code></td><td>Monotonic clock + byte accounting for eviction</td></tr>
-<tr><td>Coverage</td><td><code>_index/cov.bin</code></td><td>Per-segment byte-range coverage for partial downloads</td></tr>
+<tr><td>Availability</td><td><code>_index/availability.bin</code></td><td>Per-resource byte ranges and committed final length — the aggregate snapshot of <code>AvailabilityIndex</code> (see below)</td></tr>
 </table>
 
-All indices use bincode serialization with `Atomic<R>` for crash-safe writes.
+All indices use `postcard` serialization with `Atomic<R>` for crash-safe writes. The availability index is **explicit only** — persisted via `AssetStore::checkpoint()`, never from a `Drop` hook or background timer.
+
+## Byte Availability — single source of truth
+
+`AssetStore` is the sole authoritative answer to "which bytes of this resource are present?". Callers query it through three read-only methods that are safe to invoke from high-frequency hot paths (e.g. the HLS decoder read loop):
+
+```rust
+store.contains_range(&key, 0..4096); // bool — every byte in range
+store.available_ranges(&key);        // RangeSet<u64> — full snapshot
+store.final_len(&key);               // Option<u64> — committed size
+```
+
+Internally these sit on top of an aggregate `AvailabilityIndex` (`DashMap<ResourceKey, Arc<Mutex<Availability>>>`):
+
+- **Updated** by a `ScopedAvailabilityObserver` attached to every `Resource` opened through `DiskAssetStore` / `MemAssetStore`. Each `Resource::write_at` fires `on_write(range)` and each successful `Resource::commit(Some(len))` fires `on_commit(len)`. Opening a pre-existing committed file also seeds `0..final_len`.
+- **Queried** with a fast path first (`DashMap::get → Arc::clone → Mutex::lock`, with the shard guard released before the inner lock). A cold miss on `Disk` falls back once to `resource_state` so pre-existing committed files on disk are still discoverable before the observer has ever fired.
+- **Persisted** on demand via `AssetStore::checkpoint()` to `_index/availability.bin`. Missing / corrupt / wrong-version files are silently treated as an empty seed on rebuild.
+
+`Resource<D>::CommonState.available` remains the per-resource byte map inside `kithara-storage`, but it is an implementation detail — consumers outside `kithara-storage` must query through `AssetStore`, not through `resource.contains_range()` on an ad-hoc `open_resource` call.
 
 ## Integration
 

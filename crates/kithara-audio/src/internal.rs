@@ -54,13 +54,16 @@ pub mod source {
 
     use delegate::delegate;
     use kithara_decode::{InnerDecoder, PcmChunk};
-    use kithara_stream::{Fetch, MediaInfo, Stream, StreamType, Timeline};
+    use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
     use crate::{
-        pipeline::track_fsm::{
-            RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
-            TrackState, WaitContext,
+        pipeline::{
+            fetch::Fetch,
+            track_fsm::{
+                RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
+                TrackState, WaitContext,
+            },
         },
         traits::AudioEffect,
         worker::AudioWorkerSource,

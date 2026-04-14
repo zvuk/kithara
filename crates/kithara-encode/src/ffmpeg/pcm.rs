@@ -1,6 +1,11 @@
 use std::mem::size_of;
 
-use ffmpeg::{codec, format as av_format, frame as av_frame};
+use ffmpeg::{
+    ChannelLayout, Error as FfmpegError,
+    codec::encoder::Audio as AudioEncoder,
+    format::{Sample, sample::Type as SampleType},
+    frame::Audio as AudioFrame,
+};
 use ffmpeg_next as ffmpeg;
 
 use crate::PcmSource;
@@ -8,8 +13,8 @@ use crate::PcmSource;
 pub(crate) fn pump_pcm_frames(
     pcm: &dyn PcmSource,
     chunk_frames: usize,
-    mut on_frame: impl FnMut(&av_frame::Audio) -> Result<(), ffmpeg::Error>,
-) -> Result<(), ffmpeg::Error> {
+    mut on_frame: impl FnMut(&AudioFrame) -> Result<(), FfmpegError>,
+) -> Result<(), FfmpegError> {
     let bytes_per_frame = pcm.channels() as usize * size_of::<i16>();
     let mut offset = 0;
     let mut pts = 0;
@@ -26,10 +31,10 @@ pub(crate) fn pump_pcm_frames(
         }
 
         let frames_read = read / bytes_per_frame;
-        let mut audio_frame = av_frame::Audio::new(
-            av_format::Sample::I16(av_format::sample::Type::Packed),
+        let mut audio_frame = AudioFrame::new(
+            Sample::I16(SampleType::Packed),
             frames_read,
-            ffmpeg::ChannelLayout::default(i32::from(pcm.channels())),
+            ChannelLayout::default(i32::from(pcm.channels())),
         );
         audio_frame.set_rate(pcm.sample_rate());
         audio_frame.set_pts(Some(pts as i64));
@@ -46,34 +51,32 @@ pub(crate) fn pump_pcm_frames(
 
 pub(crate) fn send_frame_to_filter(
     filter: &mut ffmpeg::filter::Graph,
-    audio_frame: &av_frame::Audio,
-) -> Result<(), ffmpeg::Error> {
+    audio_frame: &AudioFrame,
+) -> Result<(), FfmpegError> {
     filter
         .get("in")
-        .ok_or(ffmpeg::Error::Bug)?
+        .ok_or(FfmpegError::Bug)?
         .source()
         .add(audio_frame)
 }
 
-pub(crate) fn flush_filter(filter: &mut ffmpeg::filter::Graph) -> Result<(), ffmpeg::Error> {
-    filter.get("in").ok_or(ffmpeg::Error::Bug)?.source().flush()
+pub(crate) fn flush_filter(filter: &mut ffmpeg::filter::Graph) -> Result<(), FfmpegError> {
+    filter.get("in").ok_or(FfmpegError::Bug)?.source().flush()
 }
 
-pub(crate) fn send_eof_to_encoder(
-    encoder: &mut codec::encoder::Audio,
-) -> Result<(), ffmpeg::Error> {
+pub(crate) fn send_eof_to_encoder(encoder: &mut AudioEncoder) -> Result<(), FfmpegError> {
     encoder.send_eof()
 }
 
 pub(crate) fn drain_filtered_frames(
     filter: &mut ffmpeg::filter::Graph,
-    encoder: &mut codec::encoder::Audio,
-    mut on_packet_drain: impl FnMut(&mut codec::encoder::Audio) -> Result<(), ffmpeg::Error>,
-) -> Result<(), ffmpeg::Error> {
-    let mut filtered = av_frame::Audio::empty();
+    encoder: &mut AudioEncoder,
+    mut on_packet_drain: impl FnMut(&mut AudioEncoder) -> Result<(), FfmpegError>,
+) -> Result<(), FfmpegError> {
+    let mut filtered = AudioFrame::empty();
     while filter
         .get("out")
-        .ok_or(ffmpeg::Error::Bug)?
+        .ok_or(FfmpegError::Bug)?
         .sink()
         .frame(&mut filtered)
         .is_ok()

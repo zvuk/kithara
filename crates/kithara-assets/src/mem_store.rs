@@ -5,45 +5,82 @@
 use std::{
     io::{Error as IoError, ErrorKind},
     path::Path,
+    sync::{Arc, Weak},
 };
 
-use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
+use dashmap::DashMap;
+use kithara_storage::{AvailabilityObserver, MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
     base::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
+    index::{AvailabilityIndex, ScopedAvailabilityObserver},
     key::ResourceKey,
 };
 
-/// In-memory [`Assets`] implementation — stateless factory.
+/// In-memory [`Assets`] implementation.
 ///
-/// Each `open_resource_with_ctx` call creates a fresh [`MemResource`].
-/// The [`CachedAssets`](crate::cache::CachedAssets) LRU decorator is the
-/// single owner of resource handles; when a handle is evicted from LRU,
-/// its `Arc` ref-count drops and memory is freed.
-///
-/// `MemAssetStore` has the same `Res = StorageResource` as [`DiskAssetStore`](crate::disk_store::DiskAssetStore),
-/// allowing both to be used through the same decorator chain.
+/// Shares existing [`MemResource`] instances for the same key via an internal
+/// weak cache. This ensures that multiple handles to the same resource share
+/// the same underlying data and status, even if the primary handle is
+/// evicted from [`CachedAssets`](crate::cache::CachedAssets).
 #[derive(Clone, Debug)]
 pub struct MemAssetStore {
     asset_root: String,
     cancel: CancellationToken,
     mem_resource_capacity: Option<usize>,
+    availability: AvailabilityIndex,
+    /// Weak cache of active resources to ensure sharing.
+    active_resources: Arc<DashMap<String, Weak<MemResource>>>,
 }
 
 impl MemAssetStore {
-    /// Create a new in-memory asset store.
+    /// Create a new in-memory asset store with its own unshared
+    /// [`AvailabilityIndex`].
     pub fn new<S: Into<String>>(
         asset_root: S,
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
     ) -> Self {
+        Self::with_availability(
+            asset_root,
+            cancel,
+            mem_resource_capacity,
+            AvailabilityIndex::new(),
+        )
+    }
+
+    /// Like [`MemAssetStore::new`] but shares the given aggregate
+    /// availability handle.
+    pub(crate) fn with_availability<S: Into<String>>(
+        asset_root: S,
+        cancel: CancellationToken,
+        mem_resource_capacity: Option<usize>,
+        availability: AvailabilityIndex,
+    ) -> Self {
         Self {
             asset_root: asset_root.into(),
             cancel,
             mem_resource_capacity,
+            availability,
+            active_resources: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
+        ScopedAvailabilityObserver::new(
+            self.asset_root.clone(),
+            key.clone(),
+            self.availability.clone(),
+        )
+    }
+
+    fn resource_cache_key(key: &ResourceKey) -> String {
+        match key {
+            ResourceKey::Relative(path) => path.clone(),
+            ResourceKey::Absolute(path) => path.to_string_lossy().to_string(),
         }
     }
 }
@@ -76,6 +113,13 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
+        let cache_key = Self::resource_cache_key(key);
+        if let Some(weak) = self.active_resources.get(&cache_key)
+            && let Some(res) = weak.upgrade()
+        {
+            return Ok(StorageResource::Mem((*res).clone()));
+        }
+
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
     }
 
@@ -90,14 +134,31 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
+        let cache_key = Self::resource_cache_key(key);
+        if let Some(weak) = self.active_resources.get(&cache_key)
+            && let Some(res) = weak.upgrade()
+        {
+            return Ok(StorageResource::Mem((*res).clone()));
+        }
+
         let mut options = MemOptions::default();
         if let Some(capacity) = self.mem_resource_capacity
             && capacity > 0
         {
             options.capacity = capacity;
         }
-        let mem = Resource::open(self.cancel.clone(), options).map_err(AssetsError::Storage)?;
-        Ok(StorageResource::Mem(mem))
+        let mem = Resource::open_with_observer(
+            self.cancel.clone(),
+            options,
+            Some(self.scoped_observer(key)),
+        )
+        .map_err(AssetsError::Storage)?;
+
+        let shared = Arc::new(mem);
+        self.active_resources
+            .insert(cache_key, Arc::downgrade(&shared));
+
+        Ok(StorageResource::Mem((*shared).clone()))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {

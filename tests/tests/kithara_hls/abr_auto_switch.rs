@@ -26,9 +26,10 @@ use kithara_platform::{
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_test_utils::{
-    TestTempDir,
+    TestTempDir, abr_fast,
     fixture_protocol::DelayRule,
     signal_pcm::{Finite, SignalPcm, signal},
+    temp_dir,
     wav::create_wav_header,
 };
 use tokio_util::sync::CancellationToken;
@@ -60,7 +61,7 @@ fn create_pcm_segments() -> Vec<u8> {
 ///
 /// Also verifies that `content_duration` from fast initial segments (< 10ms)
 /// is accumulated for buffer level tracking, which is required for up-switch
-/// decisions (min_buffer_for_up_switch_secs check).
+/// decisions (`min_buffer_for_up_switch_secs` check).
 #[kithara::test(
     native,
     tokio,
@@ -68,11 +69,12 @@ fn create_pcm_segments() -> Vec<u8> {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-async fn abr_auto_switch_during_playback() {
+async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOptions) {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
@@ -97,7 +99,6 @@ async fn abr_auto_switch_during_playback() {
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     // Shared event bus: subscribe BEFORE Audio::new so we don't miss
@@ -107,11 +108,18 @@ async fn abr_auto_switch_during_playback() {
     let switches_bg = switches.clone();
     let mut events_rx = bus.subscribe();
     spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            let ev_str = format!("{ev:?}");
-            if ev_str.contains("VariantApplied") {
-                switches_bg.fetch_add(1, Ordering::Relaxed);
-                info!("ABR switch: {ev_str}");
+        use kithara_platform::tokio::sync::broadcast::error::RecvError;
+        loop {
+            match events_rx.recv().await {
+                Ok(ev) => {
+                    let ev_str = format!("{ev:?}");
+                    if ev_str.contains("VariantApplied") {
+                        switches_bg.fetch_add(1, Ordering::Relaxed);
+                        info!("ABR switch: {ev_str}");
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
         }
     });
@@ -121,12 +129,8 @@ async fn abr_auto_switch_during_playback() {
         .with_cancel(cancel)
         .with_events(bus.clone())
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(120),
             mode: AbrMode::Auto(Some(0)), // start on V0
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -142,7 +146,7 @@ async fn abr_auto_switch_during_playback() {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0u64;
         let start = Instant::now();
-        let timeout = Duration::from_secs(20);
+        let timeout = Duration::from_secs(5);
 
         while start.elapsed() < timeout {
             let n = audio.read(&mut buf);

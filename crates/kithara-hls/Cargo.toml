@@ -20,6 +20,7 @@ kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 bytes = { workspace = true }
+dashmap = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
@@ -31,6 +32,7 @@ tracing = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 rangemap = { workspace = true }
+re_mp4 = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

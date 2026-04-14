@@ -20,9 +20,7 @@ use kithara_platform::{
     thread::park_timeout,
     tokio::{sync::Notify, task::spawn_blocking},
 };
-use kithara_stream::{
-    EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
-};
+use kithara_stream::{MediaInfo, Stream, StreamContext, StreamType, Timeline};
 use portable_atomic::AtomicF32;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -34,6 +32,7 @@ use tracing::{debug, info, trace, warn};
 use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
+        fetch::{EpochValidator, Fetch},
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },

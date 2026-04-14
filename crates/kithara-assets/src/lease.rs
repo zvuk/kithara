@@ -296,6 +296,23 @@ impl<R: ResourceExt, L> LeaseResource<R, L> {
     }
 }
 
+impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
+where
+    R: ResourceExt + Clone + Send + Sync + Debug + 'static,
+{
+    /// Pin the underlying cached resource so it is never evicted.
+    pub fn retain(self) -> Self {
+        self.inner.set_retained();
+        self
+    }
+
+    /// Unpin the underlying cached resource.
+    pub fn release(self) -> Self {
+        self.inner.set_released();
+        self
+    }
+}
+
 impl<R, L> ResourceExt for LeaseResource<R, L>
 where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
@@ -577,7 +594,7 @@ mod tests {
         LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
     }
 
-    /// Bypass test: empty asset_root → capabilities lack LEASE.
+    /// Bypass test: empty `asset_root` → capabilities lack LEASE.
     fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
         LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())

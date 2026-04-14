@@ -191,7 +191,8 @@ hls_m3u8 = "0.5.1"
 # iterators
 fallible-iterator = "0.3"
 
-# decoding
+# decoding / mp4 parsing
+re_mp4 = "0.4.0"
 symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
@@ -231,7 +232,8 @@ web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", 
 base64 = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-postcard = { version = "1", features = ["alloc"] }
+rkyv = { version = "0.7.45", features = ["validation"] }
+bytecheck = "0.6.11"
 
 # hex encoding
 hex = "0.4"
@@ -336,14 +338,17 @@ opt-level = 2
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
 
-# Optimised test profile — keeps debug assertions but compiles with
-# opt-level 2 so integration tests run at near-release speed.
-# Usage: cargo test --profile test-release
+# Best-of-both-worlds profile for maximum testing speed.
+# Combines release-grade runtime performance (opt-level 3) with fast
+# parallel compilation (codegen-units 16, LTO off).
 [profile.test-release]
 inherits = "release"
+opt-level = 3
 debug = "line-tables-only"
 debug-assertions = true
 overflow-checks = true
+lto = false
+codegen-units = 16
 
 [profile.wasm-release]
 inherits = "release"

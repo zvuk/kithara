@@ -200,6 +200,48 @@ public final class KitharaPlayer: @unchecked Sendable {
         _knownItems.removeAll()
     }
 
+    /// Number of items currently in the queue.
+    public var itemCount: Int {
+        Int(_inner.itemCount())
+    }
+
+    /// Replace the item at `index` with a freshly-loaded one.
+    ///
+    /// Use before ``selectItem(at:autoplay:)`` to re-play a track whose
+    /// resource was consumed by a prior playback. The replacement item
+    /// must already have a loaded resource (``KitharaPlayerItem/load()``
+    /// finished).
+    public func replaceItem(at index: Int, with item: KitharaPlayerItem) throws {
+        do {
+            try _inner.replaceItem(index: UInt32(index), item: item._inner)
+            _knownItems[item.id] = item
+        } catch let ffiError as FfiError {
+            throw KitharaError(ffi: ffiError)
+        }
+    }
+
+    /// Select an item at the given queue index, applying the configured
+    /// crossfade duration during the transition.
+    ///
+    /// - Parameters:
+    ///   - index: Queue index (0-based).
+    ///   - autoplay: If `true`, begin playback immediately after the switch.
+    /// - Throws: ``KitharaError`` if the index is out of range or the item
+    ///   is not yet inserted into the engine.
+    public func selectItem(at index: Int, autoplay: Bool = true) throws {
+        do {
+            try _inner.selectItem(index: UInt32(index), autoplay: autoplay)
+        } catch let ffiError as FfiError {
+            throw KitharaError(ffi: ffiError)
+        }
+    }
+
+    /// Crossfade duration in seconds applied on item transitions.
+    public var crossfadeDuration: Float {
+        get { _inner.crossfadeDuration() }
+        set { _inner.setCrossfadeDuration(seconds: newValue) }
+    }
+
     // MARK: - Key processing (DRM)
 
     /// Set a key processor for HLS DRM key decryption.

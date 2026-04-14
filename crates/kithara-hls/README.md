@@ -141,6 +141,14 @@ flowchart LR
 - On ABR mid-stream switch, metadata offsets are no longer trusted for old layout, so source wakes sequential downloader instead of forcing stale offset lookup.
 - `Eof` is returned only when timeline is marked EOF and requested range starts at/after effective total bytes.
 
+## Byte availability is owned by AssetStore
+
+`StreamIndex` owns **semantic mapping only**: virtual byte offset → variant, segment index, init/media split. "Are those bytes actually present on disk / in memory?" is always a query on `AssetStore`, never a double-check through an ad-hoc `open_resource` + `resource.contains_range()`.
+
+The read path lives in `source/read.rs`. `range_ready_from_segments` first consults `StreamIndex::find_at_offset` for the mapping, then calls `AssetStore::contains_range(key, range)` once per sub-range (init + media) — the aggregate `AvailabilityIndex` answers hot cases without opening any resource, and falls back to `resource_state` for pre-existing committed files that have never been touched through the observer. `read_from_entry` and `read_media_segment_checked` use the same single-query guard before actually opening the resource and calling `read_at`.
+
+`LRU`-driven segment invalidation still flows through `on_invalidated → StreamIndex::remove_resource`, which clears the `SegmentSlot` entry. That causes `find_at_offset` to return `None` for the evicted segment and `range_ready_from_segments` to short-circuit to `false` before even hitting the backend — consistent with the previous contract.
+
 ## Agent guardrails
 
 - Keep topology, committed layout, residency, and ABR state as separate buckets. Do not collapse them into one convenience state object.

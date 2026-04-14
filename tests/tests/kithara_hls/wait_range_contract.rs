@@ -136,7 +136,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 /// without deadlock or hang.
 ///
 /// capacity=2 is the minimum for fMP4 segments with init+media resources.
-/// Without PlanOutcome::Idle + backfill guard + TOCTOU Retry:
+/// Without `PlanOutcome::Idle` + backfill guard + TOCTOU Retry:
 /// - downloader hot-spins on empty Batch → hang detector fires
 /// - or backfill rewind re-downloads evicted segments infinitely
 ///

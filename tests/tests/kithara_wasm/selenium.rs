@@ -424,12 +424,11 @@ impl WasmPlayerSelenium {
                 .map(el => el.textContent ?? '')
                 .join('\n');
         "#;
-        if let Ok(ret) = self.driver.execute(script, Vec::<Value>::new()).await {
-            if let Ok(s) = ret.convert::<String>() {
-                if !s.is_empty() {
-                    logs.push(format!("--- UI event log ---\n{s}"));
-                }
-            }
+        if let Ok(ret) = self.driver.execute(script, Vec::<Value>::new()).await
+            && let Ok(s) = ret.convert::<String>()
+            && !s.is_empty()
+        {
+            logs.push(format!("--- UI event log ---\n{s}"));
         }
 
         // Captured console logs
@@ -438,12 +437,11 @@ impl WasmPlayerSelenium {
             .driver
             .execute(console_script, Vec::<Value>::new())
             .await
+            && let Ok(s) = ret.convert::<String>()
+            && !s.is_empty()
+            && s != "<no console capture>"
         {
-            if let Ok(s) = ret.convert::<String>() {
-                if !s.is_empty() && s != "<no console capture>" {
-                    logs.push(format!("--- console logs ---\n{s}"));
-                }
-            }
+            logs.push(format!("--- console logs ---\n{s}"));
         }
 
         if logs.is_empty() {
@@ -861,7 +859,7 @@ impl WasmPlayerSelenium {
         self.stop_and_replay_verify().await
     }
 
-    /// Count dedicated Web Workers via Chrome DevTools Protocol.
+    /// Count dedicated Web Workers via Chrome `DevTools` Protocol.
     ///
     /// Returns `(worker_count, worker_titles)` — only dedicated workers
     /// (not service workers or shared workers).
@@ -890,8 +888,8 @@ impl WasmPlayerSelenium {
     /// Run the worker count scenario: verify workers are created and cleaned up
     /// as expected during the player lifecycle.
     ///
-    /// Uses a baseline approach: WASM infrastructure (tokio_with_wasm,
-    /// wasm_safe_thread) may create its own workers at page load. We measure
+    /// Uses a baseline approach: WASM infrastructure (`tokio_with_wasm`,
+    /// `wasm_safe_thread`) may create its own workers at page load. We measure
     /// the baseline and check that exactly 2 *additional* workers appear after
     /// track load (engine command worker + shared audio worker).
     async fn run_worker_count_scenario(&self) -> Result<(), String> {
@@ -1404,8 +1402,7 @@ fn repo_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| manifest.to_path_buf())
+        .map_or_else(|| manifest.to_path_buf(), Path::to_path_buf)
 }
 
 async fn http_ok(url: &str) -> bool {
@@ -1463,7 +1460,7 @@ async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
 /// Create a [`WasmPlayerSelenium`] session with its owning harness.
 ///
 /// Returns both the harness (which keeps trunk/webdriver/test-server
-/// processes alive via [`ChildGuard`]) and the WebDriver session.
+/// processes alive via [`ChildGuard`]) and the `WebDriver` session.
 /// The caller must keep the harness alive for the session's lifetime
 /// and drop it **after** the session is closed.
 async fn selenium_setup() -> (SeleniumHarness, WasmPlayerSelenium) {
@@ -1530,7 +1527,7 @@ async fn selenium_drm_playback_scenario() {
 /// Verify Web Worker count at each lifecycle stage:
 /// - After page load: 0 workers (engine starts lazily)
 /// - Steady state after track load: 2 workers (engine + shared audio)
-/// - Ephemeral spawn_blocking workers (probe/decoder) cleaned up
+/// - Ephemeral `spawn_blocking` workers (probe/decoder) cleaned up
 #[kithara::test(selenium)]
 async fn selenium_worker_count() {
     let (_harness, session) = selenium_setup().await;

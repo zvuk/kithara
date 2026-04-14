@@ -991,7 +991,7 @@ mod tests {
             }
         }
 
-        let expected = (total_input_frames as f64 * 44100.0 / 48000.0) as usize;
+        let expected = (f64::from(total_input_frames) * 44100.0 / 48000.0) as usize;
         let tolerance = 1024 * 2;
         assert!(
             total_output_frames + tolerance >= expected,

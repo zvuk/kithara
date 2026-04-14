@@ -1,11 +1,13 @@
-use ffmpeg::codec;
+use ffmpeg::{
+    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
+    codec::{
+        Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
+        flag::Flags as CodecFlags,
+    },
+    encoder::find as find_encoder,
+};
 use ffmpeg_next as ffmpeg;
 use kithara_stream::AudioCodec;
-
-use crate::{
-    EncodeError, EncodeResult,
-    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
-};
 
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized,
@@ -14,6 +16,12 @@ use super::{
         send_frame_to_filter,
     },
 };
+use crate::{
+    EncodeError, EncodeResult,
+    types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
+};
+
+const AAC_FRAME_SAMPLES: usize = 1024;
 
 /// AAC-LC encoder using `FFmpeg` (`libfdk-aac` or built-in AAC).
 #[derive(Debug, Clone, Copy)]
@@ -21,7 +29,7 @@ pub(crate) struct AacFFmpegEncoder;
 
 impl AacFFmpegEncoder {
     pub(crate) const fn frame_samples() -> usize {
-        1024
+        AAC_FRAME_SAMPLES
     }
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
@@ -79,38 +87,38 @@ impl AacFFmpegEncoder {
 
 struct PacketCollectingEncoder {
     filter: ffmpeg::filter::Graph,
-    encoder: codec::encoder::Audio,
-    encoder_time_base: ffmpeg::Rational,
-    target_time_base: ffmpeg::Rational,
+    encoder: AudioEncoder,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
     timestamp_origin: Option<i64>,
     units: Vec<EncodedAccessUnit>,
 }
 
 impl PacketCollectingEncoder {
     fn new(sample_rate: u32, channels: u16, timescale: u32, bit_rate: u64) -> EncodeResult<Self> {
-        let output_codec = ffmpeg::encoder::find(codec::Id::AAC)
+        let output_codec = find_encoder(Id::AAC)
             .ok_or(EncodeError::UnsupportedCodec(AudioCodec::AacLc))?
             .audio()
             .map_err(|_| EncodeError::UnsupportedCodec(AudioCodec::AacLc))?;
-        let context = codec::context::Context::new();
+        let context = CodecContext::new();
         let mut encoder = context.encoder().audio()?;
 
-        let input_channel_layout = ffmpeg::ChannelLayout::default(i32::from(channels));
+        let input_channel_layout = ChannelLayout::default(i32::from(channels));
         let channel_layout = output_codec
             .channel_layouts()
-            .map_or(ffmpeg::channel_layout::ChannelLayout::STEREO, |layouts| {
+            .map_or(ChannelLayout::STEREO, |layouts| {
                 layouts.best(input_channel_layout.channels())
             });
 
-        encoder.set_flags(codec::flag::Flags::GLOBAL_HEADER);
+        encoder.set_flags(CodecFlags::GLOBAL_HEADER);
         encoder.set_rate(sample_rate as i32);
         encoder.set_channel_layout(channel_layout);
         encoder.set_format(
             output_codec
                 .formats()
-                .ok_or(ffmpeg::Error::InvalidData)?
+                .ok_or(FfmpegError::InvalidData)?
                 .next()
-                .ok_or(ffmpeg::Error::InvalidData)?,
+                .ok_or(FfmpegError::InvalidData)?,
         );
         let bit_rate = usize::try_from(bit_rate).map_err(|_| {
             EncodeError::InvalidInput("bit_rate does not fit into usize".to_owned())
@@ -119,20 +127,20 @@ impl PacketCollectingEncoder {
         encoder.set_max_bit_rate(bit_rate);
         encoder.set_time_base((1, sample_rate as i32));
 
-        let encoder = encoder.open_as_with(output_codec, ffmpeg::Dictionary::new())?;
+        let encoder = encoder.open_as_with(output_codec, Dictionary::new())?;
         let filter = build_direct_filter(&encoder, sample_rate, channels)?;
 
         Ok(Self {
             filter,
             encoder,
-            encoder_time_base: ffmpeg::Rational(1, sample_rate as i32),
-            target_time_base: ffmpeg::Rational(1, timescale as i32),
+            encoder_time_base: Rational(1, sample_rate as i32),
+            target_time_base: Rational(1, timescale as i32),
             timestamp_origin: None,
             units: Vec::new(),
         })
     }
 
-    fn receive_and_collect_filtered_frames(&mut self) -> Result<(), ffmpeg::Error> {
+    fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
         let timestamp_origin = &mut self.timestamp_origin;
@@ -165,18 +173,18 @@ impl PacketCollectingEncoder {
 }
 
 fn collect_encoded_packets(
-    encoder: &mut codec::encoder::Audio,
-    encoder_time_base: ffmpeg::Rational,
-    target_time_base: ffmpeg::Rational,
+    encoder: &mut AudioEncoder,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
     timestamp_origin: &mut Option<i64>,
     units: &mut Vec<EncodedAccessUnit>,
 ) {
-    let mut encoded = ffmpeg::Packet::empty();
+    let mut encoded = Packet::empty();
     while encoder.receive_packet(&mut encoded).is_ok() {
         if encoded.size() == 0 {
             continue;
         }
-        let mut packet = ffmpeg::Packet::copy(encoded.data().unwrap_or(&[]));
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
         packet.set_pts(encoded.pts());
         packet.set_dts(encoded.dts());
         packet.set_duration(encoded.duration());
@@ -204,9 +212,7 @@ mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     use super::AacFFmpegEncoder;
-    use crate::{
-        test_pcm::SawtoothPcmFixture, EncoderFactory, PackagedEncodeRequest,
-    };
+    use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -248,8 +254,7 @@ mod tests {
             assert_eq!(unit.pts, unit.dts, "AAC should not reorder audio packets");
             assert_eq!(
                 unit.duration,
-                u32::try_from(AacFFmpegEncoder::frame_samples())
-                    .expect("AAC frame size fits u32"),
+                u32::try_from(AacFFmpegEncoder::frame_samples()).expect("AAC frame size fits u32"),
                 "AAC-LC packets should use the natural frame duration"
             );
 

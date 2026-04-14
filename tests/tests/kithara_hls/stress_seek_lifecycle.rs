@@ -10,7 +10,7 @@
 //!
 //! Phases:
 //! 1. **Warmup**: read until ABR switch from V0→V1
-//! 2. **Stress**: 2000 random seeks — verify read() always produces data
+//! 2. **Stress**: 2000 random seeks — verify `read()` always produces data
 //! 3. **Reset**: seek to 0 → read the entire track beginning to end,
 //!    verify saw-tooth continuity on every frame
 
@@ -25,7 +25,7 @@ use kithara::{
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, detect_direction,
     fixture_protocol::DelayRule,
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
@@ -45,16 +45,17 @@ const STRESS_SEEK_ITERATIONS: usize = 2000;
 const MAX_ZERO_READS: usize = 50;
 
 /// Read with retry: keeps trying until data arrives or stuck.
-/// Returns (samples_read, retries_needed).
+/// Returns (`samples_read`, `retries_needed`).
 fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize) {
     for retry in 0..MAX_ZERO_READS {
+        if audio.is_eof() {
+            return (0, retry);
+        }
         let n = audio.read(buf);
         if n > 0 {
             return (n, retry);
         }
-        if audio.is_eof() {
-            return (0, retry);
-        }
+        // Give background worker some time to fill the buffer
         thread::sleep(Duration::from_millis(1));
     }
     (0, MAX_ZERO_READS)
@@ -73,7 +74,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
-async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
+async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast: AbrOptions) {
     let init_segment = Arc::new(create_wav_header(D.sample_rate, D.channels, None));
     let v0_pcm = Arc::new(
         SignalPcm::new(
@@ -103,7 +104,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         .into_vec(),
     );
 
-    let segment_duration = D.segment_size as f64 / (D.sample_rate as f64 * D.channels as f64 * 2.0);
+    let segment_duration =
+        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
     let total_secs = segment_duration * SEGMENT_COUNT as f64;
 
     info!(
@@ -157,12 +159,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         .with_store(store)
         .with_cancel(cancel)
         .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(120),
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
+            ..abr_fast
         });
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -180,7 +178,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
 
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
-        let chunk_samples = (0.05 * spec.sample_rate as f64 * channels as f64) as usize;
+        let chunk_samples = (0.05 * f64::from(spec.sample_rate) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
@@ -188,7 +186,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         info!("Phase 1: warmup — reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
-        let warmup_deadline = Instant::now() + Duration::from_secs(60);
+        let warmup_deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < warmup_deadline {
             let (n, _) = read_with_retry(&mut audio, &mut buf);

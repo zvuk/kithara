@@ -6,7 +6,6 @@ use bytes::Bytes;
 use kithara::{
     drm::{DecryptContext, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult},
-    internal::KeyManager,
 };
 use kithara_integration_tests::hls_fixture::*;
 use kithara_platform::time::Duration;
@@ -23,11 +22,9 @@ use url::Url;
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
+    let key_manager = test_key_manager(&assets_fixture, None, None, None);
     let key_url = server.url("/key.bin");
 
     let key = key_manager.get_raw_key(&key_url, None).await?;
@@ -45,7 +42,6 @@ async fn fetch_and_cache_key(
 async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
 
@@ -57,8 +53,7 @@ async fn key_processor_applied(
         Ok(Bytes::from(processed))
     });
 
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
+    let key_manager = test_key_manager(&assets_fixture, Some(processor), None, None);
     let key_url = server.url("/key.bin");
 
     let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
@@ -76,7 +71,6 @@ async fn key_processor_applied(
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
 
@@ -86,8 +80,7 @@ async fn key_manager_with_different_processors(
         Ok(Bytes::from(upper))
     });
 
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), Some(uppercase_processor), None, None);
+    let key_manager = test_key_manager(&assets_fixture, Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin");
 
     let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
@@ -102,12 +95,8 @@ async fn key_manager_with_different_processors(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn key_manager_error_handling(
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
+async fn key_manager_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
+    let key_manager = test_key_manager(&assets_fixture, None, None, None);
 
     // Try to get key from invalid URL
     let invalid_url = Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
@@ -128,11 +117,9 @@ async fn key_manager_error_handling(
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
+    let key_manager = test_key_manager(&assets_fixture, None, None, None);
     let key_url = server.url("/key.bin");
 
     // First fetch
@@ -156,7 +143,6 @@ async fn key_manager_caching_behavior(
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
 
@@ -172,8 +158,7 @@ async fn key_manager_with_context(
         Ok(Bytes::from(processed))
     });
 
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
-    let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
+    let key_manager = test_key_manager(&assets_fixture, Some(processor), None, None);
     let key_url = server.url("/key.bin");
 
     // Test without IV
@@ -202,8 +187,7 @@ async fn aes128_key_decrypts_ciphertext(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let net = net_fixture;
-    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net.clone());
-    let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
+    let key_manager = test_key_manager(&assets_fixture, None, None, None);
 
     let key_url = server.url("/aes/key.bin");
     let cipher_url = server.url("/aes/seg0.bin");

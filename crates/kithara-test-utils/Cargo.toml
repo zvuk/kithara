@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 kithara-stream = { workspace = true }
+kithara-abr = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }

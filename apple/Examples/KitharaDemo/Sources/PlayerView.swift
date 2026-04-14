@@ -25,32 +25,75 @@ struct PlayerView: View {
     @StateObject private var viewModel = PlayerViewModel()
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerSection
-            Spacer().frame(height: 20)
-            urlSection
-            Spacer().frame(height: 16)
-            nowPlayingSection
-            Spacer().frame(height: 12)
-            seekSection
-            Spacer().frame(height: 16)
-            transportSection
-            Spacer().frame(height: 12)
-            rateSection
-            Spacer().frame(height: 16)
-            volumeSection
-            Spacer().frame(height: 16)
-            eqSection
-            Spacer().frame(height: 16)
-            qualitySection
-            Spacer().frame(height: 16)
-            playlistSection
-            Spacer().frame(height: 16)
-            errorSection
+        ScrollView {
+            VStack(spacing: 0) {
+                headerSection
+                Spacer().frame(height: 20)
+                urlSection
+                Spacer().frame(height: 16)
+                nowPlayingSection
+                Spacer().frame(height: 12)
+                seekSection
+                Spacer().frame(height: 16)
+                transportSection
+                Spacer().frame(height: 12)
+                rateSection
+                Spacer().frame(height: 16)
+                volumeSection
+                Spacer().frame(height: 16)
+                tabbedSection
+                Spacer().frame(height: 16)
+                errorSection
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .scrollIndicators(.hidden)
         .background(Color.kitharaBg.ignoresSafeArea())
+    }
+
+    // MARK: - Tabs
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case playlist = "Playlist"
+        case eq = "EQ"
+        case settings = "Settings"
+
+        var id: String { rawValue }
+    }
+
+    @State private var selectedTab: Tab = .playlist
+
+    private var tabbedSection: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                ForEach(Tab.allCases) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Text(tab.rawValue)
+                            .font(.system(size: 12, weight: selectedTab == tab ? .bold : .regular))
+                            .foregroundStyle(selectedTab == tab ? Color.kitharaBg : Color.kitharaMuted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .frame(maxWidth: .infinity)
+                            .background(selectedTab == tab ? Color.kitharaGold : Color.kitharaPanel)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Group {
+                switch selectedTab {
+                case .playlist: playlistSection
+                case .eq: eqSection
+                case .settings: settingsSection
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(height: 380)
     }
 
     // MARK: - Header
@@ -286,7 +329,7 @@ struct PlayerView: View {
 
             HStack(spacing: 4) {
                 ForEach(0..<viewModel.eqGains.count, id: \.self) { band in
-                    VStack(spacing: 4) {
+                    VStack(spacing: 6) {
                         Slider(
                             value: Binding(
                                 get: { viewModel.eqGains[band] },
@@ -295,11 +338,12 @@ struct PlayerView: View {
                             in: -24...6,
                             step: 0.5
                         )
+                        .frame(width: 140, height: 28)
                         .rotationEffect(.degrees(-90))
-                        .frame(width: 20, height: 80)
+                        .frame(width: 28, height: 140)
 
                         Text(eqBandLabel(band))
-                            .font(.system(size: 8))
+                            .font(.system(size: 9))
                             .foregroundStyle(Color.kitharaMuted)
                     }
                 }
@@ -326,45 +370,36 @@ struct PlayerView: View {
     // MARK: - Quality
 
     private var qualitySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Quality")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.kitharaLight)
+        HStack(spacing: 6) {
+            Button {
+                viewModel.setAbrMode(variantIndex: nil)
+            } label: {
+                Text("Auto")
+                    .font(.system(size: 12, weight: viewModel.abrIsAuto ? .bold : .regular))
+                    .foregroundStyle(viewModel.abrIsAuto ? Color.kitharaBg : .kitharaMuted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(viewModel.abrIsAuto ? Color.kitharaGold : Color.kitharaPanel)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
 
-            HStack(spacing: 6) {
+            ForEach(viewModel.discoveredVariants, id: \.index) { variant in
+                let isSelected = !viewModel.abrIsAuto && viewModel.selectedVariantIndex == variant.index
                 Button {
-                    viewModel.setAbrMode(variantIndex: nil)
+                    viewModel.setAbrMode(variantIndex: variant.index)
                 } label: {
-                    Text("Auto")
-                        .font(.system(size: 12, weight: viewModel.abrIsAuto ? .bold : .regular))
-                        .foregroundStyle(viewModel.abrIsAuto ? Color.kitharaBg : .kitharaMuted)
+                    Text(variant.label)
+                        .font(.system(size: 12, weight: isSelected ? .bold : .regular))
+                        .foregroundStyle(isSelected ? Color.kitharaBg : .kitharaMuted)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
-                        .background(viewModel.abrIsAuto ? Color.kitharaGold : Color.kitharaPanel)
+                        .background(isSelected ? Color.kitharaGold : Color.kitharaPanel)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-
-                ForEach(viewModel.discoveredVariants, id: \.index) { variant in
-                    let isSelected = viewModel.selectedVariantIndex == variant.index
-                    Button {
-                        viewModel.setAbrMode(variantIndex: variant.index)
-                    } label: {
-                        Text(variant.label)
-                            .font(.system(size: 12, weight: isSelected ? .bold : .regular))
-                            .foregroundStyle(isSelected ? Color.kitharaBg : .kitharaMuted)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(isSelected ? Color.kitharaGold : Color.kitharaPanel)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                }
             }
         }
-        .padding(12)
-        .background(Color.kitharaPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Playlist
@@ -375,7 +410,8 @@ struct PlayerView: View {
             Text("No tracks in playlist")
                 .font(.system(size: 13))
                 .foregroundStyle(Color.kitharaMuted)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(height: 60)
                 .background(Color.kitharaPanel)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
@@ -386,6 +422,7 @@ struct PlayerView: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(10)
             .background(Color.kitharaPanel)
@@ -440,6 +477,10 @@ struct PlayerView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                Text(entry.duration.map(formatDuration) ?? "--:--")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.kitharaMuted)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 12)
@@ -448,6 +489,54 @@ struct PlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Settings
+
+    private var settingsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Quality")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.kitharaLight)
+                qualitySection
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Crossfade")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.kitharaLight)
+                HStack(spacing: 10) {
+                    Slider(
+                        value: Binding(
+                            get: { viewModel.crossfadeDuration },
+                            set: { viewModel.setCrossfadeDuration($0) }
+                        ),
+                        in: PlayerViewModel.crossfadeRange,
+                        step: 0.1
+                    )
+                    .tint(.kitharaGold)
+
+                    Text(String(format: "%.1fs", viewModel.crossfadeDuration))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color.kitharaMuted)
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color.kitharaPanel)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "--:--" }
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return String(format: "%d:%02d", mins, secs)
     }
 
     private var statusText: String {

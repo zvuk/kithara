@@ -523,13 +523,12 @@ fn encrypt_aes128_cbc(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
         fixture_protocol::{DataMode, EncryptionRequest},
         hls_spec::parse_hls_spec_with,
         hls_url::{HlsSpec, encode_hls_spec},
     };
-
-    use super::*;
 
     #[test]
     fn builds_master_and_media_playlist() {

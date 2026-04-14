@@ -14,9 +14,6 @@ pub enum AssetsError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("serialization error: {0}")]
-    Serialization(#[from] postcard::Error),
-
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
 
@@ -35,7 +32,6 @@ pub type AssetsResult<T> = Result<T, AssetsError>;
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use postcard::Error as PostcardError;
 
     use super::*;
 
@@ -46,19 +42,6 @@ mod tests {
     #[case::missing_component(AssetsError::MissingComponent("host".into()), "URL is missing required component: host")]
     fn test_error_display(#[case] error: AssetsError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
-    }
-
-    #[kithara::test]
-    fn test_serialization_error_display() {
-        let err = AssetsError::Serialization(PostcardError::DeserializeUnexpectedEnd);
-        assert!(err.to_string().starts_with("serialization error:"));
-    }
-
-    #[kithara::test]
-    fn test_serialization_error_from() {
-        let postcard_err = PostcardError::DeserializeUnexpectedEnd;
-        let err: AssetsError = postcard_err.into();
-        assert!(matches!(err, AssetsError::Serialization(_)));
     }
 
     #[kithara::test]

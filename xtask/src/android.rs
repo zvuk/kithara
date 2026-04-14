@@ -1,9 +1,12 @@
 use std::{fs, path::Path, process::Command};
 
-use crate::BuildProfile;
-use crate::util::{check_rust_target, check_tool};
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+
+use crate::{
+    BuildProfile,
+    util::{check_rust_target, check_tool},
+};
 
 #[derive(Clone, Copy, Debug, clap::Subcommand)]
 pub(crate) enum AndroidCommand {

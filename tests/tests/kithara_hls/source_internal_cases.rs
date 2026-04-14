@@ -6,28 +6,24 @@ use std::{
     },
 };
 
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_hls::internal::{
-    AbrMode, AbrOptions, DefaultFetchManager, FetchManager, HlsConfig, HlsCoord, HlsError,
-    HlsSource, PlaylistState, SegmentData, SegmentRequest, SegmentState, StreamIndex, VariantId,
-    VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
-    make_test_fetch_manager, make_test_source as make_internal_test_source,
-    make_test_source_with_fetch as make_internal_test_source_with_fetch, set_source_variant_fence,
-    source_can_cross_variant, source_variant_index_handle, subscribe_source_events,
+    AbrMode, AbrOptions, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData,
+    SegmentLoader, SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap,
+    VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
+    make_test_segment_loader, make_test_source as make_internal_test_source,
+    make_test_source_with_backend as make_internal_test_source_with_backend,
+    set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
 };
-use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant, sleep, timeout},
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{
-    AudioCodec, ReadOutcome, Source, SourcePhase, StreamError, Timeline, Topology,
-    TransferCoordination,
-};
+use kithara_stream::{AudioCodec, ReadOutcome, Source, SourcePhase, StreamError, Timeline};
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -42,11 +38,11 @@ impl SegmentRequests {
     }
 
     fn pop(&self) -> Option<SegmentRequest> {
-        self.coord.demand().take()
+        self.coord.take_segment_request()
     }
 
     fn peek(&self) -> Option<SegmentRequest> {
-        self.coord.demand().peek()
+        self.coord.peek_segment_request()
     }
 }
 
@@ -108,19 +104,19 @@ fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> H
         Arc::clone(&shared.playlist_state),
         Arc::clone(&shared.segments),
         Arc::clone(&shared.coord),
-        cancel,
+        &cancel,
     )
 }
 
-fn make_test_source_with_fetch(
+fn make_test_source_with_backend(
     shared: Arc<SharedSegments>,
-    fetch: Arc<DefaultFetchManager>,
+    backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
-    make_internal_test_source_with_fetch(
+    make_internal_test_source_with_backend(
         Arc::clone(&shared.playlist_state),
         Arc::clone(&shared.segments),
         Arc::clone(&shared.coord),
-        fetch,
+        backend,
     )
 }
 
@@ -157,7 +153,7 @@ fn make_segment_data_with_init(init_len: u64, media_len: u64) -> SegmentData {
 }
 
 fn commit_segment_bytes(
-    fetch: &DefaultFetchManager,
+    backend: &AssetStore<DecryptContext>,
     data: &SegmentData,
     init_bytes: &[u8],
     media_bytes: &[u8],
@@ -173,7 +169,6 @@ fn commit_segment_bytes(
         "test media bytes must match SegmentData::media_len"
     );
 
-    let backend = fetch.backend();
     let media_key = ResourceKey::from_url(&data.media_url);
     let media_res = backend
         .acquire_resource(&media_key)
@@ -235,7 +230,6 @@ fn make_variant_state(id: usize, count: usize) -> VariantState {
 fn uniform_size_map(segments: usize, segment_size: u64) -> VariantSizeMap {
     let offsets: Vec<u64> = (0..segments).map(|i| i as u64 * segment_size).collect();
     VariantSizeMap {
-        init_size: 0,
         segment_sizes: vec![segment_size; segments],
         offsets,
         total: segments as u64 * segment_size,
@@ -278,19 +272,10 @@ fn parsed_variants(count: usize) -> Vec<VariantStream> {
         .collect()
 }
 
-fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
-    let noop_drm: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
-    let backend = AssetStoreBuilder::new()
-        .ephemeral(true)
-        .cancel(cancel.clone())
-        .process_fn(noop_drm)
-        .build();
-    let net = HttpClient::new(NetOptions::default());
-    Arc::new(FetchManager::new(backend, net, cancel))
+fn local_test_loader(
+    cancel: &CancellationToken,
+) -> (AssetStore<DecryptContext>, Arc<SegmentLoader>) {
+    make_test_segment_loader(cancel)
 }
 
 async fn wait_range_and_take_request(
@@ -674,13 +659,17 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     let info_after_switch = Source::media_info(&source).expect("media info at switch");
     assert_eq!(info_after_switch.codec, Some(AudioCodec::Flac));
 
-    // Variant fence path can expose the target variant before reader_offset advances.
+    // Even when `variant_fence` is set and ABR has moved the hinted cursor
+    // to a different variant, the resolved reader variant must win: at
+    // byte_position 0 the reader sits on V0's seg 0. Returning the hinted
+    // variant here would make the decoder detect a bogus format change,
+    // rewind to byte 0, and re-decode — the exact mmap over-read bug.
     shared.segments.lock_sync().set_layout_variant(0);
     shared.timeline.set_byte_position(0);
     shared.abr_variant_index.store(1, Ordering::Release);
     set_source_variant_fence(&mut source, Some(0));
-    let hinted_info = Source::media_info(&source).expect("media info from hinted variant");
-    assert_eq!(hinted_info.codec, Some(AudioCodec::Flac));
+    let info_under_fence = Source::media_info(&source).expect("media info under fence");
+    assert_eq!(info_under_fence.codec, Some(AudioCodec::AacLc));
 }
 
 #[kithara::test]
@@ -698,6 +687,67 @@ fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     shared.abr_variant_index.store(1, Ordering::Release);
     let info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(info.codec, Some(AudioCodec::Flac));
+}
+
+/// RED: after reader consumed the full layout-variant track and sits at EOF,
+/// `media_info()` must continue reporting the layout variant — not the ABR
+/// hinted variant.
+///
+/// Background: in `stress_seek_lifecycle_with_zero_reset_mmap`, after seek to 0
+/// the decoder reads to `byte_position = max_end_offset`. `find_at_offset(pos)`
+/// returns None (past end of byte map) and the fallback chain in
+/// `HlsSource::media_info()` walks to `None if has_hinted_variant`, returning
+/// the hinted variant. If ABR flipped to a different variant during Phase 2's
+/// 2000 seeks, the decoder then observes `variant_index` change → triggers
+/// `detect_format_change()` → `format_change_segment_range()` returns
+/// `seg 0 range = 0..X` → decoder seeks to 0 and re-reads the full track.
+/// That loop produces 3× the expected frames on the mmap (disk) backend where
+/// all three variants remain committed in `StreamIndex`.
+#[kithara::test]
+fn media_info_at_eof_reports_layout_variant_not_hinted() {
+    let cancel = CancellationToken::new();
+    let playlist_state =
+        playlist_state_with_codecs(Some(AudioCodec::AacLc), Some(AudioCodec::Flac));
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    {
+        let mut segments = shared.segments.lock_sync();
+        // Layout variant is V0; commit 3 V0 segments (byte map: 0..300).
+        segments.commit_segment(0, 0, make_segment_data(100));
+        segments.commit_segment(0, 1, make_segment_data(100));
+        segments.commit_segment(0, 2, make_segment_data(100));
+        // ABR previously probed V1 (stays committed on disk backend).
+        segments.commit_segment(1, 0, make_segment_data(100));
+        segments.commit_segment(1, 1, make_segment_data(100));
+        segments.commit_segment(1, 2, make_segment_data(100));
+    }
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+
+    // Decoder just finished reading layout V0 end-to-end — byte_position is
+    // AT EOF of V0's byte map (0..300).
+    shared.timeline.set_byte_position(300);
+    // ABR flipped to V1 while the reader was consuming V0.
+    shared.abr_variant_index.store(1, Ordering::Release);
+    // commit_seek_landing always sets the variant fence on every seek, so
+    // after Phase 2's 2000 seeks the fence is set to the layout variant.
+    set_source_variant_fence(&mut source, Some(0));
+
+    let info = Source::media_info(&source).expect("media info at EOF");
+    assert_eq!(
+        info.codec,
+        Some(AudioCodec::AacLc),
+        "at EOF of layout V0 with fence=Some(V0), media_info must report V0 (AacLc), \
+         not ABR-hinted V1 (Flac) — reporting the hinted variant makes the decoder observe \
+         a `variant_index` change → detect_format_change → format_change_segment_range \
+         returns seg 0 range = 0..X → decoder seeks to 0 and re-reads the full track. \
+         On disk backend with all variants committed this loops, producing 3× expected frames \
+         in stress_seek_lifecycle_with_zero_reset_mmap."
+    );
+    assert_eq!(info.variant_index, Some(0));
 }
 
 #[kithara::test]
@@ -821,9 +871,9 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let fetch = make_test_fetch_manager(cancel.clone());
-    let write_fetch = Arc::clone(&fetch);
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let write_backend = backend.clone();
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let init_bytes = b"v1-init";
     let media_bytes = b"v1-seg2";
     let mut expected = Vec::new();
@@ -832,7 +882,7 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
     let segment_data =
         make_segment_data_with_init(init_bytes.len() as u64, media_bytes.len() as u64);
 
-    commit_segment_bytes(write_fetch.as_ref(), &segment_data, init_bytes, media_bytes);
+    commit_segment_bytes(&write_backend, &segment_data, init_bytes, media_bytes);
     {
         let mut segments = shared.segments.lock_sync();
         segments.set_layout_variant(1);
@@ -876,13 +926,13 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let fetch = make_test_fetch_manager(cancel.clone());
-    let write_fetch = Arc::clone(&fetch);
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let write_backend = backend.clone();
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let segment_data = make_segment_data(100);
     let expected: Vec<u8> = (0u8..100).collect();
 
-    commit_segment_bytes(write_fetch.as_ref(), &segment_data, &[], &expected);
+    commit_segment_bytes(&write_backend, &segment_data, &[], &expected);
     {
         let mut segments = shared.segments.lock_sync();
         segments.set_expected_sizes(0, vec![100; 24]);
@@ -932,9 +982,9 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let fetch = make_test_fetch_manager(cancel.clone());
-    let write_fetch = Arc::clone(&fetch);
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let write_backend = backend.clone();
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let seg0_bytes = b"v0-seg0|";
     let seg1_bytes = b"v0-seg1|";
@@ -960,9 +1010,9 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
         media_url: Url::parse("https://example.com/v1-seg2").expect("valid URL"),
     };
 
-    commit_segment_bytes(write_fetch.as_ref(), &seg0, &[], seg0_bytes);
-    commit_segment_bytes(write_fetch.as_ref(), &seg1, &[], seg1_bytes);
-    commit_segment_bytes(write_fetch.as_ref(), &seg2, init2_bytes, seg2_bytes);
+    commit_segment_bytes(&write_backend, &seg0, &[], seg0_bytes);
+    commit_segment_bytes(&write_backend, &seg1, &[], seg1_bytes);
+    commit_segment_bytes(&write_backend, &seg2, init2_bytes, seg2_bytes);
 
     // TODO: verify this test reflects per-variant byte map semantics
     // With per-variant byte maps, each variant has its own contiguous byte space.
@@ -1080,13 +1130,10 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
         make_variant_state(1, 3),
     ]));
     let variants = parsed_variants(2);
-    let fetch = test_fetch_manager(cancel.clone());
-    let config = HlsConfig {
-        cancel: Some(cancel),
-        ..HlsConfig::default()
-    };
+    let (backend, _loader) = local_test_loader(&cancel);
+    let config = HlsConfig::default().with_cancel(cancel);
     let source = build_source(
-        fetch,
+        backend,
         &variants,
         &config,
         Arc::clone(&playlist_state),
@@ -1107,17 +1154,15 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
         make_variant_state(1, 3),
     ]));
     let variants = parsed_variants(2);
-    let fetch = test_fetch_manager(cancel.clone());
-    let config = HlsConfig {
-        abr: Some(kithara_abr::AbrController::new(AbrOptions {
+    let (backend, _loader) = local_test_loader(&cancel);
+    let config = HlsConfig::default()
+        .with_abr(kithara_abr::AbrController::new(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
-        })),
-        cancel: Some(cancel),
-        ..HlsConfig::default()
-    };
+        }))
+        .with_cancel(cancel);
     let source = build_source(
-        fetch,
+        backend,
         &variants,
         &config,
         Arc::clone(&playlist_state),
@@ -1361,10 +1406,10 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let fetch = make_test_fetch_manager(cancel.clone());
+    let (backend, _loader) = make_test_segment_loader(&cancel);
     // commit_source shares the same fetch backend for writing dummy resources.
-    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
 
@@ -1463,9 +1508,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let fetch = make_test_fetch_manager(cancel.clone());
-    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
@@ -1761,105 +1806,30 @@ async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change(
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
+async fn test_wait_range_without_size_map_does_not_enqueue_request() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
-    let source = make_test_source(Arc::clone(&shared), cancel.clone());
-
-    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
-    assert_eq!(request.variant, 0);
-    assert_eq!(request.segment_index, 0);
-}
-
-#[kithara::test(tokio, browser)]
-async fn test_wait_range_without_size_map_emits_seek_fallback_diagnostic() {
-    let cancel = CancellationToken::new();
-    let ps = playlist_state_without_size_map();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
-    let source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let mut events = subscribe_source_events(&source);
-
-    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
-    assert_eq!(request.variant, 0);
-    assert_eq!(request.segment_index, 0);
-
-    let diag = timeout(Duration::from_secs(1), async {
-        loop {
-            match events.recv().await {
-                Ok(Event::Hls(HlsEvent::Seek {
-                    stage,
-                    seek_epoch,
-                    variant,
-                    offset,
-                    from_segment_index,
-                    to_segment_index,
-                })) if stage == "wait_range_metadata_fallback" => {
-                    break (
-                        stage,
-                        seek_epoch,
-                        variant,
-                        offset,
-                        from_segment_index,
-                        to_segment_index,
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    panic!("expected seek fallback diagnostic, got channel error: {error}")
-                }
-            }
-        }
-    })
-    .await
-    .expect("seek fallback diagnostic should arrive");
-
-    assert_eq!(diag.0, "wait_range_metadata_fallback");
-    assert_eq!(diag.1, 0);
-    assert_eq!(diag.2, 0);
-    assert_eq!(diag.3, 0);
-    assert_eq!(diag.4, 0);
-    assert_eq!(diag.5, 0);
-}
-
-#[kithara::test(tokio, browser)]
-async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
-    let cancel = CancellationToken::new();
-    let ps = dummy_playlist_state();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let mut events = subscribe_source_events(&source);
 
-    let handle = spawn_blocking(move || source.wait_range(1024..2048, Duration::from_secs(1)));
-    let mut saw_metadata_miss = false;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        if let Ok(Ok(Event::Hls(HlsEvent::SeekMetadataMiss { .. }))) =
-            timeout(Duration::from_millis(50), events.recv()).await
-        {
-            saw_metadata_miss = true;
-            break;
-        }
-    }
+    let handle = spawn_blocking(move || source.wait_range(0..128, Duration::from_millis(150)));
 
-    let result = timeout(Duration::from_secs(3), handle)
+    let result = timeout(Duration::from_secs(2), handle)
         .await
-        .expect("wait_range should fail fast")
+        .expect("wait_range should complete")
         .expect("wait_range task should not panic");
 
+    assert!(
+        shared.segment_requests.pop().is_none(),
+        "no request should be enqueued without size map"
+    );
     match result {
-        Err(StreamError::Source(HlsError::SegmentNotFound(message))) => {
-            assert!(
-                message.contains("seek metadata miss"),
-                "unexpected error message: {message}"
-            );
+        Err(StreamError::Source(HlsError::Timeout(msg))) => {
+            assert!(msg.contains("budget exceeded"), "unexpected: {msg}");
         }
-        other => panic!("unexpected wait_range result: {other:?}"),
+        other => panic!("expected Timeout, got: {other:?}"),
     }
-
-    assert!(saw_metadata_miss, "expected SeekMetadataMiss diagnostic");
 }
 
 #[kithara::test(
@@ -1913,9 +1883,9 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
-    let fetch = make_test_fetch_manager(cancel.clone());
-    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = make_test_segment_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
@@ -2104,9 +2074,9 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(1, Ordering::Release);
     shared.had_midstream_switch.store(true, Ordering::Release);
-    let fetch = test_fetch_manager(cancel.clone());
-    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
-    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
+    let (backend, _loader) = local_test_loader(&cancel);
+    let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
+    let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     set_source_variant_fence(&mut source, Some(0));
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
@@ -2157,7 +2127,7 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
 /// Background task pushes entries at 10000+ that do NOT cover the waited
 /// range.  `range_ready=false` throughout.
 /// Expected: budget check returns `Err(HlsError::Timeout)` after the
-/// wait_range timeout expires.
+/// `wait_range` timeout expires.
 #[kithara::test(
     tokio,
     browser,

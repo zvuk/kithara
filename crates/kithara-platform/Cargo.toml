@@ -17,6 +17,7 @@ disable-hang-detector = ["kithara-hang-detector/disable-hang-detector"]
 
 [dependencies]
 futures = { workspace = true }
+tokio-util = { workspace = true }
 web-time = { workspace = true }
 kithara-hang-detector = { workspace = true }
 tokio_with_wasm = { workspace = true }
@@ -37,4 +38,5 @@ console_error_panic_hook = { workspace = true }
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false, features = ["internal"] }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }

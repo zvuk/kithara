@@ -40,32 +40,18 @@ impl StreamContext for HlsStreamContext {
 
     #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
     fn segment_index(&self) -> Option<u32> {
-        let offset = self.timeline.byte_position();
+        let offset = self.timeline.segment_position();
         let segments = self.segments.lock_sync();
-        let result = segments
+        segments
             .find_at_offset(offset)
-            .or_else(|| {
-                let max = segments.max_end_offset();
-                (max > 0)
-                    .then(|| segments.find_at_offset(max.saturating_sub(1)))
-                    .flatten()
-            })
-            .map(|seg_ref| seg_ref.segment_index as u32);
-        drop(segments);
-        result
+            .map(|seg_ref| seg_ref.segment_index as u32)
     }
 
     fn variant_index(&self) -> Option<usize> {
-        let offset = self.timeline.byte_position();
+        let offset = self.timeline.segment_position();
         let segments = self.segments.lock_sync();
         let result = segments
             .find_at_offset(offset)
-            .or_else(|| {
-                let max = segments.max_end_offset();
-                (max > 0)
-                    .then(|| segments.find_at_offset(max.saturating_sub(1)))
-                    .flatten()
-            })
             .map(|seg_ref| seg_ref.variant);
         drop(segments);
         result.or_else(|| Some(self.variant_index.load(Ordering::Relaxed)))
@@ -107,11 +93,8 @@ mod tests {
         );
 
         assert_eq!(ctx.byte_offset(), 1000);
-        // The segment at byte offset 1000 is not committed, but the last committed
-        // segment (variant 2, index 5 at byte offset 0..200) should be found via fallback.
-        // Since we committed at variant 2, seg 5 — and byte_position 1000 is past that,
-        // let's set byte position to within the segment.
-        timeline.set_byte_position(100);
+        // segment_index uses segment_position (set before byte_position advances)
+        timeline.set_segment_position(100);
         assert_eq!(ctx.segment_index(), Some(5));
         assert_eq!(ctx.variant_index(), Some(2));
 
@@ -129,10 +112,38 @@ mod tests {
         );
         variant.store(3, Ordering::Relaxed);
 
-        // The segment at byte 200..400 is (variant 3, seg 10)
-        timeline.set_byte_position(300);
-        assert_eq!(ctx.byte_offset(), 300);
+        // Variant 3 segment 10 covers byte range 0..200
+        timeline.set_segment_position(100);
         assert_eq!(ctx.segment_index(), Some(10));
         assert_eq!(ctx.variant_index(), Some(3));
+    }
+
+    #[kithara::test]
+    fn segment_index_uses_segment_position_not_byte_position() {
+        let timeline = Timeline::new();
+        let segments = Arc::new(Mutex::new(StreamIndex::new(1, 10)));
+        segments.lock_sync().commit_segment(
+            0,
+            0,
+            SegmentData {
+                init_len: 0,
+                media_len: 200,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg-0.m4s").unwrap(),
+            },
+        );
+        let variant = Arc::new(AtomicUsize::new(0));
+        let ctx = HlsStreamContext::new(
+            timeline.clone(),
+            Arc::clone(&segments),
+            Arc::clone(&variant),
+        );
+
+        // byte_position has advanced past segment 0's end (as Stream::read does),
+        // but segment_position still points inside segment 0
+        timeline.set_byte_position(200);
+        timeline.set_segment_position(150);
+        assert_eq!(ctx.segment_index(), Some(0));
+        assert_eq!(ctx.variant_index(), Some(0));
     }
 }

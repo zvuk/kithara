@@ -7,7 +7,9 @@
 use std::time::Duration;
 
 use kithara_decode::{DecodeError, InnerDecoder};
-use kithara_stream::{Fetch, MediaInfo, SourcePhase, SourceSeekAnchor};
+use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
+
+use crate::pipeline::fetch::Fetch;
 
 // TrackState — worker-side FSM
 
@@ -149,8 +151,6 @@ pub(crate) enum TrackFailure {
     RecreateFailed { offset: u64 },
     /// Source was cancelled.
     SourceCancelled,
-    /// Source was stopped.
-    SourceStopped,
 }
 
 /// Holds the decoder and its associated metadata as an atomic unit.
@@ -248,7 +248,7 @@ impl ConsumerPhase {
 ///
 /// Returns `Some(reason)` for wait states (`Waiting`, `WaitingDemand`,
 /// `WaitingMetadata`). Returns `None` for non-wait states (`Ready`, `Eof`,
-/// `Seeking`, `Cancelled`, `Stopped`) — callers handle those separately.
+/// `Seeking`, `Cancelled`) — callers handle those separately.
 pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
     match phase {
         SourcePhase::Waiting => Some(WaitingReason::Waiting),
@@ -393,7 +393,7 @@ mod tests {
         );
         assert_eq!(TrackState::AtEof.phase_tag(), TrackPhaseTag::AtEof);
         assert_eq!(
-            TrackState::Failed(TrackFailure::SourceStopped).phase_tag(),
+            TrackState::Failed(TrackFailure::SourceCancelled).phase_tag(),
             TrackPhaseTag::Failed
         );
     }
@@ -417,7 +417,6 @@ mod tests {
         assert_eq!(map_source_phase(SourcePhase::Eof), None);
         assert_eq!(map_source_phase(SourcePhase::Seeking), None);
         assert_eq!(map_source_phase(SourcePhase::Cancelled), None);
-        assert_eq!(map_source_phase(SourcePhase::Stopped), None);
     }
 
     #[kithara::test]
@@ -451,13 +450,9 @@ mod tests {
 
     #[kithara::test]
     fn decoder_session_construction() {
-        let media_info = MediaInfo {
-            channels: Some(2),
-            codec: None,
-            container: None,
-            sample_rate: Some(44100),
-            variant_index: None,
-        };
+        let media_info = MediaInfo::default()
+            .with_channels(2)
+            .with_sample_rate(44100);
         let stop = Arc::new(AtomicBool::new(false));
         let (decoder, _logs) = infinite_inner_decoder_loose(PcmSpec::default(), stop);
         let session = DecoderSession {

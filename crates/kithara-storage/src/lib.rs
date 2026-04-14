@@ -28,7 +28,7 @@ pub mod internal;
 pub use atomic::Atomic;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atomic::AtomicMmap;
-pub use driver::{Driver, DriverIo, Resource};
+pub use driver::{AvailabilityObserver, Driver, DriverIo, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};
 #[cfg(not(target_arch = "wasm32"))]
