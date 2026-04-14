@@ -443,7 +443,6 @@ async fn run_range_download(inner: Arc<Mutex<FileInner>>, peer: PeerHandle, rang
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
     type Coord = Arc<FileCoord>;
-    type Demand = Range<u64>;
 
     fn coord(&self) -> &Self::Coord {
         &self.coord

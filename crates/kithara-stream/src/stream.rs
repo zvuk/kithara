@@ -37,12 +37,10 @@ pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
     /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination<Self::Demand>;
-    /// On-demand request type used by the stream-specific coordinator.
-    type Demand: Clone + Send + Sync + 'static;
+    type Coord: TransferCoordination;
 
     /// Source implementing `Source`.
-    type Source: Source<Coord = Self::Coord, Demand = Self::Demand>;
+    type Source: Source<Coord = Self::Coord>;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -325,7 +323,7 @@ mod tests {
     use kithara_storage::WaitOutcome;
 
     use super::*;
-    use crate::{DemandSlot, ReadOutcome, Source, SourcePhase};
+    use crate::{ReadOutcome, Source, SourcePhase};
 
     mod kithara {
         pub(crate) use kithara_test_macros::test;
@@ -333,17 +331,12 @@ mod tests {
 
     #[derive(Default)]
     struct TestCoord {
-        demand: DemandSlot<()>,
         timeline: Timeline,
     }
 
-    impl TransferCoordination<()> for TestCoord {
+    impl TransferCoordination for TestCoord {
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
-        }
-
-        fn demand(&self) -> &DemandSlot<()> {
-            &self.demand
         }
     }
 
@@ -364,10 +357,7 @@ mod tests {
         ) -> Self {
             Self {
                 anchor: None,
-                coord: TestCoord {
-                    demand: DemandSlot::new(),
-                    timeline,
-                },
+                coord: TestCoord { timeline },
                 data,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
@@ -378,7 +368,6 @@ mod tests {
     impl Source for ScriptSource {
         type Error = io::Error;
         type Coord = TestCoord;
-        type Demand = ();
 
         fn coord(&self) -> &Self::Coord {
             &self.coord
@@ -433,7 +422,6 @@ mod tests {
     impl StreamType for DummyType {
         type Config = ();
         type Coord = TestCoord;
-        type Demand = ();
         type Error = io::Error;
         type Events = ();
         type Source = ScriptSource;
@@ -448,7 +436,6 @@ mod tests {
     impl StreamType for SeekDuringWaitType {
         type Config = ();
         type Coord = TestCoord;
-        type Demand = ();
         type Error = io::Error;
         type Events = ();
         type Source = SeekDuringWaitSource;
@@ -466,7 +453,6 @@ mod tests {
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
         type Coord = TestCoord;
-        type Demand = ();
 
         fn coord(&self) -> &Self::Coord {
             &self.coord
@@ -539,7 +525,6 @@ mod tests {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
             coord: TestCoord {
-                demand: DemandSlot::new(),
                 timeline: timeline.clone(),
             },
             read_calls: 0,

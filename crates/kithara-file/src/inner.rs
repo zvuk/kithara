@@ -27,7 +27,6 @@ pub struct File;
 impl StreamType for File {
     type Config = FileConfig;
     type Coord = Arc<FileCoord>;
-    type Demand = std::ops::Range<u64>;
     type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;

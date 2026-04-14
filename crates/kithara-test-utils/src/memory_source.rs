@@ -6,7 +6,7 @@ use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    DemandSlot, ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
     TransferCoordination,
 };
 
@@ -50,7 +50,6 @@ impl MemorySource {
 impl Source for MemorySource {
     type Error = MemorySourceError;
     type Coord = MemoryCoord;
-    type Demand = ();
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -102,27 +101,14 @@ pub type UnknownLenSource = MemorySource;
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
 
+#[derive(Default)]
 pub struct MemoryCoord {
-    demand: DemandSlot<()>,
     timeline: Timeline,
 }
 
-impl Default for MemoryCoord {
-    fn default() -> Self {
-        Self {
-            demand: DemandSlot::new(),
-            timeline: Timeline::new(),
-        }
-    }
-}
-
-impl TransferCoordination<()> for MemoryCoord {
+impl TransferCoordination for MemoryCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<()> {
-        &self.demand
     }
 }
 
@@ -132,7 +118,6 @@ pub struct MemStream;
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
     type Coord = MemoryCoord;
-    type Demand = ();
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
@@ -153,7 +138,6 @@ pub struct UnknownLenStream;
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
     type Coord = MemoryCoord;
-    type Demand = ();
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();

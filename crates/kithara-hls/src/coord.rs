@@ -66,8 +66,12 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn take_segment_request(&self) -> Option<SegmentRequest> {
+    pub fn take_segment_request(&self) -> Option<SegmentRequest> {
         self.demand.take()
+    }
+
+    pub fn peek_segment_request(&self) -> Option<SegmentRequest> {
+        self.demand.peek()
     }
 
     pub(crate) fn clear_segment_requests(&self) {
@@ -80,12 +84,8 @@ impl HlsCoord {
     }
 }
 
-impl TransferCoordination<SegmentRequest> for HlsCoord {
+impl TransferCoordination for HlsCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<SegmentRequest> {
-        &self.demand
     }
 }

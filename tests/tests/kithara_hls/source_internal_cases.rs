@@ -23,9 +23,7 @@ use kithara_platform::{
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{
-    AudioCodec, ReadOutcome, Source, SourcePhase, StreamError, Timeline, TransferCoordination,
-};
+use kithara_stream::{AudioCodec, ReadOutcome, Source, SourcePhase, StreamError, Timeline};
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -40,11 +38,11 @@ impl SegmentRequests {
     }
 
     fn pop(&self) -> Option<SegmentRequest> {
-        self.coord.demand().take()
+        self.coord.take_segment_request()
     }
 
     fn peek(&self) -> Option<SegmentRequest> {
-        self.coord.demand().peek()
+        self.coord.peek_segment_request()
     }
 }
 

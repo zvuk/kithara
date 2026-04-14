@@ -14,7 +14,7 @@ use kithara_stream::{
 use crate::{
     HlsStreamContext,
     config::HlsConfig,
-    coord::{HlsCoord, SegmentRequest},
+    coord::HlsCoord,
     error::HlsError,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::variant_info_from_master,
@@ -51,7 +51,6 @@ fn make_invalidation_callback(
 impl StreamType for Hls {
     type Config = HlsConfig;
     type Coord = Arc<HlsCoord>;
-    type Demand = SegmentRequest;
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;

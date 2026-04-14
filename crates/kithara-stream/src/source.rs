@@ -112,7 +112,6 @@ impl SourceSeekAnchor {
         api = SourceMock,
         type Error = std::io::Error;
         type Coord = ();
-        type Demand = ();
     )
 )]
 #[expect(clippy::len_without_is_empty)]
@@ -120,9 +119,7 @@ pub trait Source: Send + 'static {
     /// Error type.
     type Error: StdError + Send + Sync + 'static;
     /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination<Self::Demand>;
-    /// On-demand request type used by the source-specific coordinator.
-    type Demand: Clone + Send + Sync + 'static;
+    type Coord: TransferCoordination;
 
     /// Shared runtime coordination for this source.
     fn coord(&self) -> &Self::Coord;
@@ -291,8 +288,6 @@ pub trait Source: Send + 'static {
 
 #[cfg(test)]
 mod tests {
-    use crate::DemandSlot;
-
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
@@ -301,17 +296,12 @@ mod tests {
 
     #[derive(Default)]
     struct TestCoord {
-        demand: DemandSlot<()>,
         timeline: Timeline,
     }
 
-    impl TransferCoordination<()> for TestCoord {
+    impl TransferCoordination for TestCoord {
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
-        }
-
-        fn demand(&self) -> &DemandSlot<()> {
-            &self.demand
         }
     }
 
@@ -337,7 +327,6 @@ mod tests {
         impl Source for ReadySource {
             type Error = std::io::Error;
             type Coord = TestCoord;
-            type Demand = ();
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,

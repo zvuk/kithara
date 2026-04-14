@@ -95,12 +95,8 @@ impl Default for FileCoord {
     }
 }
 
-impl TransferCoordination<Range<u64>> for FileCoord {
+impl TransferCoordination for FileCoord {
     fn timeline(&self) -> Timeline {
         self.timeline()
-    }
-
-    fn demand(&self) -> &DemandSlot<Range<u64>> {
-        &self.demand
     }
 }

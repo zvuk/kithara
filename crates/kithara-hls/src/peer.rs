@@ -873,7 +873,7 @@ mod tests {
         // will now return Pending without producing a FetchCmd, so the
         // demand must survive for the next poll cycle — otherwise the
         // reader's seek deadlocks (no one will fetch the target segment).
-        let still_pending = state.scheduler.coord.demand().peek();
+        let still_pending = state.scheduler.coord.peek_segment_request();
         assert!(
             still_pending.is_some(),
             "demand was drained while is_flushing()==true; poll_next's \

@@ -21,9 +21,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, DemandSlot, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
-    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
-    TransferCoordination,
+    AudioCodec, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
+    Stream, StreamError, StreamResult, StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -56,26 +55,18 @@ struct TestSource {
 }
 
 struct TestCoord {
-    demand: DemandSlot<()>,
     timeline: Timeline,
 }
 
 impl TestCoord {
     fn new(timeline: Timeline) -> Self {
-        Self {
-            demand: DemandSlot::new(),
-            timeline,
-        }
+        Self { timeline }
     }
 }
 
-impl TransferCoordination<()> for TestCoord {
+impl TransferCoordination for TestCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<()> {
-        &self.demand
     }
 }
 
@@ -111,7 +102,6 @@ impl TestSource {
 impl Source for TestSource {
     type Error = io::Error;
     type Coord = TestCoord;
-    type Demand = ();
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -260,7 +250,6 @@ struct TestStream;
 impl StreamType for TestStream {
     type Config = TestConfig;
     type Coord = TestCoord;
-    type Demand = ();
     type Source = TestSource;
     type Error = io::Error;
     type Events = ();

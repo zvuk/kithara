@@ -41,8 +41,8 @@ use std::{
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    DemandSlot, NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext,
-    StreamResult, StreamType, Timeline, TransferCoordination,
+    NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
+    StreamType, Timeline, TransferCoordination,
 };
 use kithara_test_utils::kithara;
 
@@ -56,26 +56,20 @@ struct MockSource {
 }
 
 struct MockCoord {
-    demand: DemandSlot<()>,
     timeline: Timeline,
 }
 
 impl MockCoord {
     fn new() -> Self {
         Self {
-            demand: DemandSlot::new(),
             timeline: Timeline::new(),
         }
     }
 }
 
-impl TransferCoordination<()> for MockCoord {
+impl TransferCoordination for MockCoord {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
-    }
-
-    fn demand(&self) -> &DemandSlot<()> {
-        &self.demand
     }
 }
 
@@ -102,7 +96,6 @@ impl MockSource {
 impl Source for MockSource {
     type Error = io::Error;
     type Coord = MockCoord;
-    type Demand = ();
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -145,7 +138,6 @@ struct MockStream;
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
     type Coord = MockCoord;
-    type Demand = ();
     type Source = MockSource;
     type Error = io::Error;
     type Events = ();

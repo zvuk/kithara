@@ -61,7 +61,6 @@ pub struct SignalSourceError;
 impl<S: signal::SignalFn> Source for SignalSource<S> {
     type Error = SignalSourceError;
     type Coord = MemoryCoord;
-    type Demand = ();
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
@@ -138,7 +137,6 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 impl<S: signal::SignalFn> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
     type Coord = MemoryCoord;
-    type Demand = ();
     type Source = SignalSource<S>;
     type Error = io::Error;
 

@@ -31,7 +31,6 @@ fn wait_range_hang_timeout(timeout: Duration) -> Duration {
 impl Source for HlsSource {
     type Error = HlsError;
     type Coord = Arc<HlsCoord>;
-    type Demand = SegmentRequest;
 
     fn coord(&self) -> &Self::Coord {
         &self.coord
