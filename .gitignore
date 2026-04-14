@@ -86,3 +86,5 @@ package-lock.json
 .build
 .swiftpm
 .planning/
+*.lock
+/build/
