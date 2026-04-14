@@ -108,11 +108,18 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
     let switches_bg = switches.clone();
     let mut events_rx = bus.subscribe();
     spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            let ev_str = format!("{ev:?}");
-            if ev_str.contains("VariantApplied") {
-                switches_bg.fetch_add(1, Ordering::Relaxed);
-                info!("ABR switch: {ev_str}");
+        use kithara_platform::tokio::sync::broadcast::error::RecvError;
+        loop {
+            match events_rx.recv().await {
+                Ok(ev) => {
+                    let ev_str = format!("{ev:?}");
+                    if ev_str.contains("VariantApplied") {
+                        switches_bg.fetch_add(1, Ordering::Relaxed);
+                        info!("ABR switch: {ev_str}");
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
         }
     });
