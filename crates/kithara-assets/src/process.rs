@@ -662,4 +662,198 @@ mod tests {
              processor was skipped"
         );
     }
+
+    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    ///
+    /// Root cause hypothesis for the DRM-only flake:
+    ///
+    /// The availability index and the LRU-cached `ProcessedResource`
+    /// disagree when a writer calls `acquire_resource_with_ctx(K, Some)`
+    /// on an entry that was *just committed* by another writer. The
+    /// cache hit triggers `ProcessedResource::reactivate()`, which flips
+    /// `processed` to `false`. The shared `AvailabilityIndex` still
+    /// advertises the committed range (nobody removed it — this was not
+    /// an LRU displace, so `on_invalidated` never ran). A concurrent
+    /// reader that holds a cloned `Arc` to the same `ProcessedResource`
+    /// then:
+    ///
+    ///   1. sees `contains_range` → true (availability still says
+    ///      committed),
+    ///   2. calls `read_at` → fires the pre-commit guard
+    ///      ("processed resource is not readable before commit").
+    ///
+    /// In `HlsSource::read_from_entry` this is propagated as
+    /// `Err(StreamError::Source(..))`, which poisons the decoder FSM
+    /// (`TrackState::Failed`) and makes `next_chunk_with_timeout`
+    /// panic at `stage='ephemeral_small_cache'`.
+    ///
+    /// Sibling case (`_hls`) is unaffected because without DRM context
+    /// `ProcessedResource::is_readable()` short-circuits on
+    /// `ctx.is_none()`, and reactivate() never poisons reads.
+    ///
+    /// Contract under test: after
+    /// `acquire_resource_with_ctx(K, Some(ctx))` observes an existing
+    /// *committed* entry in cache, the `contains_range` view over that
+    /// entry and the `read_at` path must agree. Either the availability
+    /// index clears the range on reactivate (preferred), or reactivate
+    /// avoids flipping `processed` while an uncommitted write has not
+    /// arrived, or the reader gets a committed snapshot that is unaffected
+    /// by subsequent writer reactivations.
+    ///
+    /// Deterministic construction:
+    ///   1. Build an ephemeral `AssetStore` (same shape as the failing
+    ///      integration test).
+    ///   2. Writer A acquires `(K, Some(ctx))`, writes + commits →
+    ///      availability records the commit, cache holds the entry.
+    ///   3. Reader asks `open_resource(K)` (ctx=None) → cache returns
+    ///      the committed entry via the ctx=None fall-through. `Reader`
+    ///      holds a cloned `Arc` to the same `ProcessedResource`.
+    ///   4. `contains_range(K, 0..N)` returns `true` — the reader's
+    ///      gate has passed.
+    ///   5. Writer B calls `acquire_resource_with_ctx(K, Some(ctx))` →
+    ///      cache hit → `res.reactivate()` → `processed = false`.
+    ///   6. Reader proceeds with `read_at(0, &mut buf)`.
+    ///
+    /// Expected: either the reader still sees the committed plaintext
+    /// (preferred), or the read returns a benign `NotFound`-style error
+    /// so `HlsSource` converts to `ReadOutcome::Retry`. Today it returns
+    /// `StorageError::Failed("processed resource is not readable before
+    /// commit")`, which is a hard error.
+    #[kithara::test]
+    fn red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader() {
+        use std::num::NonZeroUsize;
+
+        use kithara_storage::ResourceExt;
+
+        use crate::{AssetStoreBuilder, ResourceKey};
+
+        #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
+        struct DrmCtx {
+            xor_key: u8,
+        }
+
+        // AES-128-CBC is modelled as XOR here — the bug is about the
+        // processed flag bookkeeping, not about cipher correctness.
+        let process_fn: ProcessChunkFn<DrmCtx> = Arc::new(
+            |input: &[u8], output: &mut [u8], ctx: &mut DrmCtx, _is_last: bool| {
+                for (i, &b) in input.iter().enumerate() {
+                    output[i] = b ^ ctx.xor_key;
+                }
+                Ok(input.len())
+            },
+        );
+
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("drm-reactivate-poisons-reader"))
+            .process_fn(process_fn)
+            .ephemeral(true)
+            .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+            .build();
+
+        let key = ResourceKey::new("segment-0.m4s");
+        let ctx = DrmCtx { xor_key: 0x42 };
+        let plaintext = b"hello drm world";
+        let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
+
+        // Writer A: acquire + write ciphertext + commit.
+        {
+            let a = store
+                .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+                .expect("writer A acquire");
+            a.write_at(0, &ciphertext).expect("writer A write");
+            a.commit(Some(ciphertext.len() as u64))
+                .expect("writer A commit");
+        }
+
+        // Sanity: availability + a plain open_resource see the
+        // committed plaintext at this point.
+        assert!(
+            store.contains_range(&key, 0..ciphertext.len() as u64),
+            "availability must advertise the committed range before \
+             the writer B reactivate"
+        );
+
+        // Reader holds a clone over the committed DRM entry.
+        let reader = store
+            .open_resource(&key)
+            .expect("reader open_resource after commit");
+
+        let mut probe = vec![0u8; ciphertext.len()];
+        let n = reader
+            .read_at(0, &mut probe)
+            .expect("reader sanity read before writer B");
+        assert_eq!(n, ciphertext.len());
+        assert_eq!(
+            &probe[..],
+            plaintext,
+            "reader must see decrypted plaintext before any \
+             reactivate race"
+        );
+
+        // Writer B: `acquire_resource_with_ctx(key, Some(ctx))` with
+        // the same ctx. The `CachingAssets` cache is still holding
+        // the committed entry from writer A, so this hits the
+        // cache-hit branch and calls `res.reactivate()` on the shared
+        // `ProcessedResource`. That flips `processed` to `false`.
+        let _writer_b = store
+            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+            .expect("writer B reacquire");
+
+        // Availability still advertises the committed range — the
+        // LRU displace did not fire, so `on_invalidated` did not run
+        // and `availability.remove(key)` was never called.
+        assert!(
+            store.contains_range(&key, 0..ciphertext.len() as u64),
+            "availability must still advertise the range after a \
+             cache-hit reactivate (no LRU displace occurred)"
+        );
+
+        // Reader proceeds with its read_at. Under the current
+        // behaviour this triggers the pre-commit guard and returns
+        // `StorageError::Failed("processed resource is not readable
+        // before commit")`. That hard error is what the HLS source
+        // path converts into a `StreamError::Source(..)`, poisoning
+        // the decoder FSM and producing the DRM small-cache flake.
+        //
+        // Acceptable correct behaviours:
+        //   (a) read_at succeeds with the already-committed plaintext
+        //       bytes (preferred — the reader has a snapshot Arc and
+        //       writer B has not yet overwritten), OR
+        //   (b) read_at returns a NotFound-style error that the HLS
+        //       reader classifies as Retry.
+        //
+        // Unacceptable: read_at returns `StorageError::Failed` whose
+        // message contains "not readable before commit".
+        let mut buf = vec![0u8; ciphertext.len()];
+        match reader.read_at(0, &mut buf) {
+            Ok(n) => {
+                assert_eq!(
+                    &buf[..n],
+                    plaintext,
+                    "reader clone must keep seeing the committed \
+                     plaintext across a concurrent writer-side \
+                     reactivate; got {:?}",
+                    &buf[..n]
+                );
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    !msg.contains("not readable before commit"),
+                    "writer B's reactivate poisoned a concurrent \
+                     reader holding a cloned Arc to the same \
+                     ProcessedResource — reader's read_at fires the \
+                     pre-commit guard: {msg}. This is the \
+                     DRM-specific structural race behind \
+                     live_ephemeral_small_cache_playback_drm: \
+                     availability still advertises the committed \
+                     range (no on_invalidated fired), so the HLS \
+                     reader passes its contains_range gate and then \
+                     hits this guard as a hard StorageError::Failed, \
+                     which propagates as StreamError::Source and \
+                     poisons the decoder FSM."
+                );
+            }
+        }
+    }
 }

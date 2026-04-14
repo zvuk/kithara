@@ -68,7 +68,15 @@ impl HlsPeer {
         }
 
         // Waker forwarding: translate Notify → stored waker.
-        let peer = Arc::clone(self);
+        //
+        // Use `Weak` so this task does NOT keep `HlsPeer` alive. When
+        // the Registry drops its `Arc<HlsPeer>` after the PeerHandle
+        // cancel fires, the strong count hits 0 and `HlsPeer::Drop`
+        // fires `wake_cancel`, which wakes this task's select loop and
+        // it exits. Without `Weak` + `Drop` the task held an Arc to the
+        // peer and wedged the scheduler/segment-loader graph alive past
+        // `HlsSource::drop` — nextest flagged this as a rotating LEAK.
+        let peer_weak = Arc::downgrade(self);
         let wake_cancel = self.wake_cancel.clone();
         kithara_platform::tokio::task::spawn(async move {
             loop {
@@ -77,6 +85,7 @@ impl HlsPeer {
                     () = cancel.cancelled() => return,
                     () = wake_cancel.cancelled() => return,
                     () = reader_advanced.notified() => {
+                        let Some(peer) = peer_weak.upgrade() else { return; };
                         let guard = peer.state.lock_sync();
                         if let Some(ref state) = *guard
                             && let Some(waker) = state.waker.as_ref()
@@ -87,6 +96,15 @@ impl HlsPeer {
                 }
             }
         });
+    }
+}
+
+impl Drop for HlsPeer {
+    fn drop(&mut self) {
+        // Fire wake_cancel so the waker-forwarding spawn above exits
+        // even when there is no pending `reader_advanced` notification
+        // to trigger its select loop.
+        self.wake_cancel.cancel();
     }
 }
 

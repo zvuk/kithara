@@ -32,6 +32,10 @@ impl std::fmt::Debug for Downloader {
 pub(super) struct RegisteredPeerEntry {
     pub(super) peer: Arc<dyn Peer>,
     pub(super) cmd_rx: mpsc::Receiver<super::peer::InternalCmd>,
+    /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
+    /// `PeerHandle` clone is released, letting the [`Registry`] drop the
+    /// peer entry (and its `Arc<dyn Peer>`).
+    pub(super) cancel: CancellationToken,
 }
 
 /// Shared inner state for the downloader.
@@ -91,7 +95,11 @@ impl Downloader {
         self.ensure_spawned();
         let cancel = self.inner.cancel.child_token();
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
-        let entry = RegisteredPeerEntry { peer, cmd_rx };
+        let entry = RegisteredPeerEntry {
+            peer,
+            cmd_rx,
+            cancel: cancel.clone(),
+        };
         let _ = self.inner.register_tx.send(entry);
         PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx)
     }

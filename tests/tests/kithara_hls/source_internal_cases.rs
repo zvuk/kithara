@@ -661,13 +661,17 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     let info_after_switch = Source::media_info(&source).expect("media info at switch");
     assert_eq!(info_after_switch.codec, Some(AudioCodec::Flac));
 
-    // Variant fence path can expose the target variant before reader_offset advances.
+    // Even when `variant_fence` is set and ABR has moved the hinted cursor
+    // to a different variant, the resolved reader variant must win: at
+    // byte_position 0 the reader sits on V0's seg 0. Returning the hinted
+    // variant here would make the decoder detect a bogus format change,
+    // rewind to byte 0, and re-decode — the exact mmap over-read bug.
     shared.segments.lock_sync().set_layout_variant(0);
     shared.timeline.set_byte_position(0);
     shared.abr_variant_index.store(1, Ordering::Release);
     set_source_variant_fence(&mut source, Some(0));
-    let hinted_info = Source::media_info(&source).expect("media info from hinted variant");
-    assert_eq!(hinted_info.codec, Some(AudioCodec::Flac));
+    let info_under_fence = Source::media_info(&source).expect("media info under fence");
+    assert_eq!(info_under_fence.codec, Some(AudioCodec::AacLc));
 }
 
 #[kithara::test]
@@ -685,6 +689,67 @@ fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     shared.abr_variant_index.store(1, Ordering::Release);
     let info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(info.codec, Some(AudioCodec::Flac));
+}
+
+/// RED: after reader consumed the full layout-variant track and sits at EOF,
+/// `media_info()` must continue reporting the layout variant — not the ABR
+/// hinted variant.
+///
+/// Background: in `stress_seek_lifecycle_with_zero_reset_mmap`, after seek to 0
+/// the decoder reads to `byte_position = max_end_offset`. `find_at_offset(pos)`
+/// returns None (past end of byte map) and the fallback chain in
+/// `HlsSource::media_info()` walks to `None if has_hinted_variant`, returning
+/// the hinted variant. If ABR flipped to a different variant during Phase 2's
+/// 2000 seeks, the decoder then observes `variant_index` change → triggers
+/// `detect_format_change()` → `format_change_segment_range()` returns
+/// `seg 0 range = 0..X` → decoder seeks to 0 and re-reads the full track.
+/// That loop produces 3× the expected frames on the mmap (disk) backend where
+/// all three variants remain committed in `StreamIndex`.
+#[kithara::test]
+fn media_info_at_eof_reports_layout_variant_not_hinted() {
+    let cancel = CancellationToken::new();
+    let playlist_state =
+        playlist_state_with_codecs(Some(AudioCodec::AacLc), Some(AudioCodec::Flac));
+    let shared = Arc::new(SharedSegments::new(
+        cancel.clone(),
+        Arc::clone(&playlist_state),
+        Timeline::new(),
+    ));
+    {
+        let mut segments = shared.segments.lock_sync();
+        // Layout variant is V0; commit 3 V0 segments (byte map: 0..300).
+        segments.commit_segment(0, 0, make_segment_data(100));
+        segments.commit_segment(0, 1, make_segment_data(100));
+        segments.commit_segment(0, 2, make_segment_data(100));
+        // ABR previously probed V1 (stays committed on disk backend).
+        segments.commit_segment(1, 0, make_segment_data(100));
+        segments.commit_segment(1, 1, make_segment_data(100));
+        segments.commit_segment(1, 2, make_segment_data(100));
+    }
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+
+    // Decoder just finished reading layout V0 end-to-end — byte_position is
+    // AT EOF of V0's byte map (0..300).
+    shared.timeline.set_byte_position(300);
+    // ABR flipped to V1 while the reader was consuming V0.
+    shared.abr_variant_index.store(1, Ordering::Release);
+    // commit_seek_landing always sets the variant fence on every seek, so
+    // after Phase 2's 2000 seeks the fence is set to the layout variant.
+    set_source_variant_fence(&mut source, Some(0));
+
+    let info = Source::media_info(&source).expect("media info at EOF");
+    assert_eq!(
+        info.codec,
+        Some(AudioCodec::AacLc),
+        "at EOF of layout V0 with fence=Some(V0), media_info must report V0 (AacLc), \
+         not ABR-hinted V1 (Flac) — reporting the hinted variant makes the decoder observe \
+         a `variant_index` change → detect_format_change → format_change_segment_range \
+         returns seg 0 range = 0..X → decoder seeks to 0 and re-reads the full track. \
+         On disk backend with all variants committed this loops, producing 3× expected frames \
+         in stress_seek_lifecycle_with_zero_reset_mmap."
+    );
+    assert_eq!(info.variant_index, Some(0));
 }
 
 #[kithara::test]

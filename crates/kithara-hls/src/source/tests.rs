@@ -1177,18 +1177,21 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     );
 }
 
-/// RED test #1 (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
+/// Regression test (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
 ///
 /// When the scheduler re-acquires a DRM resource (via `acquire_resource_with_ctx`)
 /// for a previously-committed segment — e.g. after LRU eviction pressure —
-/// the fresh `ProcessedResource` starts in `processed=false` state until the
-/// new download commits. Meanwhile, the reader's `open_resource(key)` (ctx=None)
-/// can end up holding that uncommitted entry, and `read_at` propagates
-/// `StorageError::Failed("processed resource is not readable before commit")`
-/// as a hard Err, poisoning the decoder FSM (`TrackState::Failed`). The reader
-/// then sees `is_eof()==true` and the test panics with "stopped early at idx".
+/// the already-cached committed resource must remain readable by any concurrent
+/// reader. Previously `CachingAssets::acquire_resource_with_ctx` unconditionally
+/// called `reactivate()` on a cache hit, which flipped `processed=false` on the
+/// shared `ProcessedResource` and poisoned any reader holding a cloned Arc
+/// (`read_at` fired "processed resource is not readable before commit" as a
+/// hard `StorageError::Failed` → decoder FSM → Failed → `is_eof()==true` →
+/// integration panic "stopped early at idx"). The fix: cache-hit on a
+/// *Committed* resource must NOT reactivate — just return a clone. This
+/// test pins that behaviour: the post-reacquire read still returns `Data`.
 #[kithara::test]
-fn red_test_drm_hw_read_at_returns_retry_when_drm_resource_reacquired_uncommitted() {
+fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     use kithara_stream::ReadOutcome;
 
     let mut source = build_test_source_with_segments(1, 1);
@@ -1221,28 +1224,27 @@ fn red_test_drm_hw_read_at_returns_retry_when_drm_resource_reacquired_uncommitte
     let first = source.read_at(0, &mut buf).expect("first read_at");
     assert_eq!(first, ReadOutcome::Data(64));
 
-    // Step 2: simulate scheduler-driven re-fetch — a new DRM acquire
-    // displaces the committed cached resource with a fresh uncommitted one
-    // (mirrors the cache_capacity pressure in the ephemeral DRM scenario).
+    // Step 2: simulate scheduler-driven re-fetch — a second DRM acquire
+    // on the same key. Cache-hit branch must recognise the cached entry
+    // is Committed and return a clone WITHOUT reactivating.
     let _fresh = source
         .backend
         .acquire_resource_with_ctx(&media_key, Some(DecryptContext::default()))
-        .expect("reacquire fresh uncommitted");
+        .expect("reacquire of committed DRM resource");
 
-    // Step 3: the reader's next read_at. Since the fresh ProcessedResource
-    // is uncommitted (`processed=false`), reading it returns
-    // StorageError::Failed("... not readable before commit"), which source
-    // propagates as hard Err. The expected behaviour is `ReadOutcome::Retry`.
+    // Step 3: the reader's next read_at. The committed resource is still
+    // readable, so `Data(64)` is the correct outcome. The old contract
+    // (Retry) documented the bug itself — with `processed=false` flipped
+    // by `reactivate()` the reader had to be told to try again.
     let mut buf2 = vec![0u8; 64];
     let outcome = source
         .read_at(0, &mut buf2)
-        .expect("read_at must not return hard error for uncommitted DRM reacquire");
+        .expect("read_at must not return hard error after reacquire");
     assert_eq!(
         outcome,
-        ReadOutcome::Retry,
-        "expected Retry when the DRM resource was reacquired and not yet \
-         committed; got {outcome:?}. Current code returns Err → decoder FSM \
-         goes Failed → is_eof()==true → test sees 'stopped early'"
+        ReadOutcome::Data(64),
+        "expected Data(64) after committed DRM reacquire — cache-hit must \
+         not reactivate a Committed resource"
     );
 }
 

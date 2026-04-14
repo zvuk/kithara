@@ -401,8 +401,24 @@ where
         let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            res.reactivate()?;
-            return Ok(self.wrap(key, res.clone()));
+            // Cache-hit on an already-committed resource must NOT
+            // reactivate: reactivation flips `processed=false` /
+            // `committed=false` on the SHARED `ProcessedResource`,
+            // which poisons any concurrent reader holding a cloned Arc
+            // (reader.read_at fires "processed resource is not readable
+            // before commit" as a hard StorageError::Failed → decoder
+            // FSM → Failed). The already-committed data is exactly what
+            // the caller wants: just return a clone. See
+            // red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader.
+            //
+            // Only reactivate when the cached resource is not
+            // Committed — that's the legitimate "LRU slot reuse" case.
+            let res = res.clone();
+            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
+                res.reactivate()?;
+            }
+            drop(cache);
+            return Ok(self.wrap(key, res));
         }
 
         let res = self.inner.acquire_resource_with_ctx(key, ctx)?;

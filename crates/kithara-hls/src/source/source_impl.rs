@@ -314,9 +314,22 @@ impl Source for HlsSource {
             .lock_sync()
             .variant_segments(hinted_variant)
             .is_some_and(|vs| !vs.is_empty());
+        // The resolved reader variant (from `current_loaded_segment_key`
+        // — either the segment covering `byte_position`, or, at EOF, the
+        // last committed segment of the layout) ALWAYS wins over the ABR
+        // hint. Previously a `variant_fence.is_some() && has_hinted_variant`
+        // branch preferred the ABR-hinted variant at EOF, which made
+        // `detect_format_change()` interpret the ABR cursor moving past
+        // the reader as a real format boundary. The decoder would then
+        // call `format_change_segment_range()`, seek to byte 0 of the
+        // new variant, and re-read the entire track — once per ABR flip.
+        // With multiple variants fully committed on the disk/mmap
+        // backend this caused 3× over-reads (see
+        // media_info_at_eof_reports_layout_variant_not_hinted and the
+        // stress_seek_lifecycle_with_zero_reset_mmap failure). The ABR
+        // hint should only decide the variant when there is no reader
+        // context at all.
         let variant = match reader_variant {
-            Some(reader) if reader == hinted_variant => reader,
-            Some(_reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
             Some(reader) => reader,
             None if has_hinted_variant => hinted_variant,
             None if hinted_variant < self.playlist_state.num_variants() => hinted_variant,

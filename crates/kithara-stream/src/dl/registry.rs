@@ -58,11 +58,20 @@ impl Registry {
     }
 
     /// Register a new peer.
-    pub(super) fn add(&mut self, entry: RegisteredPeerEntry, cancel: &CancellationToken) -> Index {
+    ///
+    /// The peer's `peer_cancel` is the [`PeerHandle`]'s own cancel token
+    /// (carried through `RegisteredPeerEntry::cancel`). When the last
+    /// `PeerHandle` clone drops, `PeerInner::Drop` fires that token and
+    /// this registry detects the cancellation on its next `poll_peers`
+    /// pass, removing the peer entry (and releasing its `Arc<dyn Peer>`).
+    /// Without this, the Registry held a sibling child token of the
+    /// whole-Downloader cancel and never saw per-peer drops — the peer
+    /// Arc would leak until the entire Downloader shut down.
+    pub(super) fn add(&mut self, entry: RegisteredPeerEntry) -> Index {
         let idx = self.peers.insert(PeerEntry {
             peer: entry.peer,
             cmd_rx: entry.cmd_rx,
-            peer_cancel: cancel.child_token(),
+            peer_cancel: entry.cancel,
             peer_done: false,
         });
         self.urgent_notify.notify_one();
@@ -129,9 +138,14 @@ impl Registry {
             }
         }
 
-        // Remove dead peers (cancelled + done).
+        // Remove dead peers. `peer_cancel` is the handle's own cancel
+        // token — it fires from `PeerInner::Drop`, so observing
+        // `is_cancelled()` here is sufficient. The previous gate
+        // required `peer_done && peer_cancel.is_cancelled()`, but
+        // peers with indefinite streams (e.g. `HlsPeer::poll_next`
+        // never returns `Ready(None)`) would never meet it and leaked.
         for (idx, entry) in &self.peers {
-            if entry.peer_done && entry.peer_cancel.is_cancelled() {
+            if entry.peer_cancel.is_cancelled() {
                 to_remove.push(idx);
             }
         }
@@ -157,7 +171,7 @@ impl Registry {
             // Drain registrations inside the poll loop so new peers
             // wake poll_fn without interrupting batch execution.
             while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
-                self.add(entry, &inner.cancel);
+                self.add(entry);
             }
             self.poll_peers(cx, inner);
             if self.has_slot_work() {
