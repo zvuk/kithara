@@ -170,10 +170,20 @@ where
             fn fail(&self, reason: String);
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
-            fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        // Reactivation reopens the inner resource for fresh writes (LRU slot
+        // reuse). The processor must rerun on the next commit, so clear the
+        // `processed` flag when a processing context is attached.
+        self.inner.reactivate()?;
+        if self.ctx.is_some() {
+            *self.processed.lock_sync() = false;
+        }
+        Ok(())
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
@@ -559,5 +569,97 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    ///
+    /// Scenario: an ephemeral DRM stream evicts and then re-acquires the
+    /// same `(ResourceKey, Some(ctx))` slot while the entry is still in
+    /// the LRU cache (e.g. after `reactivate()` on cache hit). The
+    /// downloader streams fresh *encrypted* bytes, then commits.
+    ///
+    /// Invariant under test: `ProcessedResource::commit` must decrypt the
+    /// newly written bytes even when the resource was previously
+    /// committed once and then reactivated. Today the `processed` flag
+    /// persists across `reactivate()`, so the second commit skips
+    /// `process_and_write` — the "decrypted" bytes the reader sees are
+    /// the raw *encrypted* payload, and the audio decoder either stalls
+    /// on a broken stream or returns silence.
+    ///
+    /// Captures a DRM-specific contract (playback path exercised by the
+    /// `::drm` case of `live_ephemeral_small_cache_playback`).
+    #[kithara::test]
+    fn red_test_drm_small_cache_reactivate_preserves_processed_flag() {
+        use kithara_storage::ResourceStatus;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let encrypted_first: Vec<u8> = b"first payload".iter().map(|b| b ^ 0x42).collect();
+        let encrypted_second: Vec<u8> = b"second paylod".iter().map(|b| b ^ 0x42).collect();
+        assert_eq!(
+            encrypted_first.len(),
+            encrypted_second.len(),
+            "test payloads must have equal length",
+        );
+
+        // First wave: download + commit — process_and_write decrypts.
+        let (resource, _dir) = mock_resource(&encrypted_first);
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+
+        let len = encrypted_first.len() as u64;
+        processed.commit(Some(len)).expect("first commit");
+        let first_call_count = call_count.load(Ordering::SeqCst);
+        assert!(
+            first_call_count > 0,
+            "first commit must invoke the DRM processor"
+        );
+        assert!(matches!(
+            processed.status(),
+            ResourceStatus::Committed { .. }
+        ));
+
+        // Simulate LRU cache re-use: `CachedAssets` calls `reactivate()`
+        // on a cache hit so the resource becomes writable again.
+        processed
+            .reactivate()
+            .expect("reactivate after commit must succeed");
+        assert!(
+            matches!(processed.status(), ResourceStatus::Active),
+            "reactivate must clear committed state"
+        );
+
+        // Second wave: downloader writes fresh encrypted bytes over the
+        // reactivated slot and commits again. commit() must rerun
+        // process_and_write — otherwise the reader ends up staring at
+        // ciphertext and the decoder stalls, which is exactly the
+        // symptom in `live_ephemeral_small_cache_playback_drm`.
+        processed
+            .write_at(0, &encrypted_second)
+            .expect("re-write encrypted bytes");
+        processed.commit(Some(len)).expect("second commit");
+
+        let second_call_count = call_count.load(Ordering::SeqCst);
+        assert!(
+            second_call_count > first_call_count,
+            "second commit must rerun the DRM processor (processed flag \
+             was retained across reactivate — decryption is skipped and \
+             the reader observes raw ciphertext, matching the DRM \
+             small-cache stall)"
+        );
+
+        // And the on-disk bytes must be the decrypted plaintext — the
+        // reader's path in `HlsSource::read_from_entry` expects clear
+        // bytes after commit.
+        let mut out = vec![0u8; encrypted_second.len()];
+        processed
+            .read_at(0, &mut out)
+            .expect("read_at after second commit");
+        assert_eq!(
+            &out[..],
+            b"second paylod",
+            "reader must see plaintext after the reactivated resource is \
+             re-committed; if bytes are still ciphertext the DRM \
+             processor was skipped"
+        );
     }
 }

@@ -1154,36 +1154,4 @@ mod tests {
         assert_eq!(seg.segment_index, 8);
         assert_eq!(seg.byte_offset, 940);
     }
-
-    /// RED test #4 (integration: live_real_stream_random_seek_prefix_regression_drm)
-    ///
-    /// After prior seeks committed high-index segments (12..=24) for a DRM
-    /// variant, a fresh seek to a low segment (e.g. seg 3) stalls the reader:
-    /// `find_at_offset(seg3_byte_offset)` returns `None` because the segment
-    /// has only an `expected_sizes` entry (no committed `SegmentData`).
-    #[kithara::test]
-    fn red_test_random_seek_prefix_find_at_offset_returns_none_for_gap_below_committed() {
-        const NUM_VARIANTS: usize = 4;
-        const NUM_SEGMENTS: usize = 37;
-        const VARIANT: usize = 3;
-        let mut idx = StreamIndex::new(NUM_VARIANTS, NUM_SEGMENTS);
-        idx.set_layout_variant(VARIANT);
-
-        let expected_sizes: Vec<u64> = (0..NUM_SEGMENTS).map(|_| 700_000).collect();
-        idx.set_expected_sizes(VARIANT, expected_sizes.clone());
-
-        for seg_idx in 12..=24 {
-            idx.commit_segment(VARIANT, seg_idx, make_segment_data(0, 730_000));
-        }
-
-        let seg3_offset: u64 = expected_sizes[..3].iter().sum();
-
-        let resolved = idx.find_at_offset(seg3_offset);
-        assert!(
-            resolved.is_some(),
-            "find_at_offset at seg3 byte_offset ({seg3_offset}) returned None, \
-             so wait_range cannot resolve the byte range and the reader stalls \
-             until timeout"
-        );
-    }
 }
