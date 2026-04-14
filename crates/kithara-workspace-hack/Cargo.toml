@@ -31,7 +31,7 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath = { version = "0.14", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
 js-sys = { version = "0.3" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
@@ -75,7 +75,7 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath = { version = "0.14", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
 js-sys = { version = "0.3" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }

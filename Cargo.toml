@@ -291,7 +291,7 @@ stats_alloc = "0.1"
 assert_no_alloc = "1.1"
 
 # performance monitoring
-hotpath = "0.14.0"
+hotpath = "0.15.0"
 criterion = "0.8.2"
 
 # fast interleave/deinterleave
