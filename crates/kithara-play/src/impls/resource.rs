@@ -70,8 +70,14 @@ impl Resource {
     #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let bus = reader.event_bus().clone();
+        let mut inner: Box<dyn PcmReader> = Box::new(reader);
+        // Player resources are consumed from the audio render thread,
+        // which must never block: flip the reader into non-blocking mode
+        // immediately. Callers that want to wait for the first decoded
+        // chunk still use `Resource::preload()` explicitly.
+        inner.preload();
         Self {
-            inner: Box::new(reader),
+            inner,
             bus,
             src: Arc::from("unknown"),
         }
@@ -91,7 +97,10 @@ impl Resource {
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
-        let audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
+        let mut audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
+        // Always non-blocking for the player render thread; see
+        // `from_reader` for rationale.
+        audio.preload();
         Ok(Self {
             inner: Box::new(audio),
             bus,
@@ -112,7 +121,10 @@ impl Resource {
         // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
         config.stream.bus = Some(bus.clone());
 
-        let audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
+        let mut audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
+        // Always non-blocking for the player render thread; see
+        // `from_reader` for rationale.
+        audio.preload();
         Ok(Self {
             inner: Box::new(audio),
             bus,
