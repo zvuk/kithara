@@ -816,6 +816,98 @@ mod tests {
         );
     }
 
+    /// RED test #7 (integration: live_ephemeral_small_cache_playback_hls)
+    ///
+    /// With a small ephemeral LRU cache, once the downloader has fetched
+    /// every segment of the playlist, older segments are invalidated as
+    /// newer ones take their slot. At tail state, `handle_tail_state`
+    /// calls `rewind_to_first_missing_segment`, which scans from
+    /// `cursor.fill_floor() == 0` and rewinds the cursor to the very
+    /// first invalidated segment (0) — even when the reader has long
+    /// since advanced past segment 0.
+    ///
+    /// The scheduler then re-downloads segments 0, 1, 2, … evicting the
+    /// tail segments the reader is currently reading. This cycle repeats
+    /// every time the cursor hits the tail, flooding the server with
+    /// requests and starving the reader's on-demand request for a tail
+    /// segment. Under concurrent test load the hang detector fires well
+    /// before the reader receives the segment it needs.
+    ///
+    /// Invariant under test: when the reader has advanced past evicted
+    /// segments (the reader's byte position is inside a segment that is
+    /// still in the LRU cache), tail-state rewind must NOT pull the
+    /// cursor back to segment 0. Evicted segments behind the reader are
+    /// no longer needed and should not be re-fetched.
+    #[kithara::test]
+    fn red_test_small_cache_tail_rewind_does_not_drag_cursor_behind_reader() {
+        // Scenario mirrors the failing integration test: ephemeral store
+        // with a small LRU — reader reads forward, old segments evict.
+        let mut state = make_hls_state();
+        let scheduler = &mut state.scheduler;
+
+        assert!(
+            scheduler.backend.is_ephemeral(),
+            "precondition: test fixture uses ephemeral backend"
+        );
+
+        // Populate expected sizes so byte-map math works. Uniform sizes
+        // keep the assertion simple: each segment is 100 bytes, so seg N
+        // spans [N*100, (N+1)*100).
+        const SEG_SIZE: u64 = 100;
+        scheduler
+            .segments
+            .lock_sync()
+            .set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
+
+        // Commit every segment of variant 0 — downloader has walked the
+        // full playlist once.
+        for seg_idx in 0..NUM_SEGMENTS {
+            commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
+        }
+        let scheduler = &mut state.scheduler;
+
+        // LRU with cap=4 has evicted everything except the last 4
+        // segments. Simulate the on_invalidated callback by marking the
+        // old segments unavailable in the StreamIndex.
+        const CACHE_WINDOW: usize = 4;
+        {
+            let mut segments = scheduler.segments.lock_sync();
+            for seg_idx in 0..NUM_SEGMENTS - CACHE_WINDOW {
+                segments.on_segment_invalidated(0, seg_idx);
+            }
+        }
+
+        // Cursor is past the tail — every segment was fetched once.
+        scheduler.cursor.reopen_fill(0, NUM_SEGMENTS);
+        assert_eq!(scheduler.current_segment_index(), NUM_SEGMENTS);
+
+        // Reader's byte position is inside the cache window — seg
+        // (NUM_SEGMENTS - 2) is still cached. Evicted segments (< 36)
+        // are BEHIND the reader and must not be re-fetched.
+        let reader_seg = NUM_SEGMENTS - 2;
+        let reader_byte_pos = reader_seg as u64 * SEG_SIZE + 10;
+        scheduler
+            .coord
+            .timeline()
+            .set_byte_position(reader_byte_pos);
+
+        // Tail-state handler: this is what poll_next calls every cycle
+        // once the cursor is at num_segments. Today it unconditionally
+        // rewinds to segment 0 via rewind_to_first_missing_segment.
+        let consumed = scheduler.handle_tail_state(0, NUM_SEGMENTS);
+
+        let cursor_after = scheduler.current_segment_index();
+        assert!(
+            cursor_after >= reader_seg,
+            "tail-state rewind pulled the cursor to segment {cursor_after}, \
+             which is BEHIND the reader (reader_seg={reader_seg}, \
+             reader_byte_pos={reader_byte_pos}). With an ephemeral cap=4 \
+             cache, re-downloading segments 0..{reader_seg} will evict \
+             the segments the reader is currently reading and starve \
+             playback. consumed_as_tail={consumed}"
+        );
+    }
+
     /// RED test #6 (integration: stress_seek_lifecycle_with_zero_reset_mmap)
     ///
     /// `process_demand` unconditionally rewinds the cursor when

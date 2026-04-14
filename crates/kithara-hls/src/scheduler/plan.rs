@@ -102,11 +102,20 @@ impl HlsScheduler {
 
             // ABR variant done, but reader is still on the old layout
             // variant. Check if the layout variant has gaps that need
-            // filling so the reader can make progress.
+            // filling so the reader can make progress. Clamp the scan by
+            // reader position so we don't backfill segments the reader has
+            // already passed (see `rewind_to_first_missing_segment`).
             let layout_num = self.num_segments(layout).unwrap_or(0);
+            let scan_start = self.reader_segment_floor();
             let layout_gap = {
                 let segs = self.segments.lock_sync();
-                first_missing_segment(&segs, layout, 0, layout_num, self.backend.is_ephemeral())
+                first_missing_segment(
+                    &segs,
+                    layout,
+                    scan_start,
+                    layout_num,
+                    self.backend.is_ephemeral(),
+                )
             };
             if let Some(gap_seg) = layout_gap {
                 debug!(
@@ -152,12 +161,19 @@ impl HlsScheduler {
     }
 
     fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
+        // Clamp gap scan by reader position: segments strictly behind the
+        // reader will not be replayed, and in ephemeral LRU stores those
+        // "missing" slots are evictions by design — re-fetching them only
+        // evicts the tail segments the reader is currently reading.
+        let scan_start = self
+            .gap_scan_start_segment()
+            .max(self.reader_segment_floor());
         let missing_segment = {
             let segments = self.segments.lock_sync();
             first_missing_segment(
                 &segments,
                 variant,
-                self.gap_scan_start_segment(),
+                scan_start,
                 num_segments,
                 self.backend.is_ephemeral(),
             )

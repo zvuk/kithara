@@ -85,6 +85,24 @@ impl HlsScheduler {
         self.cursor.fill_floor()
     }
 
+    /// Segment index the reader is currently inside, in the layout variant.
+    ///
+    /// Tail-state gap scans must not consider segments strictly behind the
+    /// reader as "missing": in an ephemeral LRU these were evicted by design
+    /// once played, and re-fetching them only evicts the segments the reader
+    /// is actively reading next — a hot loop.
+    pub(crate) fn reader_segment_floor(&self) -> SegmentIndex {
+        let byte_pos = self.coord.timeline().byte_position();
+        if byte_pos == 0 {
+            return 0;
+        }
+        let layout = self.layout_variant();
+        self.segments
+            .lock_sync()
+            .find_at_offset_in(layout, byte_pos)
+            .map_or(0, |seg| seg.segment_index)
+    }
+
     pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
         self.cursor.reset_fill(segment_index);
     }
