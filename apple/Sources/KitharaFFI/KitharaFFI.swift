@@ -577,6 +577,8 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
+    func crossfadeDuration()  -> Float
+    
     func defaultRate()  -> Float
     
     func eqBandCount()  -> UInt32
@@ -599,6 +601,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
     func isMuted()  -> Bool
     
+    func itemCount()  -> UInt32
+    
     func items()  -> [AudioPlayerItem]
     
     func pause() 
@@ -617,6 +621,15 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems() 
     
     /**
+     * Replace the item at `index` with a freshly-loaded one.
+     *
+     * Use before [`Self::select_item`] to re-play a track whose resource
+     * was consumed by a prior playback. The new item must already have a
+     * loaded resource (`item.load()` finished).
+     */
+    func replaceItem(index: UInt32, item: AudioPlayerItem) throws 
+    
+    /**
      * # Errors
      *
      * Returns error if the engine is not running.
@@ -630,6 +643,17 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * was accepted, `false` otherwise (matches `AVPlayer` semantics).
      */
     func seek(toSeconds: Double, callback: SeekCallback) 
+    
+    /**
+     * Select an item in the queue and optionally start playback.
+     *
+     * Applies the configured crossfade duration during the transition.
+     */
+    func selectItem(index: UInt32, autoplay: Bool) throws 
+    
+    func setAbrMode(mode: FfiAbrMode) 
+    
+    func setCrossfadeDuration(seconds: Float) 
     
     func setDefaultRate(rate: Float) 
     
@@ -729,6 +753,14 @@ public convenience init(config: FfiPlayerConfig) {
     
 
     
+open func crossfadeDuration() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_crossfade_duration(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
 open func defaultRate() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_default_rate(
@@ -778,6 +810,14 @@ open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try ru
 open func isMuted() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_is_muted(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func itemCount() -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_item_count(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -834,6 +874,22 @@ open func removeAllItems()  {try! rustCall() {
 }
     
     /**
+     * Replace the item at `index` with a freshly-loaded one.
+     *
+     * Use before [`Self::select_item`] to re-play a track whose resource
+     * was consumed by a prior playback. The new item must already have a
+     * loaded resource (`item.load()` finished).
+     */
+open func replaceItem(index: UInt32, item: AudioPlayerItem)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_replace_item(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(index),
+        FfiConverterTypeAudioPlayerItem_lower(item),$0
+    )
+}
+}
+    
+    /**
      * # Errors
      *
      * Returns error if the engine is not running.
@@ -856,6 +912,36 @@ open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
             self.uniffiCloneHandle(),
         FfiConverterDouble.lower(toSeconds),
         FfiConverterTypeSeekCallback_lower(callback),$0
+    )
+}
+}
+    
+    /**
+     * Select an item in the queue and optionally start playback.
+     *
+     * Applies the configured crossfade duration during the transition.
+     */
+open func selectItem(index: UInt32, autoplay: Bool)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_select_item(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(index),
+        FfiConverterBool.lower(autoplay),$0
+    )
+}
+}
+    
+open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_abr_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAbrMode_lower(mode),$0
+    )
+}
+}
+    
+open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_duration(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(seconds),$0
     )
 }
 }
@@ -2187,7 +2273,7 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
  */
 public struct FfiPlayerConfig: Equatable, Hashable {
     /**
-     * Number of EQ bands (log-spaced). Default: 10.
+     * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
      */
     public let eqBandCount: UInt32
 
@@ -2195,7 +2281,7 @@ public struct FfiPlayerConfig: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * Number of EQ bands (log-spaced). Default: 10.
+         * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
          */eqBandCount: UInt32) {
         self.eqBandCount = eqBandCount
     }
@@ -2699,7 +2785,15 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     case variantsDiscovered(variants: [FfiVariant]
     )
-    case variantChanged(variant: FfiVariant
+    /**
+     * User selected a variant in the picker (may not be applied yet).
+     */
+    case variantSelected(variant: FfiVariant
+    )
+    /**
+     * Stream actually switched to a new variant.
+     */
+    case variantApplied(variant: FfiVariant
     )
     case error(error: String
     )
@@ -2736,10 +2830,13 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 4: return .variantsDiscovered(variants: try FfiConverterSequenceTypeFfiVariant.read(from: &buf)
         )
         
-        case 5: return .variantChanged(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
+        case 5: return .variantSelected(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
         )
         
-        case 6: return .error(error: try FfiConverterString.read(from: &buf)
+        case 6: return .variantApplied(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
+        )
+        
+        case 7: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2770,13 +2867,18 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterSequenceTypeFfiVariant.write(variants, into: &buf)
             
         
-        case let .variantChanged(variant):
+        case let .variantSelected(variant):
             writeInt(&buf, Int32(5))
             FfiConverterTypeFfiVariant.write(variant, into: &buf)
             
         
-        case let .error(error):
+        case let .variantApplied(variant):
             writeInt(&buf, Int32(6))
+            FfiConverterTypeFfiVariant.write(variant, into: &buf)
+            
+        
+        case let .error(error):
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(error, into: &buf)
             
         }
@@ -3435,6 +3537,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 9600) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 59535) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_default_rate() != 41174) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3448,6 +3553,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 23590) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_item_count() != 38685) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 26264) {
@@ -3468,10 +3576,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 32344) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 34006) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 7094) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 62537) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 13809) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 45428) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 49969) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
