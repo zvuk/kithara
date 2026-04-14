@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, atomic::Ordering},
 };
 
@@ -55,6 +55,18 @@ pub(crate) struct HlsScheduler {
     /// `demand_seg + look_ahead_segments` when a demand is processed;
     /// cleared on the next seek (new epoch) or when reader advances past.
     pub(crate) demand_throttle_until: Option<usize>,
+    /// Highest cached-segment count already announced via
+    /// `SegmentComplete { cached: true }` per variant. Prevents
+    /// `apply_cached_segment_progress` from re-publishing the same events
+    /// on every `poll_next` tick.
+    pub(crate) announced_cached_count: HashMap<VariantIndex, usize>,
+    /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
+    /// has not yet fired. Used by `process_demand` to skip rewinding the
+    /// cursor onto an in-flight segment (which would issue a duplicate
+    /// `FetchCmd` that races the original writer on the same cached
+    /// `AssetResource`). Cleared on new seek epoch (the old epoch's
+    /// cancel token drops any in-flight fetches).
+    pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
 }
 
 /// Maximum initial segment index for verbose logging.
@@ -192,6 +204,10 @@ impl HlsScheduler {
             .had_midstream_switch
             .store(false, Ordering::Release);
         self.reset_cursor(segment_index);
+        // Drop stale entries — the prior epoch's FetchCmds are cancelled
+        // by the epoch cancel token, so none of them will fire on_complete
+        // in the new epoch.
+        self.in_flight_segments.clear();
 
         self.force_init_for_seek = self
             .playlist_state

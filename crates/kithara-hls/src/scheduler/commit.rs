@@ -104,12 +104,18 @@ impl HlsScheduler {
 
         let old_variant = self.download_variant;
         let num_segments = self.num_segments(old_variant).unwrap_or(0);
+        // Clamp by reader position: on an ephemeral LRU, "missing" segments
+        // behind the reader are evictions by design — re-fetching them only
+        // evicts the live window the reader is currently reading, driving
+        // a hot loop. See `rewind_to_first_missing_segment` for the tail-state
+        // variant of this clamp.
+        let reader_floor = self.reader_segment_floor();
         let cursor_pos = {
             let state = self.segments.lock_sync();
             first_missing_segment(
                 &state,
                 old_variant,
-                0,
+                reader_floor,
                 num_segments,
                 self.backend.is_ephemeral(),
             )

@@ -270,15 +270,39 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     // Same-epoch demand.
     let mut variant_override = None;
     if req.segment_index < sched.current_segment_index() {
-        // Skip rewind if the demanded segment is already committed —
-        // re-fetching it creates a hot loop:  rewind → re-issue FetchCmd →
-        // commit-error ("cannot write to committed resource") → reader
-        // wakes, re-demands → rewind → …
-        let already_loaded = sched
-            .segments
-            .lock_sync()
-            .is_segment_loaded(req.variant, req.segment_index);
-        if !already_loaded {
+        // Two cases where rewinding the cursor re-emits a duplicate FetchCmd
+        // and drives a hot loop with the reader's condvar re-demand pump:
+        //  1. The demanded segment is already committed — the original
+        //     already-loaded check.
+        //  2. The demanded segment is IN FLIGHT — a `FetchCmd` has been
+        //     emitted but its `on_complete` has not fired yet. Issuing a
+        //     duplicate `FetchCmd` races two writers on the same cached
+        //     `AssetResource`; on mmap storage the first commit flips the
+        //     resource to `Committed` and the second `write_at` fails,
+        //     starving the reader until the hang detector fires.
+        let in_flight = sched
+            .in_flight_segments
+            .contains(&(req.variant, req.segment_index));
+        let already_loaded = !in_flight
+            && sched
+                .segments
+                .lock_sync()
+                .is_segment_loaded(req.variant, req.segment_index);
+        if in_flight {
+            debug!(
+                variant = req.variant,
+                segment = req.segment_index,
+                cursor = sched.current_segment_index(),
+                "poll_next: same-epoch demand for in-flight segment, skipping rewind"
+            );
+        } else if already_loaded {
+            debug!(
+                variant = req.variant,
+                segment = req.segment_index,
+                cursor = sched.current_segment_index(),
+                "poll_next: same-epoch demand already committed, skipping rewind"
+            );
+        } else {
             debug!(
                 variant = req.variant,
                 segment = req.segment_index,
@@ -286,13 +310,6 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
                 "poll_next: same-epoch demand behind cursor, rewinding"
             );
             sched.rewind_current_segment_index(req.segment_index);
-        } else {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand already committed, skipping rewind"
-            );
         }
     }
     if req.variant != sched.download_variant {
@@ -368,9 +385,14 @@ fn apply_variant_readiness(
     let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(variant);
     sched.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
 
-    // Demand cursor protection.
+    // Demand cursor protection — but never reset onto a segment whose
+    // `FetchCmd` is still in flight: that is the "rewind → duplicate
+    // FetchCmd" hot loop we avoid in `process_demand`. The prior fetch
+    // will commit and notify the reader; resetting the cursor here just
+    // races a second writer on the same cached `AssetResource`.
     if let Some(ds) = demand_segment
         && sched.current_segment_index() > ds
+        && !sched.in_flight_segments.contains(&(variant, ds))
     {
         debug!(
             demand = ds,
@@ -513,6 +535,10 @@ fn build_batch(
             plan_need_init,
         );
         cmds.push(cmd);
+        state
+            .scheduler
+            .in_flight_segments
+            .insert((variant, seg_idx));
 
         state.scheduler.advance_current_segment_index(seg_idx + 1);
 
@@ -569,6 +595,7 @@ fn build_fetch_cmd(
                 let Some(ref mut st) = *guard else {
                     return;
                 };
+                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if !is_already_committed {
                     debug!(variant, seg_idx, error = %e, "segment fetch failed, rewinding cursor");
                     st.scheduler.rewind_current_segment_index(seg_idx);
@@ -590,6 +617,7 @@ fn build_fetch_cmd(
             let Some(ref mut st) = *guard else {
                 return;
             };
+            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
             if let Ok(ref meta) = meta {
                 st.scheduler.commit_fetch_inline(
                     variant,
@@ -630,7 +658,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
-    use super::{HlsPeer, HlsState, process_demand};
+    use super::{
+        DemandResult, HlsPeer, HlsState, apply_variant_readiness, process_demand, resolve_variant,
+    };
     use crate::{
         config::HlsConfig,
         coord::SegmentRequest,
@@ -908,6 +938,175 @@ mod tests {
         );
     }
 
+    /// RED test #9 (integration: stress_seek_lifecycle_with_zero_reset_ephemeral)
+    ///
+    /// Phase 3 of the stress test: after 2000 random seeks (which cause
+    /// ABR to up/down-switch repeatedly), the reader seeks back to 0 and
+    /// reads the full track sequentially. By this point, BOTH variants
+    /// have had most of their segments committed at some point — but the
+    /// ephemeral LRU has since evicted many of them via
+    /// `on_segment_invalidated`.
+    ///
+    /// The hang: log shows `cursor::reopen_fill from_next=28 from_floor=27
+    /// new_floor=27 new_next=27` firing *between* regular polls, without
+    /// any seek epoch change. The only production caller of
+    /// `reopen_fill` is `handle_midstream_switch`, which is gated on
+    /// `is_midstream_switch = (download_variant != variant) && seg > 0`.
+    ///
+    /// The trigger: when `handle_tail_state` exits the `layout != variant`
+    /// branch with no layout gap (line 131) or via the `else` branch at
+    /// line 133, it clears `filling_layout_gap = false`. On the next
+    /// poll, ABR wants its current pick (say variant 1). Since
+    /// `filling_layout_gap` is now false, `resolve_variant` does NOT
+    /// override to `download_variant` (= layout variant 0). Then
+    /// `apply_variant_readiness` sees `download_variant=0, variant=1`,
+    /// classifies it as a midstream switch, and fires
+    /// `handle_midstream_switch(true)` → `reopen_fill(cursor_pos,
+    /// cursor_pos)` where `cursor_pos = first_missing_segment(
+    /// download_variant=0, 0, ephemeral=true)` — which points BEHIND
+    /// the reader at the oldest LRU-evicted seg on variant 0.
+    ///
+    /// Then build_batch runs on variant 1, where seg 27..40 are all
+    /// loaded (LRU kept them), so every seg is skipped. cursor sweeps
+    /// 27..40 again. Tail. Rewind. Loop.
+    ///
+    /// Invariant under test: when the layout variant has all segments
+    /// committed (no missing in the reader's forward window) and the
+    /// cursor is at the tail, a subsequent poll_next must NOT reopen
+    /// the cursor onto an LRU-evicted segment strictly behind the
+    /// reader's byte position. Doing so spins the scheduler on already
+    /// played-back data while the reader starves for the next segment
+    /// it actually needs.
+    #[kithara::test]
+    fn red_test_zero_reset_ephemeral_tail_switch_does_not_rewind_behind_reader() {
+        let mut state = make_hls_state();
+
+        assert!(
+            state.scheduler.backend.is_ephemeral(),
+            "precondition: test fixture uses ephemeral backend"
+        );
+
+        // Phase 2 has walked through both variants repeatedly. Commit
+        // every segment of variant 0 (the current layout) and variant 1.
+        const SEG_SIZE: u64 = 100;
+        {
+            let mut segs = state.scheduler.segments.lock_sync();
+            segs.set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_expected_sizes(1, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_layout_variant(0);
+        }
+        for seg_idx in 0..NUM_SEGMENTS {
+            commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
+            commit_segment_in_index(&state, 1, seg_idx, SEG_SIZE);
+        }
+
+        // LRU has since evicted the old half of BOTH variants. Only
+        // segments 20..40 remain loaded.
+        const LIVE_START: usize = 20;
+        {
+            let mut segs = state.scheduler.segments.lock_sync();
+            for seg_idx in 0..LIVE_START {
+                segs.on_segment_invalidated(0, seg_idx);
+                segs.on_segment_invalidated(1, seg_idx);
+            }
+        }
+
+        // Reader is reading sequentially from the start after seek-to-0;
+        // byte_position is inside segment 25 (still in the live window).
+        const READER_SEG: usize = 25;
+        state
+            .scheduler
+            .coord
+            .timeline()
+            .set_byte_position(READER_SEG as u64 * SEG_SIZE + 10);
+
+        // Production state at the hang:
+        //   - download_variant = 0 (layout variant)
+        //   - cursor is at the tail of the playlist (40)
+        //   - filling_layout_gap was cleared by the previous
+        //     handle_tail_state exit path (layout==variant branch)
+        //   - ABR wants variant 1 (throughput suggests up/down-switch)
+        state.scheduler.download_variant = 0;
+        state.scheduler.cursor.reopen_fill(READER_SEG, NUM_SEGMENTS);
+        state.scheduler.filling_layout_gap = false;
+        // Simulate ABR having picked variant 1 (e.g. after a down-switch).
+        state.scheduler.abr.apply(
+            &kithara_abr::AbrDecision {
+                target_variant_index: 1,
+                reason: kithara_abr::AbrReason::DownSwitch,
+                changed: true,
+            },
+            kithara_platform::time::Instant::now(),
+        );
+
+        assert_eq!(
+            state.scheduler.current_segment_index(),
+            NUM_SEGMENTS,
+            "precondition: cursor at tail"
+        );
+        assert_eq!(
+            state.scheduler.abr.get_current_variant_index(),
+            1,
+            "precondition: ABR wants variant 1"
+        );
+
+        // Drive one poll_next cycle via the helpers, exactly as
+        // `HlsPeer::poll_next` does. No demand is queued — this is a
+        // prefetch poll after the reader is busy draining the decoder.
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
+            DemandResult::ResetAndPend => (None, None),
+            DemandResult::Demand {
+                segment,
+                variant_override,
+            } => (Some(segment), variant_override),
+            DemandResult::None => (None, None),
+        };
+
+        let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);
+
+        // handle_tail_state runs before apply_variant_readiness. At
+        // cursor=40 and variant=1, the `layout != variant` branch
+        // triggers `first_missing_segment(layout=0, scan_start=reader_seg,
+        // layout_num, ephemeral)`. With all variant-0 segments in the
+        // forward window committed, there is NO gap → fallthrough to
+        // `filling_layout_gap = false` (line 131) or the later EOF
+        // branch → returns true (Pending). In production that's fine,
+        // BUT the NEXT poll then invokes apply_variant_readiness
+        // without the filling_layout_gap guard.
+        let _is_tail = state.scheduler.handle_tail_state(variant, NUM_SEGMENTS);
+
+        // The critical call: with filling_layout_gap=false and variant=1
+        // from ABR, classify_variant_transition sees download_variant=0
+        // vs variant=1 → midstream switch → handle_midstream_switch →
+        // reopen_fill cursor BEHIND the reader.
+        let cursor_before = state.scheduler.current_segment_index();
+        let reader_seg_before = state.scheduler.reader_segment_floor();
+        apply_variant_readiness(
+            &mut state.scheduler,
+            variant,
+            old_variant,
+            demand_segment,
+            demand_variant_override,
+        );
+        let cursor_after = state.scheduler.current_segment_index();
+
+        assert!(
+            cursor_after >= reader_seg_before,
+            "apply_variant_readiness pulled the cursor from {cursor_before} \
+             down to {cursor_after}, which is BEHIND the reader \
+             (reader_segment_floor={reader_seg_before}). The trigger is \
+             an ABR-driven midstream switch that fires `reopen_fill` to \
+             `first_missing_segment(download_variant=0, 0, ephemeral=true)` \
+             — which finds LRU-evicted segments strictly behind the reader. \
+             Re-fetching those segments evicts the live window the reader \
+             is about to read, creating the hot loop observed in \
+             `stress_seek_lifecycle_with_zero_reset_ephemeral` Phase 3."
+        );
+    }
+
     /// RED test #6 (integration: stress_seek_lifecycle_with_zero_reset_mmap)
     ///
     /// `process_demand` unconditionally rewinds the cursor when
@@ -949,6 +1148,287 @@ mod tests {
              (was {cursor_before}, now {cursor_after}); unconditional \
              rewind creates hot loop: rewind → re-fetch → commit errors \
              with 'cannot write to committed resource' → reader re-demands"
+        );
+    }
+
+    /// RED test #8 (integration: stress_seek_lifecycle_with_zero_reset_mmap).
+    ///
+    /// The existing fix at peer.rs:272..297 (commit `38d51adfb`) covers only
+    /// the case where the demanded segment is already committed in the
+    /// `StreamIndex`. But the integration test still hangs because the hot
+    /// loop fires BEFORE commit — while the `FetchCmd` for the demanded
+    /// segment is still in flight.
+    ///
+    /// Scenario reproduced from the `stress_seek_lifecycle_with_zero_reset_mmap`
+    /// trace log (see `/tmp/test-clean.log` lines ~313..345):
+    ///
+    /// ```text
+    /// 55.431134Z poll_next: returning 1 FetchCmds variant=0 count=1 cursor=13
+    /// 55.431368Z poll_next: same-epoch demand behind cursor, rewinding
+    ///                       variant=0 segment=12 cursor=13
+    /// 55.432289Z poll_next: returning 1 FetchCmds variant=0 count=1 cursor=13
+    ///                       ^^^ DUPLICATE FetchCmd for segment 12
+    /// 55.432384Z poll_next: same-epoch demand behind cursor, rewinding
+    ///                       variant=0 segment=12 cursor=13
+    /// ...  11 duplicate FetchCmds for segment 12 in ~4ms ...
+    /// 55.956343Z poll_next: returning 3 FetchCmds variant=0 count=3 cursor=16
+    /// ```
+    ///
+    /// At 55.431134 the scheduler issued the FIRST FetchCmd for segment 12
+    /// and advanced `cursor` to 13. `count=12` in the preceding `size_map`
+    /// event confirms segment 12 is NOT yet committed — the fetch is in
+    /// flight, writing into a freshly acquired `AssetResource`. Between
+    /// ticks, the reader's `wait_range` loop re-enqueues a demand for
+    /// (variant=0, segment=12) on every condvar iteration. Today
+    /// `process_demand`'s `already_loaded` check returns `false` (the
+    /// commit hasn't landed), so the rewind 13 → 12 fires, `build_batch`
+    /// emits a second `FetchCmd` for the same resource, and the cycle
+    /// repeats with two (then N) concurrent writers racing on the same
+    /// cached `AssetResource`. On mmap storage the first commit flips
+    /// the resource into `Committed` state; subsequent `write_at` calls
+    /// fail, and eventually the `on_complete` closure that wins the race
+    /// calls `commit_fetch_inline` only once — but by then, the 500ms
+    /// variant-0 delay rule has pushed every duplicate into the same
+    /// 500ms window, so the reader waits ~40×500 ms to burn through
+    /// 28 segments and trips the 5-second hang detector well before
+    /// phase 3 completes.
+    ///
+    /// Invariant under test: when `process_demand` finds that the
+    /// demanded segment sits strictly between the cursor's download
+    /// floor and its current position (i.e. the scheduler already
+    /// emitted a `FetchCmd` for it in THIS download epoch), the cursor
+    /// must NOT regress onto that segment. The prior `FetchCmd` is
+    /// still in flight; rewinding issues a duplicate `FetchCmd` that
+    /// races on the same `AssetResource` and delays commit.
+    ///
+    /// The `already_loaded` check in the current fix is insufficient —
+    /// it only sees committed state. A correct guard must treat
+    /// `floor <= req.segment_index < cursor` as "already planned in
+    /// this epoch" regardless of commit status.
+    #[kithara::test]
+    fn red_test_seek_lifecycle_mmap_no_rewind_on_in_flight_segment() {
+        let mut state = make_hls_state();
+
+        // Mirror production log state at 55.431134Z, right after the
+        // scheduler issued the FIRST FetchCmd for segment 12:
+        //   cursor: floor=12 (the download epoch opened at seg 12),
+        //           next=13 (advance_current_segment_index(12 + 1) after
+        //           build_batch pushed the FetchCmd).
+        // Segment 12 is NOT committed — the fetch is in flight, writing
+        // into the freshly acquired `AssetResource` captured by the
+        // FetchCmd's writer closure. The StreamIndex contains no entry
+        // for (variant=0, segment=12) yet, so `is_segment_loaded`
+        // returns false and the existing fix's skip branch does NOT
+        // fire.
+        state.scheduler.cursor.reopen_fill(12, 13);
+        // `build_batch` marks the segment in-flight when it emits the
+        // FetchCmd; the production log captures this as `insert_in_flight`
+        // immediately before `advance_current_segment_index(12 + 1)`.
+        state.scheduler.in_flight_segments.insert((0, 12));
+        let cursor_before = state.scheduler.current_segment_index();
+        assert_eq!(cursor_before, 13);
+
+        // Sanity: segment 12 is NOT committed (the distinguishing trait
+        // from RED #6, which committed it before the assertion).
+        assert!(
+            !state
+                .scheduler
+                .segments
+                .lock_sync()
+                .is_segment_loaded(0, 12),
+            "precondition: segment 12 must be uncommitted (fetch in flight)"
+        );
+
+        // Reader's `wait_range` loop re-enqueues the demand for the
+        // in-flight segment on every condvar iteration
+        // (source_impl.rs:130, `queue_segment_request_for_offset`).
+        enqueue_demand(&state, 0, 12);
+
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let _ = process_demand(&mut state, &mut cx);
+
+        let cursor_after = state.scheduler.current_segment_index();
+        assert_eq!(
+            cursor_after, cursor_before,
+            "cursor regressed from {cursor_before} to {cursor_after} onto \
+             segment 12, whose FetchCmd is still in flight (floor=12, so \
+             the scheduler ALREADY emitted a FetchCmd for this segment in \
+             the current download epoch before advancing to cursor=13). \
+             Today's `already_loaded` guard only detects committed state, \
+             so the rewind 13 → 12 fires, build_batch issues a duplicate \
+             FetchCmd, and two concurrent writers race on the same cached \
+             AssetResource. Under the 500ms variant-0 DelayRule in the \
+             integration test, this hot loop starves the reader until the \
+             5-second hang detector panics. A correct guard must treat \
+             `floor <= demand_seg < cursor` as 'already planned in this \
+             epoch' regardless of commit status."
+        );
+    }
+
+    /// RED test (integration: live_ephemeral_small_cache_playback_hls).
+    ///
+    /// Reproduces the flake observed under CPU contention when running
+    /// `live_ephemeral_small_cache_playback_hls` with 8-way parallel
+    /// stress (6/8 runs fail with `next_chunk timeout at
+    /// stage='ephemeral_small_cache' (is_eof=false)`).
+    ///
+    /// Scenario: forward-only playback, `cache_capacity=4`, ephemeral
+    /// store, `AbrMode::Auto(Some(0))`. The reader is inside the LRU's
+    /// live window. ABR's initial pick was variant 0 (floor). After a
+    /// few seconds of throughput measurement ABR up-switches to a higher
+    /// variant. The downloader has reached the tail of variant 0 with
+    /// `filling_layout_gap = false` (the previous `handle_tail_state`
+    /// exited via the `else` arm at plan.rs:133).
+    ///
+    /// The next `poll_next` calls:
+    /// 1. `resolve_variant` — no demand override, no layout gap-fill,
+    ///    so `variant = abr.current = 1`.
+    /// 2. `apply_variant_readiness(variant=1, download_variant=0, …)`.
+    ///    `classify_variant_transition` reports a midstream switch.
+    ///    `handle_midstream_switch(true)` runs
+    ///    `first_missing_segment(old_variant=0, scan_start=0,
+    ///    ephemeral=true)` and finds segment 0 — the oldest LRU-evicted
+    ///    segment BEHIND the reader.
+    /// 3. `reopen_fill(0, 0)` pulls the cursor from the tail down to 0.
+    /// 4. `build_batch` starts re-downloading segments 0, 1, 2, … which
+    ///    evicts the reader's live window. Reader starves → `wait_range`
+    ///    exceeds its 3-second budget → `next_chunk_with_timeout` fires
+    ///    the assert at tests/tests/kithara_hls/live_stress_real_stream.rs:190.
+    ///
+    /// Invariant under test: with forward-only playback on an ephemeral
+    /// LRU store, an ABR up-switch at the tail must NOT rewind the
+    /// cursor onto segments strictly behind the reader. The reader's
+    /// live window must remain untouched.
+    #[kithara::test]
+    fn red_test_small_cache_playback_abr_upswitch_does_not_rewind_behind_reader() {
+        let mut state = make_hls_state();
+
+        assert!(
+            state.scheduler.backend.is_ephemeral(),
+            "precondition: small-cache playback uses ephemeral backend"
+        );
+
+        // All 40 segments of variants 0 and 1 were downloaded while the
+        // reader walked forward. Layout is variant 0 (initial ABR pick).
+        const SEG_SIZE: u64 = 100;
+        {
+            let mut segs = state.scheduler.segments.lock_sync();
+            segs.set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_expected_sizes(1, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_layout_variant(0);
+        }
+        for seg_idx in 0..NUM_SEGMENTS {
+            commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
+            commit_segment_in_index(&state, 1, seg_idx, SEG_SIZE);
+        }
+
+        // LRU cap=4 has evicted everything except the last 4 segments on
+        // BOTH variants — matches `.with_cache_capacity(NonZeroUsize::new(4))`
+        // on the integration test's StoreOptions.
+        const CACHE_WINDOW: usize = 4;
+        const LIVE_START: usize = NUM_SEGMENTS - CACHE_WINDOW;
+        {
+            let mut segs = state.scheduler.segments.lock_sync();
+            for seg_idx in 0..LIVE_START {
+                segs.on_segment_invalidated(0, seg_idx);
+                segs.on_segment_invalidated(1, seg_idx);
+            }
+        }
+
+        // Reader is playing forward inside the live window — second-to-last
+        // cached segment. This is the state right before the flake fires:
+        // 55 seconds in, `chunks_read` ≈ 2000, decoder advancing, byte
+        // position inside LIVE_START+2.
+        const READER_SEG: usize = NUM_SEGMENTS - 2;
+        let reader_byte_pos = READER_SEG as u64 * SEG_SIZE + 10;
+        state
+            .scheduler
+            .coord
+            .timeline()
+            .set_byte_position(reader_byte_pos);
+
+        // Downloader is at the playlist tail on the current layout variant.
+        // `filling_layout_gap` was cleared by the previous
+        // `handle_tail_state` pass (layout==variant → `else` arm at
+        // plan.rs:133).
+        state.scheduler.download_variant = 0;
+        state.scheduler.cursor.reopen_fill(LIVE_START, NUM_SEGMENTS);
+        state.scheduler.filling_layout_gap = false;
+
+        // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
+        // After throughput measurement it decides to up-switch to
+        // variant 1. `abr.get_current_variant_index()` now returns 1.
+        state.scheduler.abr.apply(
+            &kithara_abr::AbrDecision {
+                target_variant_index: 1,
+                reason: kithara_abr::AbrReason::UpSwitch,
+                changed: true,
+            },
+            kithara_platform::time::Instant::now(),
+        );
+
+        assert_eq!(
+            state.scheduler.current_segment_index(),
+            NUM_SEGMENTS,
+            "precondition: cursor at tail"
+        );
+
+        // Drive the post-tail `poll_next` cycle through its helpers,
+        // exactly as `HlsPeer::poll_next` does in production. No demand
+        // is queued — this is a prefetch poll.
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
+            DemandResult::ResetAndPend => (None, None),
+            DemandResult::Demand {
+                segment,
+                variant_override,
+            } => (Some(segment), variant_override),
+            DemandResult::None => (None, None),
+        };
+
+        let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);
+
+        // `handle_tail_state` runs before `apply_variant_readiness`. At
+        // cursor == num_segments and variant 1 fully cached, this hits
+        // the `layout != variant` branch, finds no layout gap in the
+        // reader's forward window, and falls through clearing
+        // `filling_layout_gap`.
+        let _is_tail = state.scheduler.handle_tail_state(variant, NUM_SEGMENTS);
+
+        // The critical call. With `download_variant=0`, `variant=1`
+        // (from ABR up-switch), and `filling_layout_gap=false`,
+        // `classify_variant_transition` reports a midstream switch.
+        // `handle_midstream_switch(true)` then calls
+        // `first_missing_segment(old_variant=0, 0, ephemeral=true)`,
+        // which returns 0 — the oldest LRU-evicted segment behind the
+        // reader. `reopen_fill(0, 0)` drags the cursor back.
+        let cursor_before = state.scheduler.current_segment_index();
+        let reader_seg_before = state.scheduler.reader_segment_floor();
+        apply_variant_readiness(
+            &mut state.scheduler,
+            variant,
+            old_variant,
+            demand_segment,
+            demand_variant_override,
+        );
+        let cursor_after = state.scheduler.current_segment_index();
+
+        assert!(
+            cursor_after >= reader_seg_before,
+            "apply_variant_readiness pulled the cursor from {cursor_before} \
+             down to {cursor_after}, which is BEHIND the reader \
+             (reader_segment_floor={reader_seg_before}, reader_byte_pos=\
+             {reader_byte_pos}). With cache_capacity=4 on an ephemeral \
+             store, re-fetching segments 0..{reader_seg_before} evicts \
+             the reader's live window (segments \
+             {LIVE_START}..{NUM_SEGMENTS}) the decoder is actively \
+             reading, so `wait_range` exceeds its budget and \
+             `next_chunk_with_timeout` fires the assert at \
+             live_stress_real_stream.rs:190 with \
+             `stage='ephemeral_small_cache' (is_eof=false)`."
         );
     }
 }

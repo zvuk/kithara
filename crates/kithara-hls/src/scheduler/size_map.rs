@@ -162,7 +162,16 @@ impl HlsScheduler {
         }
         self.sent_init_for_variant.insert(variant);
 
-        for seg_idx in 0..cached_count {
+        let already_announced = self
+            .announced_cached_count
+            .get(&variant)
+            .copied()
+            .unwrap_or(0);
+        if cached_count <= already_announced {
+            return;
+        }
+
+        for seg_idx in already_announced..cached_count {
             let bytes = self
                 .segments
                 .lock_sync()
@@ -176,5 +185,6 @@ impl HlsScheduler {
                 duration: std::time::Duration::ZERO,
             });
         }
+        self.announced_cached_count.insert(variant, cached_count);
     }
 }

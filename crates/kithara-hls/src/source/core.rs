@@ -345,6 +345,8 @@ pub(crate) fn build_pair(
         download_variant: initial_variant,
         filling_layout_gap: false,
         demand_throttle_until: None,
+        announced_cached_count: std::collections::HashMap::new(),
+        in_flight_segments: HashSet::new(),
     };
 
     let source = HlsSource {
