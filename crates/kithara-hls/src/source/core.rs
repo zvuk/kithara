@@ -14,6 +14,7 @@ use kithara_stream::Timeline;
 use crate::{
     coord::HlsCoord,
     ids::{SegmentIndex, VariantIndex},
+    peer::HlsPeer,
     playlist::{PlaylistAccess, PlaylistState},
     scheduler::{DownloadCursor, HlsScheduler},
     stream_index::StreamIndex,
@@ -33,14 +34,39 @@ pub struct HlsSource {
     pub(crate) bus: EventBus,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     pub(crate) variant_fence: Option<VariantIndex>,
+    /// HLS peer. Cloned from the Downloader's registry; `Drop` tears down
+    /// its [`HlsState`] so the stashed [`SegmentLoader`]'s internal
+    /// `PeerHandle` clones release `PeerInner.cancel`, letting the
+    /// registry remove its own `Arc<HlsPeer>`. Without this the whole
+    /// peer graph leaks until the Downloader itself is dropped.
+    pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
     /// Peer handle. Dropped with this source, cancelling the peer.
     pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
+}
+
+impl Drop for HlsSource {
+    fn drop(&mut self) {
+        // Clear `HlsPeer::state` *before* `_peer_handle` and `_hls_peer`
+        // drop — releasing the internal PeerHandle clones stored inside
+        // the scheduler/loader so that the final external drop actually
+        // brings `PeerInner`'s strong count to zero.
+        if let Some(ref peer) = self._hls_peer {
+            peer.teardown();
+        }
+    }
 }
 
 impl HlsSource {
     /// Set the peer handle (called after the peer is activated).
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
         self._peer_handle = Some(handle);
+    }
+
+    /// Store the `Arc<HlsPeer>` so `Drop` can tear down its state and
+    /// break the `Registry → HlsPeer → HlsState::loader → PeerHandle`
+    /// reference cycle.
+    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+        self._hls_peer = Some(peer);
     }
 
     /// Current variant for source operations (read, seek, demand).
@@ -356,6 +382,7 @@ pub(crate) fn build_pair(
         playlist_state,
         bus,
         variant_fence: None,
+        _hls_peer: None,
         _peer_handle: None,
     };
 

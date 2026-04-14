@@ -77,6 +77,7 @@ pub fn make_test_source_with_backend(
         playlist_state,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
+        _hls_peer: None,
         _peer_handle: None,
     }
 }

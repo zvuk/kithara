@@ -190,6 +190,7 @@ impl StreamType for Hls {
 
         hls_peer.activate(hls_downloader, Arc::clone(&loader));
         source.set_peer_handle(peer_handle);
+        source.set_hls_peer(hls_peer);
 
         Ok(source)
     }

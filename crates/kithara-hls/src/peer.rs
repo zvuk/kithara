@@ -99,6 +99,24 @@ impl HlsPeer {
     }
 }
 
+impl HlsPeer {
+    /// Release the stashed [`HlsState`] and cancel the waker task.
+    ///
+    /// Must be called when the owning [`HlsSource`] drops, otherwise
+    /// `HlsState::loader` keeps an `Arc<SegmentLoader>` that transitively
+    /// holds three [`PeerHandle`] clones (loader, playlist cache, key
+    /// manager). Those clones keep `PeerInner.cancel` unfired, which
+    /// keeps the `Registry` entry (and this `Arc<HlsPeer>`) alive — the
+    /// whole peer graph leaks until the entire `Downloader` is dropped.
+    pub(crate) fn teardown(&self) {
+        // Stop the waker-forwarding task first so it never races our
+        // state lock after we clear it.
+        self.wake_cancel.cancel();
+        let mut guard = self.state.lock_sync();
+        *guard = None;
+    }
+}
+
 impl Drop for HlsPeer {
     fn drop(&mut self) {
         // Fire wake_cancel so the waker-forwarding spawn above exits

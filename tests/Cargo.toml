@@ -142,6 +142,10 @@ path = "bin/wasm_test_runner.rs"
 test = false
 
 [[test]]
+name = "red_env_guard_leak_thread"
+path = "tests/red_env_guard_leak_thread.rs"
+
+[[test]]
 name = "suite_light"
 path = "tests/suite_light.rs"
 

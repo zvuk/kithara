@@ -40,6 +40,8 @@ mod kithara_hls {
     mod keys_integration;
     mod playlist_integration;
     mod red_leak_pattern;
+    mod red_leak_peer_handle_cycle;
+    mod red_leak_small_cache_seek;
     mod seek_past_eof;
     mod seek_variant_switch_after_eof;
     mod smoke_test;
