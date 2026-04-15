@@ -25,7 +25,7 @@ const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
 /// AVQueuePlayer-analogue orchestration facade.
 ///
-/// Owns an `Arc<PlayerImpl>` and a [`Loader`], plus queue-level state
+/// Owns an `Arc<PlayerImpl>` and a private async track loader, plus queue-level state
 /// (ordered tracks, navigation, pending-select). Publishes [`QueueEvent`]
 /// on the shared [`EventBus`] alongside player / audio / hls / file events
 /// so [`Queue::subscribe`] returns a single unified stream.
