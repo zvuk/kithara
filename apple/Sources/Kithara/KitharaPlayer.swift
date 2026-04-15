@@ -236,6 +236,27 @@ public final class KitharaPlayer: @unchecked Sendable {
         }
     }
 
+    /// Select an item by identity (AVQueuePlayer-style).
+    ///
+    /// Resolves the item's current index via ``items`` and delegates to
+    /// ``selectItem(at:autoplay:)``. Prefer this over index-based
+    /// selection when the caller already holds the item reference — it
+    /// is race-free against concurrent `insert`/`remove` that would
+    /// shift indices.
+    ///
+    /// - Parameters:
+    ///   - item: The item to select. Must currently be in the queue.
+    ///   - autoplay: If `true`, begin playback immediately after the switch.
+    /// - Throws: ``KitharaError/invalidArgument`` if the item is not in
+    ///   the queue, or whatever ``selectItem(at:autoplay:)`` throws.
+    public func selectItem(_ item: KitharaPlayerItem, autoplay: Bool = true) throws {
+        let snapshot = items
+        guard let index = snapshot.firstIndex(where: { $0.id == item.id }) else {
+            throw KitharaError.invalidArgument("item \(item.id) not in queue")
+        }
+        try selectItem(at: index, autoplay: autoplay)
+    }
+
     /// Crossfade duration in seconds applied on item transitions.
     public var crossfadeDuration: Float {
         get { _inner.crossfadeDuration() }

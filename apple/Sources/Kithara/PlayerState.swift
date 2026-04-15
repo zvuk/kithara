@@ -91,6 +91,11 @@ public typealias PlayerEvent = FfiPlayerEvent
 /// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
 public typealias ItemEvent = FfiItemEvent
 
+/// Loading/playback status of a track inside the queue.
+///
+/// Surfaced through ``PlayerEvent/trackStatusChanged(itemId:status:)``.
+public typealias TrackStatus = FfiTrackStatus
+
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
