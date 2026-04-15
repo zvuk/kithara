@@ -17,9 +17,12 @@ backend-web-audio = ["kithara-play/backend-web-audio"]
 
 [dependencies]
 kithara-play = { workspace = true, features = ["file", "hls"] }
+kithara-events = { workspace = true }
 kithara-net = { workspace = true }
 kithara-assets = { workspace = true }
 
+tokio = { workspace = true }
+tracing = { workspace = true }
 thiserror = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
@@ -28,3 +31,4 @@ derive_setters = { workspace = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

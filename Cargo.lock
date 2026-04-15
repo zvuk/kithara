@@ -4389,10 +4389,13 @@ dependencies = [
  "derivative",
  "derive_setters",
  "kithara-assets",
+ "kithara-events",
  "kithara-net",
  "kithara-play",
  "kithara-workspace-hack",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

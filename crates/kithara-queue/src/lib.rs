@@ -5,11 +5,14 @@
 mod config;
 mod error;
 mod events;
+mod loader;
 mod navigation;
+mod queue;
 mod track;
 
 pub use config::QueueConfig;
 pub use error::QueueError;
 pub use events::QueueEvent;
 pub use navigation::{NavigationState, RepeatMode};
+pub use queue::Queue;
 pub use track::{TrackEntry, TrackId, TrackSource, TrackStatus};
