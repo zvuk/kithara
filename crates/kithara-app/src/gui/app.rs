@@ -62,7 +62,15 @@ pub(crate) struct Kithara {
 
 impl Kithara {
     /// Boot function for `iced::application()`.
-    pub(crate) fn new(queue: Arc<Queue>, palette: gui::GuiPalette) -> (Self, Task<Message>) {
+    pub(crate) fn new(
+        queue: Arc<Queue>,
+        palette: gui::GuiPalette,
+        config: &crate::config::AppConfig,
+    ) -> (Self, Task<Message>) {
+        // Feed tracks from inside iced's tokio runtime — `Loader::spawn_load`
+        // uses `tokio::spawn`, which requires a running reactor.
+        queue.set_tracks(crate::sources::build_sources(config));
+
         let volume = queue.volume();
         let crossfade = queue.crossfade_duration();
         let eq_band_count = queue.eq_band_count();

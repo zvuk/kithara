@@ -7,6 +7,7 @@ pub mod crossfade;
 pub mod drm;
 pub mod events;
 pub mod frontend;
+pub mod sources;
 pub mod theme;
 
 #[cfg(feature = "tui")]

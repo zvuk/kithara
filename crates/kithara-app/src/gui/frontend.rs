@@ -35,12 +35,14 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     palette: gui::GuiPalette,
+    config: AppConfig,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
             palette: config.palette.into(),
+            config: config.clone(),
         })
     }
 
@@ -51,9 +53,10 @@ impl Frontend for GuiFrontend {
 
     fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
         let palette = self.palette;
+        let config = self.config.clone();
 
         iced::application(
-            move || Kithara::new(Arc::clone(&queue), palette),
+            move || Kithara::new(Arc::clone(&queue), palette, &config),
             update::update,
             view::view,
         )

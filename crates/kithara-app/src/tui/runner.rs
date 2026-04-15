@@ -27,6 +27,10 @@ type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();
 
+    // Feed tracks from inside the runtime — `Loader::spawn_load` uses
+    // `tokio::spawn`, which requires a running reactor.
+    queue.set_tracks(crate::sources::build_sources(config));
+
     let event_rx = queue.subscribe();
     let bus = queue.player().bus().clone();
 
