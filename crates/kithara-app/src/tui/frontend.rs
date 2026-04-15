@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
+use kithara_queue::Queue;
+
 use super::runner;
 use crate::{
     config::AppConfig,
-    controls::AppController,
     frontend::{Frontend, FrontendError},
 };
 
@@ -17,12 +20,12 @@ impl Frontend for TuiFrontend {
         })
     }
 
-    fn start(&mut self, _controller: &mut AppController) -> Result<(), FrontendError> {
+    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
         // Terminal setup happens in run_loop (UiSession::new).
         Ok(())
     }
 
-    fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError> {
+    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
         const WORKER_THREADS: usize = 2;
         const MAX_BLOCKING_THREADS: usize = 4;
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -31,7 +34,7 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        rt.block_on(runner::run_tui(controller, &self.config))
+        rt.block_on(runner::run_tui(queue, &self.config))
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {

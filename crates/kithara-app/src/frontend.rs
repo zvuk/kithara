@@ -1,4 +1,8 @@
-use crate::{config::AppConfig, controls::AppController};
+use std::sync::Arc;
+
+use kithara_queue::Queue;
+
+use crate::config::AppConfig;
 
 /// Boxed error type used by all frontends.
 pub type FrontendError = Box<dyn std::error::Error + Send + Sync>;
@@ -20,13 +24,13 @@ pub trait Frontend: Sized {
     ///
     /// # Errors
     /// Returns an error if the frontend cannot start.
-    fn start(&mut self, controller: &mut AppController) -> Result<(), FrontendError>;
+    fn start(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
 
     /// Run the main event loop. Blocks until exit.
     ///
     /// # Errors
     /// Returns an error if the event loop fails.
-    fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError>;
+    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
 
     /// Clean up resources (restore terminal / close window).
     ///

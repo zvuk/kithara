@@ -31,7 +31,7 @@ fn drm_key() -> String {
 /// Generates a random seed, creates a cipher from `cipher_key + seed`,
 /// and returns `KeyOptions` with the `X-Encrypted-Key` header and
 /// a key processor that decrypts fetched keys.
-pub(crate) fn make_key_options() -> KeyOptions {
+pub fn make_key_options() -> KeyOptions {
     let cipher_key = drm_key();
     let seed: String = rand::rng()
         .sample_iter(Alphanumeric)

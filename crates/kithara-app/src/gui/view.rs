@@ -16,13 +16,14 @@ use iced::{
         text, vertical_slider,
     },
 };
+use kithara_queue::TrackStatus;
 
 use super::{
     app::Kithara,
     icons::Icon,
     message::{Message, Tab},
 };
-use crate::{playlist::TrackStatus, theme::gui::GuiPalette};
+use crate::theme::gui::GuiPalette;
 
 // Layout
 const OUTER_PADDING: f32 = 18.0;
@@ -477,7 +478,7 @@ fn view_tab_content(state: &Kithara) -> Element<'_, Message> {
 
 fn view_playlist(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    if state.playlist.is_empty() {
+    if state.tracks_snapshot.is_empty() {
         return container(
             text("No tracks in playlist")
                 .size(EMPTY_PLAYLIST_FONT)
@@ -492,11 +493,10 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     let mut tracks = column![].spacing(PLAYLIST_SPACING).width(Length::Fill);
 
-    for index in 0..state.playlist.len() {
+    for (index, entry) in state.tracks_snapshot.iter().enumerate() {
         let is_current = state.current_track_index == Some(index);
-        let status = state.playlist.track_status(index);
-        let is_failed = status == TrackStatus::Failed;
-        let is_slow = status == TrackStatus::Slow;
+        let is_failed = matches!(entry.status, TrackStatus::Failed(_));
+        let is_slow = matches!(entry.status, TrackStatus::Slow);
         let blink_on = u64::from(state.blink_counter / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
         let text_color = if is_failed {
             p.danger
@@ -520,7 +520,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         } else {
             p.muted
         };
-        let track_name = truncate_name(&state.playlist.track_name(index), PLAYLIST_MAX_NAME_CHARS);
+        let track_name = truncate_name(&entry.name, PLAYLIST_MAX_NAME_CHARS);
 
         let item = button(
             row![
@@ -935,11 +935,14 @@ fn track_subtitle(state: &Kithara) -> String {
     let Some(index) = state.current_track_index else {
         return "Artist / Album unavailable".to_string();
     };
-    let Some(path) = state.playlist.track_path(index) else {
+    let Some(entry) = state.tracks_snapshot.get(index) else {
+        return "Artist / Album unavailable".to_string();
+    };
+    let Some(url) = entry.url.as_deref() else {
         return "Artist / Album unavailable".to_string();
     };
 
-    let path = Path::new(path);
+    let path = Path::new(url);
     let album = path
         .parent()
         .and_then(|p| p.file_name())

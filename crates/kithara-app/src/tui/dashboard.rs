@@ -1,5 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
+use kithara_queue::{Queue, TrackEntry, TrackStatus};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -8,10 +9,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
-use crate::{
-    playlist::{Playlist, TrackStatus},
-    theme::tui::TuiPalette,
-};
+use crate::theme::tui::TuiPalette;
 
 const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 const NOTE_MAX_CHARS: usize = 26;
@@ -48,7 +46,7 @@ pub struct Dashboard {
     item_count: usize,
     last_note: Option<String>,
     playing: bool,
-    playlist: Arc<Playlist>,
+    tracks: Vec<TrackEntry>,
     position_ms: u64,
     total_ms: Option<u64>,
     volume: f32,
@@ -56,7 +54,7 @@ pub struct Dashboard {
 
 impl Dashboard {
     #[must_use]
-    pub fn new(playlist: Arc<Playlist>, palette: TuiPalette) -> Self {
+    pub fn new(palette: TuiPalette) -> Self {
         Self {
             colors: palette,
             crossfade_progress: None,
@@ -65,17 +63,26 @@ impl Dashboard {
             item_count: 0,
             last_note: None,
             playing: false,
-            playlist,
+            tracks: Vec::new(),
             position_ms: 0,
             total_ms: None,
             volume: 1.0,
         }
     }
 
+    pub fn refresh_tracks(&mut self, queue: &Queue) {
+        self.tracks = queue.tracks();
+    }
+
+    #[must_use]
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
+    }
+
     #[must_use]
     #[expect(clippy::cast_possible_truncation)]
     pub fn height(&self) -> u16 {
-        self.playlist.len() as u16 + 1
+        self.tracks.len() as u16 + 1
     }
 
     pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
@@ -114,7 +121,7 @@ impl Dashboard {
         frame.render_widget(Clear, area);
 
         #[expect(clippy::cast_possible_truncation)]
-        let playlist_lines = self.playlist.len() as u16;
+        let playlist_lines = self.tracks.len() as u16;
         let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
             .split(area);
 
@@ -124,12 +131,11 @@ impl Dashboard {
 
     fn render_playlist(&self, frame: &mut Frame, area: Rect) {
         let c = &self.colors;
-        for i in 0..self.playlist.len() {
-            let track_name = self.playlist.track_name(i);
+        for (i, entry) in self.tracks.iter().enumerate() {
+            let track_name = &entry.name;
             let is_active = i == self.current_index;
-            let status = self.playlist.track_status(i);
-            let is_failed = status == TrackStatus::Failed;
-            let is_slow = status == TrackStatus::Slow;
+            let is_failed = matches!(entry.status, TrackStatus::Failed(_));
+            let is_slow = matches!(entry.status, TrackStatus::Slow);
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
             let text = format!(" {marker} {number}  {track_name}");
@@ -169,7 +175,10 @@ impl Dashboard {
             .saturating_sub(PROGRESS_BAR_OVERHEAD)
             .max(MIN_PROGRESS_BAR_WIDTH);
         let icon = if self.playing { '▶' } else { '⏸' };
-        let active_track = self.playlist.track_name(self.current_index);
+        let active_track = self
+            .tracks
+            .get(self.current_index)
+            .map_or("", |e| e.name.as_str());
         let queue_current = self.current_index.saturating_add(1).max(1);
         let queue_total = self.item_count.max(1);
         let segments = [

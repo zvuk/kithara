@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use iced::Size;
+use kithara_queue::Queue;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use super::{app::Kithara, update, view};
 use crate::{
     config::AppConfig,
-    controls::AppController,
     frontend::{Frontend, FrontendError},
     theme::gui,
 };
@@ -35,38 +35,25 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     palette: gui::GuiPalette,
-    config: AppConfig,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
             palette: config.palette.into(),
-            config: config.clone(),
         })
     }
 
-    fn start(&mut self, _controller: &mut AppController) -> Result<(), FrontendError> {
+    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
         // iced handles window setup internally.
         Ok(())
     }
 
-    fn run_loop(&mut self, controller: &mut AppController) -> Result<(), FrontendError> {
-        let player = controller.player().clone();
-        let load_params = controller.load_params(self.config.danger_accept_invalid_certs);
-        let playlist = Arc::clone(load_params.playlist());
+    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
         let palette = self.palette;
 
-        // iced owns the tokio runtime — this must NOT be called from within block_on().
         iced::application(
-            move || {
-                Kithara::new(
-                    player.clone(),
-                    Arc::clone(&playlist),
-                    load_params.clone(),
-                    palette,
-                )
-            },
+            move || Kithara::new(Arc::clone(&queue), palette),
             update::update,
             view::view,
         )

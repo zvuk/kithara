@@ -1,18 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
-use kithara::{
-    events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent},
-    prelude::PlayerImpl,
-};
+use kithara::events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent};
+use kithara_queue::{Queue, TrackId};
 use tokio::{sync::broadcast::error::TryRecvError, task};
 
 use super::{dashboard::Dashboard, session::UiSession};
 use crate::{
-    controls::{AppController, PlayerControls, TrackLoadParams},
     crossfade::{CrossfadeClock, ProgressLog},
     events::{format_seconds, is_progress_event, source_note},
-    playlist::{Playlist, TrackStatus},
     theme::tui,
 };
 
@@ -28,44 +24,15 @@ type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 ///
 /// # Errors
 /// Returns an error if the TUI event loop fails.
-pub(super) async fn run_tui(
-    controller: &mut AppController,
-    config: &crate::config::AppConfig,
-) -> RunnerResult {
+pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();
 
-    let player = controller.player().clone();
-    let load_params = controller.load_params(config.danger_accept_invalid_certs);
-    let playlist = Arc::clone(load_params.playlist());
+    let event_rx = queue.subscribe();
+    let bus = queue.player().bus().clone();
 
-    let event_rx = player.subscribe();
-    let bus = player.bus().clone();
-
-    // Reserve player slots for all tracks so replace_item works by index.
-    player.reserve_slots(playlist.len());
-
-    // Spawn async loading for each track.
-    for i in 0..playlist.len() {
-        let params = load_params.clone();
-        let track_bus = bus.clone();
-        tokio::spawn(async move {
-            let ok = params.load_and_apply(i).await;
-            let msg = if ok {
-                format!("loaded #{}", i + 1)
-            } else {
-                format!("failed #{}", i + 1)
-            };
-            track_bus.publish(AppEvent::Note(msg));
-        });
-    }
-
-    // Run blocking UI loop in a separate thread.
-    let ui_player = player.clone();
-    let ui_playlist = Arc::clone(&playlist);
-    let ui_load_params = load_params.clone();
-    let mut ui_handle = task::spawn_blocking(move || {
-        run_ui_loop(&ui_player, &ui_playlist, &ui_load_params, event_rx, palette)
-    });
+    let queue_for_loop = Arc::clone(&queue);
+    let mut ui_handle =
+        task::spawn_blocking(move || run_ui_loop(&queue_for_loop, event_rx, palette));
 
     let ui_finished = tokio::select! {
         result = &mut ui_handle => {
@@ -84,20 +51,20 @@ pub(super) async fn run_tui(
         ui_handle.await??;
     }
 
-    controller.pause();
+    queue.pause();
 
     Ok(())
 }
 
 fn run_ui_loop(
-    player: &PlayerImpl,
-    playlist: &Arc<Playlist>,
-    load_params: &TrackLoadParams,
+    queue: &Queue,
     mut event_rx: EventReceiver,
     palette: tui::TuiPalette,
 ) -> RunnerResult {
-    let track_count = playlist.len();
-    let dashboard = Dashboard::new(Arc::clone(playlist), palette);
+    let mut dashboard = Dashboard::new(palette);
+    dashboard.refresh_tracks(queue);
+    let track_count = dashboard.track_count();
+
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
         "controls: space play/pause, 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
@@ -113,7 +80,6 @@ fn run_ui_loop(
     let mut tick_error_logged = false;
 
     'ui: loop {
-        // Drain all pending events from the shared bus.
         loop {
             match event_rx.try_recv() {
                 Ok(event) => {
@@ -129,7 +95,7 @@ fn run_ui_loop(
             }
         }
 
-        match player.tick() {
+        match queue.tick() {
             Ok(()) => {
                 tick_error_logged = false;
             }
@@ -142,9 +108,9 @@ fn run_ui_loop(
             }
         }
 
-        refresh_dashboard(&mut ui.dashboard, player);
+        ui.dashboard.refresh_tracks(queue);
+        refresh_dashboard(&mut ui.dashboard, queue);
 
-        // Crossfade progress
         if let Some(clock) = crossfade_clock.as_ref() {
             let progress = clock.progress();
             ui.dashboard.set_crossfade_progress(Some(progress));
@@ -155,27 +121,20 @@ fn run_ui_loop(
             ui.dashboard.set_crossfade_progress(None);
         }
 
-        // Auto-advance: crossfade to next track when remaining time <= crossfade duration
-        let crossfade_secs = f64::from(player.crossfade_duration());
-        if let (Some(pos), Some(dur)) = (player.position_seconds(), player.duration_seconds())
+        // Auto-advance: crossfade to next track when remaining time <= crossfade duration.
+        let crossfade_secs = f64::from(queue.crossfade_duration());
+        if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
             && dur > crossfade_secs
             && pos >= dur - crossfade_secs
         {
-            let current = player.current_index();
+            let current = queue.current_index().unwrap_or(0);
             let not_yet_advanced = auto_advanced_index != Some(current);
-            if not_yet_advanced && current + 1 < player.item_count() {
+            if not_yet_advanced && current + 1 < queue.len() {
                 auto_advanced_index = Some(current);
-                let next = current + 1;
-                switch_track(
-                    player,
-                    load_params,
-                    next,
-                    &mut ui,
-                    &mut crossfade_clock,
-                    &mut auto_advanced_index,
-                )?;
-                // Restore guard (switch_track resets it for manual switches)
-                auto_advanced_index = Some(current);
+                if queue.advance_to_next().is_some() {
+                    crossfade_clock = Some(CrossfadeClock::new(queue.crossfade_duration()));
+                    ui.dashboard.set_crossfade_progress(Some(0.0));
+                }
             }
         }
 
@@ -184,14 +143,14 @@ fn run_ui_loop(
                 TermEvent::Key(key)
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
-                    match handle_key(key.code, key.modifiers, player, &mut ui.dashboard) {
+                    match handle_key(key.code, key.modifiers, queue, &mut ui.dashboard) {
                         ControlOutcome::Continue(Some(line)) => ui.log_line(&line)?,
                         ControlOutcome::Continue(None) => {}
                         ControlOutcome::SwitchTrack(index) => {
-                            if index < player.item_count() {
-                                switch_track(
-                                    player,
-                                    load_params,
+                            if let Some(id) = track_id_at(queue, index) {
+                                switch_to_id(
+                                    queue,
+                                    id,
                                     index,
                                     &mut ui,
                                     &mut crossfade_clock,
@@ -213,6 +172,10 @@ fn run_ui_loop(
     }
 
     Ok(())
+}
+
+fn track_id_at(queue: &Queue, index: usize) -> Option<TrackId> {
+    queue.tracks().get(index).map(|e| e.id)
 }
 
 /// Returns `true` if the UI loop should exit.
@@ -270,7 +233,7 @@ fn handle_event(
 fn handle_key(
     key: KeyCode,
     modifiers: KeyModifiers,
-    player: &PlayerImpl,
+    queue: &Queue,
     dashboard: &mut Dashboard,
 ) -> ControlOutcome {
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(key, KeyCode::Char('c')) {
@@ -278,24 +241,24 @@ fn handle_key(
     }
     match key {
         KeyCode::Left => {
-            ControlOutcome::Continue(Some(apply_seek(player, -SEEK_STEP_SECONDS_F64, dashboard)))
+            ControlOutcome::Continue(Some(apply_seek(queue, -SEEK_STEP_SECONDS_F64, dashboard)))
         }
         KeyCode::Right => {
-            ControlOutcome::Continue(Some(apply_seek(player, SEEK_STEP_SECONDS_F64, dashboard)))
+            ControlOutcome::Continue(Some(apply_seek(queue, SEEK_STEP_SECONDS_F64, dashboard)))
         }
         KeyCode::Up => {
-            apply_volume(player, VOLUME_STEP, dashboard);
+            apply_volume(queue, VOLUME_STEP, dashboard);
             ControlOutcome::Continue(None)
         }
         KeyCode::Down => {
-            apply_volume(player, -VOLUME_STEP, dashboard);
+            apply_volume(queue, -VOLUME_STEP, dashboard);
             ControlOutcome::Continue(None)
         }
         KeyCode::Char(' ') => {
-            if player.is_playing() {
-                player.pause();
+            if queue.is_playing() {
+                queue.pause();
             } else {
-                player.play();
+                queue.play();
             }
             ControlOutcome::Continue(None)
         }
@@ -308,10 +271,10 @@ fn handle_key(
     }
 }
 
-fn apply_seek(player: &PlayerImpl, delta_seconds: f64, dashboard: &mut Dashboard) -> String {
-    let current = player.position_seconds().unwrap_or(0.0).max(0.0);
+fn apply_seek(queue: &Queue, delta_seconds: f64, dashboard: &mut Dashboard) -> String {
+    let current = queue.position_seconds().unwrap_or(0.0).max(0.0);
     let target = (current + delta_seconds).max(0.0);
-    match player.seek_seconds(target) {
+    match queue.seek(target) {
         Ok(()) => {
             dashboard.set_note(format!("seek {}", format_seconds(target)));
             dashboard.set_position(Duration::from_secs_f64(target));
@@ -325,26 +288,27 @@ fn apply_seek(player: &PlayerImpl, delta_seconds: f64, dashboard: &mut Dashboard
     }
 }
 
-fn apply_volume(player: &PlayerImpl, delta: f32, dashboard: &mut Dashboard) {
-    let volume = (player.volume() + delta).clamp(0.0, 1.0);
-    player.set_volume(volume);
+fn apply_volume(queue: &Queue, delta: f32, dashboard: &mut Dashboard) {
+    let volume = (queue.volume() + delta).clamp(0.0, 1.0);
+    queue.set_volume(volume);
     dashboard.set_volume(volume);
     dashboard.set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
 }
 
-fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
-    dashboard.set_playing(player.is_playing());
-    dashboard.set_queue(player.current_index(), player.item_count());
-    dashboard.set_volume(player.volume());
+fn refresh_dashboard(dashboard: &mut Dashboard, queue: &Queue) {
+    dashboard.set_playing(queue.is_playing());
+    let current = queue.current_index().unwrap_or(0);
+    dashboard.set_queue(current, queue.len());
+    dashboard.set_volume(queue.volume());
 
-    let position = player.position_seconds();
+    let position = queue.position_seconds();
     if let Some(position) = position.filter(|seconds| seconds.is_finite() && *seconds >= 0.0) {
         dashboard.set_position(Duration::from_secs_f64(position));
     } else {
         dashboard.set_position(Duration::ZERO);
     }
 
-    let total = player.duration_seconds().and_then(|seconds| {
+    let total = queue.duration_seconds().and_then(|seconds| {
         if !seconds.is_finite() || seconds <= 0.0 {
             return None;
         }
@@ -353,40 +317,23 @@ fn refresh_dashboard(dashboard: &mut Dashboard, player: &PlayerImpl) {
     dashboard.set_total(total);
 }
 
-fn switch_track(
-    player: &PlayerImpl,
-    load_params: &TrackLoadParams,
+fn switch_to_id(
+    queue: &Queue,
+    id: TrackId,
     index: usize,
     ui: &mut UiSession,
     crossfade_clock: &mut Option<CrossfadeClock>,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
-    let handle = tokio::runtime::Handle::current();
-
-    let resource = match handle.block_on(load_params.load_resource(index)) {
-        Ok(r) => r,
-        Err(e) => {
-            load_params
-                .playlist()
-                .set_status(index, TrackStatus::Failed);
-            let note = format!("track #{} load failed: {e}", index + 1);
-            tracing::error!(index, %e, "track load failed");
-            ui.dashboard.set_note(&note);
-            ui.log_line(&note)?;
-            return Ok(());
-        }
-    };
-    player.replace_item(index, resource);
-
-    match player.select_item(index, true) {
+    match queue.select(id) {
         Ok(()) => {
-            *crossfade_clock = Some(CrossfadeClock::new(player.crossfade_duration()));
+            *crossfade_clock = Some(CrossfadeClock::new(queue.crossfade_duration()));
             ui.dashboard.set_crossfade_progress(Some(0.0));
             *auto_advanced_index = None;
             let note = format!(
                 "crossfade to #{} ({:.1}s)",
                 index + 1,
-                player.crossfade_duration()
+                queue.crossfade_duration()
             );
             ui.dashboard.set_note(&note);
             ui.log_line(&note)?;

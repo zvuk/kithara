@@ -1,19 +1,16 @@
-use std::{
-    io::{self, IsTerminal},
-    sync::Arc,
-};
+use std::io::{self, IsTerminal};
 
 use clap::Parser;
-use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig, prelude::PlayerImpl};
+use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig, prelude::ResourceConfig};
 #[cfg(not(feature = "tui"))]
 use kithara_app::gui;
 #[cfg(feature = "gui")]
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
-use kithara_app::{
-    config::AppConfig, controls::AppController, frontend::Frontend, playlist::Playlist,
-};
+use kithara_app::{config::AppConfig, frontend::Frontend};
+use kithara_queue::{Queue, QueueConfig, TrackSource};
+use url::Url;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -60,6 +57,38 @@ fn resolve_mode(mode: Mode) -> Mode {
     }
 }
 
+/// Whether the host portion of `url` matches one of the configured DRM
+/// domains.
+fn needs_drm(url: &str, drm_domains: &[String]) -> bool {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| drm_domains.iter().any(|d| h.ends_with(d.as_str())))
+        })
+        .unwrap_or(false)
+}
+
+/// Build a [`TrackSource`] for a given URL, applying zvuk DRM keys when
+/// the URL's host matches `config.drm_domains`.
+fn build_source(url: &str, config: &AppConfig) -> TrackSource {
+    if needs_drm(url, &config.drm_domains) {
+        match ResourceConfig::new(url) {
+            Ok(mut cfg) => {
+                cfg = cfg.with_keys(kithara_app::drm::make_key_options());
+                cfg.net.insecure = config.danger_accept_invalid_certs;
+                TrackSource::Config(Box::new(cfg))
+            }
+            Err(e) => {
+                tracing::error!(%url, %e, "failed to build DRM config, falling back to Uri");
+                TrackSource::Uri(url.to_string())
+            }
+        }
+    } else {
+        TrackSource::Uri(url.to_string())
+    }
+}
+
 fn main() -> AppResult {
     // Suppress noisy macOS system logs (OpenGL dlsym, WindowTab, etc.)
     #[cfg(target_os = "macos")]
@@ -89,28 +118,34 @@ fn main() -> AppResult {
         gui::init_tracing()?;
     }
 
-    // Create player and controller.
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default()
-            .with_crossfade_duration(config.crossfade_seconds)
-            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count)),
-    ));
-    let playlist = Arc::new(Playlist::new(config.tracks.clone(), &config.drm_domains));
-    let mut controller = AppController::new(Arc::clone(&player), playlist, config.eq_band_count);
+    let player_config = PlayerConfig::default()
+        .with_crossfade_duration(config.crossfade_seconds)
+        .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
+    let mut queue_config = QueueConfig::new(player_config);
+    queue_config.net.insecure = config.danger_accept_invalid_certs;
+    queue_config.autoplay = true;
+
+    let queue = std::sync::Arc::new(Queue::new(queue_config));
+    let sources: Vec<TrackSource> = config
+        .tracks
+        .iter()
+        .map(|url| build_source(url, &config))
+        .collect();
+    queue.set_tracks(sources);
 
     match mode {
         #[cfg(feature = "tui")]
         Mode::Tui | Mode::Auto => {
             let mut frontend = TuiFrontend::new(&config)?;
-            frontend.start(&mut controller)?;
-            frontend.run_loop(&mut controller)?;
+            frontend.start(std::sync::Arc::clone(&queue))?;
+            frontend.run_loop(std::sync::Arc::clone(&queue))?;
             frontend.shutdown()?;
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
             let mut frontend = GuiFrontend::new(&config)?;
-            frontend.start(&mut controller)?;
-            frontend.run_loop(&mut controller)?;
+            frontend.start(std::sync::Arc::clone(&queue))?;
+            frontend.run_loop(std::sync::Arc::clone(&queue))?;
             frontend.shutdown()?;
         }
         #[cfg(not(feature = "gui"))]
