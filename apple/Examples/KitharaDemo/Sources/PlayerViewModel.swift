@@ -46,6 +46,10 @@ final class PlayerViewModel: ObservableObject {
     private var items: [UUID: KitharaPlayerItem] = [:]
     private var itemCancellables: [UUID: AnyCancellable] = [:]
     private var pendingSelectEntryId: UUID?
+    /// The last item inserted into the player queue for each playlist entry.
+    /// Used to remove the stale slot before appending a fresh one during
+    /// `performDeferredSelect`, so the queue doesn't grow unbounded.
+    private var lastInsertedItems: [UUID: KitharaPlayerItem] = [:]
 
     static let defaultCrossfadeSeconds: Float = 5.0
 
@@ -183,6 +187,7 @@ final class PlayerViewModel: ObservableObject {
 
         do {
             try player.insert(item)
+            lastInsertedItems[entry.id] = item
             if autoPlay {
                 currentTrackId = entry.id
                 status = .unknown
@@ -332,15 +337,35 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func performDeferredSelect(entryId: UUID) {
-        guard let idx = playlist.firstIndex(where: { $0.id == entryId }),
-              let item = items[entryId]
-        else { return }
+        guard let item = items[entryId] else {
+            pendingSelectEntryId = nil
+            return
+        }
         pendingSelectEntryId = nil
+
+        // Swift `playlist` and the FFI player queue can diverge — spawn_auto_load
+        // drops entries from the player queue when their initial load fails
+        // (e.g. offline at startup), so `playlist.firstIndex(...)` is not a
+        // valid FFI index. Drop the stale item for this entry (if any),
+        // append the fresh one, and select the last slot. That is always a
+        // valid queue position and still crossfades against the current leading
+        // track because the engine keeps its mixer tracks separately.
+        if let prior = lastInsertedItems[entryId] {
+            try? player.remove(prior)
+        }
+
         do {
-            try player.replaceItem(at: idx, with: item)
-            try player.selectItem(at: idx, autoplay: true)
+            try player.insert(item)
+            lastInsertedItems[entryId] = item
+            let lastIdx = Int(player.itemCount) - 1
+            guard lastIdx >= 0 else { return }
+            try player.selectItem(at: lastIdx, autoplay: true)
+            errorMessage = nil
+            if status == .failed {
+                status = .unknown
+            }
         } catch {
-            print("[KitharaDemo] replace/select error: \(error)")
+            print("[KitharaDemo] insert/select error for \(trackLabel(entryId)): \(error)")
             errorMessage = "\(error)"
             status = .failed
         }
@@ -353,6 +378,7 @@ final class PlayerViewModel: ObservableObject {
                 guard let self else { return }
                 switch event {
                 case let .durationChanged(seconds):
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) durationChanged: \(seconds)s")
                     if let idx = self.playlist.firstIndex(where: { $0.id == entryId }) {
                         self.playlist[idx].duration = seconds
                         if entryId == self.currentTrackId {
@@ -363,6 +389,8 @@ final class PlayerViewModel: ObservableObject {
                         }
                     }
                 case let .variantsDiscovered(variants):
+                    let labels = variants.map { "\($0.bandwidthBps / 1000)k" }.joined(separator: ",")
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) variants: [\(labels)]")
                     if entryId == self.currentTrackId {
                         let sorted = variants.sorted { $0.bandwidthBps < $1.bandwidthBps }
                         self.discoveredVariants = sorted.map { v in
@@ -371,16 +399,24 @@ final class PlayerViewModel: ObservableObject {
                         }
                     }
                 case let .variantSelected(variant):
+                    let label = variant.name ?? "\(variant.bandwidthBps / 1000)k"
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) variantSelected: \(label)")
                     if entryId == self.currentTrackId {
                         self.selectedVariantIndex = variant.index
                     }
                 case let .variantApplied(variant):
+                    let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) variantApplied: \(label)")
                     if entryId == self.currentTrackId {
-                        let label = variant.name ?? "\(variant.bandwidthBps / 1000) kbps"
                         self.currentVariantLabel = label
                     }
+                case let .statusChanged(ffiStatus):
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) status: \(ffiStatus)")
                 case let .error(message):
-                    if entryId == self.currentTrackId {
+                    // Log every track error — not only the current one —
+                    // so failures during background pre-load are visible.
+                    print("[KitharaDemo] \(self.trackLabel(entryId)) ERROR: \(message)")
+                    if entryId == self.currentTrackId || entryId == self.pendingSelectEntryId {
                         self.errorMessage = message
                         self.status = .failed
                     }
@@ -388,6 +424,11 @@ final class PlayerViewModel: ObservableObject {
                     break
                 }
             }
+    }
+
+    private func trackLabel(_ entryId: UUID) -> String {
+        let name = playlist.first(where: { $0.id == entryId })?.name ?? "unknown"
+        return "[\(name)]"
     }
 }
 

@@ -1,7 +1,12 @@
+import Kithara
 import SwiftUI
 
 @main
 struct KitharaDemoApp: App {
+    init() {
+        Kithara.initLogging(level: .debug)
+    }
+
     #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #endif
