@@ -29,6 +29,7 @@ bytes = { workspace = true }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
@@ -55,4 +56,3 @@ jni = { workspace = true }
 ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
-tracing-subscriber = { workspace = true }

@@ -425,6 +425,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -626,6 +642,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Use before [`Self::select_item`] to re-play a track whose resource
      * was consumed by a prior playback. The new item must already have a
      * loaded resource (`item.load()` finished).
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+     * or [`FfiError::NotReady`] if `item` has not finished loading.
      */
     func replaceItem(index: UInt32, item: AudioPlayerItem) throws 
     
@@ -648,6 +669,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Select an item in the queue and optionally start playback.
      *
      * Applies the configured crossfade duration during the transition.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+     * [`FfiError::NotReady`] if the item has not been inserted into the
+     * engine yet, or [`FfiError::Internal`] if the underlying player
+     * fails to select.
      */
     func selectItem(index: UInt32, autoplay: Bool) throws 
     
@@ -879,6 +907,11 @@ open func removeAllItems()  {try! rustCall() {
      * Use before [`Self::select_item`] to re-play a track whose resource
      * was consumed by a prior playback. The new item must already have a
      * loaded resource (`item.load()` finished).
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+     * or [`FfiError::NotReady`] if `item` has not finished loading.
      */
 open func replaceItem(index: UInt32, item: AudioPlayerItem)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_replace_item(
@@ -920,6 +953,13 @@ open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
      * Select an item in the queue and optionally start playback.
      *
      * Applies the configured crossfade duration during the transition.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
+     * [`FfiError::NotReady`] if the item has not been inserted into the
+     * engine yet, or [`FfiError::Internal`] if the underlying player
+     * fails to select.
      */
 open func selectItem(index: UInt32, autoplay: Bool)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_select_item(
@@ -3473,6 +3513,21 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
         return dict
     }
 }
+/**
+ * Initialize Rust tracing for FFI consumers.
+ *
+ * Writes formatted events to stderr. Idempotent — subsequent calls are
+ * no-ops.
+ *
+ * `level` ordinal: 0=trace, 1=debug, 2=info, 3=warn, 4=error, anything
+ * else = off.
+ */
+public func initLogging(level: UInt8)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_func_init_logging(
+        FfiConverterUInt8.lower(level),$0
+    )
+}
+}
 
 private enum InitializationResult {
     case ok
@@ -3488,6 +3543,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_kithara_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_init_logging() != 21302) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15435) {
         return InitializationResult.apiChecksumMismatch
@@ -3576,7 +3634,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 32344) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 34006) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 61142) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 7094) {
@@ -3585,7 +3643,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 62537) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 13809) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 49640) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 45428) {
