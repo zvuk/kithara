@@ -194,6 +194,37 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
     }
 }
 
+/// FFI-friendly mirror of [`kithara_events::TrackStatus`].
+///
+/// Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
+/// loaded -> consumed, or `failed` on error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiTrackStatus {
+    Pending,
+    Loading,
+    Slow,
+    Loaded,
+    Failed { reason: String },
+    Consumed,
+}
+
+impl From<kithara_events::TrackStatus> for FfiTrackStatus {
+    fn from(s: kithara_events::TrackStatus) -> Self {
+        use kithara_events::TrackStatus as TS;
+        match s {
+            TS::Loading => Self::Loading,
+            TS::Slow => Self::Slow,
+            TS::Loaded => Self::Loaded,
+            TS::Failed(reason) => Self::Failed { reason },
+            TS::Consumed => Self::Consumed,
+            // `TrackStatus` is `#[non_exhaustive]`; fall back to `Pending`
+            // for `Pending` itself + any future variants.
+            _ => Self::Pending,
+        }
+    }
+}
+
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
@@ -234,6 +265,16 @@ pub enum FfiPlayerEvent {
     VolumeChanged { volume: f32 },
     MuteChanged { muted: bool },
     ItemDidPlayToEnd,
+    /// Queue-level: the loading/playback status of an item changed.
+    /// `item_id` matches `AudioPlayerItem::id()`.
+    TrackStatusChanged { item_id: String, status: FfiTrackStatus },
+    /// Queue reached the end with `RepeatMode::Off` active.
+    QueueEnded,
+    /// A crossfade between tracks just started. `duration_seconds` is
+    /// the configured crossfade window — UIs can drive progress from it.
+    CrossfadeStarted { duration_seconds: f32 },
+    /// The configured crossfade window changed at runtime.
+    CrossfadeDurationChanged { seconds: f32 },
 }
 
 /// Typed item event dispatched through [`ItemObserver::on_event`].

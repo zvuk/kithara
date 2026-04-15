@@ -12,12 +12,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use kithara::play::PlayerEvent;
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId};
+use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
 use kithara_queue::Queue;
 use tokio_util::sync::CancellationToken;
 
-use crate::{item::AudioPlayerItem, observer::PlayerObserver, types::FfiPlayerEvent};
+use crate::{
+    item::AudioPlayerItem,
+    observer::{ItemObserver, PlayerObserver},
+    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
+};
 
 /// Polling interval for time/duration updates (~10 Hz).
 const TIME_POLL_INTERVAL_MS: u64 = 100;
@@ -141,9 +145,66 @@ impl EventBridge {
                 };
                 observer.on_event(ffi_event);
             }
-            Event::Queue(QueueEvent::CurrentTrackChanged { id }) => {
+            Event::Queue(qe) => Self::dispatch_queue_event(observer, items, qe),
+            _ => {}
+        }
+    }
+
+    fn dispatch_queue_event(
+        observer: &Arc<dyn PlayerObserver>,
+        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        event: &QueueEvent,
+    ) {
+        match event {
+            QueueEvent::CurrentTrackChanged { id } => {
                 let item_id = id.and_then(|tid| items.lock_sync().get(&tid).map(|i| i.id()));
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
+            }
+            QueueEvent::TrackStatusChanged { id, status } => {
+                let item = items.lock_sync().get(id).cloned();
+                if let Some(item) = item {
+                    let item_id = item.id();
+                    if let Some(item_obs) = item.observer() {
+                        Self::route_track_status_to_item(&item_obs, status);
+                    }
+                    observer.on_event(FfiPlayerEvent::TrackStatusChanged {
+                        item_id,
+                        status: FfiTrackStatus::from(status.clone()),
+                    });
+                }
+            }
+            QueueEvent::QueueEnded => {
+                observer.on_event(FfiPlayerEvent::QueueEnded);
+            }
+            QueueEvent::CrossfadeStarted { duration_seconds } => {
+                observer.on_event(FfiPlayerEvent::CrossfadeStarted {
+                    duration_seconds: *duration_seconds,
+                });
+            }
+            QueueEvent::CrossfadeDurationChanged { seconds } => {
+                observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
+            }
+            _ => {}
+        }
+    }
+
+    /// Translate a queue-level `TrackStatus` into per-item callbacks so
+    /// Swift `KitharaPlayerItem.eventPublisher` sees `StatusChanged` +
+    /// `Error` without having to subscribe to the player-level stream.
+    fn route_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &TrackStatus) {
+        match status {
+            TrackStatus::Loaded => {
+                observer.on_event(FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::ReadyToPlay,
+                });
+            }
+            TrackStatus::Failed(reason) => {
+                observer.on_event(FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::Failed,
+                });
+                observer.on_event(FfiItemEvent::Error {
+                    error: reason.clone(),
+                });
             }
             _ => {}
         }
