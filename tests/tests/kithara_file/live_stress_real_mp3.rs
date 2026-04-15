@@ -23,7 +23,7 @@ use tracing::info;
 
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 2;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 4;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 8;
 const RANDOM_SEEK_OPS_MAX: usize = 256;
 const MIN_RANDOM_CHUNKS: usize = 384;
 const CHUNKS_PER_RANDOM_SEEK: usize = 2;

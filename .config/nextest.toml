@@ -2,15 +2,22 @@
 fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 3 }
+# Default 100ms is too tight when 12 cores run 1800+ tests concurrently;
+# munmap of a 46MB test binary + stdout flush can exceed it even for
+# sync tests that spawn no threads. A real leak (live worker thread
+# blocked on channel) would still exceed 2s and get caught.
+leak-timeout = "2s"
 
 [profile.ci]
 fail-fast = false
 test-threads = "num-cpus"
+leak-timeout = "2s"
 
 # Fast-only profile: heavy tests are excluded via -E filter in justfile.
 [profile.fast]
 fail-fast = false
 test-threads = "num-cpus"
+leak-timeout = "2s"
 
 # Stress-only profile: run only the heavy test binary.
 # No thread limit — a real audio player shares the machine with many
@@ -19,3 +26,4 @@ test-threads = "num-cpus"
 fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "60s", terminate-after = 5 }
+leak-timeout = "2s"
