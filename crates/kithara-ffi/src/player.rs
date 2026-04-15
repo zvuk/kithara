@@ -1,56 +1,47 @@
 //! FFI wrapper for the audio player.
+//!
+//! `AudioPlayer` owns a [`kithara_queue::Queue`] under the hood. All queue
+//! bookkeeping (stable `TrackId`s, auto-respawn of consumed resources,
+//! crossfade-aware select, auto-advance on `ItemDidPlayToEnd`) lives in
+//! the Queue. The FFI layer is a thin adapter: index-based Swift API
+//! maps onto `TrackId`-based Queue calls through a `TrackId ->
+//! AudioPlayerItem` map that preserves Swift-side identity.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara::{
-    abr::AbrMode,
+    abr::{AbrController, AbrMode, AbrOptions},
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayerConfig, ResourceConfig},
 };
+use kithara_events::TrackId;
 use kithara_platform::Mutex;
+use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
 
 use crate::{
+    config,
     event_bridge::EventBridge,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiError, FfiItemEvent, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
+    types::{FfiAbrMode, FfiError, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
-/// Entry in the FFI queue. Tracks whether the item has been inserted
-/// into the engine's internal queue (after successful resource load).
-pub(crate) struct QueueEntry {
-    pub(crate) item: Arc<AudioPlayerItem>,
-    pub(crate) inserted_into_engine: AtomicBool,
-}
-
-/// Count how many entries before `ffi_pos` are inserted into the engine.
-/// This maps an FFI queue index to the engine's internal queue index.
-fn engine_index(queue: &[Arc<QueueEntry>], ffi_pos: usize) -> usize {
-    queue[..ffi_pos]
-        .iter()
-        .filter(|e| e.inserted_into_engine.load(Ordering::Acquire))
-        .count()
-}
-
-/// FFI-facing audio player with UUID-based queue management.
+/// FFI-facing audio player.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
-    inner: Arc<Mutex<PlayerImpl>>,
-    queue: Arc<Mutex<Vec<Arc<QueueEntry>>>>,
+    queue: Arc<Queue>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
     key_processor: Mutex<Option<Arc<dyn FfiKeyProcessor>>>,
     key_request_headers: Mutex<Option<HashMap<String, String>>>,
+    /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
+    /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
+    /// the same `AudioPlayerItem` instances that Swift handed in (preserves
+    /// identity + active per-item observer wiring).
+    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
 }
 
 /// Methods exported across the FFI boundary.
@@ -63,31 +54,33 @@ impl AudioPlayer {
             eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
             ..PlayerConfig::default()
         };
+        let queue_config = QueueConfig::new(player_config).with_autoplay(false);
         Arc::new(Self {
-            inner: Arc::new(Mutex::new(PlayerImpl::new(player_config))),
-            queue: Arc::new(Mutex::new(Vec::new())),
+            queue: Arc::new(Queue::new(queue_config)),
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             key_processor: Mutex::new(None),
             key_request_headers: Mutex::new(None),
+            items: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub fn play(&self) {
-        self.inner.lock_sync().play();
+        self.queue.play();
     }
 
     pub fn pause(&self) {
-        self.inner.lock_sync().pause();
+        self.queue.pause();
     }
 
     /// Seek to a position in the current item.
     ///
-    /// The callback is invoked synchronously with `true` if the seek command
-    /// was accepted, `false` otherwise (matches `AVPlayer` semantics).
+    /// The callback is invoked synchronously with `true` if the seek
+    /// command was accepted, `false` otherwise (matches `AVPlayer`
+    /// semantics).
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
     pub fn seek(&self, to_seconds: f64, callback: Arc<dyn SeekCallback>) {
-        match self.inner.lock_sync().seek_seconds(to_seconds) {
+        match self.queue.seek(to_seconds) {
             Ok(()) => callback.on_complete(true),
             Err(_) => callback.on_complete(false),
         }
@@ -95,162 +88,123 @@ impl AudioPlayer {
 
     /// Insert an item into the queue.
     ///
-    /// If the item's resource is already loaded, it is inserted into both
-    /// the FFI queue and the engine immediately. If not yet loaded,
-    /// the item is placed in the FFI queue and an async auto-load task
-    /// is spawned; upon completion the resource is inserted into the engine.
+    /// Registers the item's URL + caller-supplied preferences with the
+    /// Queue, which starts loading in the background and emits
+    /// `TrackStatusChanged` events through the player's event stream.
     ///
     /// # Errors
     ///
-    /// Returns [`FfiError::InvalidArgument`] if `after` is not in the queue.
+    /// Returns [`FfiError::InvalidArgument`] if `after` is not currently
+    /// in the queue, or if the item's URL is malformed.
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
     pub fn insert(
         self: &Arc<Self>,
         item: Arc<AudioPlayerItem>,
         after: Option<Arc<AudioPlayerItem>>,
     ) -> Result<(), FfiError> {
-        let mut queue = self.queue.lock_sync();
+        let source = self.build_source_for_item(&item)?;
 
-        let after_ffi_index = after
-            .as_ref()
-            .map(|after_item| {
-                queue
-                    .iter()
-                    .position(|e| e.item.uuid() == after_item.uuid())
-                    .ok_or_else(|| FfiError::InvalidArgument {
-                        reason: format!("item {} not found in queue", after_item.id()),
-                    })
-            })
-            .transpose()?;
+        let id = if let Some(after_item) = after.as_ref() {
+            let after_id =
+                (*after_item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
+                    reason: format!("item {} not found in queue", after_item.id()),
+                })?;
+            self.queue
+                .insert(source, Some(after_id))
+                .map_err(|e| FfiError::InvalidArgument {
+                    reason: e.to_string(),
+                })?
+        } else {
+            self.queue.append(source)
+        };
 
-        let ffi_pos = after_ffi_index.map_or(queue.len(), |i| i + 1);
-
-        // Inject shared bus, worker, runtime, and key options.
-        {
-            let player = self.inner.lock_sync();
-            *item.bus.lock_sync() = Some(player.bus().scoped());
-            *item.worker.lock_sync() = Some(player.worker().clone());
-            *item.runtime.lock_sync() = player.runtime().cloned();
-        }
-        *item.key_options.lock_sync() = self.key_options();
-
-        let entry = Arc::new(QueueEntry {
-            item: Arc::clone(&item),
-            inserted_into_engine: AtomicBool::new(false),
-        });
-
-        match item.take_resource() {
-            Ok(resource) => {
-                let eng_idx = engine_index(&queue, ffi_pos);
-                self.inner.lock_sync().insert(resource, Some(eng_idx));
-                entry.inserted_into_engine.store(true, Ordering::Release);
-                queue.insert(ffi_pos, entry);
-            }
-            Err(FfiError::NotReady) => {
-                queue.insert(ffi_pos, Arc::clone(&entry));
-                drop(queue);
-                self.spawn_auto_load(entry);
-            }
-            Err(e) => return Err(e),
-        }
-
+        *item.track_id.lock_sync() = Some(id);
+        self.items.lock_sync().insert(id, Arc::clone(&item));
+        item.restart_bridge();
         Ok(())
     }
 
+    /// Remove an item from the queue.
+    ///
     /// # Errors
     ///
-    /// Returns [`FfiError::InvalidArgument`] if the item is not in the queue.
+    /// Returns [`FfiError::InvalidArgument`] if the item is not in the
+    /// queue.
     pub fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        let mut queue = self.queue.lock_sync();
-        let ffi_idx = queue
-            .iter()
-            .position(|e| e.item.uuid() == item.uuid())
-            .ok_or_else(|| FfiError::InvalidArgument {
-                reason: format!("item {} not found in queue", item.id()),
+        let id = (*item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
+            reason: format!("item {} not in queue", item.id()),
+        })?;
+        self.queue
+            .remove(id)
+            .map_err(|e| FfiError::InvalidArgument {
+                reason: e.to_string(),
             })?;
-
-        let entry = &queue[ffi_idx];
-        if entry.inserted_into_engine.load(Ordering::Acquire) {
-            let eng_idx = engine_index(&queue, ffi_idx);
-            self.inner.lock_sync().remove_at(eng_idx);
-        }
-
-        queue.remove(ffi_idx);
-        drop(queue);
+        self.items.lock_sync().remove(&id);
+        *item.track_id.lock_sync() = None;
         Ok(())
     }
 
     pub fn remove_all_items(&self) {
-        let mut queue = self.queue.lock_sync();
-        self.inner.lock_sync().remove_all_items();
-        queue.clear();
+        self.queue.clear();
+        let mut items = self.items.lock_sync();
+        for (_, item) in items.drain() {
+            *item.track_id.lock_sync() = None;
+        }
     }
 
     pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
-        self.queue
-            .lock_sync()
+        let tracks = self.queue.tracks();
+        let items = self.items.lock_sync();
+        tracks
             .iter()
-            .map(|e| Arc::clone(&e.item))
+            .filter_map(|t| items.get(&t.id).cloned())
             .collect()
     }
 
     pub fn item_count(&self) -> u32 {
-        u32::try_from(self.queue.lock_sync().len()).unwrap_or(u32::MAX)
+        u32::try_from(self.queue.len()).unwrap_or(u32::MAX)
     }
 
-    /// Replace the item at `index` with a freshly-loaded one.
-    ///
-    /// Use before [`Self::select_item`] to re-play a track whose resource
-    /// was consumed by a prior playback. The new item must already have a
-    /// loaded resource (`item.load()` finished).
+    /// Replace the item at `index` with a freshly-configured one.
     ///
     /// # Errors
     ///
-    /// Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-    /// or [`FfiError::NotReady`] if `item` has not finished loading.
+    /// Returns [`FfiError::InvalidArgument`] if `index` is out of range
+    /// or the item's URL is malformed.
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
     pub fn replace_item(
         self: &Arc<Self>,
         index: u32,
         item: Arc<AudioPlayerItem>,
     ) -> Result<(), FfiError> {
-        let mut queue = self.queue.lock_sync();
-        let ffi_idx = index as usize;
-        if ffi_idx >= queue.len() {
-            return Err(FfiError::InvalidArgument {
-                reason: format!("item index {ffi_idx} out of range (len: {})", queue.len()),
-            });
-        }
+        let idx = index as usize;
+        let tracks = self.queue.tracks();
+        let old = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
+            reason: format!("item index {idx} out of range (len: {})", tracks.len()),
+        })?;
+        let old_id = old.id;
+
+        let source = self.build_source_for_item(&item)?;
+        let after_for_insert = if idx == 0 {
+            None
+        } else {
+            tracks.get(idx - 1).map(|e| e.id)
+        };
+        let new_id =
+            self.queue
+                .insert(source, after_for_insert)
+                .map_err(|e| FfiError::InvalidArgument {
+                    reason: e.to_string(),
+                })?;
+        let _ = self.queue.remove(old_id);
 
         {
-            let player = self.inner.lock_sync();
-            *item.bus.lock_sync() = Some(player.bus().scoped());
-            *item.worker.lock_sync() = Some(player.worker().clone());
-            *item.runtime.lock_sync() = player.runtime().cloned();
+            let mut items = self.items.lock_sync();
+            items.remove(&old_id);
+            items.insert(new_id, Arc::clone(&item));
         }
-        *item.key_options.lock_sync() = self.key_options();
-
-        let resource = item.take_resource()?;
-
-        let was_inserted = queue[ffi_idx].inserted_into_engine.load(Ordering::Acquire);
-        let eng_idx = engine_index(&queue, ffi_idx);
-
-        {
-            let player = self.inner.lock_sync();
-            if was_inserted {
-                player.replace_item(eng_idx, resource);
-            } else {
-                player.insert(resource, Some(eng_idx));
-            }
-        }
-
-        let new_entry = Arc::new(QueueEntry {
-            item: Arc::clone(&item),
-            inserted_into_engine: AtomicBool::new(true),
-        });
-        queue[ffi_idx] = new_entry;
-        drop(queue);
-
+        *item.track_id.lock_sync() = Some(new_id);
+        item.restart_bridge();
         Ok(())
     }
 
@@ -261,93 +215,86 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-    /// [`FfiError::NotReady`] if the item has not been inserted into the
-    /// engine yet, or [`FfiError::Internal`] if the underlying player
-    /// fails to select.
+    /// [`FfiError::NotReady`] if the track's resource is not yet loaded,
+    /// or [`FfiError::Internal`] if the underlying Queue fails to select.
     pub fn select_item(&self, index: u32, autoplay: bool) -> Result<(), FfiError> {
-        let queue = self.queue.lock_sync();
-        let ffi_idx = index as usize;
-        let entry = queue
-            .get(ffi_idx)
-            .ok_or_else(|| FfiError::InvalidArgument {
-                reason: format!("item index {ffi_idx} out of range (len: {})", queue.len()),
-            })?;
-        if !entry.inserted_into_engine.load(Ordering::Acquire) {
-            return Err(FfiError::NotReady);
+        let tracks = self.queue.tracks();
+        let idx = index as usize;
+        let entry = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
+            reason: format!("item index {idx} out of range (len: {})", tracks.len()),
+        })?;
+        self.queue.select(entry.id).map_err(|e| match e {
+            QueueError::NotReady(_) => FfiError::NotReady,
+            other => FfiError::Internal {
+                description: other.to_string(),
+            },
+        })?;
+        if !autoplay {
+            self.queue.pause();
         }
-        let eng_idx = engine_index(&queue, ffi_idx);
-        drop(queue);
-        self.inner
-            .lock_sync()
-            .select_item(eng_idx, autoplay)
-            .map_err(|e| FfiError::Internal {
-                description: e.to_string(),
-            })
+        Ok(())
     }
 
     pub fn crossfade_duration(&self) -> f32 {
-        self.inner.lock_sync().crossfade_duration()
+        self.queue.crossfade_duration()
     }
 
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.inner.lock_sync().set_crossfade_duration(seconds);
+        self.queue.set_crossfade_duration(seconds);
     }
 
     pub fn default_rate(&self) -> f32 {
-        self.inner.lock_sync().default_rate()
+        self.queue.default_rate()
     }
 
     pub fn set_default_rate(&self, rate: f32) {
-        self.inner.lock_sync().set_default_rate(rate);
+        self.queue.set_default_rate(rate);
     }
 
-    pub fn set_abr_mode(&self, mode: crate::types::FfiAbrMode) {
+    pub fn set_abr_mode(&self, mode: FfiAbrMode) {
         let abr_mode = match mode {
-            crate::types::FfiAbrMode::Auto => AbrMode::Auto(None),
-            crate::types::FfiAbrMode::Manual { variant_index } => {
-                AbrMode::Manual(variant_index as usize)
-            }
+            FfiAbrMode::Auto => AbrMode::Auto(None),
+            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
         };
-        self.inner.lock_sync().set_abr_mode(abr_mode);
+        self.queue.player().set_abr_mode(abr_mode);
     }
 
     pub fn rate(&self) -> f32 {
-        self.inner.lock_sync().rate()
+        self.queue.player().rate()
     }
 
     pub fn volume(&self) -> f32 {
-        self.inner.lock_sync().volume()
+        self.queue.volume()
     }
 
     pub fn set_volume(&self, volume: f32) {
-        self.inner.lock_sync().set_volume(volume);
+        self.queue.set_volume(volume);
     }
 
     pub fn is_muted(&self) -> bool {
-        self.inner.lock_sync().is_muted()
+        self.queue.is_muted()
     }
 
     pub fn set_muted(&self, muted: bool) {
-        self.inner.lock_sync().set_muted(muted);
+        self.queue.set_muted(muted);
     }
 
     // MARK: - EQ
 
     #[expect(clippy::cast_possible_truncation, reason = "EQ band count fits u32")]
     pub fn eq_band_count(&self) -> u32 {
-        self.inner.lock_sync().eq_band_count() as u32
+        self.queue.eq_band_count() as u32
     }
 
     pub fn eq_gain(&self, band: u32) -> f32 {
-        self.inner.lock_sync().eq_gain(band as usize).unwrap_or(0.0)
+        self.queue.eq_gain(band as usize).unwrap_or(0.0)
     }
 
     /// # Errors
     ///
     /// Returns error if the engine is not running.
     pub fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
-        self.inner
-            .lock_sync()
+        self.queue
             .set_eq_gain(band as usize, gain_db)
             .map_err(FfiError::from)
     }
@@ -356,31 +303,31 @@ impl AudioPlayer {
     ///
     /// Returns error if the engine is not running.
     pub fn reset_eq(&self) -> Result<(), FfiError> {
-        self.inner.lock_sync().reset_eq().map_err(FfiError::from)
+        self.queue.reset_eq().map_err(FfiError::from)
     }
 
     /// Return a snapshot of the player's current state.
-    ///
-    /// Cheap synchronous read — Swift should use this instead of caching
-    /// state locally.
     #[must_use]
     pub fn snapshot(&self) -> FfiPlayerSnapshot {
-        let inner = self.inner.lock_sync();
+        let player = self.queue.player();
         FfiPlayerSnapshot {
-            status: FfiPlayerStatus::from(inner.status()),
-            current_time: inner.position_seconds(),
-            duration: inner.duration_seconds(),
-            rate: inner.rate(),
-            default_rate: inner.default_rate(),
-            volume: inner.volume(),
-            muted: inner.is_muted(),
+            status: FfiPlayerStatus::from(player.status()),
+            current_time: player.position_seconds(),
+            duration: player.duration_seconds(),
+            rate: player.rate(),
+            default_rate: player.default_rate(),
+            volume: player.volume(),
+            muted: player.is_muted(),
         }
     }
 
     /// Set a key processor callback for HLS DRM key decryption.
     ///
-    /// The processor is applied to all items' `KeyOptions` when loading.
-    /// Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
+    /// The processor is applied globally: `AudioPlayer::insert` builds a
+    /// `KeyOptions` from it and attaches the keys to every new
+    /// `ResourceConfig` so HLS keys fetched for any item go through the
+    /// same processor. Optional `headers` are sent with every key
+    /// request (e.g. `X-Encrypted-Key`).
     pub fn set_key_processor(
         &self,
         processor: Arc<dyn FfiKeyProcessor>,
@@ -391,18 +338,16 @@ impl AudioPlayer {
     }
 
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
-        let rx = self.inner.lock_sync().subscribe();
+        let rx = self.queue.subscribe();
 
         let bridge = EventBridge::spawn(
             rx,
             Arc::clone(&observer),
-            Arc::clone(&self.inner),
             Arc::clone(&self.queue),
+            &self.items,
             CancellationToken::new(),
         );
 
-        // Update both atomically: old bridge is dropped (cancelled) only after
-        // new one is stored, and observer ref stays in sync with bridge.
         let mut eb = self.event_bridge.lock_sync();
         let mut obs = self.observer.lock_sync();
         *eb = Some(bridge);
@@ -431,57 +376,48 @@ impl AudioPlayer {
         Some(opts)
     }
 
-    /// Spawn an async task that waits for the item to load, then inserts
-    /// its resource into the engine.
-    ///
-    /// Uses `Arc::ptr_eq` to identify the entry — protects against
-    /// remove + re-insert race conditions.
-    fn spawn_auto_load(&self, entry: Arc<QueueEntry>) {
-        let inner = Arc::clone(&self.inner);
-        let queue = Arc::clone(&self.queue);
+    /// Build a [`TrackSource::Config`] from the item's fields. Also
+    /// attaches a scoped bus so the item's per-resource event bridge
+    /// captures events published during `Resource::new`
+    /// (`VariantsDiscovered` fires synchronously during stream open — a
+    /// late subscriber would miss it).
+    fn build_source_for_item(&self, item: &Arc<AudioPlayerItem>) -> Result<TrackSource, FfiError> {
+        let mut config =
+            ResourceConfig::new(item.url()).map_err(|e| FfiError::InvalidArgument {
+                reason: e.to_string(),
+            })?;
 
-        crate::FFI_RUNTIME.spawn(async move {
-            // Wait for the item's load() to finish.
-            entry.item.wait_for_load().await;
+        config::configure_resource(&mut config, &item.store_options());
 
-            let resource = match entry.item.take_resource() {
-                Ok(r) => r,
-                Err(e) => {
-                    error!(%e, item_id = %entry.item.id(), "auto-load failed to take resource");
-                    // Remove from FFI queue on failure.
-                    {
-                        let mut q = queue.lock_sync();
-                        if let Some(pos) = q.iter().position(|e2| Arc::ptr_eq(e2, &entry)) {
-                            q.remove(pos);
-                        }
-                    }
-                    if let Some(obs) = entry.item.observer() {
-                        obs.on_event(FfiItemEvent::Error {
-                            error: e.to_string(),
-                        });
-                    }
-                    return;
-                }
+        let bitrate = item.preferred_peak_bitrate();
+        if bitrate > 0.0 {
+            config = config.with_preferred_peak_bitrate(bitrate);
+        }
+
+        if let Some(headers) = item.headers() {
+            config = config.with_headers(headers.into());
+        }
+
+        let scoped = self.queue.player().bus().scoped();
+        config.bus = Some(scoped.clone());
+        *item.bus.lock_sync() = Some(scoped);
+
+        if let Some(keys) = self.key_options() {
+            config = config.with_keys(keys);
+        }
+
+        if let Some(mode) = item.abr_mode() {
+            let abr_mode = match mode {
+                FfiAbrMode::Auto => AbrMode::Auto(None),
+                FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
             };
+            config.abr = Some(AbrController::new(AbrOptions {
+                mode: abr_mode,
+                ..AbrOptions::default()
+            }));
+        }
 
-            // Lock queue → inner (consistent ordering with insert/remove).
-            let q = queue.lock_sync();
-            let Some(ffi_pos) = q.iter().position(|e2| Arc::ptr_eq(e2, &entry)) else {
-                debug!(
-                    item_id = %entry.item.id(),
-                    "auto-load: entry removed from queue before resource was ready"
-                );
-                return;
-            };
-
-            let eng_idx = engine_index(&q, ffi_pos);
-            let player = inner.lock_sync();
-            player.insert(resource, Some(eng_idx));
-            entry.inserted_into_engine.store(true, Ordering::Release);
-            player.try_load_if_current(eng_idx);
-            drop(player);
-            drop(q);
-        });
+        Ok(TrackSource::Config(Box::new(config)))
     }
 }
 
@@ -513,60 +449,6 @@ mod tests {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
         player.remove_all_items();
         assert!(player.items().is_empty());
-    }
-
-    #[kithara::test]
-    fn engine_index_empty() {
-        let queue: Vec<Arc<QueueEntry>> = vec![];
-        assert_eq!(engine_index(&queue, 0), 0);
-    }
-
-    #[kithara::test]
-    fn engine_index_all_inserted() {
-        let entries: Vec<Arc<QueueEntry>> = (0..3)
-            .map(|_| {
-                Arc::new(QueueEntry {
-                    item: AudioPlayerItem::new("https://example.com/a.mp3".into(), None),
-                    inserted_into_engine: AtomicBool::new(true),
-                })
-            })
-            .collect();
-        assert_eq!(engine_index(&entries, 0), 0);
-        assert_eq!(engine_index(&entries, 1), 1);
-        assert_eq!(engine_index(&entries, 2), 2);
-        assert_eq!(engine_index(&entries, 3), 3);
-    }
-
-    #[kithara::test]
-    fn engine_index_mixed() {
-        let make = |inserted: bool| {
-            Arc::new(QueueEntry {
-                item: AudioPlayerItem::new("https://example.com/a.mp3".into(), None),
-                inserted_into_engine: AtomicBool::new(inserted),
-            })
-        };
-        // [inserted, NOT inserted, inserted]
-        let entries = vec![make(true), make(false), make(true)];
-        assert_eq!(engine_index(&entries, 0), 0); // nothing before pos 0
-        assert_eq!(engine_index(&entries, 1), 1); // 1 inserted before pos 1
-        assert_eq!(engine_index(&entries, 2), 1); // still 1 (pos 1 not inserted)
-        assert_eq!(engine_index(&entries, 3), 2); // 2 inserted total
-    }
-
-    #[kithara::test]
-    fn engine_index_none_inserted() {
-        let entries: Vec<Arc<QueueEntry>> = (0..3)
-            .map(|_| {
-                Arc::new(QueueEntry {
-                    item: AudioPlayerItem::new("https://example.com/a.mp3".into(), None),
-                    inserted_into_engine: AtomicBool::new(false),
-                })
-            })
-            .collect();
-        assert_eq!(engine_index(&entries, 0), 0);
-        assert_eq!(engine_index(&entries, 1), 0);
-        assert_eq!(engine_index(&entries, 2), 0);
-        assert_eq!(engine_index(&entries, 3), 0);
     }
 
     #[kithara::test]
