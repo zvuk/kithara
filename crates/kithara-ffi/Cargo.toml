@@ -24,6 +24,7 @@ kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
+kithara-queue = { workspace = true }
 bytes = { workspace = true }
 
 tokio-util = { workspace = true }

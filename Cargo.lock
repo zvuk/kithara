@@ -4104,6 +4104,7 @@ dependencies = [
  "kithara-drm",
  "kithara-events",
  "kithara-platform",
+ "kithara-queue",
  "kithara-test-utils",
  "ndk-context",
  "rustls-platform-verifier",
