@@ -8,6 +8,8 @@ use crate::AudioEvent;
 use crate::FileEvent;
 #[cfg(feature = "hls")]
 use crate::HlsEvent;
+#[cfg(feature = "queue")]
+use crate::QueueEvent;
 #[cfg(feature = "player")]
 use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
 
@@ -45,6 +47,9 @@ pub enum Event {
     /// Application lifecycle event.
     #[cfg(feature = "app")]
     App(AppEvent),
+    /// Queue-level event (track added/removed/status/current/ended).
+    #[cfg(feature = "queue")]
+    Queue(QueueEvent),
 }
 
 #[cfg(feature = "hls")]
@@ -107,6 +112,13 @@ impl From<DjEvent> for Event {
 impl From<AppEvent> for Event {
     fn from(e: AppEvent) -> Self {
         Self::App(e)
+    }
+}
+
+#[cfg(feature = "queue")]
+impl From<QueueEvent> for Event {
+    fn from(e: QueueEvent) -> Self {
+        Self::Queue(e)
     }
 }
 

@@ -20,6 +20,8 @@ mod hls;
 pub mod internal;
 #[cfg(feature = "player")]
 mod play;
+#[cfg(feature = "queue")]
+mod queue;
 
 #[cfg(feature = "app")]
 pub use app::AppEvent;
@@ -37,6 +39,8 @@ pub use play::{
     PlayerStatus, PortDescription, PortType, RouteChangeReason, RouteDescription, SessionEvent,
     SlotId, TimeControlStatus, TimeRange, WaitingReason,
 };
+#[cfg(feature = "queue")]
+pub use queue::{QueueEvent, TrackId, TrackStatus};
 pub use receiver::EventReceiver;
 pub use scope::BusScope;
 pub use seek::{SeekEpoch, SeekTaskId};

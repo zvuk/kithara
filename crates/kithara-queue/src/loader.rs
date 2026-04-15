@@ -1,20 +1,13 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::StoreOptions;
-use kithara_events::{Event, FileEvent, HlsEvent};
+use kithara_events::{Event, EventBus, FileEvent, HlsEvent, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
-use tokio::{
-    sync::{Semaphore, broadcast},
-    task::JoinHandle,
-};
+use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
 
-use crate::{
-    error::QueueError,
-    events::QueueEvent,
-    track::{TrackId, TrackSource, TrackStatus},
-};
+use crate::{error::QueueError, track::TrackSource};
 
 /// Async track loader: parallelism-capped `ResourceConfig` -> `Resource`.
 ///
@@ -29,7 +22,7 @@ pub(crate) struct Loader {
     net: NetOptions,
     store: StoreOptions,
     semaphore: Arc<Semaphore>,
-    event_tx: broadcast::Sender<QueueEvent>,
+    bus: EventBus,
 }
 
 impl Loader {
@@ -38,14 +31,14 @@ impl Loader {
         net: NetOptions,
         store: StoreOptions,
         max_concurrent_loads: NonZeroUsize,
-        event_tx: broadcast::Sender<QueueEvent>,
+        bus: EventBus,
     ) -> Self {
         Self {
             player,
             net,
             store,
             semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
-            event_tx,
+            bus,
         }
     }
 
@@ -82,7 +75,7 @@ impl Loader {
     ) -> Result<Resource, QueueError> {
         let config = self.build_config(source)?;
         let bus_for_slow = config.bus.clone();
-        let event_tx = self.event_tx.clone();
+        let root_bus = self.bus.clone();
 
         let slow_listener = tokio::spawn(async move {
             let Some(bus) = bus_for_slow else { return };
@@ -92,7 +85,7 @@ impl Loader {
                     ev,
                     Event::File(FileEvent::LoadSlow) | Event::Hls(HlsEvent::LoadSlow)
                 ) {
-                    let _ = event_tx.send(QueueEvent::TrackStatusChanged {
+                    root_bus.publish(QueueEvent::TrackStatusChanged {
                         id,
                         status: TrackStatus::Slow,
                     });
@@ -122,7 +115,7 @@ impl Loader {
                 .await
                 .map_err(|e| QueueError::Resource(format!("semaphore closed: {e}")))?;
 
-            let _ = this.event_tx.send(QueueEvent::TrackStatusChanged {
+            this.bus.publish(QueueEvent::TrackStatusChanged {
                 id,
                 status: TrackStatus::Loading,
             });
@@ -134,7 +127,7 @@ impl Loader {
                 Ok(_) => debug!(id = id.as_u64(), "track load ok"),
                 Err(e) => {
                     warn!(id = id.as_u64(), error = %e, "track load failed");
-                    let _ = this.event_tx.send(QueueEvent::TrackStatusChanged {
+                    this.bus.publish(QueueEvent::TrackStatusChanged {
                         id,
                         status: TrackStatus::Failed(format!("{e}")),
                     });
@@ -153,7 +146,6 @@ mod tests {
     };
 
     use kithara_play::PlayerConfig;
-    use tokio::sync::broadcast;
 
     use super::*;
 
@@ -164,24 +156,24 @@ mod tests {
 
     fn make_loader() -> Arc<Loader> {
         let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let (tx, _rx) = broadcast::channel(32);
+        let bus = player.bus().clone();
         Arc::new(Loader::new(
             player,
             NetOptions::default(),
             StoreOptions::default(),
             CAP_3,
-            tx,
+            bus,
         ))
     }
 
     #[tokio::test]
     async fn build_config_uri_applies_net_and_store_templates() {
         let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let (tx, _rx) = broadcast::channel(32);
+        let bus = player.bus().clone();
         let mut net = NetOptions::default();
         net.insecure = true;
         let store = StoreOptions::default();
-        let loader = Loader::new(player, net, store, CAP_3, tx);
+        let loader = Loader::new(player, net, store, CAP_3, bus);
         let Ok(config) = loader.build_config(TrackSource::Uri("https://example.com/a.mp3".into()))
         else {
             panic!("build_config should succeed");
@@ -230,13 +222,13 @@ mod tests {
     async fn semaphore_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("2 > 0");
         let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let (tx, _rx) = broadcast::channel(32);
+        let bus = player.bus().clone();
         let loader = Arc::new(Loader::new(
             player,
             NetOptions::default(),
             StoreOptions::default(),
             cap,
-            tx,
+            bus,
         ));
 
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -268,7 +260,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_load_bad_url_emits_failed_status() {
         let loader = make_loader();
-        let mut rx = loader.event_tx.subscribe();
+        let mut rx = loader.bus.subscribe();
 
         let handle = loader.spawn_load(TrackId(42), TrackSource::Uri("not-a-url".into()));
         let result = handle.await.expect("join");
@@ -276,16 +268,16 @@ mod tests {
 
         let mut saw_loading = false;
         let mut saw_failed = false;
-        for _ in 0..4 {
+        for _ in 0..8 {
             match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(QueueEvent::TrackStatusChanged {
+                Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Loading,
-                })) => saw_loading = true,
-                Ok(Ok(QueueEvent::TrackStatusChanged {
+                }))) => saw_loading = true,
+                Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Failed(_),
-                })) => saw_failed = true,
+                }))) => saw_failed = true,
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => break,
             }

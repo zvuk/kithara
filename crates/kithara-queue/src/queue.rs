@@ -4,21 +4,20 @@ use std::sync::{
 };
 
 use delegate::delegate;
-use kithara_events::{Event, EventReceiver, PlayerEvent};
+use kithara_events::{
+    Event, EventBus, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
+};
 use kithara_play::{PlayError, PlayerImpl};
-use tokio::sync::broadcast::{self, error::TryRecvError};
+use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, warn};
 
 use crate::{
     config::QueueConfig,
     error::QueueError,
-    events::QueueEvent,
     loader::Loader,
     navigation::{NavigationState, RepeatMode},
-    track::{TrackEntry, TrackId, TrackSource, TrackStatus},
+    track::{TrackEntry, TrackSource},
 };
-
-const QUEUE_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
 /// events emitted by crossfade fade-outs of non-current tracks.
@@ -27,8 +26,9 @@ const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns an `Arc<PlayerImpl>` and a [`Loader`], plus queue-level state
-/// (ordered tracks, navigation, pending-select). Emits [`QueueEvent`] on a
-/// broadcast channel exposed via [`Queue::subscribe`].
+/// (ordered tracks, navigation, pending-select). Publishes [`QueueEvent`]
+/// on the shared [`EventBus`] alongside player / audio / hls / file events
+/// so [`Queue::subscribe`] returns a single unified stream.
 pub struct Queue {
     player: Arc<PlayerImpl>,
     loader: Arc<Loader>,
@@ -36,9 +36,10 @@ pub struct Queue {
     tracks: Arc<Mutex<Vec<TrackEntry>>>,
     navigation: Arc<Mutex<NavigationState>>,
     pending_select: Arc<Mutex<Option<TrackId>>>,
-    event_tx: broadcast::Sender<QueueEvent>,
-    /// Subscription to the underlying player bus; drained in `tick()` to
-    /// convert engine events into `QueueEvent`s.
+    bus: EventBus,
+    /// Subscription to the shared bus; drained in `tick()` to convert
+    /// engine events into queue-level side-effects (auto-advance / current
+    /// track change forwarding).
     player_rx: Mutex<EventReceiver>,
     autoplay: bool,
 }
@@ -56,13 +57,13 @@ impl Queue {
             autoplay,
         } = config;
         let player = Arc::new(PlayerImpl::new(player_config));
-        let (event_tx, _rx) = broadcast::channel(QUEUE_EVENT_CHANNEL_CAPACITY);
+        let bus = player.bus().clone();
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
             net,
             store,
             max_concurrent_loads,
-            event_tx.clone(),
+            bus.clone(),
         ));
         let player_rx = player.subscribe();
         Self {
@@ -72,14 +73,14 @@ impl Queue {
             tracks: Arc::new(Mutex::new(Vec::new())),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
-            event_tx,
+            bus,
             player_rx: Mutex::new(player_rx),
             autoplay,
         }
     }
 
     /// Wrap an externally-owned [`PlayerImpl`]. The caller must not mutate
-    /// the player (play/pause OK; `replace_item`, `reserve_slots`,
+    /// the player directly (play/pause OK; `replace_item`, `reserve_slots`,
     /// `select_item`, `remove_at` are Queue-owned).
     #[must_use]
     pub fn wrap(player: Arc<PlayerImpl>, config: QueueConfig) -> Self {
@@ -90,13 +91,13 @@ impl Queue {
             max_concurrent_loads,
             autoplay,
         } = config;
-        let (event_tx, _rx) = broadcast::channel(QUEUE_EVENT_CHANNEL_CAPACITY);
+        let bus = player.bus().clone();
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
             net,
             store,
             max_concurrent_loads,
-            event_tx.clone(),
+            bus.clone(),
         ));
         let player_rx = player.subscribe();
         Self {
@@ -106,7 +107,7 @@ impl Queue {
             tracks: Arc::new(Mutex::new(Vec::new())),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
-            event_tx,
+            bus,
             player_rx: Mutex::new(player_rx),
             autoplay,
         }
@@ -119,17 +120,11 @@ impl Queue {
         &self.player
     }
 
-    /// Subscribe to [`QueueEvent`] notifications.
+    /// Subscribe to the unified event stream: `QueueEvent` + underlying
+    /// player / audio / hls / file events.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<QueueEvent> {
-        self.event_tx.subscribe()
-    }
-
-    /// Subscribe to the unfiltered underlying player / audio / hls events
-    /// (unified with `subscribe()` in step C.6).
-    #[must_use]
-    pub fn subscribe_player(&self) -> EventReceiver {
-        self.player.bus().subscribe()
+    pub fn subscribe(&self) -> EventReceiver {
+        self.bus.subscribe()
     }
 
     /// Number of tracks currently in the queue.
@@ -187,7 +182,7 @@ impl Queue {
             guard.len() - 1
         };
         self.player.reserve_slots(index + 1);
-        let _ = self.event_tx.send(QueueEvent::TrackAdded { id, index });
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
         id
     }
@@ -226,7 +221,7 @@ impl Queue {
             pos
         };
         self.player.reserve_slots(self.len());
-        let _ = self.event_tx.send(QueueEvent::TrackAdded { id, index });
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
         Ok(id)
     }
@@ -246,7 +241,7 @@ impl Queue {
             pos
         };
         let _ = self.player.remove_at(index);
-        let _ = self.event_tx.send(QueueEvent::TrackRemoved { id });
+        self.bus.publish(QueueEvent::TrackRemoved { id });
         Ok(())
     }
 
@@ -260,7 +255,7 @@ impl Queue {
         };
         self.player.remove_all_items();
         for id in ids {
-            let _ = self.event_tx.send(QueueEvent::TrackRemoved { id });
+            self.bus.publish(QueueEvent::TrackRemoved { id });
         }
     }
 
@@ -304,10 +299,7 @@ impl Queue {
                 *self.lock_pending_select_mut() = Some(id);
                 Ok(())
             }
-            TrackStatus::Failed(_) => Err(QueueError::NotReady(id)),
             TrackStatus::Consumed => {
-                // Respawn load for Uri-sourced tracks. Caller-built Config
-                // sources are not Clone and cannot be respawned.
                 let Some(url) = url else {
                     return Err(QueueError::NotReady(id));
                 };
@@ -316,6 +308,7 @@ impl Queue {
                 self.spawn_apply_after_load(id, TrackSource::Uri(url));
                 Ok(())
             }
+            _ => Err(QueueError::NotReady(id)),
         }
     }
 
@@ -325,7 +318,7 @@ impl Queue {
     pub fn advance_to_next(&self) -> Option<TrackId> {
         let len = self.len();
         let Some(idx) = self.lock_navigation_mut().next(len) else {
-            let _ = self.event_tx.send(QueueEvent::QueueEnded);
+            self.bus.publish(QueueEvent::QueueEnded);
             return None;
         };
         let id = self.lock_tracks().get(idx).map(|e| e.id)?;
@@ -377,8 +370,8 @@ impl Queue {
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-    /// events to convert them into [`QueueEvent`]s. Must be called from
-    /// the host application's main loop.
+    /// events to act on `ItemDidPlayToEnd` (filtered) and forward
+    /// `CurrentItemChanged` as [`QueueEvent::CurrentTrackChanged`].
     ///
     /// # Errors
     /// Forwards `PlayError` from `PlayerImpl::tick`.
@@ -473,28 +466,23 @@ impl Queue {
         if let Some(entry) = guard.iter_mut().find(|e| e.id == id) {
             entry.status = status.clone();
             drop(guard);
-            let _ = self
-                .event_tx
-                .send(QueueEvent::TrackStatusChanged { id, status });
+            self.bus
+                .publish(QueueEvent::TrackStatusChanged { id, status });
         }
     }
 
-    /// Spawn a task that awaits the load and applies the resulting
-    /// `Resource` via `replace_item`, updates the track status to
-    /// `Loaded`, fires autoplay if configured, and honors any
-    /// pending-select.
     fn spawn_apply_after_load(&self, id: TrackId, source: TrackSource) {
         let handle = self.loader.spawn_load(id, source);
         let player = Arc::clone(&self.player);
         let tracks = Arc::clone(&self.tracks);
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
-        let event_tx = self.event_tx.clone();
+        let bus = self.bus.clone();
         let autoplay = self.autoplay;
         tokio::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
-                Ok(Err(_)) => return, // Failed already broadcast by Loader.
+                Ok(Err(_)) => return,
                 Err(join_err) => {
                     warn!(id = id.as_u64(), error = %join_err, "loader join failed");
                     return;
@@ -520,7 +508,7 @@ impl Queue {
                     entry.status = TrackStatus::Loaded;
                 }
             }
-            let _ = event_tx.send(QueueEvent::TrackStatusChanged {
+            bus.publish(QueueEvent::TrackStatusChanged {
                 id,
                 status: TrackStatus::Loaded,
             });
@@ -586,7 +574,7 @@ impl Queue {
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 let idx = self.player.current_index();
                 let id = self.lock_tracks().get(idx).map(|e| e.id);
-                let _ = self.event_tx.send(QueueEvent::CurrentTrackChanged { id });
+                self.bus.publish(QueueEvent::CurrentTrackChanged { id });
             }
             _ => {}
         }
@@ -615,6 +603,28 @@ mod tests {
         Queue::new(cfg)
     }
 
+    async fn wait_for_queue_event<F>(
+        rx: &mut EventReceiver,
+        mut matches: F,
+        timeout_ms: u64,
+    ) -> bool
+    where
+        F: FnMut(&QueueEvent) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) | Err(_) => return false,
+            }
+        }
+    }
+
     #[test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
@@ -639,12 +649,16 @@ mod tests {
         assert!(a.as_u64() < b.as_u64());
 
         let mut seen = 0;
-        while let Ok(Ok(ev)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            if matches!(ev, QueueEvent::TrackAdded { .. }) {
-                seen += 1;
-                if seen == 2 {
-                    break;
-                }
+        while wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(ev, QueueEvent::TrackAdded { .. }),
+            200,
+        )
+        .await
+        {
+            seen += 1;
+            if seen == 2 {
+                break;
             }
         }
         assert_eq!(seen, 2);
@@ -663,7 +677,6 @@ mod tests {
     async fn select_pending_track_stashes_pending_select() {
         let queue = make_queue();
         let id = queue.append("https://example.com/a.mp3");
-        // Before load finishes, the track is Pending/Loading.
         let _ = queue.select(id);
         let pending = queue
             .pending_select
@@ -678,17 +691,8 @@ mod tests {
         let queue = make_queue();
         let mut rx = queue.subscribe();
         assert!(queue.advance_to_next().is_none());
-        let mut saw_ended = false;
-        for _ in 0..4 {
-            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Ok(QueueEvent::QueueEnded)) => {
-                    saw_ended = true;
-                    break;
-                }
-                Ok(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        let saw_ended =
+            wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
         assert!(saw_ended);
     }
 
@@ -699,27 +703,12 @@ mod tests {
         let _b = queue.append("https://example.com/b.mp3");
         let mut rx = queue.subscribe();
 
-        // Drain TrackAdded events.
-        while tokio::time::timeout(Duration::from_millis(50), rx.recv())
-            .await
-            .is_ok()
-        {}
-
         assert!(queue.advance_to_next().is_some());
         assert!(queue.advance_to_next().is_some());
         assert!(queue.advance_to_next().is_none());
 
-        let mut saw_ended = false;
-        for _ in 0..10 {
-            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Ok(QueueEvent::QueueEnded)) => {
-                    saw_ended = true;
-                    break;
-                }
-                Ok(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        let saw_ended =
+            wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;
         assert!(saw_ended, "QueueEnded should be broadcast at end-of-queue");
     }
 
@@ -729,8 +718,6 @@ mod tests {
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
 
-        // Publish a spurious ItemDidPlayToEnd when there is no current item
-        // (position/duration are both None so the filter kicks in).
         queue
             .player
             .bus()
@@ -738,9 +725,6 @@ mod tests {
 
         queue.tick().expect("tick");
 
-        // No QueueEnded should have been emitted as a result of the filter
-        // treating the event as spurious (queue navigation did not advance
-        // to end-of-queue).
         let nav_idx = queue.lock_navigation().current_index();
         assert_eq!(nav_idx, None, "navigation must not have advanced");
     }
@@ -751,24 +735,15 @@ mod tests {
         let a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
         let mut rx = queue.subscribe();
-        while tokio::time::timeout(Duration::from_millis(50), rx.recv())
-            .await
-            .is_ok()
-        {}
 
         queue.remove(a).expect("removed");
         assert_eq!(queue.len(), 1);
-        let mut saw_removed = false;
-        for _ in 0..4 {
-            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Ok(QueueEvent::TrackRemoved { id })) if id == a => {
-                    saw_removed = true;
-                    break;
-                }
-                Ok(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        let saw_removed = wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(ev, QueueEvent::TrackRemoved { id } if *id == a),
+            300,
+        )
+        .await;
         assert!(saw_removed);
     }
 

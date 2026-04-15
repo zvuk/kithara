@@ -1,41 +1,5 @@
+use kithara_events::{TrackId, TrackStatus};
 use kithara_play::ResourceConfig;
-
-/// Monotonic identifier for a track in the queue.
-///
-/// Stable across removals — if a track is removed and a new one appended, the
-/// new track gets a fresh id. Use this to address tracks independently of
-/// their index (which shifts as the queue is mutated).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TrackId(pub(crate) u64);
-
-impl TrackId {
-    /// Raw id value. Stable within a single [`Queue`](crate::Queue) instance.
-    #[must_use]
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-
-/// Loading lifecycle of a track in the queue.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TrackStatus {
-    /// Track is queued but loading has not started.
-    Pending,
-    /// Track is currently loading.
-    Loading,
-    /// Track has been loading longer than the soft timeout.
-    Slow,
-    /// Track is loaded and ready for playback.
-    Loaded,
-    /// Track load failed. The string carries a rendering of the underlying
-    /// `PlayError` — the original typed error is delivered via
-    /// [`QueueError::Play`](crate::QueueError::Play).
-    Failed(String),
-    /// Track was consumed by the engine after playback — needs a fresh load
-    /// before [`Queue::select`](crate::Queue::select) can target it again.
-    Consumed,
-}
 
 /// Snapshot of a track entry in the queue.
 #[derive(Debug, Clone)]
@@ -128,21 +92,5 @@ mod tests {
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);
-    }
-
-    #[test]
-    fn track_status_roundtrip_simple_variants() {
-        let s = TrackStatus::Loaded;
-        assert_eq!(s.clone(), TrackStatus::Loaded);
-        assert_ne!(s, TrackStatus::Pending);
-    }
-
-    #[test]
-    fn track_status_failed_carries_reason() {
-        let s = TrackStatus::Failed("timed out".to_string());
-        match s {
-            TrackStatus::Failed(reason) => assert_eq!(reason, "timed out"),
-            _ => panic!("expected Failed"),
-        }
     }
 }

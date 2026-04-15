@@ -25,12 +25,13 @@ kithara-decode = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-default = ["file", "hls", "audio", "player", "app"]
+default = ["file", "hls", "audio", "player", "app", "queue"]
 app = []
 file = []
 hls = ["dep:kithara-abr"]
 audio = ["dep:kithara-decode"]
 player = []
+queue = []
 internal = []
 
 [dev-dependencies]

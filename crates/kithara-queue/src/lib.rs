@@ -4,7 +4,6 @@
 
 mod config;
 mod error;
-mod events;
 mod loader;
 mod navigation;
 mod queue;
@@ -12,7 +11,7 @@ mod track;
 
 pub use config::QueueConfig;
 pub use error::QueueError;
-pub use events::QueueEvent;
+pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
 pub use navigation::{NavigationState, RepeatMode};
 pub use queue::Queue;
-pub use track::{TrackEntry, TrackId, TrackSource, TrackStatus};
+pub use track::{TrackEntry, TrackSource};

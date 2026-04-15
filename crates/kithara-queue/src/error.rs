@@ -1,6 +1,5 @@
+use kithara_events::TrackId;
 use kithara_play::PlayError;
-
-use crate::track::TrackId;
 
 /// Errors from the [`Queue`](crate::Queue) orchestration layer.
 #[derive(Debug, thiserror::Error)]
