@@ -4383,6 +4383,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-queue"
+version = "0.1.0"
+dependencies = [
+ "kithara-workspace-hack",
+]
+
+[[package]]
 name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
