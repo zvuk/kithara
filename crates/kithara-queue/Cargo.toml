@@ -10,7 +10,19 @@ description = "AVQueuePlayer-analogue orchestration on top of kithara-play (queu
 [lints]
 workspace = true
 
+[features]
+default = ["backend-cpal"]
+backend-cpal = ["kithara-play/backend-cpal"]
+backend-web-audio = ["kithara-play/backend-web-audio"]
+
 [dependencies]
+kithara-play = { workspace = true, features = ["file", "hls"] }
+kithara-net = { workspace = true }
+kithara-assets = { workspace = true }
+
+thiserror = { workspace = true }
+derivative = { workspace = true }
+derive_setters = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }

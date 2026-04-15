@@ -4386,7 +4386,13 @@ dependencies = [
 name = "kithara-queue"
 version = "0.1.0"
 dependencies = [
+ "derivative",
+ "derive_setters",
+ "kithara-assets",
+ "kithara-net",
+ "kithara-play",
  "kithara-workspace-hack",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
