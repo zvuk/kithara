@@ -293,6 +293,9 @@ impl Queue {
             TrackStatus::Loaded => {
                 self.player.select_item(index, true)?;
                 self.lock_navigation_mut().select(index);
+                // Engine took items[index] inside select_item — if user
+                // re-selects the same track later, we must reload.
+                self.set_status(id, TrackStatus::Consumed);
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
@@ -524,6 +527,19 @@ impl Queue {
                     false
                 }
             };
+            let mark_consumed = || {
+                {
+                    let mut guard = tracks.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(entry) = guard.get_mut(index) {
+                        entry.status = TrackStatus::Consumed;
+                    }
+                }
+                bus.publish(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Consumed,
+                });
+            };
+
             if apply_pending {
                 if let Err(e) = player.select_item(index, true) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
@@ -532,6 +548,7 @@ impl Queue {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .select(index);
+                    mark_consumed();
                 }
             } else if autoplay && !player.is_playing() {
                 if let Err(e) = player.select_item(index, true) {
@@ -541,6 +558,7 @@ impl Queue {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .select(index);
+                    mark_consumed();
                 }
             }
         });
