@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent};
-use kithara_queue::{Queue, TrackId};
+use kithara_queue::{Queue, QueueEvent, TrackId};
 use tokio::{sync::broadcast::error::TryRecvError, task};
 
 use super::{dashboard::Dashboard, session::UiSession};
@@ -87,6 +87,11 @@ fn run_ui_loop(
         loop {
             match event_rx.try_recv() {
                 Ok(event) => {
+                    if let Event::Queue(QueueEvent::CrossfadeStarted { duration_seconds }) = &event
+                    {
+                        crossfade_clock = Some(CrossfadeClock::new(*duration_seconds));
+                        ui.dashboard.set_crossfade_progress(Some(0.0));
+                    }
                     if handle_event(&event, &mut ui, &mut progress_log)? {
                         break 'ui;
                     }
@@ -135,10 +140,8 @@ fn run_ui_loop(
             let not_yet_advanced = auto_advanced_index != Some(current);
             if not_yet_advanced && current + 1 < queue.len() {
                 auto_advanced_index = Some(current);
-                if queue.advance_to_next().is_some() {
-                    crossfade_clock = Some(CrossfadeClock::new(queue.crossfade_duration()));
-                    ui.dashboard.set_crossfade_progress(Some(0.0));
-                }
+                // Clock is armed by QueueEvent::CrossfadeStarted on the bus.
+                let _ = queue.advance_to_next();
             }
         }
 
@@ -152,14 +155,7 @@ fn run_ui_loop(
                         ControlOutcome::Continue(None) => {}
                         ControlOutcome::SwitchTrack(index) => {
                             if let Some(id) = track_id_at(queue, index) {
-                                switch_to_id(
-                                    queue,
-                                    id,
-                                    index,
-                                    &mut ui,
-                                    &mut crossfade_clock,
-                                    &mut auto_advanced_index,
-                                )?;
+                                switch_to_id(queue, id, index, &mut ui, &mut auto_advanced_index)?;
                             }
                         }
                         ControlOutcome::Quit => break,
@@ -326,21 +322,19 @@ fn switch_to_id(
     id: TrackId,
     index: usize,
     ui: &mut UiSession,
-    crossfade_clock: &mut Option<CrossfadeClock>,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
     match queue.select(id) {
         Ok(()) => {
-            *crossfade_clock = Some(CrossfadeClock::new(queue.crossfade_duration()));
-            ui.dashboard.set_crossfade_progress(Some(0.0));
             *auto_advanced_index = None;
             let note = format!(
-                "crossfade to #{} ({:.1}s)",
+                "switch to #{} (crossfade {:.1}s)",
                 index + 1,
                 queue.crossfade_duration()
             );
             ui.dashboard.set_note(&note);
             ui.log_line(&note)?;
+            // Clock is armed by QueueEvent::CrossfadeStarted on the bus.
         }
         Err(e) => {
             let note = format!("switch failed: {e}");

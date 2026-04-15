@@ -54,4 +54,9 @@ pub enum QueueEvent {
     QueueEnded,
     /// The crossfade duration was updated at runtime.
     CrossfadeDurationChanged { seconds: f32 },
+    /// A crossfade between tracks just started. Emitted when
+    /// [`Queue::select`](https://docs.rs/kithara-queue) triggers the engine
+    /// to fade from a currently-playing track to the newly selected one.
+    /// UIs can use `duration_seconds` to drive a progress indicator.
+    CrossfadeStarted { duration_seconds: f32 },
 }
