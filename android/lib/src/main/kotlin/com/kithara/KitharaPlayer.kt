@@ -5,6 +5,7 @@ import com.kithara.ffi.FfiException
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
+import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -174,6 +175,47 @@ class KitharaPlayer() {
         updateState { current -> current.copy(items = emptyList()) }
     }
 
+    /**
+     * Select an item at the given queue index.
+     *
+     * @param index Queue index (0-based).
+     * @param transition How the switch plays. [Transition.None] is an
+     *   immediate cut (AVQueuePlayer user-initiated-selection idiom —
+     *   default). [Transition.Crossfade] uses the player's configured
+     *   duration (typical for Next/Prev buttons).
+     * @throws KitharaError If the index is out of range or the item is
+     *   not yet loaded.
+     */
+    @Throws(KitharaError::class)
+    fun selectItem(at: Int, transition: Transition = Transition.None) {
+        try {
+            inner.selectItem(at.toUInt(), transition.toFfi())
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    /**
+     * Select an item by identity (AVQueuePlayer-style).
+     *
+     * Race-free against concurrent insert/remove that would shift
+     * indices — resolves the item's current index on the fly.
+     *
+     * @param item Item to select; must currently be in the queue.
+     * @param transition `.None` by default (immediate cut); pass
+     *   `.Crossfade` for Next/Prev button UX.
+     * @throws KitharaError If the item is not in the queue, or the
+     *   underlying select fails.
+     */
+    @Throws(KitharaError::class)
+    fun selectItem(item: KitharaPlayerItem, transition: Transition = Transition.None) {
+        val idx = items.indexOfFirst { queued -> queued.id == item.id }
+        if (idx < 0) {
+            throw KitharaError.InvalidArgument("item ${item.id} not in queue")
+        }
+        selectItem(at = idx, transition = transition)
+    }
+
     private fun updateState(update: (PlayerState) -> PlayerState) {
         stateFlow.update(update)
     }
@@ -235,6 +277,12 @@ private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
     FfiPlayerStatus.READY_TO_PLAY -> PlayerStatus.ReadyToPlay
     FfiPlayerStatus.FAILED -> PlayerStatus.Failed
     FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
+}
+
+private fun Transition.toFfi(): FfiTransition = when (this) {
+    is Transition.None -> FfiTransition.None
+    is Transition.Crossfade -> FfiTransition.Crossfade
+    is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(seconds)
 }
 
 private fun List<KitharaPlayerItem>.inserted(

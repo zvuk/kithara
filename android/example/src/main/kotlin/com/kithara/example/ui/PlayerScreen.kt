@@ -67,7 +67,6 @@ import com.kithara.example.ui.theme.PanelBackground
 import com.kithara.example.ui.theme.PanelBorder
 import com.kithara.example.ui.theme.PrimaryText
 import com.kithara.example.ui.theme.SecondaryText
-import java.util.UUID
 
 internal sealed interface PlayerScreenEvent {
     data class UrlChanged(val url: String) : PlayerScreenEvent
@@ -76,7 +75,7 @@ internal sealed interface PlayerScreenEvent {
     data object PlayPauseClick : PlayerScreenEvent
     data object PrevClick : PlayerScreenEvent
     data object NextClick : PlayerScreenEvent
-    data class TrackClick(val uuid: UUID) : PlayerScreenEvent
+    data class TrackClick(val trackId: String) : PlayerScreenEvent
     data class RateClick(val rate: Float) : PlayerScreenEvent
     data object SeekStarted : PlayerScreenEvent
     data class SeekChanged(val value: Float) : PlayerScreenEvent
@@ -418,7 +417,7 @@ private fun RateSection(
 @Composable
 private fun PlaylistSection(
     playlist: List<PlaylistEntry>,
-    currentTrackId: UUID?,
+    currentTrackId: String?,
     onEvent: (PlayerScreenEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -520,9 +519,9 @@ private fun rateLabel(rate: Float): String =
 @Composable
 private fun PlayerScreenPreview() {
     val playlist = listOf(
-        PlaylistEntry(url = "", name = "song.mp3"),
-        PlaylistEntry(url = "", name = "another-long-track-name-that-gets-truncated.mp3"),
-        PlaylistEntry(url = "", name = "third-track.mp3"),
+        PlaylistEntry(id = "preview-1", url = "", name = "song.mp3"),
+        PlaylistEntry(id = "preview-2", url = "", name = "another-long-track-name-that-gets-truncated.mp3"),
+        PlaylistEntry(id = "preview-3", url = "", name = "third-track.mp3"),
     )
 
     KitharaTheme {

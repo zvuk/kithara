@@ -218,7 +218,8 @@ final class PlayerViewModel: ObservableObject {
             player.pause()
         } else {
             if currentTrackId == nil, let first = playlist.first {
-                switchTo(entryId: first.id)
+                // First-time play on empty session → immediate cut.
+                switchTo(entryId: first.id, transition: .none)
                 return
             }
             player.play()
@@ -228,19 +229,23 @@ final class PlayerViewModel: ObservableObject {
     func playNext() {
         let nextIdx = currentTrackIndex + 1
         guard nextIdx < playlist.count else { return }
-        switchTo(index: nextIdx)
+        // Next button → crossfade, symmetric with auto-advance at
+        // track end.
+        switchTo(index: nextIdx, transition: .crossfade)
     }
 
     func playPrev() {
         let prevIdx = max(currentTrackIndex - 1, 0)
         guard prevIdx != currentTrackIndex else { return }
-        switchTo(index: prevIdx)
+        // Prev button → crossfade, symmetric with Next.
+        switchTo(index: prevIdx, transition: .crossfade)
     }
 
     func selectTrack(_ trackId: String) {
         guard let idx = playlist.firstIndex(where: { $0.id == trackId }) else { return }
         if idx == currentTrackIndex { return }
-        switchTo(index: idx)
+        // Tap on a track in the list → immediate cut (AVQueuePlayer idiom).
+        switchTo(index: idx, transition: .none)
     }
 
     // MARK: - Seek
@@ -263,18 +268,18 @@ final class PlayerViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private func switchTo(index: Int) {
+    private func switchTo(index: Int, transition: Transition) {
         guard let entry = playlist[safe: index] else { return }
-        switchTo(entryId: entry.id)
+        switchTo(entryId: entry.id, transition: transition)
     }
 
-    private func switchTo(entryId: String) {
+    private func switchTo(entryId: String, transition: Transition) {
         guard let item = player.items.first(where: { $0.id == entryId }) else {
             errorMessage = "item \(entryId) not in queue"
             return
         }
         do {
-            try player.selectItem(item)
+            try player.selectItem(item, transition: transition)
             // Per-track UI reset happens on `.currentItemChanged` once the
             // Queue actually switches (matches crossfade timing).
         } catch {

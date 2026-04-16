@@ -26,7 +26,7 @@ internal fun PlayerRoute(viewModel: PlayerViewModel) {
                 PlayerScreenEvent.PlayPauseClick -> viewModel.playPause()
                 PlayerScreenEvent.PrevClick -> viewModel.playPrev()
                 PlayerScreenEvent.NextClick -> viewModel.playNext()
-                is PlayerScreenEvent.TrackClick -> viewModel.selectTrack(event.uuid)
+                is PlayerScreenEvent.TrackClick -> viewModel.selectTrack(event.trackId)
                 is PlayerScreenEvent.RateClick -> viewModel.setRate(event.rate)
                 PlayerScreenEvent.SeekStarted -> viewModel.onSeekStarted()
                 is PlayerScreenEvent.SeekChanged -> viewModel.onSeekChanged(event.value)

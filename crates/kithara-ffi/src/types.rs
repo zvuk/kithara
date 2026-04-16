@@ -277,6 +277,31 @@ pub enum FfiPlayerEvent {
     CrossfadeDurationChanged { seconds: f32 },
 }
 
+/// Transition style for a track switch.
+///
+/// Mirrors [`kithara_queue::Transition`]. Use [`FfiTransition::None`]
+/// for immediate cuts (`AVQueuePlayer` user-initiated-selection idiom),
+/// [`FfiTransition::Crossfade`] to use the player's configured
+/// duration (typical for auto-advance and Next/Prev buttons), or
+/// [`FfiTransition::CrossfadeWith`] to override per-call.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiTransition {
+    None,
+    Crossfade,
+    CrossfadeWith { seconds: f32 },
+}
+
+impl From<FfiTransition> for kithara_queue::Transition {
+    fn from(t: FfiTransition) -> Self {
+        match t {
+            FfiTransition::None => Self::None,
+            FfiTransition::Crossfade => Self::Crossfade,
+            FfiTransition::CrossfadeWith { seconds } => Self::CrossfadeWith { seconds },
+        }
+    }
+}
+
 /// Typed item event dispatched through [`ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]

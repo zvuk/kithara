@@ -666,9 +666,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func seek(toSeconds: Double, callback: SeekCallback) 
     
     /**
-     * Select an item in the queue and optionally start playback.
+     * Select an item in the queue with the given transition.
      *
-     * Applies the configured crossfade duration during the transition.
+     * `FfiTransition::None` performs an immediate cut (AVQueuePlayer
+     * user-initiated-selection idiom — tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here —
+     * the engine continues playing if it was, pauses if it was.
      *
      * # Errors
      *
@@ -676,7 +680,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * [`FfiError::NotReady`] if the track's resource is not yet loaded,
      * or [`FfiError::Internal`] if the underlying Queue fails to select.
      */
-    func selectItem(index: UInt32, autoplay: Bool) throws 
+    func selectItem(index: UInt32, transition: FfiTransition) throws 
     
     func setAbrMode(mode: FfiAbrMode) 
     
@@ -949,9 +953,13 @@ open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
 }
     
     /**
-     * Select an item in the queue and optionally start playback.
+     * Select an item in the queue with the given transition.
      *
-     * Applies the configured crossfade duration during the transition.
+     * `FfiTransition::None` performs an immediate cut (AVQueuePlayer
+     * user-initiated-selection idiom — tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here —
+     * the engine continues playing if it was, pauses if it was.
      *
      * # Errors
      *
@@ -959,11 +967,11 @@ open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
      * [`FfiError::NotReady`] if the track's resource is not yet loaded,
      * or [`FfiError::Internal`] if the underlying Queue fails to select.
      */
-open func selectItem(index: UInt32, autoplay: Bool)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+open func selectItem(index: UInt32, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_select_item(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(index),
-        FfiConverterBool.lower(autoplay),$0
+        FfiConverterTypeFfiTransition_lower(transition),$0
     )
 }
 }
@@ -3491,6 +3499,92 @@ public func FfiConverterTypeFfiTrackStatus_lower(_ value: FfiTrackStatus) -> Rus
 }
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Transition style for a track switch.
+ *
+ * Mirrors [`kithara_queue::Transition`]. Use [`FfiTransition::None`]
+ * for immediate cuts (AVQueuePlayer user-initiated-selection idiom),
+ * [`FfiTransition::Crossfade`] to use the player's configured
+ * duration (typical for auto-advance and Next/Prev buttons), or
+ * [`FfiTransition::CrossfadeWith`] to override per-call.
+ */
+
+public enum FfiTransition: Equatable, Hashable {
+    
+    case none
+    case crossfade
+    case crossfadeWith(seconds: Float
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTransition: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTransition: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTransition
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTransition {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .none
+        
+        case 2: return .crossfade
+        
+        case 3: return .crossfadeWith(seconds: try FfiConverterFloat.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiTransition, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .none:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .crossfade:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .crossfadeWith(seconds):
+            writeInt(&buf, Int32(3))
+            FfiConverterFloat.write(seconds, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransition_lift(_ buf: RustBuffer) throws -> FfiTransition {
+    return try FfiConverterTypeFfiTransition.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTransition_lower(_ value: FfiTransition) -> RustBuffer {
+    return FfiConverterTypeFfiTransition.lower(value)
+}
+
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -3792,7 +3886,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 47471) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 41514) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 53508) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 45428) {

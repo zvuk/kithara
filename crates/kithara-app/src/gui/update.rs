@@ -1,6 +1,6 @@
 use iced::Task;
 use kithara::abr::AbrMode;
-use kithara_queue::TrackId;
+use kithara_queue::{TrackId, Transition};
 use tracing::error;
 
 use super::{app::Kithara, message::Message};
@@ -39,7 +39,8 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::Next => {
-            if state.queue.advance_to_next().is_some() {
+            // Next button → crossfade, matching auto-advance feel.
+            if state.queue.advance_to_next(Transition::Crossfade).is_some() {
                 let current = state.queue.current_index();
                 if let Some(idx) = current {
                     state.current_track_index = Some(idx);
@@ -53,7 +54,12 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::Prev => {
-            if state.queue.return_to_previous().is_some() {
+            // Prev button → crossfade, symmetric with Next.
+            if state
+                .queue
+                .return_to_previous(Transition::Crossfade)
+                .is_some()
+            {
                 let current = state.queue.current_index();
                 if let Some(idx) = current {
                     state.current_track_index = Some(idx);
@@ -121,8 +127,9 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::SelectTrack(idx) => {
+            // Tap on a track in the list → immediate cut (AVQueuePlayer-idiom).
             if let Some(id) = track_id_at(state, idx)
-                && let Err(e) = state.queue.select(id)
+                && let Err(e) = state.queue.select(id, Transition::None)
             {
                 error!(index = idx, error = %e, "select failed");
             }

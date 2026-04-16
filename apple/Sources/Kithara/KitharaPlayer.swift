@@ -220,17 +220,18 @@ public final class KitharaPlayer: @unchecked Sendable {
         }
     }
 
-    /// Select an item at the given queue index, applying the configured
-    /// crossfade duration during the transition.
+    /// Select an item at the given queue index.
     ///
     /// - Parameters:
     ///   - index: Queue index (0-based).
-    ///   - autoplay: If `true`, begin playback immediately after the switch.
+    ///   - transition: How the switch plays — `.none` for an immediate
+    ///     cut (AVQueuePlayer user-initiated-selection idiom — default),
+    ///     `.crossfade` to use the player's configured duration.
     /// - Throws: ``KitharaError`` if the index is out of range or the item
     ///   is not yet inserted into the engine.
-    public func selectItem(at index: Int, autoplay: Bool = true) throws {
+    public func selectItem(at index: Int, transition: Transition = .none) throws {
         do {
-            try _inner.selectItem(index: UInt32(index), autoplay: autoplay)
+            try _inner.selectItem(index: UInt32(index), transition: transition.ffi)
         } catch let ffiError as FfiError {
             throw KitharaError(ffi: ffiError)
         }
@@ -239,22 +240,21 @@ public final class KitharaPlayer: @unchecked Sendable {
     /// Select an item by identity (AVQueuePlayer-style).
     ///
     /// Resolves the item's current index via ``items`` and delegates to
-    /// ``selectItem(at:autoplay:)``. Prefer this over index-based
-    /// selection when the caller already holds the item reference — it
-    /// is race-free against concurrent `insert`/`remove` that would
-    /// shift indices.
+    /// ``selectItem(at:transition:)``. Race-free against concurrent
+    /// `insert`/`remove` that would shift indices.
     ///
     /// - Parameters:
     ///   - item: The item to select. Must currently be in the queue.
-    ///   - autoplay: If `true`, begin playback immediately after the switch.
+    ///   - transition: `.none` by default (immediate cut); pass
+    ///     `.crossfade` for Next/Prev button UX.
     /// - Throws: ``KitharaError/invalidArgument`` if the item is not in
-    ///   the queue, or whatever ``selectItem(at:autoplay:)`` throws.
-    public func selectItem(_ item: KitharaPlayerItem, autoplay: Bool = true) throws {
+    ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
+    public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
         let snapshot = items
         guard let index = snapshot.firstIndex(where: { $0.id == item.id }) else {
             throw KitharaError.invalidArgument("item \(item.id) not in queue")
         }
-        try selectItem(at: index, autoplay: autoplay)
+        try selectItem(at: index, transition: transition)
     }
 
     /// Crossfade duration in seconds applied on item transitions.

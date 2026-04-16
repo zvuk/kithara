@@ -1,17 +1,17 @@
 package com.kithara.example
 
 import com.kithara.PlayerStatus
-import java.util.UUID
 
 internal data class PlaylistEntry(
+    /** Matches `KitharaPlayerItem.id` — stable across queue reorder. */
+    val id: String,
     val name: String,
     val url: String,
-    val id: UUID = UUID.randomUUID(),
 )
 
 internal data class PlayerUiState(
     val currentTimeSeconds: Float = 0f,
-    val currentTrackId: UUID? = null,
+    val currentTrackId: String? = null,
     val durationSeconds: Float? = null,
     val errorMessage: String? = null,
     val isPlaying: Boolean = false,

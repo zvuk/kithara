@@ -13,5 +13,5 @@ pub use config::QueueConfig;
 pub use error::QueueError;
 pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
 pub use navigation::{NavigationState, RepeatMode};
-pub use queue::Queue;
+pub use queue::{Queue, Transition};
 pub use track::{TrackEntry, TrackSource};

@@ -576,8 +576,25 @@ impl PlayerImpl {
         }
     }
 
-    /// Select and load a queue item by index.
+    /// Select and load a queue item by index, using the configured
+    /// crossfade duration for the transition.
     pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+        self.select_item_with_crossfade(index, autoplay, self.crossfade_duration())
+    }
+
+    /// Select and load a queue item by index, applying an explicit
+    /// crossfade duration for this one transition only.
+    ///
+    /// Does not mutate the player-configured crossfade — subsequent
+    /// calls to [`select_item`] fall back to [`crossfade_duration`].
+    /// Pass `0.0` for an immediate cut (no fade); matches
+    /// `AVQueuePlayer`'s manual-selection idiom.
+    pub fn select_item_with_crossfade(
+        &self,
+        index: usize,
+        autoplay: bool,
+        crossfade_seconds: f32,
+    ) -> Result<(), PlayError> {
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::Internal(format!(
@@ -590,7 +607,7 @@ impl PlayerImpl {
         self.current_index.store(index, Ordering::Relaxed);
         self.bus.publish(PlayerEvent::CurrentItemChanged);
 
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(crossfade_seconds));
         self.load_current_item();
 
         if autoplay {

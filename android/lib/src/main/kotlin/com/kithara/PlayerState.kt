@@ -76,3 +76,24 @@ sealed interface KitharaPlayerEvent {
     /** The current item played to its end successfully. */
     data object PlayedToEnd : KitharaPlayerEvent
 }
+
+/**
+ * Transition style for a track switch.
+ *
+ * Mirrors the Apple-idiomatic namespace-struct pattern:
+ * - [None] — immediate cut. Matches AVQueuePlayer's user-initiated
+ *   selection idiom (tap on a track in a list).
+ * - [Crossfade] — use the player's configured crossfade duration.
+ *   Typical for Next/Prev buttons and auto-advance at track end.
+ * - [CrossfadeWith] — explicit override.
+ */
+sealed interface Transition {
+    /** Immediate cut. */
+    data object None : Transition
+
+    /** Use the player's configured crossfade duration. */
+    data object Crossfade : Transition
+
+    /** Use an explicit crossfade duration in seconds. */
+    data class CrossfadeWith(val seconds: Float) : Transition
+}

@@ -23,6 +23,48 @@ use crate::{
 /// events emitted by crossfade fade-outs of non-current tracks.
 const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
+/// Transition style for a track switch.
+///
+/// Mirrors the Apple-idiomatic pattern of a namespace-style type with
+/// variants describing "what" — not "how" — so the same method
+/// signature handles both manual and auto-advance cases.
+///
+/// - [`Transition::None`] — immediate cut (0 seconds). Matches
+///   `AVQueuePlayer`'s user-initiated selection idiom.
+/// - [`Transition::Crossfade`] — use the player's configured
+///   [`PlayerImpl::crossfade_duration`].
+/// - [`Transition::CrossfadeWith`] — explicit override in seconds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Transition {
+    /// No crossfade; immediate cut.
+    None,
+    /// Use the player's configured crossfade duration.
+    Crossfade,
+    /// Use an explicit crossfade duration (seconds).
+    CrossfadeWith { seconds: f32 },
+}
+
+impl Transition {
+    /// Resolve the transition to an actual crossfade duration in
+    /// seconds using `default` for [`Transition::Crossfade`].
+    #[must_use]
+    pub fn crossfade_seconds(self, default: f32) -> f32 {
+        match self {
+            Self::None => 0.0,
+            Self::Crossfade => default,
+            Self::CrossfadeWith { seconds } => seconds,
+        }
+    }
+}
+
+/// A pending-select entry: a track id waiting to be applied plus the
+/// [`Transition`] the caller asked for. Stored until loading finishes.
+#[derive(Clone, Copy, Debug)]
+struct PendingSelect {
+    id: TrackId,
+    transition: Transition,
+}
+
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns an `Arc<PlayerImpl>` and a private async track loader, plus queue-level state
@@ -35,7 +77,7 @@ pub struct Queue {
     next_id: AtomicU64,
     tracks: Arc<Mutex<Vec<TrackEntry>>>,
     navigation: Arc<Mutex<NavigationState>>,
-    pending_select: Arc<Mutex<Option<TrackId>>>,
+    pending_select: Arc<Mutex<Option<PendingSelect>>>,
     bus: EventBus,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
@@ -243,14 +285,15 @@ impl Queue {
         }
     }
 
-    /// Select a track by id. If the track is still loading or pending, the
-    /// selection is stashed and applied when loading finishes.
+    /// Select a track by id, applying the given [`Transition`]. If the
+    /// track is still loading or pending, both the id and the
+    /// transition are stashed and applied when loading finishes.
     ///
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue,
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
     /// or [`QueueError::Play`] if the underlying `select_item` call fails.
-    pub fn select(&self, id: TrackId) -> Result<(), QueueError> {
+    pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
         let (index, status, url) = {
             let guard = self.lock_tracks();
             guard
@@ -264,8 +307,9 @@ impl Queue {
         match status {
             TrackStatus::Loaded => {
                 let was_playing = self.player.is_playing();
-                let crossfade = self.player.crossfade_duration();
-                self.player.select_item(index, true)?;
+                let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+                self.player
+                    .select_item_with_crossfade(index, true, crossfade)?;
                 self.lock_navigation_mut().select(index);
                 if was_playing && crossfade > 0.0 {
                     self.bus.publish(QueueEvent::CrossfadeStarted {
@@ -278,14 +322,14 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
-                *self.lock_pending_select_mut() = Some(id);
+                *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
                 Ok(())
             }
             TrackStatus::Consumed => {
                 let Some(url) = url else {
                     return Err(QueueError::NotReady(id));
                 };
-                *self.lock_pending_select_mut() = Some(id);
+                *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
                 self.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, TrackSource::Uri(url));
                 Ok(())
@@ -297,14 +341,14 @@ impl Queue {
     /// Advance to the next track per navigation rules. Returns the newly
     /// selected id, or `None` when the queue has ended (and
     /// [`RepeatMode::Off`] is active).
-    pub fn advance_to_next(&self) -> Option<TrackId> {
+    pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
         let len = self.len();
         let Some(idx) = self.lock_navigation_mut().next(len) else {
             self.bus.publish(QueueEvent::QueueEnded);
             return None;
         };
         let id = self.lock_tracks().get(idx).map(|e| e.id)?;
-        if let Err(e) = self.select(id) {
+        if let Err(e) = self.select(id, transition) {
             warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
         }
         Some(id)
@@ -312,10 +356,10 @@ impl Queue {
 
     /// Go back to the previous track. Returns the newly selected id, or
     /// `None` at index 0.
-    pub fn return_to_previous(&self) -> Option<TrackId> {
+    pub fn return_to_previous(&self, transition: Transition) -> Option<TrackId> {
         let prev_idx = self.lock_navigation_mut().prev()?;
         let id = self.lock_tracks().get(prev_idx).map(|e| e.id)?;
-        if let Err(e) = self.select(id) {
+        if let Err(e) = self.select(id, transition) {
             warn!(id = id.as_u64(), error = %e, "return_to_previous: select failed");
         }
         Some(id)
@@ -437,7 +481,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn lock_pending_select_mut(&self) -> std::sync::MutexGuard<'_, Option<TrackId>> {
+    fn lock_pending_select_mut(&self) -> std::sync::MutexGuard<'_, Option<PendingSelect>> {
         self.pending_select
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -495,16 +539,19 @@ impl Queue {
                 status: TrackStatus::Loaded,
             });
 
-            let apply_pending = {
+            let pending_transition = {
                 let mut p = pending_select
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                if *p == Some(id) {
-                    *p = None;
-                    true
-                } else {
-                    false
-                }
+                let result = match *p {
+                    Some(pending) if pending.id == id => {
+                        *p = None;
+                        Some(pending.transition)
+                    }
+                    _ => None,
+                };
+                drop(p);
+                result
             };
             let mark_consumed = || {
                 {
@@ -519,10 +566,10 @@ impl Queue {
                 });
             };
 
-            if apply_pending {
+            if let Some(transition) = pending_transition {
                 let was_playing = player.is_playing();
-                let crossfade = player.crossfade_duration();
-                if let Err(e) = player.select_item(index, true) {
+                let crossfade = transition.crossfade_seconds(player.crossfade_duration());
+                if let Err(e) = player.select_item_with_crossfade(index, true, crossfade) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
                 } else {
                     navigation
@@ -537,7 +584,9 @@ impl Queue {
                     mark_consumed();
                 }
             } else if autoplay && !player.is_playing() {
-                if let Err(e) = player.select_item(index, true) {
+                // First autoplay is always an immediate cut — nothing
+                // is playing yet, so there's nothing to fade from.
+                if let Err(e) = player.select_item_with_crossfade(index, true, 0.0) {
                     warn!(id = id.as_u64(), error = %e, "autoplay select failed");
                 } else {
                     navigation
@@ -570,7 +619,10 @@ impl Queue {
                 let pos = self.player.position_seconds().unwrap_or(0.0);
                 let dur = self.player.duration_seconds().unwrap_or(0.0);
                 if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-                    let _ = self.advance_to_next();
+                    // Auto-advance at end-of-track uses the configured
+                    // crossfade — this is the raison d'être of the
+                    // crossfade setting.
+                    let _ = self.advance_to_next(Transition::Crossfade);
                 } else {
                     debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
                 }
@@ -670,7 +722,7 @@ mod tests {
     async fn select_unknown_id_errors() {
         let queue = make_queue();
         let err = queue
-            .select(TrackId(999))
+            .select(TrackId(999), Transition::None)
             .expect_err("unknown id should error");
         assert!(matches!(err, QueueError::UnknownTrackId(_)));
     }
@@ -679,20 +731,22 @@ mod tests {
     async fn select_pending_track_stashes_pending_select() {
         let queue = make_queue();
         let id = queue.append("https://example.com/a.mp3");
-        let _ = queue.select(id);
+        let _ = queue.select(id, Transition::None);
         let pending = queue
             .pending_select
             .lock()
             .expect("pending_select lock")
             .to_owned();
-        assert_eq!(pending, Some(id));
+        let pending = pending.expect("pending set");
+        assert_eq!(pending.id, id);
+        assert_eq!(pending.transition, Transition::None);
     }
 
     #[tokio::test]
     async fn advance_to_next_on_empty_emits_queue_ended() {
         let queue = make_queue();
         let mut rx = queue.subscribe();
-        assert!(queue.advance_to_next().is_none());
+        assert!(queue.advance_to_next(Transition::Crossfade).is_none());
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
         assert!(saw_ended);
@@ -705,9 +759,9 @@ mod tests {
         let _b = queue.append("https://example.com/b.mp3");
         let mut rx = queue.subscribe();
 
-        assert!(queue.advance_to_next().is_some());
-        assert!(queue.advance_to_next().is_some());
-        assert!(queue.advance_to_next().is_none());
+        assert!(queue.advance_to_next(Transition::Crossfade).is_some());
+        assert!(queue.advance_to_next(Transition::Crossfade).is_some());
+        assert!(queue.advance_to_next(Transition::Crossfade).is_none());
 
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;

@@ -211,31 +211,37 @@ impl AudioPlayer {
         Ok(())
     }
 
-    /// Select an item in the queue and optionally start playback.
+    /// Select an item in the queue with the given transition.
     ///
-    /// Applies the configured crossfade duration during the transition.
+    /// `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+    /// user-initiated-selection idiom — tap a track in a list).
+    /// `FfiTransition::Crossfade` uses the player's configured duration
+    /// (typical for Next/Prev buttons). Play state is not changed here —
+    /// the engine continues playing if it was, pauses if it was.
     ///
     /// # Errors
     ///
     /// Returns [`FfiError::InvalidArgument`] if `index` is out of range,
     /// [`FfiError::NotReady`] if the track's resource is not yet loaded,
     /// or [`FfiError::Internal`] if the underlying Queue fails to select.
-    pub fn select_item(&self, index: u32, autoplay: bool) -> Result<(), FfiError> {
+    pub fn select_item(
+        &self,
+        index: u32,
+        transition: crate::types::FfiTransition,
+    ) -> Result<(), FfiError> {
         let tracks = self.queue.tracks();
         let idx = index as usize;
         let entry = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
             reason: format!("item index {idx} out of range (len: {})", tracks.len()),
         })?;
-        self.queue.select(entry.id).map_err(|e| match e {
-            QueueError::NotReady(_) => FfiError::NotReady,
-            other => FfiError::Internal {
-                description: other.to_string(),
-            },
-        })?;
-        if !autoplay {
-            self.queue.pause();
-        }
-        Ok(())
+        self.queue
+            .select(entry.id, transition.into())
+            .map_err(|e| match e {
+                QueueError::NotReady(_) => FfiError::NotReady,
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
     }
 
     pub fn crossfade_duration(&self) -> f32 {

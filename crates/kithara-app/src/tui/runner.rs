@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent};
-use kithara_queue::{Queue, QueueEvent, TrackId};
+use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
 
 use super::{dashboard::Dashboard, session::UiSession};
@@ -141,7 +141,7 @@ fn run_ui_loop(
             if not_yet_advanced && current + 1 < queue.len() {
                 auto_advanced_index = Some(current);
                 // Clock is armed by QueueEvent::CrossfadeStarted on the bus.
-                let _ = queue.advance_to_next();
+                let _ = queue.advance_to_next(Transition::Crossfade);
             }
         }
 
@@ -324,14 +324,12 @@ fn switch_to_id(
     ui: &mut UiSession,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
-    match queue.select(id) {
+    // Manual selection from the playlist — immediate cut (no crossfade)
+    // matches the AVQueuePlayer user-initiated-selection idiom.
+    match queue.select(id, Transition::None) {
         Ok(()) => {
             *auto_advanced_index = None;
-            let note = format!(
-                "switch to #{} (crossfade {:.1}s)",
-                index + 1,
-                queue.crossfade_duration()
-            );
+            let note = format!("switch to #{} (immediate)", index + 1);
             ui.dashboard.set_note(&note);
             ui.log_line(&note)?;
             // Clock is armed by QueueEvent::CrossfadeStarted on the bus.

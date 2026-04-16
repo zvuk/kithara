@@ -96,6 +96,35 @@ public typealias ItemEvent = FfiItemEvent
 /// Surfaced through ``PlayerEvent/trackStatusChanged(itemId:status:)``.
 public typealias TrackStatus = FfiTrackStatus
 
+// MARK: - Transition
+
+/// Transition style for a track switch.
+///
+/// Mirrors Apple namespace-struct conventions (e.g. `UIBlurEffect.Style`):
+/// - ``none`` — immediate cut. Matches AVQueuePlayer's user-initiated
+///   selection idiom (tap an item in a list).
+/// - ``crossfade`` — use the player's configured crossfade duration.
+///   Typical for Next/Prev buttons and auto-advance at track end.
+/// - ``crossfade(duration:)`` — explicit override.
+public struct Transition: Sendable, Equatable {
+    /// Immediate cut.
+    public static let none = Transition(ffi: .none)
+
+    /// Use the player's configured crossfade duration.
+    public static let crossfade = Transition(ffi: .crossfade)
+
+    /// Use an explicit crossfade duration in seconds.
+    public static func crossfade(duration: TimeInterval) -> Transition {
+        Transition(ffi: .crossfadeWith(seconds: Float(duration)))
+    }
+
+    let ffi: FfiTransition
+
+    init(ffi: FfiTransition) {
+        self.ffi = ffi
+    }
+}
+
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
