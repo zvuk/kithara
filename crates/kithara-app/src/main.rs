@@ -4,7 +4,10 @@ use std::{
 };
 
 use clap::Parser;
-use kithara::{audio::generate_log_spaced_bands, play::PlayerConfig};
+use kithara::{
+    audio::generate_log_spaced_bands,
+    play::{PlayerConfig, PlayerImpl},
+};
 #[cfg(not(feature = "tui"))]
 use kithara_app::gui;
 #[cfg(feature = "gui")]
@@ -91,7 +94,8 @@ fn main() -> AppResult {
     let player_config = PlayerConfig::default()
         .with_crossfade_duration(config.crossfade_seconds)
         .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
-    let mut queue_config = QueueConfig::new(player_config);
+    let player = Arc::new(PlayerImpl::new(player_config));
+    let mut queue_config = QueueConfig::default().with_player(player);
     queue_config.net.insecure = config.danger_accept_invalid_certs;
     queue_config.autoplay = true;
 

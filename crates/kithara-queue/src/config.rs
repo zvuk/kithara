@@ -1,10 +1,10 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
-use kithara_play::PlayerConfig;
+use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
 const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -14,23 +14,28 @@ const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
-/// Composes existing `kithara-play`, `kithara-net`, and `kithara-assets`
-/// configs rather than duplicating their fields. Forward-composition keeps
-/// the Queue layer thin: bumps to `PlayerConfig` / `NetOptions` /
-/// `StoreOptions` show up for free.
+/// Holds queue-level defaults plus an optional externally-owned
+/// [`PlayerImpl`] instance. Matches the project-wide pattern where
+/// config structs accept optional built instances (see
+/// [`ResourceConfig::worker`](kithara_play::ResourceConfig::worker) /
+/// [`runtime`](kithara_play::ResourceConfig::runtime) /
+/// [`bus`](kithara_play::ResourceConfig::bus)) rather than re-taking
+/// their own construction parameters.
 ///
-/// - [`QueueConfig::player`] is passed to `PlayerImpl::new`.
-/// - [`QueueConfig::net`] + [`QueueConfig::store`] are used as templates for
-///   [`TrackSource::Uri`](crate::TrackSource::Uri) entries. Caller-built
-///   [`TrackSource::Config`](crate::TrackSource::Config) values are left
-///   intact (DRM keys, headers, hints).
+/// - [`QueueConfig::player`] — if `None`, [`Queue::new`](crate::Queue::new)
+///   builds a default [`PlayerImpl`].
+/// - [`QueueConfig::net`] + [`QueueConfig::store`] — used as templates
+///   for [`TrackSource::Uri`](crate::TrackSource::Uri) entries.
+///   Caller-built [`TrackSource::Config`](crate::TrackSource::Config)
+///   values are left intact (DRM keys, headers, hints).
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct QueueConfig {
-    /// Forwarded to `PlayerImpl::new`.
+    /// Externally-owned player. `None` means Queue builds a default.
     #[setters(skip)]
-    pub player: PlayerConfig,
+    #[derivative(Debug = "ignore")]
+    pub player: Option<Arc<PlayerImpl>>,
 
     /// Default network options for `Uri`-sourced tracks. Timeouts, retries.
     #[setters(skip)]
@@ -51,23 +56,17 @@ pub struct QueueConfig {
 }
 
 impl QueueConfig {
-    /// Create a new [`QueueConfig`] with the given [`PlayerConfig`] and
-    /// defaults for everything else.
+    /// Create a new [`QueueConfig`] with all defaults. Equivalent to
+    /// [`QueueConfig::default`].
     #[must_use]
-    pub fn new(player: PlayerConfig) -> Self {
-        Self {
-            player,
-            net: NetOptions::default(),
-            store: StoreOptions::default(),
-            max_concurrent_loads: DEFAULT_MAX_CONCURRENT_LOADS,
-            autoplay: false,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Replace the [`PlayerConfig`] wholesale.
+    /// Replace the [`PlayerImpl`] instance.
     #[must_use]
-    pub fn with_player(mut self, player: PlayerConfig) -> Self {
-        self.player = player;
+    pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
+        self.player = Some(player);
         self
     }
 
@@ -95,6 +94,7 @@ mod tests {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
         assert!(!cfg.autoplay);
+        assert!(cfg.player.is_none());
     }
 
     #[test]

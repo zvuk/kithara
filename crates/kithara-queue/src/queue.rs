@@ -7,7 +7,7 @@ use delegate::delegate;
 use kithara_events::{
     Event, EventBus, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
 };
-use kithara_play::{PlayError, PlayerImpl};
+use kithara_play::{PlayError, PlayerConfig, PlayerImpl};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, warn};
 
@@ -45,52 +45,28 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// Create a new queue with a fresh [`PlayerImpl`] built from
-    /// `config.player`.
+    /// Build a queue from a [`QueueConfig`].
+    ///
+    /// If `config.player` is `Some`, the caller-supplied
+    /// [`PlayerImpl`] is used (caller retains ownership; must not
+    /// mutate its item list directly — `play`/`pause`/`seek` OK;
+    /// `replace_item`, `reserve_slots`, `select_item`, `remove_at` are
+    /// Queue-owned). If `None`, a default player is built internally.
+    ///
+    /// Matches the project-wide pattern where config structs accept
+    /// optional built instances (see
+    /// [`ResourceConfig`](kithara_play::ResourceConfig)'s `worker` /
+    /// `runtime` / `bus` fields).
     #[must_use]
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
-            player: player_config,
-            net,
-            store,
-            max_concurrent_loads,
-            autoplay,
-        } = config;
-        let player = Arc::new(PlayerImpl::new(player_config));
-        let bus = player.bus().clone();
-        let loader = Arc::new(Loader::new(
-            Arc::clone(&player),
-            net,
-            store,
-            max_concurrent_loads,
-            bus.clone(),
-        ));
-        let player_rx = player.subscribe();
-        Self {
             player,
-            loader,
-            next_id: AtomicU64::new(0),
-            tracks: Arc::new(Mutex::new(Vec::new())),
-            navigation: Arc::new(Mutex::new(NavigationState::new())),
-            pending_select: Arc::new(Mutex::new(None)),
-            bus,
-            player_rx: Mutex::new(player_rx),
-            autoplay,
-        }
-    }
-
-    /// Wrap an externally-owned [`PlayerImpl`]. The caller must not mutate
-    /// the player directly (play/pause OK; `replace_item`, `reserve_slots`,
-    /// `select_item`, `remove_at` are Queue-owned).
-    #[must_use]
-    pub fn wrap(player: Arc<PlayerImpl>, config: QueueConfig) -> Self {
-        let QueueConfig {
-            player: _,
             net,
             store,
             max_concurrent_loads,
             autoplay,
         } = config;
+        let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
@@ -626,13 +602,11 @@ mod tests {
     use std::time::Duration;
 
     use kithara_events::PlayerEvent;
-    use kithara_play::PlayerConfig;
 
     use super::*;
 
     fn make_queue() -> Queue {
-        let cfg = QueueConfig::new(PlayerConfig::default());
-        Queue::new(cfg)
+        Queue::new(QueueConfig::default())
     }
 
     async fn wait_for_queue_event<F>(

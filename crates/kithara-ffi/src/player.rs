@@ -14,7 +14,7 @@ use kithara::{
     abr::{AbrController, AbrMode, AbrOptions},
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
-    play::{PlayerConfig, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
 };
 use kithara_events::TrackId;
 use kithara_platform::Mutex;
@@ -54,7 +54,10 @@ impl AudioPlayer {
             eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
             ..PlayerConfig::default()
         };
-        let queue_config = QueueConfig::new(player_config).with_autoplay(false);
+        let player = Arc::new(PlayerImpl::new(player_config));
+        let queue_config = QueueConfig::default()
+            .with_player(player)
+            .with_autoplay(false);
         Arc::new(Self {
             queue: Arc::new(Queue::new(queue_config)),
             observer: Mutex::new(None),
