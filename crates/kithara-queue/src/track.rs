@@ -9,7 +9,9 @@ pub struct TrackEntry {
     pub id: TrackId,
     /// Display name derived from the URL or caller-supplied. May be empty.
     pub name: String,
-    /// Source URL, if known. `None` for local paths.
+    /// Source URL, if known. `None` for `TrackSource::Config` entries
+    /// whose source is a pre-built [`ResourceConfig`] without a URL
+    /// string (local file path, etc.).
     pub url: Option<String>,
     /// Current loading status.
     pub status: TrackStatus,
@@ -25,6 +27,11 @@ pub struct TrackEntry {
 /// - [`TrackSource::Config`] — the caller pre-builds a [`ResourceConfig`]
 ///   (useful for DRM keys, custom headers, format hints). The queue leaves
 ///   caller-set fields intact.
+///
+/// `TrackSource` is `Clone` so the queue can respawn a load when a
+/// previously-consumed track is re-selected — re-tapping a track in
+/// the playlist must work without the caller reconstructing anything.
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum TrackSource {
     /// Load from URL / path. Queue fills in defaults from `QueueConfig`.

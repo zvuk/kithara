@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Mutex, PoisonError,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use delegate::delegate;
@@ -78,6 +81,12 @@ pub struct Queue {
     tracks: Arc<Mutex<Vec<TrackEntry>>>,
     navigation: Arc<Mutex<NavigationState>>,
     pending_select: Arc<Mutex<Option<PendingSelect>>>,
+    /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
+    /// on re-selection (user tapping a previously-played track). The
+    /// original `TrackSource::Config` — including DRM keys and custom
+    /// net/headers — is preserved; a bare URL wouldn't be enough to
+    /// reconstruct a DRM-protected source.
+    sources: Arc<Mutex<HashMap<TrackId, TrackSource>>>,
     bus: EventBus,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
@@ -121,6 +130,7 @@ impl Queue {
             tracks: Arc::new(Mutex::new(Vec::new())),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
+            sources: Arc::new(Mutex::new(HashMap::new())),
             bus,
             player_rx: Mutex::new(player_rx),
             autoplay,
@@ -195,6 +205,10 @@ impl Queue {
             guard.push(entry);
             guard.len() - 1
         };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, source.clone());
         self.player.reserve_slots(index + 1);
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
@@ -234,6 +248,10 @@ impl Queue {
             guard.insert(pos, entry);
             pos
         };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, source.clone());
         self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
@@ -254,6 +272,10 @@ impl Queue {
             guard.remove(pos);
             pos
         };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&id);
         let _ = self.player.remove_at(index);
         self.bus.publish(QueueEvent::TrackRemoved { id });
         Ok(())
@@ -267,6 +289,10 @@ impl Queue {
             guard.clear();
             ids
         };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         self.player.remove_all_items();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
@@ -294,13 +320,13 @@ impl Queue {
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
     /// or [`QueueError::Play`] if the underlying `select_item` call fails.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
-        let (index, status, url) = {
+        let (index, status) = {
             let guard = self.lock_tracks();
             guard
                 .iter()
                 .enumerate()
                 .find(|(_, e)| e.id == id)
-                .map(|(i, e)| (i, e.status.clone(), e.url.clone()))
+                .map(|(i, e)| (i, e.status.clone()))
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
@@ -326,12 +352,20 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Consumed => {
-                let Some(url) = url else {
-                    return Err(QueueError::NotReady(id));
-                };
+                // Re-selecting a Consumed track: the engine took the
+                // resource during prior `select_item`, so we respawn
+                // the load from the originally-supplied `TrackSource`
+                // (preserving DRM keys / custom headers / etc.).
+                let source = self
+                    .sources
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&id)
+                    .cloned()
+                    .ok_or(QueueError::NotReady(id))?;
                 *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
                 self.set_status(id, TrackStatus::Pending);
-                self.spawn_apply_after_load(id, TrackSource::Uri(url));
+                self.spawn_apply_after_load(id, source);
                 Ok(())
             }
             _ => Err(QueueError::NotReady(id)),

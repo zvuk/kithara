@@ -101,7 +101,7 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 ///     .with_hint("mp3")
 ///     .with_look_ahead_bytes(1_000_000);
 /// ```
-#[derive(Setters)]
+#[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct ResourceConfig {
     /// ABR controller (shared across tracks in a player).
