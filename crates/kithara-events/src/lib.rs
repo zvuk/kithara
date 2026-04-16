@@ -12,6 +12,8 @@ mod seek;
 mod app;
 #[cfg(feature = "audio")]
 mod audio;
+#[cfg(feature = "downloader")]
+mod downloader;
 #[cfg(feature = "file")]
 mod file;
 #[cfg(feature = "hls")]
@@ -28,6 +30,8 @@ pub use app::AppEvent;
 #[cfg(feature = "audio")]
 pub use audio::{AudioEvent, SeekLifecycleStage};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
+#[cfg(feature = "downloader")]
+pub use downloader::DownloaderEvent;
 pub use event::Event;
 #[cfg(feature = "file")]
 pub use file::FileEvent;
