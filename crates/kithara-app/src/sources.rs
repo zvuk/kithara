@@ -25,7 +25,6 @@ fn needs_drm(url: &str, drm_domains: &[String]) -> bool {
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
     match ResourceConfig::new(url) {
         Ok(mut cfg) => {
-            cfg.net.insecure = config.danger_accept_invalid_certs;
             if needs_drm(url, &config.drm_domains) {
                 cfg = cfg.with_keys(drm::make_key_options());
             }

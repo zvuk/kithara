@@ -6,6 +6,7 @@ use std::{
 use clap::Parser;
 use kithara::{
     audio::generate_log_spaced_bands,
+    net::NetOptions,
     play::{PlayerConfig, PlayerImpl},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -76,8 +77,13 @@ fn main() -> AppResult {
 
     // One Downloader for the whole app — shared HTTP pool and
     // ambient-runtime aware, so every track created through
-    // `sources::build_source` reuses it.
-    let downloader = Downloader::new(DownloaderConfig::default());
+    // `sources::build_source` reuses it. TLS posture goes through
+    // `NetOptions` on the Downloader; `ResourceConfig` has no `net`.
+    let net = NetOptions {
+        insecure: args.insecure,
+        ..NetOptions::default()
+    };
+    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
     let config = AppConfig::new(downloader)
         .with_tracks(args.tracks)
         .with_danger_accept_invalid_certs(args.insecure);

@@ -21,7 +21,7 @@ use kithara_file::{FileConfig, FileSrc};
 #[cfg(feature = "hls")]
 use kithara_hls::{HlsConfig, KeyOptions};
 #[cfg(any(feature = "file", feature = "hls"))]
-use kithara_net::{Headers, NetOptions};
+use kithara_net::Headers;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
@@ -142,9 +142,6 @@ pub struct ResourceConfig {
     /// Additional HTTP headers to include in all network requests.
     #[cfg(any(feature = "file", feature = "hls"))]
     pub headers: Option<Headers>,
-    /// Network configuration (timeouts, retries).
-    #[cfg(any(feature = "file", feature = "hls"))]
-    pub net: NetOptions,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Shared playback rate atomic for the audio pipeline resampler.
@@ -247,8 +244,6 @@ impl ResourceConfig {
             keys: KeyOptions::default(),
             look_ahead_bytes: None,
             name: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
-            net: NetOptions::default(),
             pcm_pool: None,
             playback_rate: None,
             preferred_peak_bitrate: 0.0,
@@ -310,10 +305,9 @@ impl ResourceConfig {
             }
         };
 
-        let dl = match self.downloader {
-            Some(dl) => dl,
-            None => Downloader::new(DownloaderConfig::default().with_net(self.net.clone())),
-        };
+        let dl = self
+            .downloader
+            .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
         let mut file_config = FileConfig::new(file_src)
             .with_store(self.store)
             .with_downloader(dl);
@@ -380,7 +374,6 @@ impl ResourceConfig {
 
         let mut hls_config = HlsConfig::new(url)
             .with_store(self.store)
-            .with_net(self.net)
             .with_keys(self.keys);
         if let Some(dl) = self.downloader {
             hls_config = hls_config.with_downloader(dl);

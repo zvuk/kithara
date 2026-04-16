@@ -72,8 +72,6 @@ pub enum HlsEvent {
     },
     /// Error occurred.
     Error { error: String, recoverable: bool },
-    /// Soft timeout fired — request is taking longer than expected.
-    LoadSlow,
     /// Stream ended.
     EndOfStream,
 }

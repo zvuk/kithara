@@ -1,8 +1,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_events::{
-    DownloaderEvent, Event, EventBus, FileEvent, HlsEvent, QueueEvent, TrackId, TrackStatus,
-};
+use kithara_events::{DownloaderEvent, Event, EventBus, QueueEvent, TrackId, TrackStatus};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
 use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
@@ -72,12 +70,7 @@ impl Loader {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
-                if matches!(
-                    ev,
-                    Event::Downloader(DownloaderEvent::LoadSlow)
-                        | Event::File(FileEvent::LoadSlow)
-                        | Event::Hls(HlsEvent::LoadSlow)
-                ) {
+                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow)) {
                     root_bus.publish(QueueEvent::TrackStatusChanged {
                         id,
                         status: TrackStatus::Slow,
@@ -156,16 +149,16 @@ mod tests {
     #[tokio::test]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = make_loader();
-        let Ok(mut given) = ResourceConfig::new("https://example.com/a.mp3") else {
+        let Ok(given) = ResourceConfig::new("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        given.net.insecure = true;
+        let given = given.with_preferred_peak_bitrate(321.0);
         let Ok(returned) = loader.build_config(TrackSource::Config(Box::new(given))) else {
             panic!("build_config should succeed");
         };
         assert!(
-            returned.net.insecure,
-            "caller-set net flags must be preserved"
+            (returned.preferred_peak_bitrate - 321.0).abs() < f64::EPSILON,
+            "caller-set fields must be preserved"
         );
     }
 

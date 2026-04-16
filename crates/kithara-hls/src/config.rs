@@ -7,7 +7,7 @@ use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
-use kithara_net::{Headers, NetOptions};
+use kithara_net::Headers;
 use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -97,8 +97,6 @@ pub struct HlsConfig {
     /// cache directory.
     #[setters(skip)]
     pub name: Option<String>,
-    /// Network configuration.
-    pub net: NetOptions,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Buffer pool (shared across all components, created if not provided).

@@ -1142,12 +1142,17 @@ async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir
 #[case::zvuk_125475417("https://cdn-edge.zvq.me/track/streamhq?id=125475417")]
 async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir: TestTempDir) {
     let store = store_options(&temp_dir, true);
-    let mut net = NetOptions::default();
-    net.request_timeout = Duration::from_secs(25);
+    let net = NetOptions {
+        request_timeout: Duration::from_secs(25),
+        ..NetOptions::default()
+    };
+    let downloader = kithara::stream::dl::Downloader::new(
+        kithara::stream::dl::DownloaderConfig::default().with_net(net),
+    );
     let config = ResourceConfig::new(url)
         .expect("valid URL")
         .with_store(store)
-        .with_net(net);
+        .with_downloader(downloader);
 
     let mut resource = Resource::new(config)
         .await

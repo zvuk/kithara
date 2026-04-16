@@ -69,9 +69,7 @@ impl StreamType for Hls {
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let dl_config = DownloaderConfig::default()
-                .with_net(config.net.clone())
-                .with_cancel(cancel.child_token());
+            let dl_config = DownloaderConfig::default().with_cancel(cancel.child_token());
             Downloader::new(dl_config)
         });
 

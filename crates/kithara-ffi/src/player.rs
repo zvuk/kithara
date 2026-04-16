@@ -14,6 +14,7 @@ use kithara::{
     abr::{AbrController, AbrMode, AbrOptions},
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
+    net::NetOptions,
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -64,8 +65,18 @@ impl AudioPlayer {
         let queue_config = QueueConfig::default()
             .with_player(player)
             .with_autoplay(false);
-        let downloader =
-            Downloader::new(DownloaderConfig::default().with_runtime(crate::FFI_RUNTIME.clone()));
+        #[cfg(feature = "dev")]
+        let net = NetOptions {
+            insecure: true,
+            ..NetOptions::default()
+        };
+        #[cfg(not(feature = "dev"))]
+        let net = NetOptions::default();
+        let downloader = Downloader::new(
+            DownloaderConfig::default()
+                .with_net(net)
+                .with_runtime(crate::FFI_RUNTIME.clone()),
+        );
         Arc::new(Self {
             queue: Arc::new(Queue::new(queue_config)),
             downloader,

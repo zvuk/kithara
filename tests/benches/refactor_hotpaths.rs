@@ -313,8 +313,13 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {
-                    let mut net = NetOptions::default();
-                    net.pool_max_idle_per_host = 8;
+                    let net = NetOptions {
+                        pool_max_idle_per_host: 8,
+                        ..NetOptions::default()
+                    };
+                    let downloader = kithara::stream::dl::Downloader::new(
+                        kithara::stream::dl::DownloaderConfig::default().with_net(net),
+                    );
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);
@@ -325,7 +330,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let config = HlsConfig::new(url)
                         .with_store(store)
                         .with_abr_options(abr)
-                        .with_net(net)
+                        .with_downloader(downloader)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);
 

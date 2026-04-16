@@ -15,8 +15,6 @@ pub enum FileEvent {
     PlaybackProgress { position: u64, total: Option<u64> },
     /// General error.
     Error { error: String, recoverable: bool },
-    /// Soft timeout fired — request is taking longer than expected.
-    LoadSlow,
     /// Stream ended.
     EndOfStream,
 }
