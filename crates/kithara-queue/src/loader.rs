@@ -1,11 +1,14 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_events::{DownloaderEvent, Event, EventBus, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{DownloaderEvent, Event, TrackId, TrackStatus};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
 use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
 
-use crate::{error::QueueError, track::TrackSource};
+use crate::{
+    error::QueueError,
+    track::{TrackSource, Tracks},
+};
 
 /// Async track loader: parallelism-capped `ResourceConfig` -> `Resource`.
 ///
@@ -18,19 +21,22 @@ use crate::{error::QueueError, track::TrackSource};
 pub(crate) struct Loader {
     player: Arc<PlayerImpl>,
     semaphore: Arc<Semaphore>,
-    bus: EventBus,
+    /// Same `Arc<Tracks>` as `Queue::tracks`. All status transitions go
+    /// through [`Tracks::set_status`] so polled and event-stream views
+    /// never drift.
+    tracks: Arc<Tracks>,
 }
 
 impl Loader {
     pub(crate) fn new(
         player: Arc<PlayerImpl>,
         max_concurrent_loads: NonZeroUsize,
-        bus: EventBus,
+        tracks: Arc<Tracks>,
     ) -> Self {
         Self {
             player,
             semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
-            bus,
+            tracks,
         }
     }
 
@@ -64,17 +70,14 @@ impl Loader {
     ) -> Result<Resource, QueueError> {
         let config = self.build_config(source)?;
         let bus_for_slow = config.bus.clone();
-        let root_bus = self.bus.clone();
+        let tracks = Arc::clone(&self.tracks);
 
         let slow_listener = tokio::spawn(async move {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
                 if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow)) {
-                    root_bus.publish(QueueEvent::TrackStatusChanged {
-                        id,
-                        status: TrackStatus::Slow,
-                    });
+                    tracks.set_status(id, TrackStatus::Slow);
                     break;
                 }
             }
@@ -101,10 +104,7 @@ impl Loader {
                 .await
                 .map_err(|e| QueueError::Resource(format!("semaphore closed: {e}")))?;
 
-            this.bus.publish(QueueEvent::TrackStatusChanged {
-                id,
-                status: TrackStatus::Loading,
-            });
+            this.tracks.set_status(id, TrackStatus::Loading);
 
             let result = this.load(id, source).await;
             drop(permit);
@@ -113,10 +113,8 @@ impl Loader {
                 Ok(_) => debug!(id = id.as_u64(), "track load ok"),
                 Err(e) => {
                     warn!(id = id.as_u64(), error = %e, "track load failed");
-                    this.bus.publish(QueueEvent::TrackStatusChanged {
-                        id,
-                        status: TrackStatus::Failed(format!("{e}")),
-                    });
+                    this.tracks
+                        .set_status(id, TrackStatus::Failed(format!("{e}")));
                 }
             }
             result
@@ -131,24 +129,54 @@ mod tests {
         time::Duration,
     };
 
+    use derivative::Derivative;
+    use derive_setters::Setters;
+    use kithara_events::{EventBus, QueueEvent};
     use kithara_play::PlayerConfig;
 
     use super::*;
+    use crate::track::TrackEntry;
 
     const CAP_3: NonZeroUsize = match NonZeroUsize::new(3) {
         Some(n) => n,
         None => unreachable!(),
     };
 
-    fn make_loader() -> Arc<Loader> {
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let bus = player.bus().clone();
-        Arc::new(Loader::new(player, CAP_3, bus))
+    /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
+    /// override via setters when a specific concurrency cap matters.
+    #[derive(Derivative, Setters)]
+    #[derivative(Default)]
+    #[setters(prefix = "with_")]
+    struct LoaderBuilder {
+        #[derivative(Default(value = "CAP_3"))]
+        cap: NonZeroUsize,
+    }
+
+    /// Test fixture: the [`Loader`] under test, the shared
+    /// [`Tracks`] store (so tests can seed entries), and the root
+    /// [`EventBus`] (so tests can subscribe for assertions).
+    struct LoaderFixture {
+        loader: Arc<Loader>,
+        tracks: Arc<Tracks>,
+        bus: EventBus,
+    }
+
+    impl LoaderBuilder {
+        fn build(self) -> LoaderFixture {
+            let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+            let bus = player.bus().clone();
+            let tracks = Arc::new(Tracks::new(bus.clone()));
+            LoaderFixture {
+                loader: Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks))),
+                tracks,
+                bus,
+            }
+        }
     }
 
     #[tokio::test]
     async fn build_config_preserves_caller_supplied_config() {
-        let loader = make_loader();
+        let loader = LoaderBuilder::default().build().loader;
         let Ok(given) = ResourceConfig::new("https://example.com/a.mp3") else {
             panic!("valid url");
         };
@@ -164,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_config_invalid_uri_errors() {
-        let loader = make_loader();
+        let loader = LoaderBuilder::default().build().loader;
         let Err(err) = loader.build_config(TrackSource::Uri("not-a-url".into())) else {
             panic!("should reject relative path");
         };
@@ -173,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_invalid_uri_returns_invalid_url_error() {
-        let loader = make_loader();
+        let loader = LoaderBuilder::default().build().loader;
         let Err(err) = loader
             .load(TrackId(0), TrackSource::Uri("not-a-url".into()))
             .await
@@ -186,9 +214,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn semaphore_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("2 > 0");
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let bus = player.bus().clone();
-        let loader = Arc::new(Loader::new(player, cap, bus));
+        let loader = LoaderBuilder::default().with_cap(cap).build().loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
@@ -218,8 +244,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_load_bad_url_emits_failed_status() {
-        let loader = make_loader();
-        let mut rx = loader.bus.subscribe();
+        let fx = LoaderBuilder::default().build();
+        fx.tracks.lock().push(TrackEntry {
+            id: TrackId(42),
+            name: String::new(),
+            url: None,
+            status: TrackStatus::Pending,
+        });
+        let mut rx = fx.bus.subscribe();
+        let loader = fx.loader;
 
         let handle = loader.spawn_load(TrackId(42), TrackSource::Uri("not-a-url".into()));
         let result = handle.await.expect("join");

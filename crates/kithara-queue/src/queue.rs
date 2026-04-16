@@ -19,7 +19,7 @@ use crate::{
     error::QueueError,
     loader::Loader,
     navigation::{NavigationState, RepeatMode},
-    track::{TrackEntry, TrackSource},
+    track::{TrackEntry, TrackSource, Tracks},
 };
 
 /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
@@ -78,7 +78,11 @@ pub struct Queue {
     player: Arc<PlayerImpl>,
     loader: Arc<Loader>,
     next_id: AtomicU64,
-    tracks: Arc<Mutex<Vec<TrackEntry>>>,
+    /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
+    /// through `Arc<Tracks>`; every status transition goes through
+    /// [`Tracks::set_status`] so polling and the event stream stay in
+    /// sync.
+    tracks: Arc<Tracks>,
     navigation: Arc<Mutex<NavigationState>>,
     pending_select: Arc<Mutex<Option<PendingSelect>>>,
     /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
@@ -117,17 +121,18 @@ impl Queue {
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
+        let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
             max_concurrent_loads,
-            bus.clone(),
+            Arc::clone(&tracks),
         ));
         let player_rx = player.subscribe();
         Self {
             player,
             loader,
             next_id: AtomicU64::new(0),
-            tracks: Arc::new(Mutex::new(Vec::new())),
+            tracks,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
             sources: Arc::new(Mutex::new(HashMap::new())),
@@ -525,11 +530,11 @@ impl Queue {
     }
 
     fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
-        self.tracks.lock().unwrap_or_else(PoisonError::into_inner)
+        self.tracks.lock()
     }
 
     fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
-        self.tracks.lock().unwrap_or_else(PoisonError::into_inner)
+        self.tracks.lock()
     }
 
     fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
@@ -551,13 +556,7 @@ impl Queue {
     }
 
     fn set_status(&self, id: TrackId, status: TrackStatus) {
-        let mut guard = self.lock_tracks_mut();
-        if let Some(entry) = guard.iter_mut().find(|e| e.id == id) {
-            entry.status = status.clone();
-            drop(guard);
-            self.bus
-                .publish(QueueEvent::TrackStatusChanged { id, status });
-        }
+        self.tracks.set_status(id, status);
     }
 
     fn spawn_apply_after_load(&self, id: TrackId, source: TrackSource) {
@@ -579,7 +578,7 @@ impl Queue {
             };
 
             let index = {
-                let guard = tracks.lock().unwrap_or_else(PoisonError::into_inner);
+                let guard = tracks.lock();
                 guard.iter().position(|e| e.id == id)
             };
             let Some(index) = index else {
@@ -591,16 +590,7 @@ impl Queue {
             };
 
             player.replace_item(index, resource);
-            {
-                let mut guard = tracks.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Some(entry) = guard.get_mut(index) {
-                    entry.status = TrackStatus::Loaded;
-                }
-            }
-            bus.publish(QueueEvent::TrackStatusChanged {
-                id,
-                status: TrackStatus::Loaded,
-            });
+            tracks.set_status(id, TrackStatus::Loaded);
 
             let pending_transition = {
                 let mut p = pending_select
@@ -617,16 +607,7 @@ impl Queue {
                 result
             };
             let mark_consumed = || {
-                {
-                    let mut guard = tracks.lock().unwrap_or_else(PoisonError::into_inner);
-                    if let Some(entry) = guard.get_mut(index) {
-                        entry.status = TrackStatus::Consumed;
-                    }
-                }
-                bus.publish(QueueEvent::TrackStatusChanged {
-                    id,
-                    status: TrackStatus::Consumed,
-                });
+                tracks.set_status(id, TrackStatus::Consumed);
             };
 
             if let Some(transition) = pending_transition {

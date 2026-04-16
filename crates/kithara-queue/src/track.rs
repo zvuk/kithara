@@ -1,4 +1,6 @@
-use kithara_events::{TrackId, TrackStatus};
+use std::sync::{Mutex, PoisonError};
+
+use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
 use kithara_play::ResourceConfig;
 
 /// Snapshot of a track entry in the queue.
@@ -73,6 +75,48 @@ impl From<ResourceConfig> for TrackSource {
 impl From<Box<ResourceConfig>> for TrackSource {
     fn from(c: Box<ResourceConfig>) -> Self {
         Self::Config(c)
+    }
+}
+
+/// Authoritative store for the queue's track list.
+///
+/// Single owner of `Vec<TrackEntry>`; shared between [`Queue`](crate::Queue)
+/// and [`Loader`](crate::loader::Loader) via `Arc<Tracks>`. Every status
+/// transition — `Loading` / `Slow` / `Failed` / `Loaded` / `Consumed`
+/// / `Pending` respawn — MUST go through [`Tracks::set_status`] so that
+/// the polled view (`tracks[i].status`) and the reactive
+/// [`QueueEvent::TrackStatusChanged`] stream never drift.
+pub(crate) struct Tracks {
+    inner: Mutex<Vec<TrackEntry>>,
+    bus: EventBus,
+}
+
+impl Tracks {
+    pub(crate) fn new(bus: EventBus) -> Self {
+        Self {
+            inner: Mutex::new(Vec::new()),
+            bus,
+        }
+    }
+
+    /// Lock the underlying `Vec<TrackEntry>` for direct read/write.
+    /// Callers that only need to flip status should prefer
+    /// [`Self::set_status`].
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Atomically mutate `entry.status` and publish
+    /// [`QueueEvent::TrackStatusChanged`]. No-op when `id` is not
+    /// present (caller most likely raced with `Queue::remove`).
+    pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
+        let mut guard = self.lock();
+        if let Some(entry) = guard.iter_mut().find(|e| e.id == id) {
+            entry.status = status.clone();
+            drop(guard);
+            self.bus
+                .publish(QueueEvent::TrackStatusChanged { id, status });
+        }
     }
 }
 
