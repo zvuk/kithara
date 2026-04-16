@@ -206,7 +206,11 @@ class KitharaPlayer() {
 
             is FfiPlayerEvent.TimeControlStatusChanged,
             is FfiPlayerEvent.VolumeChanged,
-            is FfiPlayerEvent.MuteChanged -> Unit
+            is FfiPlayerEvent.MuteChanged,
+            is FfiPlayerEvent.TrackStatusChanged,
+            is FfiPlayerEvent.QueueEnded,
+            is FfiPlayerEvent.CrossfadeStarted,
+            is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
         }
     }
 
