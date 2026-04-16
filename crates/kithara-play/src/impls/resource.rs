@@ -353,19 +353,27 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
+        use kithara_events::AudioFormat;
+
         let (resource, bus) = make_resource_with_bus();
         let mut rx = resource.subscribe();
 
         // Publish an AudioEvent through the shared bus directly.
         let spec = mock_spec();
-        bus.publish(AudioEvent::FormatDetected { spec });
+        let format = AudioFormat {
+            channels: spec.channels,
+            sample_rate: spec.sample_rate,
+        };
+        bus.publish(AudioEvent::FormatDetected { spec: format });
 
         let event = time::timeout(Duration::from_millis(200), rx.recv())
             .await
             .unwrap()
             .unwrap();
 
-        assert!(matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
+        assert!(
+            matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == format)
+        );
     }
 
     #[kithara::test(tokio)]

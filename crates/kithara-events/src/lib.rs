@@ -28,7 +28,7 @@ mod queue;
 #[cfg(feature = "app")]
 pub use app::AppEvent;
 #[cfg(feature = "audio")]
-pub use audio::{AudioEvent, SeekLifecycleStage};
+pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 #[cfg(feature = "downloader")]
 pub use downloader::DownloaderEvent;

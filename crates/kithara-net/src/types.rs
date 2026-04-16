@@ -1,4 +1,4 @@
-use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration};
+use std::{cmp::min, collections::HashMap, time::Duration};
 
 use derivative::Derivative;
 
@@ -104,7 +104,7 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Derivative)]
+#[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
 pub struct NetOptions {
     /// Max idle connections per host. Enables HTTP keep-alive connection
@@ -115,28 +115,10 @@ pub struct NetOptions {
     /// Hard timeout per request. Connection is aborted after this duration.
     #[derivative(Default(value = "Duration::from_secs(10)"))]
     pub request_timeout: Duration,
-    /// Soft timeout. Calls `on_slow` callback without aborting the request.
-    #[derivative(Default(value = "Duration::from_secs(2)"))]
-    pub soft_timeout: Duration,
-    /// Called when soft timeout fires. Does not abort the request.
-    pub on_slow: Option<Arc<dyn Fn() + Send + Sync>>,
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
     pub insecure: bool,
-}
-
-impl std::fmt::Debug for NetOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NetOptions")
-            .field("pool_max_idle_per_host", &self.pool_max_idle_per_host)
-            .field("request_timeout", &self.request_timeout)
-            .field("soft_timeout", &self.soft_timeout)
-            .field("on_slow", &self.on_slow.as_ref().map(|_| ".."))
-            .field("retry_policy", &self.retry_policy)
-            .field("insecure", &self.insecure)
-            .finish()
-    }
 }
 
 #[cfg(test)]

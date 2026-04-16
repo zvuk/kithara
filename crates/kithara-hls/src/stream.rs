@@ -69,11 +69,8 @@ impl StreamType for Hls {
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let mut net_opts = config.net.clone();
-            let slow_bus = bus.clone();
-            net_opts.on_slow = Some(Arc::new(move || slow_bus.publish(HlsEvent::LoadSlow)));
             let dl_config = DownloaderConfig::default()
-                .with_net(net_opts)
+                .with_net(config.net.clone())
                 .with_cancel(cancel.child_token());
             Downloader::new(dl_config)
         });
@@ -106,7 +103,9 @@ impl StreamType for Hls {
         let backend: AssetStore<DecryptContext> = builder.build();
 
         let hls_peer = Arc::new(HlsPeer::new());
-        let peer_handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn Peer>);
+        let peer_handle = downloader
+            .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
+            .with_bus(bus.clone());
 
         let playlist_cache = PlaylistCache::new(backend.clone(), peer_handle.clone());
         playlist_cache.set_master_url(config.url.clone());

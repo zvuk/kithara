@@ -7,7 +7,8 @@ use std::{
     task::Poll,
 };
 
-use kithara_platform::{CancelGroup, tokio, tokio::sync::mpsc};
+use kithara_events::EventBus;
+use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -38,6 +39,10 @@ struct PeerEntry {
     cmd_rx: mpsc::Receiver<InternalCmd>,
     peer_cancel: CancellationToken,
     peer_done: bool,
+    /// Same Arc as the owning [`PeerHandle`]'s bus. Read-snapshot on
+    /// every proactive poll so `PeerHandle::with_bus` takes effect
+    /// immediately.
+    bus: Arc<RwLock<Option<EventBus>>>,
 }
 
 /// Peer registry: owns peers, routes commands to priority slots,
@@ -73,6 +78,7 @@ impl Registry {
             cmd_rx: entry.cmd_rx,
             peer_cancel: entry.cancel,
             peer_done: false,
+            bus: entry.bus,
         });
         self.urgent_notify.notify_one();
         idx
@@ -110,6 +116,7 @@ impl Registry {
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
+                    let bus = entry.bus.lock_sync_read().clone();
                     for mut cmd in batch {
                         let epoch_cancel = cmd.cancel.take();
                         let cancel = match epoch_cancel {
@@ -124,6 +131,7 @@ impl Registry {
                             priority: cmd_prio,
                             response: ResponseTarget::Streaming,
                             peer: Some(idx),
+                            bus: bus.clone(),
                         };
                         self.slots[slot].push_back(internal);
                         if slot <= 1 {

@@ -19,7 +19,6 @@ portable-atomic = { workspace = true }
 smallvec = { workspace = true }
 
 kithara-abr = { workspace = true, optional = true }
-kithara-decode = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -29,7 +28,7 @@ default = ["file", "hls", "audio", "player", "app", "queue", "downloader"]
 app = []
 file = []
 hls = ["dep:kithara-abr"]
-audio = ["dep:kithara-decode"]
+audio = []
 player = []
 queue = []
 downloader = []

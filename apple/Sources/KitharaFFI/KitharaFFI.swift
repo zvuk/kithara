@@ -668,7 +668,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     /**
      * Select an item in the queue with the given transition.
      *
-     * `FfiTransition::None` performs an immediate cut (AVQueuePlayer
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
      * user-initiated-selection idiom — tap a track in a list).
      * `FfiTransition::Crossfade` uses the player's configured duration
      * (typical for Next/Prev buttons). Play state is not changed here —
@@ -955,7 +955,7 @@ open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
     /**
      * Select an item in the queue with the given transition.
      *
-     * `FfiTransition::None` performs an immediate cut (AVQueuePlayer
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
      * user-initiated-selection idiom — tap a track in a list).
      * `FfiTransition::Crossfade` uses the player's configured duration
      * (typical for Next/Prev buttons). Play state is not changed here —
@@ -3505,7 +3505,7 @@ public func FfiConverterTypeFfiTrackStatus_lower(_ value: FfiTrackStatus) -> Rus
  * Transition style for a track switch.
  *
  * Mirrors [`kithara_queue::Transition`]. Use [`FfiTransition::None`]
- * for immediate cuts (AVQueuePlayer user-initiated-selection idiom),
+ * for immediate cuts (`AVQueuePlayer` user-initiated-selection idiom),
  * [`FfiTransition::Crossfade`] to use the player's configured
  * duration (typical for auto-advance and Next/Prev buttons), or
  * [`FfiTransition::CrossfadeWith`] to override per-call.
@@ -3886,7 +3886,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 47471) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 53508) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 40175) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 45428) {

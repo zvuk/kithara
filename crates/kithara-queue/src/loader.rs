@@ -1,6 +1,8 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_events::{Event, EventBus, FileEvent, HlsEvent, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{
+    DownloaderEvent, Event, EventBus, FileEvent, HlsEvent, QueueEvent, TrackId, TrackStatus,
+};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
 use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
@@ -72,7 +74,9 @@ impl Loader {
             while let Ok(ev) = rx.recv().await {
                 if matches!(
                     ev,
-                    Event::File(FileEvent::LoadSlow) | Event::Hls(HlsEvent::LoadSlow)
+                    Event::Downloader(DownloaderEvent::LoadSlow)
+                        | Event::File(FileEvent::LoadSlow)
+                        | Event::Hls(HlsEvent::LoadSlow)
                 ) {
                     root_bus.publish(QueueEvent::TrackStatusChanged {
                         id,

@@ -14,12 +14,22 @@ use std::{
 
 use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
-use kithara_events::{AudioEvent, SeekLifecycleStage};
+use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
 
 use crate::pipeline::fetch::Fetch;
+
+/// Convert a decoder's [`PcmSpec`] into the shared [`AudioFormat`]
+/// carried by `AudioEvent`. The two structs are intentionally
+/// decoupled — see [`AudioFormat`] for the dependency-cycle rationale.
+fn spec_to_format(spec: PcmSpec) -> AudioFormat {
+    AudioFormat {
+        channels: spec.channels,
+        sample_rate: spec.sample_rate,
+    }
+}
 
 /// Nanoseconds per second for frame/duration conversion.
 const NANOS_PER_SEC: u128 = 1_000_000_000;
@@ -306,7 +316,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         if self.chunks_decoded == 1
             && let Some(ref emit) = self.emit
         {
-            emit(AudioEvent::FormatDetected { spec: chunk.spec() });
+            emit(AudioEvent::FormatDetected {
+                spec: spec_to_format(chunk.spec()),
+            });
             self.last_spec = Some(chunk.spec());
         }
 
@@ -315,8 +327,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             && old_spec != chunk.spec()
         {
             self.emit_event(AudioEvent::FormatChanged {
-                old: old_spec,
-                new: chunk.spec(),
+                old: spec_to_format(old_spec),
+                new: spec_to_format(chunk.spec()),
             });
             self.last_spec = Some(chunk.spec());
         }

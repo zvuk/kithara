@@ -5,8 +5,12 @@ use std::{
     task::{Context, Poll},
 };
 
+use kithara_events::EventBus;
 use kithara_net::NetError;
-use kithara_platform::tokio::sync::{mpsc, oneshot};
+use kithara_platform::{
+    RwLock,
+    tokio::sync::{mpsc, oneshot},
+};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -62,6 +66,9 @@ pub(super) struct InternalCmd {
     /// Arena index of the owning peer. `None` when sent from `PeerHandle`
     /// (filled in by Registry on receipt).
     pub(super) peer: Option<thunderdome::Index>,
+    /// Bus of the peer that issued this command. Downloader publishes
+    /// per-fetch `DownloaderEvent`s here (currently `LoadSlow`).
+    pub(super) bus: Option<EventBus>,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
@@ -71,6 +78,11 @@ struct PeerInner {
     _pool: Arc<DownloaderInner>,
     cancel: CancellationToken,
     cmd_tx: mpsc::Sender<InternalCmd>,
+    /// Shared with the Registry's `PeerEntry`. Writing through
+    /// [`PeerHandle::with_bus`] immediately makes the new bus visible
+    /// to both the handle's own imperative path and the Registry's
+    /// proactive `poll_next` path.
+    bus: Arc<RwLock<Option<EventBus>>>,
 }
 
 impl Drop for PeerInner {
@@ -101,12 +113,14 @@ impl PeerHandle {
         pool: Arc<DownloaderInner>,
         cancel: CancellationToken,
         cmd_tx: mpsc::Sender<InternalCmd>,
+        bus: Arc<RwLock<Option<EventBus>>>,
     ) -> Self {
         Self {
             inner: Arc::new(PeerInner {
                 _pool: pool,
                 cancel,
                 cmd_tx,
+                bus,
             }),
         }
     }
@@ -119,6 +133,22 @@ impl PeerHandle {
     #[must_use]
     pub fn cancel(&self) -> CancellationToken {
         self.inner.cancel.clone()
+    }
+
+    /// Attach an event bus so the Downloader can publish per-peer
+    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s (currently
+    /// `LoadSlow`) to it. Returns `self` so the call chains naturally
+    /// after [`Downloader::register`](super::Downloader::register).
+    #[must_use]
+    pub fn with_bus(self, bus: EventBus) -> Self {
+        *self.inner.bus.lock_sync_write() = Some(bus);
+        self
+    }
+
+    /// Currently attached bus, if any.
+    #[must_use]
+    pub fn bus(&self) -> Option<EventBus> {
+        self.inner.bus.lock_sync_read().clone()
     }
 
     /// Submit a single fetch command and await the response.
@@ -138,6 +168,7 @@ impl PeerHandle {
             priority: Priority::High,
             response: ResponseTarget::Channel(resp_tx),
             peer: None,
+            bus: self.bus(),
         };
         self.inner
             .cmd_tx
@@ -158,6 +189,7 @@ impl PeerHandle {
     pub async fn batch(&self, cmds: Vec<FetchCmd>) -> Vec<Result<FetchResponse, NetError>> {
         let mut receivers: Vec<Option<oneshot::Receiver<Result<FetchResponse, NetError>>>> =
             Vec::with_capacity(cmds.len());
+        let bus = self.bus();
 
         for cmd in cmds {
             let cancel = kithara_platform::CancelGroup::new(vec![self.inner.cancel.child_token()]);
@@ -168,6 +200,7 @@ impl PeerHandle {
                 priority: Priority::High,
                 response: ResponseTarget::Channel(resp_tx),
                 peer: None,
+                bus: bus.clone(),
             };
             if self.inner.cmd_tx.send(internal).await.is_err() {
                 receivers.push(None);

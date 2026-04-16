@@ -2,6 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
+use kithara_events::{DownloaderEvent, EventBus};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{CancelGroup, time::Duration, tokio, tokio::task};
 
@@ -73,28 +74,59 @@ impl BatchGroup {
 /// Spawn an HTTP fetch task for one command.
 fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd) {
     let client = inner.client.clone();
-    let timeout = inner.chunk_timeout;
+    let chunk_timeout = inner.chunk_timeout;
+    let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
     let mut cmd = internal.cmd;
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
+    let bus = internal.bus;
 
     inflight.fetch_add(1, Ordering::Relaxed);
 
     task::spawn(async move {
-        let result = establish(&client, timeout, &internal.cancel, cmd).await;
+        let result = establish(
+            &client,
+            chunk_timeout,
+            soft_timeout,
+            &internal.cancel,
+            bus,
+            cmd,
+        )
+        .await;
         deliver(internal.response, result, writer, on_complete_cb).await;
         inflight.fetch_sub(1, Ordering::Relaxed);
         fetch_waker.wake();
     });
 }
 
+/// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
+/// [`DownloaderEvent::LoadSlow`] on `bus` (if any) and keep waiting for
+/// `fut` to complete. Does not abort the underlying request.
+async fn with_soft_timeout<F, T>(fut: F, soft: Duration, bus: Option<&EventBus>) -> T
+where
+    F: Future<Output = T>,
+{
+    tokio::pin!(fut);
+    tokio::select! {
+        r = &mut fut => r,
+        () = tokio::time::sleep(soft) => {
+            if let Some(bus) = bus {
+                bus.publish(DownloaderEvent::LoadSlow);
+            }
+            fut.await
+        }
+    }
+}
+
 /// Establish an HTTP connection and return a [`FetchResponse`].
 async fn establish(
     client: &HttpClient,
     chunk_timeout: Duration,
+    soft_timeout: Duration,
     cancel: &CancelGroup,
+    bus: Option<EventBus>,
     cmd: FetchCmd,
 ) -> Result<FetchResponse, NetError> {
     let FetchCmd {
@@ -108,7 +140,7 @@ async fn establish(
     if method == FetchMethod::Head {
         let resp_headers = tokio::select! {
             () = cancel.cancelled() => return Err(NetError::Cancelled),
-            r = client.head(url, headers) => r?,
+            r = with_soft_timeout(client.head(url, headers), soft_timeout, bus.as_ref()) => r?,
         };
         return Ok(FetchResponse {
             headers: resp_headers,
@@ -116,14 +148,15 @@ async fn establish(
         });
     }
 
+    let fetch = async {
+        match range {
+            Some(range) => client.get_range(url, range, headers).await,
+            None => client.stream(url, headers).await,
+        }
+    };
     let byte_stream = tokio::select! {
         () = cancel.cancelled() => return Err(NetError::Cancelled),
-        r = async {
-            match range {
-                Some(range) => client.get_range(url, range, headers).await,
-                None => client.stream(url, headers).await,
-            }
-        } => r?,
+        r = with_soft_timeout(fetch, soft_timeout, bus.as_ref()) => r?,
     };
 
     let resp_headers = byte_stream.headers.clone();

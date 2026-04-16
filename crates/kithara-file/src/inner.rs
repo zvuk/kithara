@@ -146,7 +146,9 @@ impl File {
         }
 
         // Register a peer and get a PeerHandle for HTTP requests.
-        let peer_handle = downloader.register(Arc::new(FilePeer));
+        let peer_handle = downloader
+            .register(Arc::new(FilePeer))
+            .with_bus(state.bus.clone());
 
         // Create source — spawns download tasks internally.
         let source = FileSource::remote(
