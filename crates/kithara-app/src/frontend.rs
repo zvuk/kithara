@@ -13,6 +13,8 @@ pub type FrontendError = Box<dyn std::error::Error + Send + Sync>;
 /// dispatches to the appropriate frontend based on `--mode`.
 ///
 /// Each frontend manages its own runtime (tokio for TUI, iced for GUI).
+/// Shared resources like the HTTP downloader travel through
+/// [`AppConfig`] so frontends don't duplicate constructor shapes.
 pub trait Frontend: Sized {
     /// Create the frontend from config.
     ///

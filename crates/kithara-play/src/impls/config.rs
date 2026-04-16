@@ -22,14 +22,11 @@ use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, KeyOptions};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::tokio::runtime;
-#[cfg(feature = "file")]
+#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-
-type RuntimeHandle = runtime::Handle;
 
 #[cfg(feature = "file")]
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
@@ -178,11 +175,14 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
-    /// Shared tokio runtime handle for downloader tasks.
+    /// Shared downloader instance.
     ///
-    /// When set, downloader threads reuse this runtime instead of creating
-    /// their own. When `None`, auto-detected from current context.
-    pub runtime: Option<RuntimeHandle>,
+    /// When set, the underlying `FileConfig` / `HlsConfig` reuses this
+    /// downloader instead of spawning a private one. Lets multiple
+    /// resources share a single HTTP pool and runtime handle.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
+    pub downloader: Option<Downloader>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     ///
     /// When set, all resources sharing the same worker decode on a single
@@ -258,9 +258,18 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
-            runtime: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            downloader: None,
             worker: None,
         })
+    }
+
+    /// Set a shared downloader for the underlying stream.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_downloader(mut self, dl: Downloader) -> Self {
+        self.downloader = Some(dl);
+        self
     }
 
     /// Set name for cache disambiguation.
@@ -301,7 +310,10 @@ impl ResourceConfig {
             }
         };
 
-        let dl = Downloader::new(DownloaderConfig::default().with_net(self.net));
+        let dl = match self.downloader {
+            Some(dl) => dl,
+            None => Downloader::new(DownloaderConfig::default().with_net(self.net.clone())),
+        };
         let mut file_config = FileConfig::new(file_src)
             .with_store(self.store)
             .with_downloader(dl);
@@ -370,6 +382,9 @@ impl ResourceConfig {
             .with_store(self.store)
             .with_net(self.net)
             .with_keys(self.keys);
+        if let Some(dl) = self.downloader {
+            hls_config = hls_config.with_downloader(dl);
+        }
 
         hls_config.abr = self.abr;
 
@@ -404,7 +419,6 @@ impl ResourceConfig {
         if let Some(cancel) = self.cancel {
             hls_config = hls_config.with_cancel(cancel);
         }
-        hls_config.runtime = self.runtime;
 
         let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
 

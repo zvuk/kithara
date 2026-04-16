@@ -23,6 +23,8 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 crossterm = { workspace = true, optional = true }
+derivative = { workspace = true }
+derive_setters = { workspace = true }
 iced = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 obfstr = { workspace = true }

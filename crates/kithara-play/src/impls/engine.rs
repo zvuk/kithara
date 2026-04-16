@@ -211,8 +211,10 @@ impl EngineImpl {
 
     /// Runtime handle captured at engine creation.
     ///
-    /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
-    /// the app's runtime instead of spawning per-stream runtimes.
+    /// Use when building a shared
+    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// land on the same runtime the audio engine observes, then pass the
+    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
     #[must_use]
     pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.runtime.as_ref()

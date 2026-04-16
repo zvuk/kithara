@@ -8,7 +8,6 @@ use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::tokio as platform_tokio;
 use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -104,15 +103,6 @@ pub struct HlsConfig {
     pub headers: Option<Headers>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
-    /// Shared tokio runtime handle for the downloader.
-    ///
-    /// When provided, the downloader runs as an async task on this runtime
-    /// instead of spawning a dedicated OS thread. When `None`, the downloader
-    /// auto-detects: reuses a multi-thread runtime if available, otherwise
-    /// falls back to a dedicated thread.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub runtime: Option<platform_tokio::runtime::Handle>,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Master playlist URL.

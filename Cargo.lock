@@ -3909,6 +3909,8 @@ dependencies = [
  "clap",
  "crabtime",
  "crossterm",
+ "derivative",
+ "derive_setters",
  "iced",
  "kithara",
  "kithara-drm",

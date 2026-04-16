@@ -7,6 +7,7 @@ use clap::Parser;
 use kithara::{
     audio::generate_log_spaced_bands,
     play::{PlayerConfig, PlayerImpl},
+    stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
 use kithara_app::gui;
@@ -73,8 +74,13 @@ fn main() -> AppResult {
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    let mut config = AppConfig::with_defaults(args.tracks);
-    config.danger_accept_invalid_certs = args.insecure;
+    // One Downloader for the whole app — shared HTTP pool and
+    // ambient-runtime aware, so every track created through
+    // `sources::build_source` reuses it.
+    let downloader = Downloader::new(DownloaderConfig::default());
+    let config = AppConfig::new(downloader)
+        .with_tracks(args.tracks)
+        .with_danger_accept_invalid_certs(args.insecure);
 
     // Initialize tracing based on mode.
     #[cfg(feature = "tui")]

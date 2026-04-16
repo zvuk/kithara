@@ -16,9 +16,11 @@ fn needs_drm(url: &str, drm_domains: &[String]) -> bool {
         .unwrap_or(false)
 }
 
-/// Build a [`TrackSource`] for `url`, applying zvuk DRM keys when the host
-/// matches `config.drm_domains` and the `danger_accept_invalid_certs`
-/// net-option from the app config.
+/// Build a [`TrackSource`] for `url`, applying zvuk DRM keys when the
+/// host matches `config.drm_domains`, the `danger_accept_invalid_certs`
+/// net-option from the app config, and the shared
+/// [`Downloader`](kithara::stream::dl::Downloader) so every track reuses
+/// the same HTTP pool.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
     match ResourceConfig::new(url) {
@@ -27,6 +29,7 @@ pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
             if needs_drm(url, &config.drm_domains) {
                 cfg = cfg.with_keys(drm::make_key_options());
             }
+            cfg = cfg.with_downloader(config.downloader.clone());
             TrackSource::Config(Box::new(cfg))
         }
         Err(e) => {

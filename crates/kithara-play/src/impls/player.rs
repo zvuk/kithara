@@ -154,25 +154,27 @@ impl PlayerImpl {
 
     /// Runtime handle captured by this player's engine.
     ///
-    /// Pass to [`ResourceConfig::with_runtime`] so downloaders reuse
-    /// the app's runtime instead of creating per-stream runtimes.
+    /// Use when building a shared
+    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// land on the same runtime the audio engine observes, then pass the
+    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
     #[must_use]
     pub fn runtime(&self) -> Option<&RuntimeHandle> {
         self.engine.runtime()
     }
 
-    /// Apply shared worker, host sample rate, and runtime to a resource
+    /// Apply shared worker, host sample rate, ABR, and bus to a resource
     /// config so the resource integrates with this player's engine.
     ///
     /// Call this before [`Resource::new`] to ensure the resource shares
-    /// the player's decode thread, resampler is pre-initialised with the
-    /// correct ratio, and downloaders reuse the app's tokio runtime.
+    /// the player's decode thread and resampler is pre-initialised with
+    /// the correct ratio. Callers that want a shared HTTP pool /
+    /// tokio runtime must build their own [`Downloader`] (with an
+    /// explicit runtime handle if needed) and pass it via
+    /// [`ResourceConfig::with_downloader`].
     pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
         config.worker = Some(self.engine.worker().clone());
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
-        if let Some(rt) = self.engine.runtime() {
-            config.runtime = Some(rt.clone());
-        }
         #[cfg(feature = "hls")]
         if config.abr.is_none() {
             config.abr.clone_from(&self.config.abr);

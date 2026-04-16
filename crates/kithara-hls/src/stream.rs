@@ -72,12 +72,9 @@ impl StreamType for Hls {
             let mut net_opts = config.net.clone();
             let slow_bus = bus.clone();
             net_opts.on_slow = Some(Arc::new(move || slow_bus.publish(HlsEvent::LoadSlow)));
-            let mut dl_config = DownloaderConfig::default()
+            let dl_config = DownloaderConfig::default()
                 .with_net(net_opts)
                 .with_cancel(cancel.child_token());
-            if let Some(handle) = config.runtime.clone() {
-                dl_config = dl_config.with_runtime(handle);
-            }
             Downloader::new(dl_config)
         });
 

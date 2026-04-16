@@ -15,6 +15,7 @@ use kithara::{
     audio::generate_log_spaced_bands,
     hls::KeyOptions,
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_events::TrackId;
 use kithara_platform::Mutex;
@@ -33,6 +34,11 @@ use crate::{
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
     queue: Arc<Queue>,
+    /// Shared downloader for every track created through this player.
+    /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
+    /// is always alive, independent of the caller thread (Swift /
+    /// Kotlin callbacks run without an ambient tokio context).
+    downloader: Downloader,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
     key_processor: Mutex<Option<Arc<dyn FfiKeyProcessor>>>,
@@ -58,8 +64,11 @@ impl AudioPlayer {
         let queue_config = QueueConfig::default()
             .with_player(player)
             .with_autoplay(false);
+        let downloader =
+            Downloader::new(DownloaderConfig::default().with_runtime(crate::FFI_RUNTIME.clone()));
         Arc::new(Self {
             queue: Arc::new(Queue::new(queue_config)),
+            downloader,
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             key_processor: Mutex::new(None),
@@ -410,6 +419,8 @@ impl AudioPlayer {
         let scoped = self.queue.player().bus().scoped();
         config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
+
+        config = config.with_downloader(self.downloader.clone());
 
         if let Some(keys) = self.key_options() {
             config = config.with_keys(keys);
