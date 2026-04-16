@@ -2,8 +2,6 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara_assets::StoreOptions;
-use kithara_net::NetOptions;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -22,12 +20,13 @@ const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
 /// [`bus`](kithara_play::ResourceConfig::bus)) rather than re-taking
 /// their own construction parameters.
 ///
-/// - [`QueueConfig::player`] — if `None`, [`Queue::new`](crate::Queue::new)
-///   builds a default [`PlayerImpl`].
-/// - [`QueueConfig::net`] + [`QueueConfig::store`] — used as templates
-///   for [`TrackSource::Uri`](crate::TrackSource::Uri) entries.
-///   Caller-built [`TrackSource::Config`](crate::TrackSource::Config)
-///   values are left intact (DRM keys, headers, hints).
+/// Network and storage options are owned by
+/// [`ResourceConfig`](kithara_play::ResourceConfig). Callers that need
+/// non-default net/store behavior (custom timeouts, insecure certs,
+/// alternative cache dir) build a configured [`ResourceConfig`] and
+/// pass it via [`TrackSource::Config`](crate::TrackSource::Config).
+/// [`TrackSource::Uri`](crate::TrackSource::Uri) uses the
+/// [`ResourceConfig::new`](kithara_play::ResourceConfig::new) defaults.
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
@@ -36,14 +35,6 @@ pub struct QueueConfig {
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub player: Option<Arc<PlayerImpl>>,
-
-    /// Default network options for `Uri`-sourced tracks. Timeouts, retries.
-    #[setters(skip)]
-    pub net: NetOptions,
-
-    /// Default storage options for `Uri`-sourced tracks. Cache dir, eviction.
-    #[setters(skip)]
-    pub store: StoreOptions,
 
     /// Max concurrent `Loader` in-flight loads. Default: 3.
     #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
@@ -67,20 +58,6 @@ impl QueueConfig {
     #[must_use]
     pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
         self.player = Some(player);
-        self
-    }
-
-    /// Replace the [`NetOptions`] template.
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Replace the [`StoreOptions`] template.
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
         self
     }
 }

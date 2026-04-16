@@ -61,8 +61,6 @@ impl Queue {
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
             player,
-            net,
-            store,
             max_concurrent_loads,
             autoplay,
         } = config;
@@ -70,8 +68,6 @@ impl Queue {
         let bus = player.bus().clone();
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
-            net,
-            store,
             max_concurrent_loads,
             bus.clone(),
         ));

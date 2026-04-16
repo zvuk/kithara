@@ -95,9 +95,9 @@ fn main() -> AppResult {
         .with_crossfade_duration(config.crossfade_seconds)
         .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
     let player = Arc::new(PlayerImpl::new(player_config));
-    let mut queue_config = QueueConfig::default().with_player(player);
-    queue_config.net.insecure = config.danger_accept_invalid_certs;
-    queue_config.autoplay = true;
+    let queue_config = QueueConfig::default()
+        .with_player(player)
+        .with_autoplay(true);
 
     // Queue is constructed here, but `queue.set_tracks` is deferred to each
     // frontend's runtime context — `Loader::spawn_load` requires a running

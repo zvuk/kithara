@@ -1,8 +1,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::StoreOptions;
 use kithara_events::{Event, EventBus, FileEvent, HlsEvent, QueueEvent, TrackId, TrackStatus};
-use kithara_net::NetOptions;
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
 use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
@@ -19,8 +17,6 @@ use crate::{error::QueueError, track::TrackSource};
 /// `Loaded` emission.
 pub(crate) struct Loader {
     player: Arc<PlayerImpl>,
-    net: NetOptions,
-    store: StoreOptions,
     semaphore: Arc<Semaphore>,
     bus: EventBus,
 }
@@ -28,15 +24,11 @@ pub(crate) struct Loader {
 impl Loader {
     pub(crate) fn new(
         player: Arc<PlayerImpl>,
-        net: NetOptions,
-        store: StoreOptions,
         max_concurrent_loads: NonZeroUsize,
         bus: EventBus,
     ) -> Self {
         Self {
             player,
-            net,
-            store,
             semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             bus,
         }
@@ -44,7 +36,9 @@ impl Loader {
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
     ///
-    /// - [`TrackSource::Uri`] uses the loader's `net` / `store` templates.
+    /// - [`TrackSource::Uri`] uses [`ResourceConfig::new`] defaults.
+    ///   Callers wanting custom net/store behavior build a configured
+    ///   [`ResourceConfig`] and pass it via [`TrackSource::Config`].
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
@@ -52,13 +46,8 @@ impl Loader {
     /// sample-rate / runtime / default bus are injected.
     pub(crate) fn build_config(&self, source: TrackSource) -> Result<ResourceConfig, QueueError> {
         let mut config = match source {
-            TrackSource::Uri(url) => {
-                let mut c = ResourceConfig::new(&url)
-                    .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
-                c.net = self.net.clone();
-                c.store = self.store.clone();
-                c
-            }
+            TrackSource::Uri(url) => ResourceConfig::new(&url)
+                .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
         self.player.prepare_config(&mut config);
@@ -157,28 +146,7 @@ mod tests {
     fn make_loader() -> Arc<Loader> {
         let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
         let bus = player.bus().clone();
-        Arc::new(Loader::new(
-            player,
-            NetOptions::default(),
-            StoreOptions::default(),
-            CAP_3,
-            bus,
-        ))
-    }
-
-    #[tokio::test]
-    async fn build_config_uri_applies_net_and_store_templates() {
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-        let bus = player.bus().clone();
-        let mut net = NetOptions::default();
-        net.insecure = true;
-        let store = StoreOptions::default();
-        let loader = Loader::new(player, net, store, CAP_3, bus);
-        let Ok(config) = loader.build_config(TrackSource::Uri("https://example.com/a.mp3".into()))
-        else {
-            panic!("build_config should succeed");
-        };
-        assert!(config.net.insecure);
+        Arc::new(Loader::new(player, CAP_3, bus))
     }
 
     #[tokio::test]
@@ -223,13 +191,7 @@ mod tests {
         let cap = NonZeroUsize::new(2).expect("2 > 0");
         let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
         let bus = player.bus().clone();
-        let loader = Arc::new(Loader::new(
-            player,
-            NetOptions::default(),
-            StoreOptions::default(),
-            cap,
-            bus,
-        ));
+        let loader = Arc::new(Loader::new(player, cap, bus));
 
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));

@@ -17,23 +17,22 @@ fn needs_drm(url: &str, drm_domains: &[String]) -> bool {
 }
 
 /// Build a [`TrackSource`] for `url`, applying zvuk DRM keys when the host
-/// matches `config.drm_domains`.
+/// matches `config.drm_domains` and the `danger_accept_invalid_certs`
+/// net-option from the app config.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
-    if needs_drm(url, &config.drm_domains) {
-        match ResourceConfig::new(url) {
-            Ok(mut cfg) => {
+    match ResourceConfig::new(url) {
+        Ok(mut cfg) => {
+            cfg.net.insecure = config.danger_accept_invalid_certs;
+            if needs_drm(url, &config.drm_domains) {
                 cfg = cfg.with_keys(drm::make_key_options());
-                cfg.net.insecure = config.danger_accept_invalid_certs;
-                TrackSource::Config(Box::new(cfg))
             }
-            Err(e) => {
-                tracing::error!(%url, %e, "failed to build DRM config, falling back to Uri");
-                TrackSource::Uri(url.to_string())
-            }
+            TrackSource::Config(Box::new(cfg))
         }
-    } else {
-        TrackSource::Uri(url.to_string())
+        Err(e) => {
+            tracing::error!(%url, %e, "failed to build ResourceConfig, falling back to Uri");
+            TrackSource::Uri(url.to_string())
+        }
     }
 }
 
