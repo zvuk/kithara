@@ -533,3 +533,67 @@ async fn port_exhaustion_stress() {
         all_failures.join("\n")
     );
 }
+
+/// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
+/// on the peer's bus, and a subscriber on that bus (as
+/// `kithara_queue::Loader` would set up) receives it.
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(10)))]
+async fn soft_timeout_publishes_load_slow_on_peer_bus() {
+    use std::net::SocketAddr;
+
+    use axum::{Router, routing::get};
+    use kithara_events::{DownloaderEvent, Event, EventBus};
+
+    // Server delays longer than our configured soft_timeout, but less
+    // than the hard timeout / test timeout.
+    let app = Router::new().route(
+        "/slow",
+        get(|| async {
+            kithara_platform::tokio::time::sleep(Duration::from_millis(500)).await;
+            "ok"
+        }),
+    );
+    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    kithara_platform::tokio::task::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
+
+    let config = DownloaderConfig::default().with_soft_timeout(Duration::from_millis(50));
+    let dl = Downloader::new(config);
+
+    // Simulate the bus topology Queue builds: a scoped child of a root
+    // bus. The downloader emits on the peer's scoped handle; the
+    // subscriber (Queue's slow_listener) holds a clone of the same
+    // scope.
+    let root = EventBus::new(64);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+
+    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped.clone());
+    let _ = handle.execute(FetchCmd::get(url)).await;
+
+    // Drain until we see LoadSlow — the soft timer fires before the
+    // 500 ms server response completes.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen_slow = false;
+    while Instant::now() < deadline {
+        match kithara_platform::tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow))) => {
+                seen_slow = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(
+        seen_slow,
+        "peer bus subscriber must receive DownloaderEvent::LoadSlow"
+    );
+}
