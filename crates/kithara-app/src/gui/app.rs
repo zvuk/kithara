@@ -3,7 +3,11 @@ use std::{
     time::Duration,
 };
 
-use iced::{Subscription, Task, Theme, time as iced_time};
+use iced::{
+    Event as IcedEvent, Subscription, Task, Theme, event,
+    keyboard::{Event as KeyboardEvent, Key, key::Named},
+    time as iced_time,
+};
 use kithara::prelude::{Event, HlsEvent};
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
@@ -42,6 +46,9 @@ pub(crate) struct Kithara {
 
     // Track info.
     pub(crate) current_track_index: Option<usize>,
+    /// Row highlighted by a single click — second click on same row
+    /// commits playback. `None` when nothing is focused.
+    pub(crate) selected_track_index: Option<usize>,
     pub(crate) track_name: String,
     pub(crate) variant_label: String,
     pub(crate) shared_variant_label: Arc<Mutex<String>>,
@@ -96,6 +103,7 @@ impl Kithara {
             selected_rate: 1.0,
             crossfade,
             current_track_index,
+            selected_track_index: None,
             track_name,
             variant_label: String::new(),
             shared_variant_label: Arc::new(Mutex::new(String::new())),
@@ -124,11 +132,19 @@ impl Kithara {
         theme::kithara_theme(&self.palette)
     }
 
-    /// 100 ms tick subscription for player state sync.
+    /// 100 ms tick subscription for player state sync plus keyboard.
     #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         const TICK_INTERVAL_MS: u64 = 100;
-        iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
+        let tick = iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick);
+        let keys = event::listen_with(|e, _status, _window| match e {
+            IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
+                key: Key::Named(Named::Delete | Named::Backspace),
+                ..
+            }) => Some(Message::DeleteTrack),
+            _ => None,
+        });
+        Subscription::batch([tick, keys])
     }
 }
 

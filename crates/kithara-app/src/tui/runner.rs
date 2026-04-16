@@ -158,6 +158,17 @@ fn run_ui_loop(
                                 switch_to_id(queue, id, index, &mut ui, &mut auto_advanced_index)?;
                             }
                         }
+                        ControlOutcome::DeleteCurrent => {
+                            if let Some(id) = queue.current().map(|e| e.id) {
+                                match queue.remove(id) {
+                                    Ok(()) => {
+                                        auto_advanced_index = None;
+                                        ui.log_line(&format!("removed track {}", id.as_u64()))?;
+                                    }
+                                    Err(e) => ui.log_line(&format!("remove failed: {e}"))?,
+                                }
+                            }
+                        }
                         ControlOutcome::Quit => break,
                     }
                 }
@@ -267,6 +278,7 @@ fn handle_key(
             let index = (c as usize) - ('1' as usize);
             ControlOutcome::SwitchTrack(index)
         }
+        KeyCode::Delete | KeyCode::Backspace => ControlOutcome::DeleteCurrent,
         _ => ControlOutcome::Continue(None),
     }
 }
@@ -346,5 +358,6 @@ fn switch_to_id(
 enum ControlOutcome {
     Continue(Option<String>),
     SwitchTrack(usize),
+    DeleteCurrent,
     Quit,
 }

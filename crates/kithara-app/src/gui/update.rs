@@ -127,17 +127,38 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
 
         Message::SelectTrack(idx) => {
-            // Tap on a track in the list → immediate cut (AVQueuePlayer-idiom).
-            if let Some(id) = track_id_at(state, idx)
-                && let Err(e) = state.queue.select(id, Transition::None)
-            {
-                error!(index = idx, error = %e, "select failed");
+            // First click highlights, second click on the same row plays.
+            // Matches file-browser UX: click = focus, double-click = open.
+            if state.selected_track_index != Some(idx) {
+                state.selected_track_index = Some(idx);
+            } else if let Some(id) = track_id_at(state, idx) {
+                if let Err(e) = state.queue.select(id, Transition::None) {
+                    error!(index = idx, error = %e, "select failed");
+                }
+                state.current_track_index = Some(idx);
+                state.track_name = track_name_at(state, idx);
+                state.variant_label.clear();
+                state.abr_mode_is_auto = true;
+                state.selected_variant = None;
             }
-            state.current_track_index = Some(idx);
-            state.track_name = track_name_at(state, idx);
-            state.variant_label.clear();
-            state.abr_mode_is_auto = true;
-            state.selected_variant = None;
+            Task::none()
+        }
+
+        Message::DeleteTrack => {
+            // Prefer the highlighted row; fall back to the playing one.
+            let target_idx = state.selected_track_index.or(state.current_track_index);
+            if let Some(idx) = target_idx
+                && let Some(id) = track_id_at(state, idx)
+            {
+                match state.queue.remove(id) {
+                    Ok(()) => {
+                        state.selected_track_index = None;
+                        // Queue::remove auto-advances if we removed the
+                        // current track, or pauses on empty queue.
+                    }
+                    Err(e) => error!(index = idx, error = %e, "remove failed"),
+                }
+            }
             Task::none()
         }
 

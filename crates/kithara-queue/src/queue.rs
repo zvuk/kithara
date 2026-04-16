@@ -260,9 +260,30 @@ impl Queue {
 
     /// Remove a track from the queue by id.
     ///
+    /// If the removed track is currently playing:
+    /// - with tracks remaining → switches to the next (or previous if
+    ///   we were at the tail) with an immediate cut.
+    /// - with no tracks remaining → pauses the player.
+    ///
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue.
     pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
+        let was_current = self.current().map(|e| e.id) == Some(id);
+        let successor_id = if was_current {
+            let guard = self.lock_tracks();
+            let pos = guard.iter().position(|e| e.id == id);
+            let result = pos.and_then(|p| {
+                guard
+                    .get(p + 1)
+                    .or_else(|| if p > 0 { guard.get(p - 1) } else { None })
+                    .map(|e| e.id)
+            });
+            drop(guard);
+            result
+        } else {
+            None
+        };
+
         let index = {
             let mut guard = self.lock_tracks_mut();
             let pos = guard
@@ -278,6 +299,14 @@ impl Queue {
             .remove(&id);
         let _ = self.player.remove_at(index);
         self.bus.publish(QueueEvent::TrackRemoved { id });
+
+        if was_current {
+            if let Some(next) = successor_id {
+                let _ = self.select(next, Transition::None);
+            } else {
+                self.player.pause();
+            }
+        }
         Ok(())
     }
 

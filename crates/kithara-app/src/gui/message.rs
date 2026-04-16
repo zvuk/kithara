@@ -21,8 +21,13 @@ pub(crate) enum Message {
     PlayRateChanged(f32),
     /// Crossfade duration changed (seconds).
     CrossfadeChanged(f32),
-    /// Select a track from the playlist by index.
+    /// Select a track from the playlist by index. First click just
+    /// highlights the row (no playback); a second click on the already-
+    /// selected row plays it. Matches common file-browser UX.
     SelectTrack(usize),
+    /// Delete the currently-highlighted track (or current one if none
+    /// is highlighted). Wired to the Delete / Backspace key.
+    DeleteTrack,
     /// Switch the active tab.
     TabSelected(Tab),
     /// Switch ABR mode (None = Auto).
