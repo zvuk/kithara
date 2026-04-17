@@ -871,13 +871,13 @@ fn playlist_item_style(
         Color::TRANSPARENT
     };
 
-    let hover_bg = if current {
+    let hover_bg = if current || selected {
         with_alpha(p.accent, ALPHA_PLAYLIST_CURRENT_HOVER)
     } else {
         with_alpha(p.bg_panel, ALPHA_PLAYLIST_INACTIVE_HOVER)
     };
 
-    let pressed_bg = if current {
+    let pressed_bg = if current || selected {
         with_alpha(p.accent, ALPHA_PLAYLIST_CURRENT_PRESSED)
     } else {
         with_alpha(p.accent, ALPHA_PLAYLIST_INACTIVE_PRESSED)
