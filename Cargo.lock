@@ -4052,6 +4052,7 @@ dependencies = [
  "kithara-workspace-hack",
  "thiserror 2.0.18",
  "tracing",
+ "url",
  "wasm-bindgen-test",
 ]
 

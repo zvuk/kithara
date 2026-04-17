@@ -16,6 +16,7 @@ mod cipher;
 mod context;
 mod decrypt;
 mod error;
+mod registry;
 
 #[cfg(feature = "internal")]
 pub mod internal;
@@ -24,3 +25,6 @@ pub use cipher::UniqueBinaryCipher;
 pub use context::DecryptContext;
 pub use decrypt::aes128_cbc_process_chunk;
 pub use error::DrmError;
+pub use registry::{
+    DomainMatcher, KeyProcessResult, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule,
+};
