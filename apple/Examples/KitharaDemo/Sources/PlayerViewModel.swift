@@ -45,8 +45,36 @@ final class PlayerViewModel: ObservableObject {
     @Published var crossfadeDuration: Float = 0
 
     private let player = KitharaPlayer(
-        config: KitharaPlayer.Config(keyRules: makeZvukKeyRules())
+        config: KitharaPlayer.Config(
+            keyRules: makeZvukKeyRules(),
+            cacheDir: Self.defaultCacheDir
+        )
     )
+
+    /// Self-managed cache directory: `~/Library/Application Support/kithara`.
+    ///
+    /// Uses Application Support instead of Caches because kithara runs
+    /// its own eviction; the system-managed `Caches/` dir can be purged
+    /// at any time, which would desync our on-disk bookkeeping. The
+    /// directory is created on demand and marked as excluded from iCloud
+    /// backup — cached media is large and regenerable.
+    private static var defaultCacheDir: String? {
+        let fm = FileManager.default
+        guard let base = fm
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("kithara", isDirectory: true)
+        else { return nil }
+
+        try? fm.createDirectory(at: base, withIntermediateDirectories: true)
+
+        var url = base
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
+
+        return url.path
+    }
     private var cancellables = Set<AnyCancellable>()
     /// Per-item event subscriptions keyed by `KitharaPlayerItem.id`.
     /// Variant discovery and item-level duration flow through here;

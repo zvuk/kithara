@@ -28,10 +28,19 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState = _uiState.asStateFlow()
 
-    private val player = KitharaPlayer().apply { defaultRate = _uiState.value.selectedRate }
+    private val player: KitharaPlayer
 
     init {
         Kithara.initialize(application, logLevel = LogLevel.Debug)
+        // Self-managed cache: /data/data/<package>/files/kithara-cache.
+        // We use `filesDir` rather than `cacheDir` because kithara runs
+        // its own eviction — the OS-managed `cacheDir` can be cleared
+        // under storage pressure, which would desync our bookkeeping.
+        // Only clears on app uninstall.
+        val cacheDir = File(application.filesDir, "kithara-cache").apply { mkdirs() }.absolutePath
+        player = KitharaPlayer(
+            config = KitharaPlayer.Config(cacheDir = cacheDir),
+        ).apply { defaultRate = _uiState.value.selectedRate }
         observePlayer()
         observeEvents()
         for (url in DEFAULT_TRACK_URLS) {
