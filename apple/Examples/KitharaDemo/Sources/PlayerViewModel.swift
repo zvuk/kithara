@@ -437,6 +437,11 @@ final class PlayerViewModel: ObservableObject {
             }
         case let .error(message):
             print("[KitharaDemo] \(trackLabel(entryId)) item error: \(message)")
+            // Surface only the first error per track — the pipeline can
+            // retry internally and emit the same error many times.
+            if entryId == currentTrackId, errorMessage == nil {
+                errorMessage = message
+            }
         case .statusChanged, .bufferedDurationChanged:
             break
         @unknown default:
