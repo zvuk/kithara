@@ -1,3 +1,4 @@
+import Kithara
 import SwiftUI
 
 // MARK: - Kithara color palette (matches kithara-ui theme)
@@ -17,6 +18,8 @@ extension Color {
     static let kitharaSuccess = Color(red: 0.400, green: 0.800, blue: 0.400)
     /// Danger red (#e64c4c).
     static let kitharaDanger = Color(red: 0.900, green: 0.300, blue: 0.300)
+    /// Warning amber (#e6b333) — matches kithara-ui theme.warning.
+    static let kitharaWarning = Color(red: 0.902, green: 0.702, blue: 0.200)
 }
 
 // MARK: - Player View
@@ -462,6 +465,7 @@ struct PlayerView: View {
 
     private func playlistRow(entry: PlaylistEntry, index: Int) -> some View {
         let isCurrent = entry.id == viewModel.currentTrackId
+        let statusColor = trackStatusColor(entry.trackStatus, isCurrent: isCurrent)
 
         return Button {
             viewModel.selectTrack(entry.id)
@@ -469,11 +473,11 @@ struct PlayerView: View {
             HStack(spacing: 10) {
                 Text(String(format: "%02d", index + 1))
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(isCurrent ? Color.kitharaGold : .kitharaMuted)
+                    .foregroundStyle(statusColor ?? (isCurrent ? Color.kitharaGold : .kitharaMuted))
 
                 Text(entry.name)
                     .font(.system(size: 13))
-                    .foregroundStyle(isCurrent ? Color.kitharaLight : .kitharaMuted)
+                    .foregroundStyle(statusColor ?? (isCurrent ? Color.kitharaLight : .kitharaMuted))
                     .lineLimit(1)
 
                 Spacer()
@@ -489,6 +493,14 @@ struct PlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func trackStatusColor(_ status: TrackStatus?, isCurrent: Bool) -> Color? {
+        switch status {
+        case .slow: .kitharaWarning
+        case .failed: .kitharaDanger
+        default: nil
+        }
     }
 
     // MARK: - Settings

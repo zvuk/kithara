@@ -61,7 +61,10 @@ import com.kithara.example.ui.theme.AccentGold
 import com.kithara.example.ui.theme.KitharaBackground
 import com.kithara.example.ui.theme.KitharaDanger
 import com.kithara.example.ui.theme.KitharaMuted
+import com.kithara.example.ui.theme.KitharaWarning
 import com.kithara.example.ui.theme.KitharaSuccess
+import androidx.compose.ui.graphics.Color
+import com.kithara.TrackStatus
 import com.kithara.example.ui.theme.KitharaTheme
 import com.kithara.example.ui.theme.PanelBackground
 import com.kithara.example.ui.theme.PanelBorder
@@ -455,9 +458,10 @@ private fun PlaylistItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val statusColor = trackStatusColor(entry.trackStatus)
     val background = if (isCurrent) AccentGold.copy(alpha = 0.18f) else KitharaBackground
-    val indexColor = if (isCurrent) AccentGold else KitharaMuted
-    val nameColor = if (isCurrent) PrimaryText else SecondaryText
+    val indexColor = statusColor ?: if (isCurrent) AccentGold else KitharaMuted
+    val nameColor = statusColor ?: if (isCurrent) PrimaryText else SecondaryText
 
     Row(
         modifier = modifier
@@ -483,6 +487,12 @@ private fun PlaylistItem(
             modifier = Modifier.weight(1f),
         )
     }
+}
+
+private fun trackStatusColor(status: TrackStatus?): Color? = when (status) {
+    is TrackStatus.Slow -> KitharaWarning
+    is TrackStatus.Failed -> KitharaDanger
+    else -> null
 }
 
 @Composable

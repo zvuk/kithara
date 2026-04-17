@@ -65,6 +65,22 @@ data class ItemState(
 )
 
 /**
+ * Queue-level loading lifecycle of a track.
+ *
+ * Mirrors the Rust `TrackStatus` enum. Tracks progress through
+ * `Pending → Loading → Loaded → Consumed`, with `Slow` and `Failed`
+ * as transient/terminal branches.
+ */
+sealed interface TrackStatus {
+    data object Pending : TrackStatus
+    data object Loading : TrackStatus
+    data object Slow : TrackStatus
+    data object Loaded : TrackStatus
+    data class Failed(val reason: String) : TrackStatus
+    data object Consumed : TrackStatus
+}
+
+/**
  * One-shot player events delivered via [KitharaPlayer.events].
  *
  * Distinct from [PlayerState], which carries continuously-updated snapshot data.
@@ -75,6 +91,12 @@ sealed interface KitharaPlayerEvent {
 
     /** The current item played to its end successfully. */
     data object PlayedToEnd : KitharaPlayerEvent
+
+    /** The loading/playback status of a queued track changed. */
+    data class TrackStatusChanged(val itemId: String, val status: TrackStatus) : KitharaPlayerEvent
+
+    /** Queue reached the end (no more tracks to play). */
+    data object QueueEnded : KitharaPlayerEvent
 }
 
 /**

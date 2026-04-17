@@ -5,6 +5,7 @@ import com.kithara.ffi.FfiException
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
+import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
@@ -246,11 +247,20 @@ class KitharaPlayer() {
             is FfiPlayerEvent.ItemDidPlayToEnd ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.PlayedToEnd)
 
+            is FfiPlayerEvent.TrackStatusChanged ->
+                eventsFlow.tryEmit(
+                    KitharaPlayerEvent.TrackStatusChanged(
+                        event.itemId,
+                        event.status.toTrackStatus(),
+                    )
+                )
+
+            is FfiPlayerEvent.QueueEnded ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
+
             is FfiPlayerEvent.TimeControlStatusChanged,
             is FfiPlayerEvent.VolumeChanged,
             is FfiPlayerEvent.MuteChanged,
-            is FfiPlayerEvent.TrackStatusChanged,
-            is FfiPlayerEvent.QueueEnded,
             is FfiPlayerEvent.CrossfadeStarted,
             is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
         }
@@ -277,6 +287,15 @@ private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
     FfiPlayerStatus.READY_TO_PLAY -> PlayerStatus.ReadyToPlay
     FfiPlayerStatus.FAILED -> PlayerStatus.Failed
     FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
+}
+
+private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
+    is FfiTrackStatus.Pending -> TrackStatus.Pending
+    is FfiTrackStatus.Loading -> TrackStatus.Loading
+    is FfiTrackStatus.Slow -> TrackStatus.Slow
+    is FfiTrackStatus.Loaded -> TrackStatus.Loaded
+    is FfiTrackStatus.Failed -> TrackStatus.Failed(reason)
+    is FfiTrackStatus.Consumed -> TrackStatus.Consumed
 }
 
 private fun Transition.toFfi(): FfiTransition = when (this) {

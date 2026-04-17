@@ -1,12 +1,14 @@
 package com.kithara.example
 
 import com.kithara.PlayerStatus
+import com.kithara.TrackStatus
 
 internal data class PlaylistEntry(
     /** Matches `KitharaPlayerItem.id` — stable across queue reorder. */
     val id: String,
     val name: String,
     val url: String,
+    val trackStatus: TrackStatus? = null,
 )
 
 internal data class PlayerUiState(

@@ -12,6 +12,7 @@ import com.kithara.KitharaPlayerEvent
 import com.kithara.KitharaPlayerItem
 import com.kithara.LogLevel
 import com.kithara.PlayerStatus
+import com.kithara.TrackStatus
 import com.kithara.Transition
 import java.io.File
 import java.io.IOException
@@ -206,14 +207,29 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             player.events.collect { event ->
                 when (event) {
                     is KitharaPlayerEvent.CurrentItemChanged -> {
-                        // Queue owns auto-advance + crossfade timing; we
-                        // just mirror the current id into the UI state.
                         _uiState.update { it.copy(currentTrackId = event.itemId) }
                     }
-                    is KitharaPlayerEvent.PlayedToEnd -> {
-                        // Queue handles end-of-track auto-advance; nothing
-                        // to do here.
+                    is KitharaPlayerEvent.TrackStatusChanged -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                playlist = state.playlist.map { entry ->
+                                    if (entry.id == event.itemId) entry.copy(trackStatus = event.status)
+                                    else entry
+                                }
+                            )
+                        }
+                        if (event.status is TrackStatus.Failed) {
+                            val reason = (event.status as TrackStatus.Failed).reason
+                            Log.w(TAG, "Track ${event.itemId} failed: $reason")
+                            if (event.itemId == _uiState.value.currentTrackId) {
+                                setLocalError(reason)
+                            }
+                        }
                     }
+                    is KitharaPlayerEvent.QueueEnded -> {
+                        _uiState.update { it.copy(isPlaying = false, errorMessage = "Playlist ended") }
+                    }
+                    is KitharaPlayerEvent.PlayedToEnd -> Unit
                 }
             }
         }

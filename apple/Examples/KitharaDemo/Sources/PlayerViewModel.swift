@@ -8,12 +8,14 @@ struct PlaylistEntry: Identifiable, Equatable {
     let name: String
     let url: String
     var duration: TimeInterval?
+    var trackStatus: TrackStatus?
 
     init(from item: KitharaPlayerItem) {
         self.id = item.id
         self.url = item.url
         self.name = trackName(for: item.url)
         self.duration = nil
+        self.trackStatus = nil
     }
 
     static func == (lhs: PlaylistEntry, rhs: PlaylistEntry) -> Bool {
@@ -342,6 +344,10 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func handleTrackStatus(itemId: String, status: TrackStatus) {
+        if let idx = playlist.firstIndex(where: { $0.id == itemId }) {
+            playlist[idx].trackStatus = status
+        }
+
         switch status {
         case let .failed(reason):
             print("[KitharaDemo] \(trackLabel(itemId)) FAILED: \(reason)")
@@ -349,6 +355,8 @@ final class PlayerViewModel: ObservableObject {
                 errorMessage = reason
                 self.status = .failed
             }
+        case .slow:
+            print("[KitharaDemo] \(trackLabel(itemId)) slow loading")
         default:
             break
         }
