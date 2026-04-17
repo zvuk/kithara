@@ -64,7 +64,7 @@ impl AppConfig {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            drm_domains: vec!["zvq.me".to_string()],
+            drm_domains: vec!["*.zvq.me".to_string()],
             crossfade_seconds: Self::DEFAULT_CROSSFADE_SECONDS,
             eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),

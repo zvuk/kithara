@@ -8,7 +8,7 @@ import Kithara
 /// creates a cipher, and returns a [`KitharaPlayer.KeyRule`] scoped to
 /// zvuk-owned domains. Pass the result to `KitharaPlayer.Config.keyRules`.
 func makeZvukKeyRules() -> [KitharaPlayer.KeyRule] {
-    let cipherKey = readEnvValue("DRM_KEY") ?? "kithara"
+    let cipherKey = readEnvValue("DRM_KEY") ?? "BinaryCipherKey"
     let seed = randomAlphanumericSeed(length: 16)
     let secret = cipherKey + seed
     let cipher = Cipher(key: secret)
