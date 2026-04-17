@@ -22,10 +22,6 @@ use kithara_platform::{
 };
 use kithara_stream::{MediaInfo, Stream, StreamContext, StreamType, Timeline};
 use portable_atomic::AtomicF32;
-use ringbuf::{
-    HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Split},
-};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -38,7 +34,6 @@ use crate::{
     },
     traits::{DecodeError, DecodeResult, PcmReader},
     worker::{
-        AudioCommand,
         handle::{AudioWorkerHandle, TrackRegistration},
         thread_wake::ThreadWake,
         types::{ServiceClass, TrackId},
@@ -64,13 +59,6 @@ enum RecvOutcome {
     Empty,
     Item(Fetch<PcmChunk>),
 }
-
-type AudioChannels = (
-    HeapProd<AudioCommand>,
-    HeapCons<AudioCommand>,
-    HeapProd<Fetch<PcmChunk>>,
-    HeapCons<Fetch<PcmChunk>>,
-);
 
 /// Generic audio pipeline running in a separate thread.
 ///
@@ -100,15 +88,8 @@ type AudioChannels = (
 /// }
 /// ```
 pub struct Audio<S> {
-    /// Command sender for non-seek commands.
-    ///
-    /// Seek flows through Timeline atomics. This channel is kept alive
-    /// so the worker loop does not exit due to a closed `cmd_rx`.
-    #[expect(dead_code, reason = "kept alive for cmd_rx in worker loop")]
-    cmd_tx: HeapProd<AudioCommand>,
-
     /// PCM chunk receiver.
-    pcm_rx: HeapCons<Fetch<PcmChunk>>,
+    pcm_rx: kithara_rt::Inlet<Fetch<PcmChunk>>,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
     _epoch: Arc<AtomicU64>,
@@ -195,7 +176,7 @@ impl<S> Audio<S> {
 
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
-    pub fn pcm_rx(&mut self) -> &mut HeapCons<Fetch<PcmChunk>> {
+    pub fn pcm_rx(&mut self) -> &mut kithara_rt::Inlet<Fetch<PcmChunk>> {
         &mut self.pcm_rx
     }
 
@@ -661,11 +642,14 @@ where
         Ok(decoder)
     }
 
-    fn create_channels(command_channel_capacity: usize, pcm_buffer_chunks: usize) -> AudioChannels {
-        let cmd_capacity = command_channel_capacity.max(1);
-        let (cmd_tx, cmd_rx) = HeapRb::<AudioCommand>::new(cmd_capacity).split();
-        let (data_tx, data_rx) = HeapRb::<Fetch<PcmChunk>>::new(pcm_buffer_chunks.max(1)).split();
-        (cmd_tx, cmd_rx, data_tx, data_rx)
+    fn create_channels(
+        pcm_buffer_chunks: usize,
+        wake: Arc<ThreadWake>,
+    ) -> (
+        kithara_rt::Outlet<Fetch<PcmChunk>>,
+        kithara_rt::Inlet<Fetch<PcmChunk>>,
+    ) {
+        kithara_rt::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
     }
 
     fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
@@ -743,7 +727,7 @@ where
 
         let AudioConfig {
             byte_pool,
-            command_channel_capacity,
+            command_channel_capacity: _command_channel_capacity,
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
@@ -788,9 +772,6 @@ where
         let total_duration = decoder.duration().or_else(|| timeline.total_duration());
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
-
-        let (cmd_tx, cmd_rx, data_tx, data_rx) =
-            Self::create_channels(command_channel_capacity, pcm_buffer_chunks);
 
         let epoch = Arc::new(AtomicU64::new(0));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
@@ -841,24 +822,21 @@ where
 
         let preload_notify = Arc::new(Notify::new());
         let reader_wake = Arc::new(ThreadWake::new());
+        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
 
         // Get or create worker — standalone mode when no worker provided.
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
 
         let track_id = worker.register_track(TrackRegistration {
-            consumer_wake: Arc::clone(&reader_wake),
             source: Box::new(audio_source),
-            data_tx,
-            cmd_rx,
+            outlet: data_tx,
             preload_notify: preload_notify.clone(),
             preload_chunks: preload_chunks.get(),
-            cancel: cancel.clone(),
             service_class: ServiceClass::default(),
         });
 
         Ok(Self {
-            cmd_tx,
             pcm_rx: data_rx,
             _epoch: epoch,
             validator: EpochValidator::new(),
@@ -1032,16 +1010,13 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
-    use ringbuf::traits::Producer;
 
     use super::*;
 
     fn empty_audio() -> Audio<()> {
-        let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
-        let (_data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(1).split();
+        let (_data_tx, pcm_rx) = kithara_rt::connect::<Fetch<PcmChunk>>(1, None);
 
         Audio {
-            cmd_tx,
             pcm_rx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::new(),
@@ -1095,12 +1070,10 @@ mod tests {
     }
 
     // Helper that returns (Audio, data_tx) so tests can push fetches.
-    fn audio_with_channel() -> (Audio<()>, HeapProd<Fetch<PcmChunk>>) {
-        let (cmd_tx, _cmd_rx) = HeapRb::<AudioCommand>::new(1).split();
-        let (data_tx, pcm_rx) = HeapRb::<Fetch<PcmChunk>>::new(4).split();
+    fn audio_with_channel() -> (Audio<()>, kithara_rt::Outlet<Fetch<PcmChunk>>) {
+        let (data_tx, pcm_rx) = kithara_rt::connect::<Fetch<PcmChunk>>(4, None);
 
         let audio = Audio {
-            cmd_tx,
             pcm_rx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::new(),

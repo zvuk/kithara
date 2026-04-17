@@ -8,6 +8,7 @@ members = [
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-rt",
     "crates/kithara-audio",
     "crates/kithara-encode",
     "crates/kithara-decode",
@@ -39,6 +40,7 @@ default-members = [
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-rt",
     "crates/kithara-audio",
     "crates/kithara-encode",
     "crates/kithara-decode",
@@ -144,6 +146,7 @@ kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
 kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
+kithara-rt = { path = "crates/kithara-rt", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-hang-detector = { path = "crates/kithara-hang-detector", version = "0.1.0" }

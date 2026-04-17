@@ -5,14 +5,6 @@ use kithara_stream::Timeline;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};
 
-/// Command for audio worker (non-seek commands only).
-///
-/// Seek flows entirely through [`Timeline`] atomics.
-#[derive(Debug)]
-pub(crate) enum AudioCommand {
-    // Seek removed — flows through Timeline::initiate_seek / complete_seek.
-}
-
 /// Trait for audio sources processed in a blocking worker thread.
 ///
 /// The worker calls `step_track()` once per scheduling round. Each call
@@ -20,7 +12,6 @@ pub(crate) enum AudioCommand {
 /// tells the worker what happened.
 pub(crate) trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
-    type Command: Send + 'static;
 
     /// Advance the track FSM by one step.
     ///
@@ -32,8 +23,6 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
     /// - `Eof` — end of stream (may transition out via seek-after-EOF).
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
-
-    fn handle_command(&mut self, cmd: Self::Command);
 
     /// Access the shared timeline for epoch queries.
     fn timeline(&self) -> &Timeline;

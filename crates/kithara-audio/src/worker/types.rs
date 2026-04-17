@@ -18,32 +18,7 @@ impl TrackIdGen {
     }
 }
 
-/// Priority class for worker scheduling.
-///
-/// Tracks with higher service class are served first when the scheduler
-/// selects which track to decode next.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum ServiceClass {
-    /// Not playing, not needed soon. Lowest priority.
-    #[default]
-    Idle,
-    /// Preloading or about to play. Medium priority.
-    Warm,
-    /// Currently audible. Highest priority.
-    Audible,
-}
-
-/// Result of a single worker step for one track.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StepResult {
-    /// Track made progress (decoded chunk, applied seek, pushed pending).
-    Progress,
-    /// Track is alive but waiting (backpressure, source not ready yet).
-    /// Not a hang — should reset the watchdog.
-    Waiting,
-    /// Track could not progress (EOF, failed, terminal).
-    NoProgress,
-}
+pub use kithara_rt::ServiceClass;
 
 #[cfg(test)]
 mod tests {
@@ -60,22 +35,5 @@ mod tests {
         assert_eq!(a, 1);
         assert_eq!(b, 2);
         assert_eq!(c, 3);
-    }
-
-    #[kithara::test]
-    fn service_class_ordering() {
-        assert!(ServiceClass::Idle < ServiceClass::Warm);
-        assert!(ServiceClass::Warm < ServiceClass::Audible);
-    }
-
-    #[kithara::test]
-    fn service_class_default_is_idle() {
-        assert_eq!(ServiceClass::default(), ServiceClass::Idle);
-    }
-
-    #[kithara::test]
-    fn step_result_equality() {
-        assert_eq!(StepResult::Progress, StepResult::Progress);
-        assert_ne!(StepResult::Progress, StepResult::NoProgress);
     }
 }

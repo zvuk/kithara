@@ -1,0 +1,20 @@
+[package]
+name = "kithara-rt"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cooperative multi-node scheduler for real-time audio processing"
+
+[lints]
+workspace = true
+
+[dependencies]
+ringbuf = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+kithara-platform = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
