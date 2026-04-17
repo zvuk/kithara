@@ -49,7 +49,10 @@ impl AppConfig {
         "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
         "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
         "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/95038745_1/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109/master.m3u8",
     ];
 
     /// Create a default config around the given downloader. Tracks default

@@ -38,6 +38,7 @@ const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 ///   [`PlayerImpl::crossfade_duration`].
 /// - [`Transition::CrossfadeWith`] — explicit override in seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Transition {
     /// No crossfade; immediate cut.
     None,
@@ -101,6 +102,11 @@ pub struct Queue {
     /// select repeatedly as the remaining playtime keeps ticking below
     /// the crossfade threshold. Cleared on [`QueueEvent::CurrentTrackChanged`].
     crossfade_armed_for: Arc<Mutex<Option<TrackId>>>,
+    /// Authoritative playback position updated on every [`Self::tick`].
+    /// Filters transient 0.0 blips the engine reports on pause/resume —
+    /// downstream UIs should read from this field rather than polling
+    /// the engine directly.
+    cached_position: Arc<Mutex<Option<f64>>>,
     autoplay: bool,
 }
 
@@ -144,6 +150,7 @@ impl Queue {
             bus,
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(Mutex::new(None)),
+            cached_position: Arc::new(Mutex::new(None)),
             autoplay,
         }
     }
@@ -474,8 +481,37 @@ impl Queue {
     pub fn tick(&self) -> Result<(), QueueError> {
         self.player.tick()?;
         self.drain_player_events();
+        self.update_cached_position();
         self.maybe_arm_crossfade();
         Ok(())
+    }
+
+    /// Latest monotonic playback position for the current track in
+    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+    /// samples the engine produces on pause/resume so downstream UIs
+    /// see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        *self
+            .cached_position
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn update_cached_position(&self) {
+        let Some(t) = self.player.position_seconds() else {
+            return;
+        };
+        let mut slot = self
+            .cached_position
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Engine briefly reports 0.0 on pause/resume; keep the last
+        // sane value so slider bindings don't flash back to the start.
+        if t == 0.0 && slot.is_some_and(|prev| prev > 0.5) {
+            return;
+        }
+        *slot = Some(t);
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the
@@ -491,7 +527,7 @@ impl Queue {
         let Some(dur) = self.player.duration_seconds() else {
             return;
         };
-        let Some(pos) = self.player.position_seconds() else {
+        let Some(pos) = self.position_seconds() else {
             return;
         };
         if dur <= 0.0 || pos <= 0.0 {
@@ -567,9 +603,6 @@ impl Queue {
             /// # Errors
             /// Forwards `PlayError` from the underlying player.
             pub fn reset_eq(&self) -> Result<(), PlayError>;
-            /// Current playback position in seconds.
-            #[must_use]
-            pub fn position_seconds(&self) -> Option<f64>;
             /// Current track duration in seconds.
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;
@@ -722,6 +755,10 @@ impl Queue {
                 let idx = self.player.current_index();
                 let id = self.lock_tracks().get(idx).map(|e| e.id);
                 *self.lock_crossfade_armed_mut() = None;
+                *self
+                    .cached_position
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = None;
                 self.bus.publish(QueueEvent::CurrentTrackChanged { id });
             }
             _ => {}

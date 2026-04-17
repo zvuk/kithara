@@ -99,7 +99,7 @@ impl EventBridge {
                 // handling below.
                 let _ = queue.tick();
                 queue.player().process_notifications();
-                let time = queue.player().position_seconds();
+                let time = queue.position_seconds();
                 let duration = queue.player().duration_seconds();
 
                 match time {
@@ -107,16 +107,8 @@ impl EventBridge {
                         if last_time
                             .is_none_or(|prev| (prev - t).abs() > TIME_UPDATE_THRESHOLD) =>
                     {
-                        // Filter transient 0.0 blips the engine reports
-                        // on pause/resume. A real seek-to-0 after a
-                        // non-zero position would otherwise flash the
-                        // slider back to the start for one frame.
-                        let looks_like_resume_blip =
-                            t == 0.0 && last_time.is_some_and(|prev| prev > 0.5);
-                        if !looks_like_resume_blip {
-                            observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
-                            last_time = Some(t);
-                        }
+                        observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
+                        last_time = Some(t);
                     }
                     None if last_time.is_some() => {
                         last_time = None;

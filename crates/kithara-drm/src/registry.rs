@@ -13,6 +13,7 @@ pub type KeyProcessor = Arc<dyn Fn(Bytes) -> KeyProcessResult + Send + Sync>;
 
 /// Pattern for matching key-URL domains.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum DomainMatcher {
     /// Exact domain match (e.g. `"zvuk.com"` matches only `zvuk.com`).
     Exact(String),
@@ -56,6 +57,7 @@ impl DomainMatcher {
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct KeyProcessorRule {
     #[setters(skip)]
     matchers: Vec<DomainMatcher>,
@@ -105,6 +107,7 @@ impl KeyProcessorRule {
 /// find a matching rule. The first rule whose domain pattern matches
 /// the key URL's host wins. Unmatched URLs use the raw key as-is.
 #[derive(Clone, Default, Debug)]
+#[non_exhaustive]
 pub struct KeyProcessorRegistry {
     rules: Vec<KeyProcessorRule>,
 }

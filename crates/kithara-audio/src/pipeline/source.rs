@@ -25,10 +25,7 @@ use crate::pipeline::fetch::Fetch;
 /// carried by `AudioEvent`. The two structs are intentionally
 /// decoupled — see [`AudioFormat`] for the dependency-cycle rationale.
 fn spec_to_format(spec: PcmSpec) -> AudioFormat {
-    AudioFormat {
-        channels: spec.channels,
-        sample_rate: spec.sample_rate,
-    }
+    AudioFormat::new(spec.channels, spec.sample_rate)
 }
 
 /// Nanoseconds per second for frame/duration conversion.
