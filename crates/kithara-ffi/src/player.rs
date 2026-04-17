@@ -125,6 +125,7 @@ impl AudioPlayer {
         item: Arc<AudioPlayerItem>,
         after: Option<Arc<AudioPlayerItem>>,
     ) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
         let source = self.build_source_for_item(&item)?;
 
         let id = if let Some(after_item) = after.as_ref() {
@@ -200,6 +201,7 @@ impl AudioPlayer {
         index: u32,
         item: Arc<AudioPlayerItem>,
     ) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
         let idx = index as usize;
         let tracks = self.queue.tracks();
         let old = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
@@ -249,6 +251,7 @@ impl AudioPlayer {
         index: u32,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
         let tracks = self.queue.tracks();
         let idx = index as usize;
         let entry = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
