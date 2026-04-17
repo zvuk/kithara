@@ -495,6 +495,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     for (index, entry) in state.tracks_snapshot.iter().enumerate() {
         let is_current = state.current_track_index == Some(index);
+        let is_selected = state.selected_track_index == Some(index);
         let is_failed = matches!(entry.status, TrackStatus::Failed(_));
         let is_slow = matches!(entry.status, TrackStatus::Slow);
         let blink_on = u64::from(state.blink_counter / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
@@ -534,7 +535,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         )
         .width(Length::Fill)
         .padding([PLAYLIST_ITEM_PADDING_Y, PLAYLIST_ITEM_PADDING_X])
-        .style(move |_theme, status| playlist_item_style(p, is_current, status))
+        .style(move |_theme, status| playlist_item_style(p, is_current, is_selected, status))
         .on_press(Message::SelectTrack(index));
 
         tracks = tracks.push(item);
@@ -856,9 +857,16 @@ fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> Button
     }
 }
 
-fn playlist_item_style(p: GuiPalette, current: bool, status: ButtonStatus) -> ButtonStyle {
+fn playlist_item_style(
+    p: GuiPalette,
+    current: bool,
+    selected: bool,
+    status: ButtonStatus,
+) -> ButtonStyle {
     let active_bg = if current {
         with_alpha(p.accent, ALPHA_PLAYLIST_CURRENT)
+    } else if selected {
+        with_alpha(p.accent, ALPHA_PLAYLIST_INACTIVE_PRESSED)
     } else {
         Color::TRANSPARENT
     };

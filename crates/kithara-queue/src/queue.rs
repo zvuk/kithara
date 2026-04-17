@@ -678,9 +678,29 @@ impl Queue {
 }
 
 fn extract_track_name(source: &TrackSource) -> String {
-    source
-        .uri()
-        .and_then(|s| s.rsplit('/').next())
+    let raw = match source {
+        TrackSource::Uri(s) => s.as_str(),
+        TrackSource::Config(cfg) => return name_from_src(&cfg.src),
+    };
+    name_from_raw(raw)
+}
+
+fn name_from_src(src: &kithara_play::ResourceSrc) -> String {
+    match src {
+        kithara_play::ResourceSrc::Url(url) => {
+            let path = url.path();
+            name_from_raw(path)
+        }
+        kithara_play::ResourceSrc::Path(p) => p.file_name().map_or_else(
+            || "Unknown".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+    }
+}
+
+fn name_from_raw(s: &str) -> String {
+    s.rsplit('/')
+        .find(|seg| !seg.is_empty())
         .unwrap_or("Unknown")
         .to_string()
 }
