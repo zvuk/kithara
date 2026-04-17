@@ -1,8 +1,9 @@
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara::stream::dl::Downloader;
+use kithara_drm::KeyProcessorRegistry;
 
-use crate::theme::Palette;
+use crate::{drm, theme::Palette};
 
 /// Application configuration passed to frontends.
 ///
@@ -17,8 +18,12 @@ pub struct AppConfig {
     /// Audio file URLs or paths to play.
     #[setters(skip)]
     pub tracks: Vec<String>,
-    /// Domains that require DRM key cipher processing.
-    pub drm_domains: Vec<String>,
+    /// DRM key processing registry. Populated via
+    /// [`drm::make_key_registry`](crate::drm::make_key_registry) or
+    /// built directly by the embedding app. Carries the
+    /// domain-scoped rules — processor + headers (incl. auth) +
+    /// query params — that HLS applies to key fetches.
+    pub key_registry: KeyProcessorRegistry,
     /// Crossfade duration in seconds.
     pub crossfade_seconds: f32,
     /// Number of EQ bands for the UI.
@@ -64,7 +69,7 @@ impl AppConfig {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            drm_domains: vec!["*.zvq.me".to_string()],
+            key_registry: drm::default_zvq_key_registry(),
             crossfade_seconds: Self::DEFAULT_CROSSFADE_SECONDS,
             eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),
