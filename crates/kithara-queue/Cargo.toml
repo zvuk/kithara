@@ -32,4 +32,6 @@ delegate = { workspace = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+kithara-platform = { workspace = true }
+kithara-test-utils = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

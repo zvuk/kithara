@@ -521,34 +521,24 @@ impl Queue {
     /// real crossfade.
     fn maybe_arm_crossfade(&self) {
         let crossfade = self.player.crossfade_duration();
-        if crossfade <= 0.0 {
-            return;
-        }
         let Some(dur) = self.player.duration_seconds() else {
             return;
         };
         let Some(pos) = self.position_seconds() else {
             return;
         };
-        if dur <= 0.0 || pos <= 0.0 {
-            return;
-        }
-        let remaining = dur - pos;
-        if remaining > f64::from(crossfade) {
-            return;
-        }
-        // A track that's actively playing has already been selected, so
-        // its status is `Consumed` here (Loaded → Consumed on select).
-        // We only need the id to dedupe the arm across ticks.
         let Some(entry) = self.current() else { return };
-        {
-            let mut armed = self.lock_crossfade_armed_mut();
-            if *armed == Some(entry.id) {
-                return;
-            }
-            *armed = Some(entry.id);
+        let armed_for = *self.lock_crossfade_armed_mut();
+        if !should_arm_crossfade(pos, dur, crossfade, entry.id, armed_for) {
+            return;
         }
-        let _ = self.advance_to_next(Transition::Crossfade);
+        *self.lock_crossfade_armed_mut() = Some(entry.id);
+        let transition = if crossfade > 0.0 {
+            Transition::Crossfade
+        } else {
+            Transition::None
+        };
+        let _ = self.advance_to_next(transition);
     }
 
     fn lock_crossfade_armed_mut(&self) -> std::sync::MutexGuard<'_, Option<TrackId>> {
@@ -748,7 +738,21 @@ impl Queue {
                 // just-switched window is a real end (natural or from
                 // a fatal decode error after a failed seek) and must
                 // advance the queue, otherwise playback hangs.
-                if pos > ITEM_END_POSITION_TOLERANCE_SECONDS {
+                // If we already armed the advance from tick() while the
+                // outgoing track was still playing, the engine's
+                // subsequent ItemDidPlayToEnd is the trailing signal
+                // for the same track — consume it without advancing
+                // again.
+                let armed = self.lock_crossfade_armed_mut().take();
+                if armed.is_some() {
+                    debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
+                    return;
+                }
+                // Real end-of-track: position has reached duration
+                // within tolerance. Anything else is a stale / fake
+                // signal (e.g. decoder-failure pos stamp, crossfade
+                // fade-out on previous track).
+                if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
                     let _ = self.advance_to_next(Transition::Crossfade);
                 } else {
                     debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
@@ -757,7 +761,6 @@ impl Queue {
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 let idx = self.player.current_index();
                 let id = self.lock_tracks().get(idx).map(|e| e.id);
-                *self.lock_crossfade_armed_mut() = None;
                 *self
                     .cached_position
                     .lock()
@@ -768,6 +771,41 @@ impl Queue {
         }
     }
 }
+
+/// Decide whether [`Queue::tick`] should arm the pre-end advance.
+///
+/// Returns `true` when:
+/// - `pos` and `dur` are positive (track has meaningful position + duration), AND
+/// - remaining playtime is below the arm threshold — either
+///   `crossfade` seconds (with crossfade > 0) or [`END_PROXIMITY_SECONDS`]
+///   (no crossfade, trigger right at the tail), AND
+/// - we haven't already armed for this track this play-through.
+#[must_use]
+pub(crate) fn should_arm_crossfade(
+    pos: f64,
+    dur: f64,
+    crossfade: f32,
+    current_id: TrackId,
+    armed_for: Option<TrackId>,
+) -> bool {
+    if dur <= 0.0 || pos <= 0.0 {
+        return false;
+    }
+    let threshold = if crossfade > 0.0 {
+        f64::from(crossfade)
+    } else {
+        END_PROXIMITY_SECONDS
+    };
+    if dur - pos > threshold {
+        return false;
+    }
+    armed_for != Some(current_id)
+}
+
+/// How close to the end we arm the next-track advance when there is
+/// no crossfade configured — gives the queue a brief window to select
+/// and start the next track before the current one goes silent.
+const END_PROXIMITY_SECONDS: f64 = 0.25;
 
 fn extract_track_name(source: &TrackSource) -> String {
     let raw = match source {
@@ -802,6 +840,7 @@ mod tests {
     use std::time::Duration;
 
     use kithara_events::PlayerEvent;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -836,7 +875,7 @@ mod tests {
         let _queue = make_queue();
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
         let queue = make_queue();
         assert!(queue.is_empty());
@@ -845,7 +884,7 @@ mod tests {
         assert_eq!(queue.len(), 2);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
         let queue = make_queue();
         let mut rx = queue.subscribe();
@@ -870,7 +909,7 @@ mod tests {
         assert_eq!(seen, 2);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn select_unknown_id_errors() {
         let queue = make_queue();
         let err = queue
@@ -879,7 +918,7 @@ mod tests {
         assert!(matches!(err, QueueError::UnknownTrackId(_)));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn select_pending_track_stashes_pending_select() {
         let queue = make_queue();
         let id = queue.append("https://example.com/a.mp3");
@@ -894,7 +933,7 @@ mod tests {
         assert_eq!(pending.transition, Transition::None);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn advance_to_next_on_empty_emits_queue_ended() {
         let queue = make_queue();
         let mut rx = queue.subscribe();
@@ -904,7 +943,7 @@ mod tests {
         assert!(saw_ended);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn advance_to_next_cycles_then_emits_queue_ended() {
         let queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
@@ -920,7 +959,7 @@ mod tests {
         assert!(saw_ended, "QueueEnded should be broadcast at end-of-queue");
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn spurious_item_did_play_to_end_is_filtered() {
         let queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
@@ -937,7 +976,7 @@ mod tests {
         assert_eq!(nav_idx, None, "navigation must not have advanced");
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
         let queue = make_queue();
         let a = queue.append("https://example.com/a.mp3");
@@ -955,7 +994,7 @@ mod tests {
         assert!(saw_removed);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn clear_empties_queue() {
         let queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
@@ -965,7 +1004,7 @@ mod tests {
         assert_eq!(queue.len(), 0);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
         let queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
@@ -977,7 +1016,41 @@ mod tests {
         assert_eq!(queue.len(), 3);
     }
 
-    #[tokio::test]
+    const TRACK_ID_0: TrackId = TrackId(0);
+    const TRACK_ID_1: TrackId = TrackId(1);
+
+    #[kithara::test]
+    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TRACK_ID_1, None, true)]
+    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TRACK_ID_1, None, true)]
+    #[case::far_from_end(100.0, 162.0, 5.0, TRACK_ID_1, None, false)]
+    #[case::already_armed_for_same_track(160.0, 162.0, 5.0, TRACK_ID_1, Some(TRACK_ID_1), false)]
+    #[case::armed_for_different_track_still_arms(
+        160.0,
+        162.0,
+        5.0,
+        TRACK_ID_1,
+        Some(TRACK_ID_0),
+        true
+    )]
+    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TRACK_ID_1, None, true)]
+    #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TRACK_ID_1, None, false)]
+    #[case::zero_position_rejected(0.0, 162.0, 5.0, TRACK_ID_1, None, false)]
+    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TRACK_ID_1, None, false)]
+    fn should_arm_crossfade_cases(
+        #[case] pos: f64,
+        #[case] dur: f64,
+        #[case] crossfade: f32,
+        #[case] current_id: TrackId,
+        #[case] armed_for: Option<TrackId>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            should_arm_crossfade(pos, dur, crossfade, current_id, armed_for),
+            expected
+        );
+    }
+
+    #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
         let queue = make_queue();
         let a = queue.append("https://example.com/a.mp3");
