@@ -12,6 +12,10 @@ workspace = true
 default = ["tui", "gui"]
 tui = ["dep:ratatui", "dep:crossterm"]
 gui = ["dep:iced"]
+# Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
+# modules without pulling in iced/ratatui. Used by integration tests
+# (`tests/tests/kithara_queue/real_playlist.rs`).
+lib-only = []
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }

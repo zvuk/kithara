@@ -22,6 +22,8 @@ kithara-bufpool = { workspace = true, features = ["internal"] }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
+kithara-queue = { workspace = true }
+kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true }
 rkyv = { workspace = true }
 bytecheck = { workspace = true }
@@ -70,7 +72,7 @@ async-trait = { workspace = true }
 kithara = { workspace = true, features = ["rodio"] }
 kithara-decode = { workspace = true, features = ["test-utils"] }
 kithara-file = { workspace = true }
-kithara-play = { workspace = true, features = ["backend-cpal", "internal"] }
+kithara-play = { workspace = true, features = ["backend-cpal", "internal", "test-utils"] }
 
 # Additional tokio features (full runtime on native)
 tokio = { workspace = true, features = ["full"] }

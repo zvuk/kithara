@@ -32,5 +32,8 @@ mod kithara_hls {
     mod stress_seek_random;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_queue;
+
 mod kithara_wasm;
 mod multi_instance;

@@ -159,7 +159,7 @@ kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
-kithara-app = { path = "crates/kithara-app" }
+kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"

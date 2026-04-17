@@ -1,3 +1,7 @@
+// Binary needs at least one frontend — `lib-only` alone is not enough.
+#[cfg(not(any(feature = "tui", feature = "gui")))]
+compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
+
 use std::{
     io::{self, IsTerminal},
     sync::Arc,
