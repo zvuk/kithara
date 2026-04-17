@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::runtime::{Node, Outlet, TickResult};
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
-use kithara_rt::{Node, Outlet, TickResult};
 use tracing::trace;
 
 use super::{
@@ -55,7 +55,7 @@ impl DecoderNode {
         }
 
         self.chunks_sent += 1;
-        if self.chunks_sent >= self.preload_chunks {
+        if self.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
             self.complete_preload();
         }
     }
@@ -93,6 +93,12 @@ impl Node for DecoderNode {
             return TickResult::Waiting;
         }
 
+        // If we had pending chunks that just got flushed to the ring,
+        // we might now meet the preload condition.
+        if self.chunks_sent >= self.preload_chunks && !self.preloaded {
+            self.complete_preload();
+        }
+
         match self.source.step_track() {
             TrackStep::Produced(fetch) => {
                 self.eof_sent = false;
@@ -116,27 +122,40 @@ impl Node for DecoderNode {
 
             TrackStep::Eof => {
                 let epoch = self.source.timeline().seek_epoch();
-                let _ = self
-                    .outlet
-                    .try_push(Fetch::new(PcmChunk::default(), true, epoch));
-                self.complete_preload();
-                self.eof_sent = true;
-                TickResult::Progress
+                let marker = Fetch::new(PcmChunk::default(), true, epoch);
+                // We just called `flush()` above, so the overflow slot is guaranteed to be empty.
+                // However, we handle the `Err` case defensively to prevent silent EOF drops
+                // if the internal FSM or port contracts change in the future.
+                if let Ok(()) = self.outlet.try_push(marker) {
+                    self.complete_preload();
+                    self.eof_sent = true;
+                    TickResult::Progress
+                } else {
+                    debug_assert!(false, "EOF marker rejected — overflow invariant violated");
+                    TickResult::Waiting
+                }
             }
 
             TrackStep::Failed => {
                 let epoch = self.source.timeline().seek_epoch();
-                let _ = self
-                    .outlet
-                    .try_push(Fetch::new(PcmChunk::default(), true, epoch));
-                self.complete_preload();
-                // If the failure marker only landed in the overflow slot,
-                // we need at least one more tick to flush it before the
-                // node may be retired.
-                if self.outlet.has_pending() {
-                    TickResult::Progress
+                let marker = Fetch::new(PcmChunk::default(), true, epoch);
+                // We just called `flush()` above, so the overflow slot is guaranteed to be empty.
+                if let Ok(()) = self.outlet.try_push(marker) {
+                    self.complete_preload();
+                    // If the failure marker only landed in the overflow slot,
+                    // we need at least one more tick to flush it before the
+                    // node may be retired.
+                    if self.outlet.has_pending() {
+                        TickResult::Progress
+                    } else {
+                        TickResult::Done
+                    }
                 } else {
-                    TickResult::Done
+                    debug_assert!(
+                        false,
+                        "Failed marker rejected — overflow invariant violated"
+                    );
+                    TickResult::Waiting
                 }
             }
         }
@@ -148,5 +167,127 @@ impl Node for DecoderNode {
 
     fn on_cancel(&mut self) {
         self.complete_preload();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::Timeline;
+    use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
+
+    use super::*;
+    use crate::runtime::connect;
+    use crate::worker::MockAudioWorkerSource;
+
+    #[kithara::test]
+    fn decoder_node_eof_under_backpressure() {
+        let notify = Arc::new(Notify::new());
+        let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
+
+        // Fill the ring buffer and the overflow slot
+        outlet
+            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .unwrap();
+        outlet
+            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .unwrap();
+        assert!(outlet.has_pending());
+
+        let timeline = Timeline::new();
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Eof),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(timeline.clone());
+            }),
+        )));
+
+        let mut node = DecoderNode {
+            source,
+            outlet,
+            service_class: ServiceClass::default(),
+            preload_notify: notify,
+            preload_chunks: 1,
+            chunks_sent: 0,
+            preloaded: false,
+            seek_epoch: 0,
+            eof_sent: false,
+        };
+
+        // Tick 1: flush fails, returns Waiting
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert!(!node.eof_sent);
+
+        // Drain the inlet so flush can succeed
+        let _ = node.outlet.take_pending();
+
+        // Tick 2: flush succeeds (overflow is empty). Now step_track returns Eof.
+        // It pushes the EOF marker.
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(node.eof_sent);
+        assert!(node.outlet.has_pending()); // EOF marker is now in overflow
+    }
+
+    #[kithara::test]
+    fn decoder_node_preload_notify_waits_for_ring() {
+        let notify = Arc::new(Notify::new());
+        let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
+
+        // Fill the ring buffer so the next push goes to overflow
+        outlet
+            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .unwrap();
+
+        let timeline = Timeline::new();
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::new(
+                    PcmChunk::default(),
+                    false,
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Blocked(
+                    crate::pipeline::track_fsm::WaitingReason::Waiting,
+                )),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(timeline.clone());
+            }),
+        )));
+
+        let mut node = DecoderNode {
+            source,
+            outlet,
+            service_class: ServiceClass::default(),
+            preload_notify: notify.clone(),
+            preload_chunks: 1, // We want 1 chunk to trigger preload
+            chunks_sent: 0,
+            preloaded: false,
+            seek_epoch: 0,
+            eof_sent: false,
+        };
+
+        // Tick 1: flush succeeds (overflow was empty). step_track produces chunk.
+        // Chunk goes to overflow because ring is full.
+        // chunks_sent becomes 1, but has_pending is true, so preloaded stays false.
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(node.chunks_sent, 1);
+        assert!(!node.preloaded);
+
+        // Tick 2: flush fails (ring still full, overflow has chunk).
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert!(!node.preloaded);
+
+        // Consumer reads from ring
+        let _ = inlet.try_pop();
+
+        // Tick 3: flush succeeds (moves chunk from overflow to ring).
+        // Now chunks_sent >= 1 and !has_pending, so complete_preload is called!
+        assert_eq!(node.tick(), TickResult::Waiting); // step_track returns Blocked
+        assert!(node.preloaded);
     }
 }

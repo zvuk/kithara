@@ -7,4 +7,8 @@ pub(crate) mod thread_wake;
 mod traits;
 pub(crate) mod types;
 
-pub(crate) use traits::{AudioWorkerSource, apply_effects, flush_effects, reset_effects};
+pub use traits::AudioWorkerSource;
+pub(crate) use traits::{apply_effects, flush_effects, reset_effects};
+
+#[cfg(test)]
+pub(crate) use traits::MockAudioWorkerSource;

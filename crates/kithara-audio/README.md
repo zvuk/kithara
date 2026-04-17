@@ -93,7 +93,7 @@ flowchart TB
 ```
 
 - **Stream backend thread** (`kithara-stream`): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
-- **Decode thread** (shared `AudioWorker` OS thread): cooperative round-robin scheduler (powered by [`kithara-rt`](../kithara-rt/README.md)) that checks `is_ready()` before each track step, calls `Decoder::next_chunk`, applies effects (resampler), and sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure. Multiple tracks share one worker thread via `AudioWorkerHandle`.
+- **Decode thread** (shared `AudioWorker` OS thread): internal priority scheduler in `runtime/` that checks `is_ready()` before each track step, calls `Decoder::next_chunk`, applies effects (resampler), and sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure. Multiple tracks share one worker thread via `AudioWorkerHandle`.
 - **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
@@ -154,10 +154,10 @@ On seek, epoch is incremented atomically. The worker tags each decoded chunk wit
 
 ## Agent guardrails
 
-- **Node Architecture**: A track is represented by a single `Node` (e.g. `DecoderNode`).
+- **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.
 - **Operators vs Nodes**: Audio effects are implemented as operators (`AudioEffect`) that are called directly within the track's `Node`. We do not use separate `Node`s or ring buffers between effects.
 - **Buffers**: If a backpressure boundary or rate-matching is needed (e.g. between the worker and the audio callback), a separate buffer `Node` should be introduced explicitly.
-- **Push with Backpressure**: Producer nodes call `Outlet::try_push` directly. The outlet has a built-in single-slot overflow that absorbs one backpressure miss per tick, so a producer that emits at most one chunk per tick treats `try_push` as infallible. Each tick begins with `Outlet::flush()` to forward the parked item to the ring once the consumer drains it; if the ring is still full the node returns `TickResult::Waiting`. The source's FSM is still ticked every pass so non-producing transitions (e.g. completing a seek) make progress regardless of outlet fullness.
+- **Push with Backpressure**: Producer nodes call `Outlet::try_push` directly. The outlet has a built-in single-slot overflow that absorbs one backpressure miss per tick, so a producer that emits at most one chunk per tick treats `try_push` as infallible. Each tick begins with `Outlet::flush()` to forward the parked item to the ring once the consumer drains it; if the ring is still full the node returns `TickResult::Waiting`. Under normal operation, the source's FSM is ticked every pass. However, if the outlet is completely saturated (both the ring buffer and the overflow slot are full), the node will return `Waiting` immediately without ticking the FSM. This provides strict backpressure, pausing all internal state transitions (including seeks) until the consumer drains the ring.
 - **Cancellation**: Do not use `CancellationToken` inside `Node` implementations. Cancellation is handled centrally by calling `worker.unregister_track(...)`, which triggers the scheduler to call `Node::on_cancel()`.
 - **Track lifecycle**: A `Node` returns `TickResult::Done` only when truly terminal (e.g. `TrackStep::Failed`). EOF is *not* terminal — the track stays alive so a subsequent seek can re-arm it; idle ticks just return `TickResult::Waiting`.
 - `kithara-audio` owns decoder lifecycle, seek or session state, effects reset timing, and stale chunk invalidation.

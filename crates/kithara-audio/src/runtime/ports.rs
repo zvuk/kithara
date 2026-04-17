@@ -4,11 +4,14 @@ use std::sync::Arc;
 
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Observer, Producer, Split},
+    traits::{Consumer, Producer, Split},
 };
 
+#[cfg(test)]
+use ringbuf::traits::Observer;
+
 /// A signal to wake up a blocked consumer.
-pub trait WakeSignal: Send + Sync + 'static {
+pub(crate) trait WakeSignal: Send + Sync + 'static {
     /// Wake up the consumer.
     fn wake(&self);
 }
@@ -24,7 +27,7 @@ pub trait WakeSignal: Send + Sync + 'static {
 ///
 /// [`try_push`]: Outlet::try_push
 /// [`flush`]: Outlet::flush
-pub struct Outlet<T> {
+pub(crate) struct Outlet<T> {
     producer: HeapProd<T>,
     overflow: Option<T>,
     wake: Option<Arc<dyn WakeSignal>>,
@@ -37,7 +40,7 @@ impl<T> Outlet<T> {
     /// because there was nothing parked, or because the parked item was
     /// successfully forwarded). Returns `false` when the ring buffer is
     /// still full and the parked item could not be moved.
-    pub fn flush(&mut self) -> bool {
+    pub(crate) fn flush(&mut self) -> bool {
         let Some(item) = self.overflow.take() else {
             return true;
         };
@@ -55,7 +58,7 @@ impl<T> Outlet<T> {
     /// # Errors
     ///
     /// Returns `Err(item)` when the ring and overflow slot are both full.
-    pub fn try_push(&mut self, item: T) -> Result<(), T> {
+    pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
         if !self.flush() {
             return Err(item);
         }
@@ -84,7 +87,7 @@ impl<T> Outlet<T> {
     }
 
     /// Whether an item is currently parked in the overflow slot.
-    pub fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         self.overflow.is_some()
     }
 
@@ -93,7 +96,7 @@ impl<T> Outlet<T> {
     /// Useful when a producer needs to invalidate previously enqueued data
     /// (e.g. on a seek epoch change) without waiting for the consumer to
     /// drain the ring.
-    pub fn take_pending(&mut self) -> Option<T> {
+    pub(crate) fn take_pending(&mut self) -> Option<T> {
         self.overflow.take()
     }
 
@@ -101,7 +104,8 @@ impl<T> Outlet<T> {
     ///
     /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
     /// return `Err`.
-    pub fn is_full(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_full(&self) -> bool {
         self.overflow.is_some() && self.producer.is_full()
     }
 
@@ -113,25 +117,29 @@ impl<T> Outlet<T> {
 }
 
 /// The input port of a node.
-pub struct Inlet<T> {
+pub(crate) struct Inlet<T> {
     consumer: HeapCons<T>,
 }
 
 impl<T> Inlet<T> {
     /// Pop an item from the inlet. Returns `None` if empty.
-    pub fn try_pop(&mut self) -> Option<T> {
+    pub(crate) fn try_pop(&mut self) -> Option<T> {
         self.consumer.try_pop()
     }
 
     /// Check if the inlet is empty.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.consumer.is_empty()
     }
 }
 
 /// Connect two nodes with a lock-free ring buffer.
 #[must_use]
-pub fn connect<T>(capacity: usize, wake: Option<Arc<dyn WakeSignal>>) -> (Outlet<T>, Inlet<T>) {
+pub(crate) fn connect<T>(
+    capacity: usize,
+    wake: Option<Arc<dyn WakeSignal>>,
+) -> (Outlet<T>, Inlet<T>) {
     let rb = HeapRb::<T>::new(capacity);
     let (producer, consumer) = rb.split();
     (

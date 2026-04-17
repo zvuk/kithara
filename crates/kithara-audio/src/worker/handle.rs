@@ -1,17 +1,17 @@
 //! Shared audio worker — cooperative multi-track decoder on a single OS thread.
 //!
 //! [`AudioWorkerHandle`] is the user-facing handle (clonable). It spawns a
-//! background OS thread that runs a `kithara_rt::Scheduler`, serving all
-//! registered tracks via round-robin scheduling.
+//! background OS thread that runs a `crate::runtime::Scheduler`, serving all
+//! registered tracks via priority scheduling.
 
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
 
+use crate::runtime::{Scheduler, SchedulerHandle};
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
-use kithara_rt::{RoundRobin, Scheduler, SchedulerHandle};
 
 use super::{
     AudioWorkerSource,
@@ -24,7 +24,7 @@ use crate::pipeline::fetch::Fetch;
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
     pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    pub outlet: kithara_rt::Outlet<Fetch<PcmChunk>>,
+    pub outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub preload_notify: Arc<Notify>,
     pub preload_chunks: usize,
     pub service_class: ServiceClass,
@@ -35,7 +35,7 @@ pub(crate) struct TrackRegistration {
 /// Multiple [`Audio`](crate::Audio) handles can share one worker by cloning
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 pub struct AudioWorkerHandle {
-    inner: SchedulerHandle<Box<dyn kithara_rt::Node>>,
+    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
     id_gen: Arc<TrackIdGen>,
 }
 
@@ -56,10 +56,9 @@ impl AudioWorkerHandle {
     #[must_use]
     pub fn new() -> Self {
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let inner = Scheduler::<Box<dyn kithara_rt::Node>, HangWatchdogObserver, RoundRobin>::start(
+        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
             format!("kithara-audio-worker-{id}"),
             HangWatchdogObserver::new(),
-            RoundRobin::default(),
         );
 
         Self {
@@ -75,7 +74,7 @@ impl AudioWorkerHandle {
     /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
         let id = self.id_gen.next();
-        let node: Box<dyn kithara_rt::Node> = Box::new(DecoderNode::from_registration(id, reg));
+        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from_registration(id, reg));
         self.inner.register(id, node);
         id
     }
@@ -117,12 +116,12 @@ mod tests {
         time::Duration,
     };
 
+    use crate::runtime::connect;
     use kithara_decode::PcmChunk;
     use kithara_platform::{
         thread::sleep as thread_sleep, time::Instant, time::timeout as platform_timeout,
         tokio::sync::Notify,
     };
-    use kithara_rt::connect;
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
 
@@ -205,7 +204,7 @@ mod tests {
         preload_chunks: usize,
     ) -> (
         TrackRegistration,
-        kithara_rt::Inlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
         Arc<Notify>,
     ) {
         let wake = Arc::new(ThreadWake::new());
@@ -228,7 +227,7 @@ mod tests {
         preload_chunks: usize,
     ) -> (
         TrackRegistration,
-        kithara_rt::Inlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
         Arc<Notify>,
     ) {
         let wake = Arc::new(ThreadWake::new());
@@ -246,7 +245,7 @@ mod tests {
     }
 
     fn wait_for_chunks(
-        rx: &mut kithara_rt::Inlet<Fetch<PcmChunk>>,
+        rx: &mut crate::runtime::Inlet<Fetch<PcmChunk>>,
         count: usize,
         timeout: Duration,
     ) -> usize {

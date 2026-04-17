@@ -4,7 +4,7 @@
 ///
 /// Nodes with higher service class are served first when the scheduler
 /// selects which node to process next.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ServiceClass {
     /// Not playing, not needed soon. Lowest priority.
     #[default]
@@ -17,7 +17,7 @@ pub enum ServiceClass {
 
 /// Result of a single node tick.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TickResult {
+pub(crate) enum TickResult {
     /// Node made progress (produced or consumed data, applied internal state change).
     Progress,
     /// Node is alive but waiting (backpressure, source not ready yet).
@@ -27,7 +27,7 @@ pub enum TickResult {
 }
 
 /// A component that can be executed by the scheduler.
-pub trait Node: Send + 'static {
+pub(crate) trait Node: Send + 'static {
     /// Perform one quantum of work.
     fn tick(&mut self) -> TickResult;
 

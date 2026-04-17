@@ -28,7 +28,6 @@ rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-rt = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }

@@ -1,4 +1,4 @@
-//! Audio worker traits and effects utilities.
+//! Audio worker traits and effect utilities.
 
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
@@ -10,7 +10,8 @@ use crate::{pipeline::track_fsm, traits::AudioEffect};
 /// The worker calls `step_track()` once per scheduling round. Each call
 /// performs at most one FSM transition and returns a [`TrackStep`] that
 /// tells the worker what happened.
-pub(crate) trait AudioWorkerSource: Send + 'static {
+#[cfg_attr(any(test, feature = "test-utils"), unimock::unimock(api = MockAudioWorkerSource, type Chunk = PcmChunk;))]
+pub trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
 
     /// Advance the track FSM by one step.
@@ -19,7 +20,7 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
     /// internal state transitions. Returns:
     /// - `Produced` — decoded chunk ready for the consumer.
     /// - `StateChanged` — internal transition; caller should call again.
-    /// - `Blocked` — source not ready; caller should wait for a wake.
+    /// - `Blocked` — the source is not ready; the caller should wait for a wake.
     /// - `Eof` — end of stream (may transition out via seek-after-EOF).
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
@@ -28,7 +29,7 @@ pub(crate) trait AudioWorkerSource: Send + 'static {
     fn timeline(&self) -> &Timeline;
 }
 
-/// Apply effects chain to a chunk.
+/// Apply the effect chain to the chunk.
 pub(crate) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
     mut chunk: PcmChunk,

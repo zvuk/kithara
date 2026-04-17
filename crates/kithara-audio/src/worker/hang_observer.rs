@@ -1,7 +1,7 @@
 //! Watchdog observer for the audio worker.
 
+use crate::runtime::{SchedulerEvent, SchedulerObserver};
 use kithara_hang_detector::{HangDetector, default_timeout};
-use kithara_rt::{SchedulerEvent, SchedulerObserver};
 
 /// Observer that integrates the scheduler with `kithara_hang_detector`.
 pub(crate) struct HangWatchdogObserver {
@@ -22,9 +22,6 @@ impl SchedulerObserver for HangWatchdogObserver {
             SchedulerEvent::Progress | SchedulerEvent::Idle => {
                 self.detector.reset();
             }
-            SchedulerEvent::Stuck => {
-                self.detector.tick();
-            }
             SchedulerEvent::SlowTick { slot, elapsed } => {
                 tracing::warn!(
                     track_id = slot,
@@ -32,7 +29,7 @@ impl SchedulerObserver for HangWatchdogObserver {
                     "step_track took too long — starving other tracks"
                 );
             }
-            SchedulerEvent::PassStart | SchedulerEvent::PassEnd(_) => {}
+            SchedulerEvent::PassStart | SchedulerEvent::PassEnd => {}
         }
     }
 }

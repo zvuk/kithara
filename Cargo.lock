@@ -3984,7 +3984,6 @@ dependencies = [
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
- "kithara-rt",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4381,17 +4380,6 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen-test",
-]
-
-[[package]]
-name = "kithara-rt"
-version = "0.1.0"
-dependencies = [
- "kithara-platform",
- "kithara-test-utils",
- "ringbuf",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]

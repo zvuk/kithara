@@ -89,7 +89,7 @@ enum RecvOutcome {
 /// ```
 pub struct Audio<S> {
     /// PCM chunk receiver.
-    pcm_rx: kithara_rt::Inlet<Fetch<PcmChunk>>,
+    pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
     _epoch: Arc<AtomicU64>,
@@ -176,7 +176,8 @@ impl<S> Audio<S> {
 
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
-    pub fn pcm_rx(&mut self) -> &mut kithara_rt::Inlet<Fetch<PcmChunk>> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
         &mut self.pcm_rx
     }
 
@@ -646,10 +647,10 @@ where
         pcm_buffer_chunks: usize,
         wake: Arc<ThreadWake>,
     ) -> (
-        kithara_rt::Outlet<Fetch<PcmChunk>>,
-        kithara_rt::Inlet<Fetch<PcmChunk>>,
+        crate::runtime::Outlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
     ) {
-        kithara_rt::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
     }
 
     fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
@@ -727,7 +728,6 @@ where
 
         let AudioConfig {
             byte_pool,
-            command_channel_capacity: _command_channel_capacity,
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
@@ -1014,7 +1014,7 @@ mod tests {
     use super::*;
 
     fn empty_audio() -> Audio<()> {
-        let (_data_tx, pcm_rx) = kithara_rt::connect::<Fetch<PcmChunk>>(1, None);
+        let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
 
         Audio {
             pcm_rx,
@@ -1070,8 +1070,8 @@ mod tests {
     }
 
     // Helper that returns (Audio, data_tx) so tests can push fetches.
-    fn audio_with_channel() -> (Audio<()>, kithara_rt::Outlet<Fetch<PcmChunk>>) {
-        let (data_tx, pcm_rx) = kithara_rt::connect::<Fetch<PcmChunk>>(4, None);
+    fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
+        let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
 
         let audio = Audio {
             pcm_rx,

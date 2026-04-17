@@ -14,13 +14,12 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
-use crate::{
-    Node, NoopObserver, PassOutcome, RoundRobin, Schedule, SchedulerEvent, SchedulerObserver,
-    SchedulerWake, ServiceClass, SlotMeta, TickResult,
+use crate::runtime::{
+    Node, PassOutcome, SchedulerEvent, SchedulerObserver, SchedulerWake, ServiceClass, TickResult,
 };
 
 /// Unique identifier for a slot in the scheduler.
-pub type SlotId = u64;
+pub(crate) type SlotId = u64;
 
 /// Threshold for warning about slow `tick` calls.
 const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
@@ -28,7 +27,7 @@ const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Command sent from `SchedulerHandle` to the scheduler thread.
-pub enum SchedulerCmd<N> {
+pub(crate) enum SchedulerCmd<N> {
     /// Register a new node.
     Register(SlotId, N),
     /// Remove a node by ID.
@@ -40,7 +39,7 @@ pub enum SchedulerCmd<N> {
 }
 
 /// A slot holding a node and its metadata.
-pub struct Slot<N> {
+pub(crate) struct Slot<N> {
     pub id: SlotId,
     pub node: N,
     pub service_class: ServiceClass,
@@ -54,7 +53,7 @@ impl<N: Node> Slot<N> {
 }
 
 /// Clonable handle to a scheduler.
-pub struct SchedulerHandle<N> {
+pub(crate) struct SchedulerHandle<N> {
     inner: Arc<SchedulerInner<N>>,
 }
 
@@ -88,7 +87,7 @@ impl<N> Drop for SchedulerInner<N> {
 
 impl<N: Node> SchedulerHandle<N> {
     /// Register a node.
-    pub fn register(&self, id: SlotId, node: N) {
+    pub(crate) fn register(&self, id: SlotId, node: N) {
         if self
             .inner
             .cmd_tx
@@ -101,13 +100,13 @@ impl<N: Node> SchedulerHandle<N> {
     }
 
     /// Remove a node by ID.
-    pub fn unregister(&self, id: SlotId) {
+    pub(crate) fn unregister(&self, id: SlotId) {
         let _ = self.inner.cmd_tx.send_sync(SchedulerCmd::Unregister(id));
         self.inner.wake.wake();
     }
 
     /// Update scheduling priority for a node.
-    pub fn set_service_class(&self, id: SlotId, class: ServiceClass) {
+    pub(crate) fn set_service_class(&self, id: SlotId, class: ServiceClass) {
         let _ = self
             .inner
             .cmd_tx
@@ -116,31 +115,25 @@ impl<N: Node> SchedulerHandle<N> {
     }
 
     /// Wake the scheduler.
-    pub fn wake(&self) {
+    pub(crate) fn wake(&self) {
         self.inner.wake.wake();
     }
 
     /// Request graceful shutdown and cancel the scheduler.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.inner.shutdown();
-    }
-
-    /// Get the cancellation token.
-    #[must_use]
-    pub fn cancel_token(&self) -> CancellationToken {
-        self.inner.cancel.clone()
     }
 }
 
 /// The core scheduler.
-pub struct Scheduler<N, O = NoopObserver, S = RoundRobin> {
-    _phantom: std::marker::PhantomData<(N, O, S)>,
+pub(crate) struct Scheduler<N, O> {
+    _phantom: std::marker::PhantomData<(N, O)>,
 }
 
-impl<N: Node, O: SchedulerObserver, S: Schedule> Scheduler<N, O, S> {
+impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// Spawn a new scheduler thread and return a handle.
     #[must_use]
-    pub fn start(name: String, observer: O, schedule: S) -> SchedulerHandle<N> {
+    pub(crate) fn start(name: String, observer: O) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Arc::new(SchedulerWake::new());
         let cancel = CancellationToken::new();
@@ -149,7 +142,7 @@ impl<N: Node, O: SchedulerObserver, S: Schedule> Scheduler<N, O, S> {
         let cancel_clone = cancel.clone();
 
         spawn_named(name, move || {
-            run_loop(&cmd_rx, &wake_clone, &cancel_clone, observer, schedule);
+            run_loop(&cmd_rx, &wake_clone, &cancel_clone, observer);
         });
 
         SchedulerHandle {
@@ -162,16 +155,15 @@ impl<N: Node, O: SchedulerObserver, S: Schedule> Scheduler<N, O, S> {
     }
 }
 
-fn run_loop<N: Node, O: SchedulerObserver, S: Schedule>(
+fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     wake: &SchedulerWake,
     cancel: &CancellationToken,
     mut observer: O,
-    mut schedule: S,
 ) {
     trace!("scheduler started");
     let mut slots: Vec<Slot<N>> = Vec::new();
-    let mut slots_meta: Vec<SlotMeta> = Vec::new();
+    let mut slots_order: Vec<usize> = Vec::new();
     let mut needs_reorder = false;
 
     loop {
@@ -190,16 +182,11 @@ fn run_loop<N: Node, O: SchedulerObserver, S: Schedule>(
         }
 
         if needs_reorder {
-            slots_meta.clear();
-            slots_meta.extend(slots.iter().map(|s| SlotMeta {
-                id: s.id,
-                service_class: s.service_class,
-            }));
-            schedule.reorder(&mut slots_meta);
+            recompute_slots_order(&slots, &mut slots_order);
             needs_reorder = false;
         }
 
-        let outcome = step_all_slots(&mut slots, &slots_meta, &mut schedule, &mut observer);
+        let outcome = step_all_slots(&mut slots, &slots_order, &mut observer);
 
         let before = slots.len();
         slots.retain(|slot| !slot.is_removable());
@@ -211,16 +198,15 @@ fn run_loop<N: Node, O: SchedulerObserver, S: Schedule>(
             PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
             PassOutcome::Waiting => {}
             PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
-            PassOutcome::Stuck => observer.on_event(SchedulerEvent::Stuck),
         }
 
-        observer.on_event(SchedulerEvent::PassEnd(outcome));
+        observer.on_event(SchedulerEvent::PassEnd);
 
         match outcome {
             PassOutcome::Produced => {
                 yield_now();
             }
-            PassOutcome::Waiting | PassOutcome::Stuck => {
+            PassOutcome::Waiting => {
                 wake.wait_timeout(IDLE_TIMEOUT);
             }
             PassOutcome::Idle => {
@@ -230,10 +216,19 @@ fn run_loop<N: Node, O: SchedulerObserver, S: Schedule>(
     }
 }
 
-fn step_all_slots<N: Node, O: SchedulerObserver, S: Schedule>(
+fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize>) {
+    slots_order.clear();
+    slots_order.extend(0..slots.len());
+    slots_order.sort_by(|&a, &b| {
+        let class_a = slots[a].service_class;
+        let class_b = slots[b].service_class;
+        class_b.cmp(&class_a)
+    });
+}
+
+fn step_all_slots<N: Node, O: SchedulerObserver>(
     slots: &mut [Slot<N>],
-    slots_meta: &[SlotMeta],
-    schedule: &mut S,
+    slots_order: &[usize],
     observer: &mut O,
 ) -> PassOutcome {
     if slots.is_empty() {
@@ -241,9 +236,8 @@ fn step_all_slots<N: Node, O: SchedulerObserver, S: Schedule>(
     }
 
     let mut best = TickResult::Done;
-    let indices = schedule.next_indices(slots_meta);
 
-    for &idx in indices {
+    for &idx in slots_order {
         if idx >= slots.len() {
             continue;
         }
@@ -281,13 +275,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver, S: Schedule>(
     match best {
         TickResult::Progress => PassOutcome::Produced,
         TickResult::Waiting => PassOutcome::Waiting,
-        TickResult::Done => {
-            if slots.iter().all(|s| s.terminal) {
-                PassOutcome::Idle
-            } else {
-                PassOutcome::Stuck
-            }
-        }
+        TickResult::Done => PassOutcome::Idle,
     }
 }
 
@@ -301,10 +289,11 @@ fn drain_commands<N: Node>(
         match cmd_rx.try_recv() {
             Ok(SchedulerCmd::Register(id, node)) => {
                 debug!(slot_id = id, "scheduler: registering node");
+                let service_class = node.service_class();
                 slots.push(Slot {
                     id,
                     node,
-                    service_class: ServiceClass::Audible,
+                    service_class,
                     terminal: false,
                 });
                 *needs_reorder = true;
@@ -352,7 +341,7 @@ fn drain_commands<N: Node>(
 
 /// Process CPU time in milliseconds (user + system).
 #[cfg(test)]
-pub fn cpu_time_ms() -> u64 {
+pub(crate) fn cpu_time_ms() -> u64 {
     let output = std::process::Command::new("ps")
         .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
         .output()
@@ -363,7 +352,7 @@ pub fn cpu_time_ms() -> u64 {
 
 /// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
 #[cfg(test)]
-pub fn parse_cputime(s: &str) -> u64 {
+pub(crate) fn parse_cputime(s: &str) -> u64 {
     const HMS_PARTS: usize = 3;
     const MS_PARTS: usize = 2;
     const SECS_PER_HOUR: u64 = 3600;
@@ -394,7 +383,12 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::NoopObserver;
+
+    struct TestObserver;
+
+    impl SchedulerObserver for TestObserver {
+        fn on_event(&mut self, _event: SchedulerEvent) {}
+    }
 
     struct DummyNode {
         ticks: usize,
@@ -418,13 +412,24 @@ mod tests {
         }
     }
 
+    struct ServiceClassNode {
+        service_class: ServiceClass,
+    }
+
+    impl Node for ServiceClassNode {
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+
+        fn service_class(&self) -> ServiceClass {
+            self.service_class
+        }
+    }
+
     #[kithara::test]
     fn scheduler_creates_and_drops_cleanly() {
-        let handle = Scheduler::<DummyNode>::start(
-            "test-worker".into(),
-            NoopObserver,
-            RoundRobin::default(),
-        );
+        let handle =
+            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
         sleep(Duration::from_millis(10));
         handle.shutdown();
         sleep(Duration::from_millis(50));
@@ -432,11 +437,8 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_panic_isolation() {
-        let handle = Scheduler::<DummyNode>::start(
-            "test-worker".into(),
-            NoopObserver,
-            RoundRobin::default(),
-        );
+        let handle =
+            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
 
         handle.register(
             1,
@@ -470,11 +472,8 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_does_not_busy_spin_on_backpressure() {
-        let handle = Scheduler::<BackpressureNode>::start(
-            "test-worker".into(),
-            NoopObserver,
-            RoundRobin::default(),
-        );
+        let handle =
+            Scheduler::<BackpressureNode, TestObserver>::start("test-worker".into(), TestObserver);
 
         handle.register(1, BackpressureNode);
 
@@ -493,5 +492,40 @@ mod tests {
             "Worker should NOT busy-spin on backpressure: \
              used {cpu_used_ms}ms CPU in 500ms wall time (expected <100ms)"
         );
+    }
+
+    #[kithara::test]
+    fn scheduler_orders_service_classes_descending() {
+        let slots = vec![
+            Slot {
+                id: 1,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Idle,
+                },
+                service_class: ServiceClass::Idle,
+                terminal: false,
+            },
+            Slot {
+                id: 2,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Audible,
+                },
+                service_class: ServiceClass::Audible,
+                terminal: false,
+            },
+            Slot {
+                id: 3,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Warm,
+                },
+                service_class: ServiceClass::Warm,
+                terminal: false,
+            },
+        ];
+
+        let mut slots_order: Vec<usize> = Vec::new();
+        recompute_slots_order(&slots, &mut slots_order);
+
+        assert_eq!(slots_order, vec![1, 2, 0]);
     }
 }

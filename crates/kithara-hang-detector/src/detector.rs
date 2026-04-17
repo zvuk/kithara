@@ -4,6 +4,7 @@ use std::env;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+#[cfg(not(feature = "disable-hang-detector"))]
 use web_time::Instant;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 10;

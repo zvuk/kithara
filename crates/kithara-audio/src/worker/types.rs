@@ -18,7 +18,7 @@ impl TrackIdGen {
     }
 }
 
-pub use kithara_rt::ServiceClass;
+pub use crate::runtime::ServiceClass;
 
 #[cfg(test)]
 mod tests {
