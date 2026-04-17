@@ -47,7 +47,7 @@ final class PlayerViewModel: ObservableObject {
     private let player = KitharaPlayer(
         config: KitharaPlayer.Config(
             keyRules: makeZvukKeyRules(),
-            cacheDir: Self.defaultCacheDir
+            cacheDir: PlayerViewModel.defaultCacheDir
         )
     )
 
