@@ -537,11 +537,10 @@ impl Queue {
         if remaining > f64::from(crossfade) {
             return;
         }
-        let current = self.current();
-        let Some(entry) = current else { return };
-        if !matches!(entry.status, TrackStatus::Loaded) {
-            return;
-        }
+        // A track that's actively playing has already been selected, so
+        // its status is `Consumed` here (Loaded → Consumed on select).
+        // We only need the id to dedupe the arm across ticks.
+        let Some(entry) = self.current() else { return };
         {
             let mut armed = self.lock_crossfade_armed_mut();
             if *armed == Some(entry.id) {

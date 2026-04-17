@@ -370,11 +370,12 @@ final class PlayerViewModel: ObservableObject {
     }
 
     private func resetPerTrackUi(trackId: String?) {
-        currentTime = 0
+        // Don't reset `currentTime`, `status`, or `isPlaying` — the
+        // engine drives those via explicit events. Touching them here
+        // races with the engine's own updates and causes UI flicker
+        // (slider snap to 0 on pause/resume, "Not Ready" blink between
+        // tracks). Queue-owned values are the source of truth.
         errorMessage = nil
-        // Don't reset `status` — the engine only emits StatusChanged on
-        // real transitions, so touching the field here makes the header
-        // flicker to "Not Ready" between tracks.
         isSeeking = false
         currentVariantLabel = nil
         selectedVariantIndex = nil
