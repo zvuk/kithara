@@ -9,6 +9,8 @@
     <string name="status_failed">Failed</string>
     <string name="status_not_ready">Not Ready</string>
     <string name="status_ready">Ready</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_playing">Playing</string>
     <string name="add_action">Add</string>
     <string name="playlist_empty">No tracks in playlist</string>
 </resources>

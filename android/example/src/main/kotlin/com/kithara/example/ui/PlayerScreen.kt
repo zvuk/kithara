@@ -112,7 +112,11 @@ internal fun PlayerScreen(
             ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        HeaderSection(isPlaying = uiState.isPlaying, status = uiState.status)
+        HeaderSection(
+            isPlaying = uiState.isPlaying,
+            status = uiState.status,
+            hasTracks = uiState.playlist.isNotEmpty(),
+        )
         UrlSection(
             url = uiState.url,
             onEvent = onEvent,
@@ -146,7 +150,7 @@ internal fun PlayerScreen(
 }
 
 @Composable
-private fun HeaderSection(isPlaying: Boolean, status: PlayerStatus) {
+private fun HeaderSection(isPlaying: Boolean, status: PlayerStatus, hasTracks: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -164,21 +168,23 @@ private fun HeaderSection(isPlaying: Boolean, status: PlayerStatus) {
             modifier = Modifier.padding(start = 8.dp, top = 10.dp),
         )
         Box(modifier = Modifier.weight(1f))
-        StatusBadge(status = status)
+        StatusBadge(status = status, isPlaying = isPlaying, hasTracks = hasTracks)
     }
 }
 
 @Composable
-private fun StatusBadge(status: PlayerStatus) {
-    val statusColor = when (status) {
-        PlayerStatus.ReadyToPlay -> KitharaSuccess
-        PlayerStatus.Failed -> KitharaDanger
-        PlayerStatus.Unknown -> KitharaMuted
+private fun StatusBadge(status: PlayerStatus, isPlaying: Boolean, hasTracks: Boolean) {
+    val statusColor = when {
+        status == PlayerStatus.Failed -> KitharaDanger
+        !hasTracks -> KitharaMuted
+        isPlaying -> KitharaSuccess
+        else -> AccentGold
     }
-    val statusText = when (status) {
-        PlayerStatus.ReadyToPlay -> stringResource(R.string.status_ready)
-        PlayerStatus.Failed -> stringResource(R.string.status_failed)
-        PlayerStatus.Unknown -> stringResource(R.string.status_not_ready)
+    val statusText = when {
+        status == PlayerStatus.Failed -> stringResource(R.string.status_failed)
+        !hasTracks -> stringResource(R.string.status_not_ready)
+        isPlaying -> stringResource(R.string.status_playing)
+        else -> stringResource(R.string.status_idle)
     }
 
     Row(

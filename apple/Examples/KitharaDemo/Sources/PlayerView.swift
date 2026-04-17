@@ -453,11 +453,10 @@ struct PlayerView: View {
     // MARK: - Helpers
 
     private var statusColor: Color {
-        switch viewModel.status {
-        case .readyToPlay: .kitharaSuccess
-        case .failed: .kitharaDanger
-        case .unknown: .kitharaMuted
-        }
+        if viewModel.status == .failed { return .kitharaDanger }
+        if viewModel.playlist.isEmpty { return .kitharaMuted }
+        if viewModel.isPlaying { return .kitharaSuccess }
+        return .kitharaGold
     }
 
     private func rateLabel(_ rate: Float) -> String {
@@ -560,10 +559,8 @@ struct PlayerView: View {
     }
 
     private var statusText: String {
-        switch viewModel.status {
-        case .readyToPlay: "Ready"
-        case .failed: "Failed"
-        case .unknown: "Not Ready"
-        }
+        if viewModel.status == .failed { return "Failed" }
+        if viewModel.playlist.isEmpty { return "Not Ready" }
+        return viewModel.isPlaying ? "Playing" : "Idle"
     }
 }
