@@ -355,8 +355,6 @@ final class PlayerViewModel: ObservableObject {
                 errorMessage = reason
                 self.status = .failed
             }
-        case .slow:
-            print("[KitharaDemo] \(trackLabel(itemId)) slow loading")
         default:
             break
         }
