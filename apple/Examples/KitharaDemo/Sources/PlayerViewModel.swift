@@ -344,7 +344,9 @@ final class PlayerViewModel: ObservableObject {
     private func resetPerTrackUi(trackId: String?) {
         currentTime = 0
         errorMessage = nil
-        status = .unknown
+        // Don't reset `status` — the engine only emits StatusChanged on
+        // real transitions, so touching the field here makes the header
+        // flicker to "Not Ready" between tracks.
         isSeeking = false
         currentVariantLabel = nil
         selectedVariantIndex = nil

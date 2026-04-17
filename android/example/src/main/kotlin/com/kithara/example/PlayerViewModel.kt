@@ -185,6 +185,9 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         try {
             player.selectItem(item, transition)
             player.play()
+            // Don't reset `status` — the engine only emits StatusChanged on
+            // real transitions, so touching the field here makes the header
+            // flicker to "Not Ready" between tracks.
             _uiState.update {
                 it.copy(
                     currentTrackId = trackId,
@@ -192,7 +195,6 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
                     durationSeconds = null,
                     errorMessage = null,
                     isSeeking = false,
-                    status = PlayerStatus.Unknown,
                 )
             }
         } catch (e: KitharaError) {
