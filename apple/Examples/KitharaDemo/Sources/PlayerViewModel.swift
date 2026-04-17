@@ -250,6 +250,17 @@ final class PlayerViewModel: ObservableObject {
         switchTo(index: idx, transition: .none)
     }
 
+    func removeTrack(_ trackId: String) {
+        guard let item = player.items.first(where: { $0.id == trackId }) else { return }
+        do {
+            try player.remove(item)
+        } catch {
+            print("[KitharaDemo] remove failed: \(error)")
+        }
+        itemCancellables.removeValue(forKey: trackId)
+        playlist.removeAll { $0.id == trackId }
+    }
+
     // MARK: - Seek
 
     func onSeekStarted() {

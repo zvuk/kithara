@@ -418,16 +418,17 @@ struct PlayerView: View {
                 .background(Color.kitharaPanel)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(Array(viewModel.playlist.enumerated()), id: \.element.id) { index, entry in
-                        playlistRow(entry: entry, index: index)
-                    }
+            List {
+                ForEach(Array(viewModel.playlist.enumerated()), id: \.element.id) { index, entry in
+                    playlistRow(entry: entry, index: index)
+                        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+                        .listRowBackground(Color.kitharaPanel)
+                        .listRowSeparator(.hidden)
                 }
             }
+            .listStyle(.plain)
             .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(10)
             .background(Color.kitharaPanel)
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -493,6 +494,13 @@ struct PlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                viewModel.removeTrack(entry.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 
     private func trackStatusColor(_ status: TrackStatus?, isCurrent: Bool) -> Color? {
