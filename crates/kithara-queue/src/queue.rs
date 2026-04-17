@@ -377,6 +377,23 @@ impl Queue {
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
+        // Idempotency: selecting the track that's already loaded & active
+        // is a no-op. Autoplay in `spawn_apply_after_load` issues an
+        // implicit select; an explicit user select on the same track must
+        // not re-issue LoadTrack — that wipes the decoder timeline and
+        // resets position to zero mid-playback. We check `player.current_index`
+        // (updated synchronously inside `select_item_with_crossfade`) rather
+        // than `navigation.current_index` (which `advance_to_next` moves
+        // before calling select, so it would mistakenly match).
+        // `rate > 0` distinguishes "player holds this slot" from the
+        // default `current_index = 0` on a fresh, never-selected player;
+        // `select_item_with_crossfade` with `autoplay=true` sets `rate`
+        // synchronously, while `is_playing()` depends on the processor
+        // draining `SetPaused(false)` — racy.
+        if self.player.current_index() == index && self.player.rate() > 0.0 {
+            return Ok(());
+        }
+
         match status {
             TrackStatus::Loaded => {
                 let was_playing = self.player.is_playing();
