@@ -34,6 +34,21 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         Kithara.initialize(application, logLevel = LogLevel.Debug)
         observePlayer()
         observeEvents()
+        for (url in DEFAULT_TRACK_URLS) {
+            enqueue(url, autoPlay = false)
+        }
+    }
+
+    companion object {
+        private val DEFAULT_TRACK_URLS = listOf(
+            "https://stream.silvercomet.top/track.mp3",
+            "https://stream.silvercomet.top/hls/master.m3u8",
+            "https://stream.silvercomet.top/drm/master.m3u8",
+            "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+            "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+            "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+            "https://ecs-stage-slicer-01.zvq.me/hls/track/95038745_1/master.m3u8",
+        )
     }
 
     fun onUrlChanged(value: String) {
@@ -138,7 +153,11 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         player.removeAllItems()
     }
 
-    private fun enqueue(url: String, name: String = resolveTrackTitle(url)) {
+    private fun enqueue(
+        url: String,
+        name: String = resolveTrackTitle(url),
+        autoPlay: Boolean = true,
+    ) {
         val item = KitharaPlayerItem(url)
         try {
             player.insert(item)
@@ -152,9 +171,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         val wasEmpty = _uiState.value.playlist.isEmpty()
         _uiState.update { it.copy(playlist = it.playlist + entry) }
 
-        // Auto-play the first inserted track so idle app becomes playing
-        // immediately — matches the one-tap-to-start UX.
-        if (wasEmpty) {
+        if (autoPlay && wasEmpty) {
             switchTo(entry.id, Transition.None)
         }
     }
