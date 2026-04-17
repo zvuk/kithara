@@ -250,6 +250,16 @@ impl SessionClient {
     #[cfg(target_arch = "wasm32")]
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         if self.local {
+            #[cfg(any(test, feature = "test-utils"))]
+            if WASM_USE_OFFLINE.with(std::cell::Cell::get) {
+                return WASM_OFFLINE_SESSION_STATE.with(|cell| {
+                    let mut state = cell.borrow_mut();
+                    let state = state.as_mut().ok_or_else(|| {
+                        PlayError::Internal("local offline session state missing".into())
+                    })?;
+                    Ok(run_cmd(state, cmd))
+                });
+            }
             WASM_SESSION_STATE.with(|cell| {
                 let mut state = cell.borrow_mut();
                 let state = state
@@ -426,21 +436,37 @@ fn engine_thread<B: AudioBackend>(mut cmd_rx: HeapCons<CmdMsg>, start_stream_fn:
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_session_client<B: AudioBackend + Send + 'static>(
+    thread_name: &'static str,
+    start_stream_fn: StartStreamFn<B>,
+) -> Arc<SessionClient> {
+    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
+    let handle = spawn_named(thread_name, move || {
+        engine_thread::<B>(cmd_rx, start_stream_fn);
+    });
+    let engine_thread = handle.thread().clone();
+    Arc::new(SessionClient {
+        cmd_tx: Mutex::new(cmd_tx),
+        engine_thread,
+    })
+}
+
+/// Singleton session client shared across the process. First caller
+/// wins — either `session_client()` (production, spawns cpal) or
+/// [`try_init_offline_session`] (tests, spawns offline).
+#[cfg(not(target_arch = "wasm32"))]
+static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
+
 pub(crate) fn session_client() -> Arc<SessionClient> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
         SESSION_CLIENT
             .get_or_init(|| {
-                let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
-                let handle = spawn_named("kithara-engine", move || {
-                    engine_thread::<firewheel::cpal::CpalBackend>(cmd_rx, start_stream_cpal);
-                });
-                let engine_thread = handle.thread().clone();
-                Arc::new(SessionClient {
-                    cmd_tx: Mutex::new(cmd_tx),
-                    engine_thread,
-                })
+                spawn_session_client::<firewheel::cpal::CpalBackend>(
+                    "kithara-engine",
+                    start_stream_cpal,
+                )
             })
             .clone()
     }
@@ -457,12 +483,26 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
             let is_local = WORKER_CMD_TX.lock_sync().is_none();
 
             if is_local {
-                WASM_SESSION_STATE.with(|state| {
-                    let mut state = state.borrow_mut();
-                    if state.is_none() {
-                        *state = Some(SessionState::new(start_stream_web_audio));
-                    }
-                });
+                #[cfg(any(test, feature = "test-utils"))]
+                let use_offline = WASM_USE_OFFLINE.with(std::cell::Cell::get);
+                #[cfg(not(any(test, feature = "test-utils")))]
+                let use_offline = false;
+                if use_offline {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    WASM_OFFLINE_SESSION_STATE.with(|state| {
+                        let mut state = state.borrow_mut();
+                        if state.is_none() {
+                            *state = Some(SessionState::new(start_stream_offline));
+                        }
+                    });
+                } else {
+                    WASM_SESSION_STATE.with(|state| {
+                        let mut state = state.borrow_mut();
+                        if state.is_none() {
+                            *state = Some(SessionState::new(start_stream_web_audio));
+                        }
+                    });
+                }
                 // Pre-warm BRIDGE_PLAYER_STATE: access the thread-local so
                 // that TLS destructor registration (which allocates via
                 // dlmalloc) happens now — before any Worker is spawned.
@@ -486,6 +526,15 @@ thread_local! {
     static WASM_SESSION_STATE: RefCell<Option<SessionState<firewheel_web_audio::WebAudioBackend>>> = const { RefCell::new(None) };
     /// Shared player state captured during slot allocation (for bridge reads).
     static BRIDGE_PLAYER_STATE: RefCell<Option<Arc<SharedPlayerState>>> = const { RefCell::new(None) };
+    /// Test-only: parallel session state backed by `OfflineBackend`. When
+    /// `WASM_USE_OFFLINE` is set, all session operations route here
+    /// instead of `WASM_SESSION_STATE`.
+    #[cfg(any(test, feature = "test-utils"))]
+    static WASM_OFFLINE_SESSION_STATE: RefCell<Option<SessionState<super::offline_backend::OfflineBackend>>> = const { RefCell::new(None) };
+    /// Test-only flag: `true` = route session ops to the offline state.
+    /// Set once by [`try_init_offline_session`] at test start.
+    #[cfg(any(test, feature = "test-utils"))]
+    static WASM_USE_OFFLINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Sender half of the Worker → main-thread session channel.
@@ -515,6 +564,39 @@ pub(crate) fn init_worker_channel() {
 /// Called from the main thread's `requestAnimationFrame` loop.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn tick_and_poll_remote() {
+    #[cfg(any(test, feature = "test-utils"))]
+    if WASM_USE_OFFLINE.with(std::cell::Cell::get) {
+        WASM_OFFLINE_SESSION_STATE.with(|state_cell| {
+            let mut state_opt = state_cell.borrow_mut();
+            let Some(ref mut state) = *state_opt else {
+                return;
+            };
+            let rx_guard = WORKER_CMD_RX.lock_sync();
+            if let Some(ref rx) = *rx_guard {
+                while let Ok(msg) = rx.try_recv() {
+                    let reply = run_cmd(state, msg.cmd);
+                    if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
+                        BRIDGE_PLAYER_STATE.with(|ps| {
+                            *ps.borrow_mut() = Some(Arc::clone(shared));
+                        });
+                    }
+                    let _ = msg.reply_tx.send_sync(reply);
+                }
+            }
+            drop(rx_guard);
+            // Drive both `update()` and `render()` — OfflineBackend
+            // doesn't pump its own processor.
+            if let Some(ref mut ctx) = state.ctx {
+                if let Err(err) = ctx.update() {
+                    warn!("offline session graph update in tick failed: {err:?}");
+                }
+                if let Some(backend) = ctx.active_backend_mut() {
+                    let _ = backend.render(OFFLINE_BLOCK_FRAMES);
+                }
+            }
+        });
+        return;
+    }
     WASM_SESSION_STATE.with(|state_cell| {
         let mut state_opt = state_cell.borrow_mut();
         let Some(ref mut state) = *state_opt else {
@@ -599,6 +681,19 @@ pub(crate) fn bridge_process_count() -> u64 {
 /// letting the browser pick the default sample rate.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn warm_up_audio() {
+    #[cfg(any(test, feature = "test-utils"))]
+    if WASM_USE_OFFLINE.with(std::cell::Cell::get) {
+        WASM_OFFLINE_SESSION_STATE.with(|state_cell| {
+            let mut state_opt = state_cell.borrow_mut();
+            let Some(ref mut state) = *state_opt else {
+                return;
+            };
+            if let Err(err) = ensure_ctx(state, 0) {
+                warn!("offline audio warm-up failed: {err}");
+            }
+        });
+        return;
+    }
     WASM_SESSION_STATE.with(|state_cell| {
         let mut state_opt = state_cell.borrow_mut();
         let Some(ref mut state) = *state_opt else {
@@ -737,6 +832,121 @@ fn start_stream_web_audio(
         request_input: false,
     };
     ctx.start_stream(config).map_err(|err| err.to_string())
+}
+
+// ─── offline backend (test-only) ─────────────────────────────────────
+
+/// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
+#[cfg(any(test, feature = "test-utils"))]
+const OFFLINE_BLOCK_FRAMES: usize = 512;
+
+/// Offline engine-thread park interval — ~one block at 44.1kHz so the
+/// firewheel graph is driven at close-to-realtime cadence.
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+const OFFLINE_PARK_MS: u64 = 10;
+
+#[cfg(any(test, feature = "test-utils"))]
+fn start_stream_offline(
+    ctx: &mut FirewheelCtx<super::offline_backend::OfflineBackend>,
+    sample_rate: u32,
+) -> Result<(), String> {
+    let config = super::offline_backend::OfflineConfig {
+        sample_rate,
+        #[expect(clippy::cast_possible_truncation, reason = "block frames fits in u32")]
+        block_frames: OFFLINE_BLOCK_FRAMES as u32,
+    };
+    ctx.start_stream(config).map_err(|err| err.to_string())
+}
+
+/// Engine thread loop for the offline backend.
+///
+/// `CpalBackend` spawns its own realtime audio thread; `OfflineBackend`
+/// does not. So this loop, in addition to handling `Cmd`s, periodically
+/// calls `ctx.active_backend_mut().render(OFFLINE_BLOCK_FRAMES)` to
+/// pull samples through the firewheel graph — without which the decoder
+/// and `PlayerNode` stay idle and integration tests see `position=0`.
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
+    use super::offline_backend::OfflineBackend;
+    let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
+    loop {
+        while let Some(msg) = cmd_rx.try_pop() {
+            let CmdMsg { cmd, reply_tx } = msg;
+            let reply = run_cmd(&mut state, cmd);
+            let _ = reply_tx.send_sync(reply);
+        }
+        if let Some(ref mut ctx) = state.ctx {
+            if let Err(err) = ctx.update() {
+                warn!("offline session graph update failed: {err:?}");
+            }
+            if let Some(backend) = ctx.active_backend_mut() {
+                let _ = backend.render(OFFLINE_BLOCK_FRAMES);
+            }
+        }
+        park_timeout(Duration::from_millis(OFFLINE_PARK_MS));
+    }
+}
+
+/// Initialise the global session client with an offline audio backend.
+///
+/// Must be called **before** any `PlayerImpl::new()` / `Queue::new()`.
+/// Idempotent: a second call returns `Ok(())` if the client is already
+/// set (regardless of backend). If production code raced ahead and set
+/// up cpal first, returns `Err(_)` — the caller should have called
+/// this function earlier.
+///
+/// # Errors
+/// Returns an error when the client was already initialised by another
+/// code path (e.g. cpal via `session_client()`).
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+pub(crate) fn try_init_offline_session() -> Result<(), String> {
+    if SESSION_CLIENT.get().is_some() {
+        return Ok(());
+    }
+    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
+    let handle = spawn_named("kithara-engine-offline", move || {
+        engine_thread_offline(cmd_rx);
+    });
+    let engine_thread = handle.thread().clone();
+    let client = Arc::new(SessionClient {
+        cmd_tx: Mutex::new(cmd_tx),
+        engine_thread,
+    });
+    SESSION_CLIENT.set(client).map_err(|_| {
+        "session client already initialized — call init_offline_backend() \
+         before any Queue/PlayerImpl instantiation"
+            .to_string()
+    })
+}
+
+/// Initialise the singleton session to use `OfflineBackend` (wasm path).
+///
+/// Sets the `WASM_USE_OFFLINE` thread-local flag and lazily initialises
+/// the parallel `WASM_OFFLINE_SESSION_STATE`. All subsequent session
+/// operations (command dispatch, warm-up, tick) route to the offline
+/// state instead of WebAudio.
+///
+/// # Errors
+/// Returns an error if the regular WebAudio session was already
+/// initialised on this thread (can't swap after first use).
+#[cfg(all(target_arch = "wasm32", any(test, feature = "test-utils")))]
+pub(crate) fn try_init_offline_session() -> Result<(), String> {
+    let already = WASM_SESSION_STATE.with(|cell| cell.borrow().is_some());
+    if already {
+        return Err(
+            "wasm WebAudio session already initialised — call init_offline_backend() \
+             before any Queue/PlayerImpl instantiation"
+                .to_string(),
+        );
+    }
+    WASM_USE_OFFLINE.with(|cell| cell.set(true));
+    WASM_OFFLINE_SESSION_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.is_none() {
+            *state = Some(SessionState::new(start_stream_offline));
+        }
+    });
+    Ok(())
 }
 
 fn ensure_ctx<B: AudioBackend>(

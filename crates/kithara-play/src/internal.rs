@@ -13,6 +13,30 @@ pub mod engine {
     }
 }
 
+/// Initialise the global session client with an offline (test-only)
+/// audio backend.
+///
+/// Must be called **before** any `PlayerImpl::new()` / `Queue::new()`.
+/// Idempotent: a second call is a no-op if the offline client is
+/// already set. If production code raced ahead and initialised the
+/// cpal client first, this panics — the caller should have called
+/// this function earlier in the test setup.
+///
+/// Available with the `test-utils` feature on both native and wasm.
+/// On wasm, offline mode is a thread-local opt-in; on native it swaps
+/// the global session client before first use.
+///
+/// # Panics
+///
+/// Panics if the global session client was already initialised with a
+/// non-offline backend (cpal on native, `WebAudio` on wasm). Call this
+/// before any `PlayerImpl::new()` or `Queue::new()` in the test binary.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn init_offline_backend() {
+    crate::impls::session_engine::try_init_offline_session()
+        .expect("failed to initialise offline session backend");
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod offline {
     use std::sync::{Arc, atomic::Ordering};
