@@ -741,10 +741,14 @@ impl Queue {
             Event::Player(PlayerEvent::ItemDidPlayToEnd) => {
                 let pos = self.player.position_seconds().unwrap_or(0.0);
                 let dur = self.player.duration_seconds().unwrap_or(0.0);
-                if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-                    // Auto-advance at end-of-track uses the configured
-                    // crossfade — this is the raison d'être of the
-                    // crossfade setting.
+                // Crossfade fade-outs emit ItemDidPlayToEnd for the
+                // previous track right after the swap, so the engine
+                // reports `pos` near 0 — those are the spurious
+                // deliveries we filter. Any ItemDidPlayToEnd past the
+                // just-switched window is a real end (natural or from
+                // a fatal decode error after a failed seek) and must
+                // advance the queue, otherwise playback hangs.
+                if pos > ITEM_END_POSITION_TOLERANCE_SECONDS {
                     let _ = self.advance_to_next(Transition::Crossfade);
                 } else {
                     debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
