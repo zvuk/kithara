@@ -360,10 +360,7 @@ mod tests {
 
         // Publish an AudioEvent through the shared bus directly.
         let spec = mock_spec();
-        let format = AudioFormat {
-            channels: spec.channels,
-            sample_rate: spec.sample_rate,
-        };
+        let format = AudioFormat::new(spec.channels, spec.sample_rate);
         bus.publish(AudioEvent::FormatDetected { spec: format });
 
         let event = time::timeout(Duration::from_millis(200), rx.recv())
