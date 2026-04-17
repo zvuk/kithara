@@ -96,6 +96,11 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     player_rx: Mutex<EventReceiver>,
+    /// Tracks the id of the track whose crossfade-advance has already
+    /// been armed during `tick()`. Prevents triggering the next-track
+    /// select repeatedly as the remaining playtime keeps ticking below
+    /// the crossfade threshold. Cleared on [`QueueEvent::CurrentTrackChanged`].
+    crossfade_armed_for: Arc<Mutex<Option<TrackId>>>,
     autoplay: bool,
 }
 
@@ -138,6 +143,7 @@ impl Queue {
             sources: Arc::new(Mutex::new(HashMap::new())),
             bus,
             player_rx: Mutex::new(player_rx),
+            crossfade_armed_for: Arc::new(Mutex::new(None)),
             autoplay,
         }
     }
@@ -468,7 +474,52 @@ impl Queue {
     pub fn tick(&self) -> Result<(), QueueError> {
         self.player.tick()?;
         self.drain_player_events();
+        self.maybe_arm_crossfade();
         Ok(())
+    }
+
+    /// Start the next-track crossfade ahead of end-of-track when the
+    /// remaining playtime drops below the configured crossfade window,
+    /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
+    /// fires after the first track is already silent — too late for a
+    /// real crossfade.
+    fn maybe_arm_crossfade(&self) {
+        let crossfade = self.player.crossfade_duration();
+        if crossfade <= 0.0 {
+            return;
+        }
+        let Some(dur) = self.player.duration_seconds() else {
+            return;
+        };
+        let Some(pos) = self.player.position_seconds() else {
+            return;
+        };
+        if dur <= 0.0 || pos <= 0.0 {
+            return;
+        }
+        let remaining = dur - pos;
+        if remaining > f64::from(crossfade) {
+            return;
+        }
+        let current = self.current();
+        let Some(entry) = current else { return };
+        if !matches!(entry.status, TrackStatus::Loaded) {
+            return;
+        }
+        {
+            let mut armed = self.lock_crossfade_armed_mut();
+            if *armed == Some(entry.id) {
+                return;
+            }
+            *armed = Some(entry.id);
+        }
+        let _ = self.advance_to_next(Transition::Crossfade);
+    }
+
+    fn lock_crossfade_armed_mut(&self) -> std::sync::MutexGuard<'_, Option<TrackId>> {
+        self.crossfade_armed_for
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     delegate! {
@@ -670,6 +721,7 @@ impl Queue {
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 let idx = self.player.current_index();
                 let id = self.lock_tracks().get(idx).map(|e| e.id);
+                *self.lock_crossfade_armed_mut() = None;
                 self.bus.publish(QueueEvent::CurrentTrackChanged { id });
             }
             _ => {}
