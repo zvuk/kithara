@@ -385,11 +385,7 @@ impl Queue {
                 *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
                 Ok(())
             }
-            TrackStatus::Consumed => {
-                // Re-selecting a Consumed track: the engine took the
-                // resource during prior `select_item`, so we respawn
-                // the load from the originally-supplied `TrackSource`
-                // (preserving DRM keys / custom headers / etc.).
+            TrackStatus::Consumed | TrackStatus::Failed(_) => {
                 let source = self
                     .sources
                     .lock()
