@@ -41,6 +41,19 @@ pub struct KeyOptions {
     pub query_params: Option<HashMap<String, String>>,
     /// Headers to include in key requests.
     pub request_headers: Option<HashMap<String, String>>,
+    /// Domain-scoped processor registry. When set, takes precedence
+    /// over the global `key_processor` — the registry is consulted
+    /// first; if no rule matches the key URL's domain, the global
+    /// processor (if any) is tried as fallback.
+    #[derivative(Debug(format_with = "fmt_registry"))]
+    pub registry: Option<kithara_drm::KeyProcessorRegistry>,
+}
+
+fn fmt_registry(
+    val: &Option<kithara_drm::KeyProcessorRegistry>,
+    f: &mut fmt::Formatter,
+) -> fmt::Result {
+    Debug::fmt(&val.as_ref().map(|_| "KeyProcessorRegistry"), f)
 }
 
 fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut fmt::Formatter) -> fmt::Result {

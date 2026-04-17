@@ -40,6 +40,7 @@ pub struct KeyManager {
     key_processor: Option<KeyProcessor>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
+    registry: Option<kithara_drm::KeyProcessorRegistry>,
 }
 
 impl KeyManager {
@@ -51,6 +52,7 @@ impl KeyManager {
         key_processor: Option<KeyProcessor>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
+        registry: Option<kithara_drm::KeyProcessorRegistry>,
     ) -> Self {
         Self {
             downloader,
@@ -59,6 +61,7 @@ impl KeyManager {
             key_processor,
             key_query_params,
             key_request_headers,
+            registry,
         }
     }
 
@@ -77,6 +80,7 @@ impl KeyManager {
             options.key_processor,
             options.query_params,
             options.request_headers,
+            options.registry,
         )
     }
 
@@ -98,7 +102,7 @@ impl KeyManager {
             }
         }
 
-        let headers = self.merged_headers();
+        let headers = self.merged_headers_for(&fetch_url);
         let rel_path = rel_path_from_url(&fetch_url);
         let raw_key = fetch_atomic_body(
             &self.downloader,
@@ -149,9 +153,19 @@ impl KeyManager {
 
     /// Merge key-specific request headers on top of the base headers.
     /// Key-specific entries take precedence on key conflict.
-    fn merged_headers(&self) -> Option<Headers> {
-        let key_headers = self.key_request_headers.clone().map(Headers::from);
-        match (self.base_headers.clone(), key_headers) {
+    fn merged_headers_for(&self, key_url: &Url) -> Option<Headers> {
+        let rule_headers = self
+            .registry
+            .as_ref()
+            .and_then(|r| r.find(key_url))
+            .and_then(|(_, h)| h)
+            .cloned()
+            .map(Headers::from);
+
+        let global_headers = self.key_request_headers.clone().map(Headers::from);
+        let extra = rule_headers.or(global_headers);
+
+        match (self.base_headers.clone(), extra) {
             (None, None) => None,
             (Some(base), None) => Some(base),
             (None, Some(req)) => Some(req),
@@ -166,6 +180,12 @@ impl KeyManager {
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
+        if let Some(registry) = &self.registry
+            && let Some((processor, _)) = registry.find(&url)
+        {
+            return processor(key)
+                .map_err(|e| HlsError::KeyProcessing(format!("registry processor: {e}")));
+        }
         let context = KeyContext { iv, url };
         if let Some(processor) = &self.key_processor {
             processor(key, context)

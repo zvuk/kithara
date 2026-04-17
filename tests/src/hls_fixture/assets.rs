@@ -119,6 +119,7 @@ pub fn test_key_manager(
         key_processor,
         key_query_params,
         key_request_headers,
+        None,
     )
 }
 
