@@ -143,13 +143,14 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
+        kithara,
         signal_pcm::{Finite, Infinite, SignalPcm, signal},
         wav::{create_wav_from_signal, create_wav_header},
     };
 
     const WAV_HEADER_SIZE: usize = 44;
 
-    #[test]
+    #[kithara::test]
     fn wav_header_magic() {
         let src = SignalPcm::new(signal::Silence, 44100, 2, Finite::new(0));
         let buf = create_wav_from_signal(src);
@@ -160,7 +161,7 @@ mod tests {
         assert_eq!(&buf[36..40], b"data");
     }
 
-    #[test]
+    #[kithara::test]
     fn wav_header_sample_rate() {
         let src = SignalPcm::new(signal::Silence, 48000, 1, Finite::new(1));
         let buf = create_wav_from_signal(src);
@@ -169,7 +170,7 @@ mod tests {
         assert_eq!(rate, 48000);
     }
 
-    #[test]
+    #[kithara::test]
     fn finite_header_has_real_sizes() {
         let sample_rate = 44100;
         let pcm = SignalPcm::new(
@@ -195,7 +196,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn infinite_header_has_streaming_sizes() {
         let pcm = SignalPcm::new(signal::Silence, 44100, 2, Infinite);
 
@@ -216,7 +217,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn create_wav_matches_first_samples() {
         // 2 stereo frames → 44 + 8 = 52 bytes; frame 0 at [44], frame 1 at [48].
         let pcm = SignalPcm::new(signal::Sawtooth, 44100, 2, Finite::new(2));
@@ -226,7 +227,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes([wav[48], wav[49]]), -32767);
     }
 
-    #[test]
+    #[kithara::test]
     fn create_wav_matches_pattern() {
         let channels = 2u16;
         let segment_count = 1;

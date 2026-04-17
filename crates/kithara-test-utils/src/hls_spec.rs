@@ -516,6 +516,7 @@ mod tests {
     use crate::{
         fixture_protocol::{InitMode, PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
         hls_blob_store::blob_key,
+        kithara,
     };
 
     fn encode(spec: &HlsSpec) -> String {
@@ -531,7 +532,7 @@ mod tests {
             .ok_or_else(|| HlsSpecError::MissingBlob(key.to_owned()))
     }
 
-    #[test]
+    #[kithara::test]
     fn parses_blob_backed_spec() {
         let media = blob_key(b"abcdef");
         let init = blob_key(b"init");
@@ -558,7 +559,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn rejects_invalid_variant_count() {
         let spec = HlsSpec {
             variant_count: 0,
@@ -568,7 +569,7 @@ mod tests {
         assert!(err.to_string().contains("variant_count"));
     }
 
-    #[test]
+    #[kithara::test]
     fn rejects_packaged_sine_freq_above_nyquist() {
         let spec = HlsSpec {
             packaged_audio: Some(PackagedAudioRequest {

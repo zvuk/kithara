@@ -318,9 +318,12 @@ impl<S: signal::SignalFn + Sync> kithara_encode::PcmSource for SignalPcm<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal_pcm::{SignalLength, SignalPcm, signal, signal::SignalFn};
+    use crate::{
+        kithara,
+        signal_pcm::{SignalLength, SignalPcm, signal, signal::SignalFn},
+    };
 
-    #[test]
+    #[kithara::test]
     fn pcm_finite_len() {
         let sample_rate = 44100;
         let pcm = SignalPcm::new(
@@ -333,7 +336,7 @@ mod tests {
         assert_eq!(pcm.total_byte_len(), Some(44100 * 2 * 2));
     }
 
-    #[test]
+    #[kithara::test]
     fn pcm_partial_frame_read() {
         let pcm = SignalPcm::new(signal::Sawtooth, 44100, 1, Finite::new(2));
         let mut buf = [0u8; 4];
@@ -342,7 +345,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes([buf[2], buf[3]]), -32767);
     }
 
-    #[test]
+    #[kithara::test]
     fn sawtooth_descending() {
         let pcm = SignalPcm::new(signal::SawtoothDescending, 44100, 1, Finite::new(1));
         let mut buf = [0u8; 2];
@@ -350,7 +353,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes(buf), 32767);
     }
 
-    #[test]
+    #[kithara::test]
     fn sine_first_sample_is_zero() {
         let pcm = SignalPcm::new(signal::SineWave(440.0), 44100, 1, Finite::new(1));
         let mut buf = [0u8; 2];
@@ -358,7 +361,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes(buf), 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn silence_all_zeros() {
         let sample_rate = 44100;
         let pcm = SignalPcm::new(
@@ -374,7 +377,7 @@ mod tests {
         assert!(buf.iter().all(|&byte| byte == 0));
     }
 
-    #[test]
+    #[kithara::test]
     fn stereo_duplicates_channels() {
         let pcm = SignalPcm::new(signal::Sawtooth, 44100, 2, Finite::new(1));
         let mut buf = [0u8; 4];
@@ -385,7 +388,7 @@ mod tests {
         assert_eq!(buf[1], buf[3]);
     }
 
-    #[test]
+    #[kithara::test]
     fn custom_signal_fn() {
         struct Constant(i16);
 
@@ -403,7 +406,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes(buf), 1000);
     }
 
-    #[test]
+    #[kithara::test]
     fn infinite_signal_has_no_known_len() {
         let pcm = SignalPcm::new(signal::Silence, 44_100, 2, Infinite);
 

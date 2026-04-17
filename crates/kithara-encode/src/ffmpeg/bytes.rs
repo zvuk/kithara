@@ -237,6 +237,8 @@ fn write_encoded_packets(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use crate::{
         BytesEncodeRequest, BytesEncodeTarget, EncoderFactory, test_pcm::SawtoothPcmFixture,
     };
@@ -245,7 +247,7 @@ mod tests {
     const CHANNELS: u16 = 2;
     const AAC_FRAME_SAMPLES: usize = 1024;
 
-    #[test]
+    #[kithara::test]
     fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
         let pcm = SawtoothPcmFixture::new(4 * AAC_FRAME_SAMPLES, SAMPLE_RATE, CHANNELS);
         let cases = [

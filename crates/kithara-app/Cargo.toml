@@ -38,6 +38,10 @@ url = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, features = ["apple"] }
 
+[dev-dependencies]
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+
 [[bin]]
 name = "kithara"
 path = "src/main.rs"

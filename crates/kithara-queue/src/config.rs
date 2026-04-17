@@ -64,9 +64,11 @@ impl QueueConfig {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
@@ -74,7 +76,7 @@ mod tests {
         assert!(cfg.player.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn with_autoplay_sets_field() {
         let cfg = QueueConfig::default().with_autoplay(true);
         assert!(cfg.autoplay);

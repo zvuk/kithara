@@ -10,7 +10,7 @@ macro_rules! env_or_default {
     () => {
         match option_env!("KITHARA_DRM_KEY") {
             Some(k) => k,
-            None => "kithara",
+            None => "BinaryCipherKey",
         }
     };
 }
@@ -48,10 +48,12 @@ pub fn make_key_registry(domains: &[String]) -> KeyProcessorRegistry {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn drm_key_returns_expected_default() {
-        assert_eq!(drm_key(), "kithara");
+        assert_eq!(drm_key(), "BinaryCipherKey");
     }
 }

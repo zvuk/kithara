@@ -448,10 +448,11 @@ mod tests {
     use super::*;
     use crate::{
         fixture_protocol::{DataMode, InitMode},
+        kithara,
         signal_url::{SignalFormat, SignalSpec, SignalSpecLength},
     };
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn signal_helper_builds_expected_url() {
         let spec = SignalSpec {
             sample_rate: 44_100,
@@ -466,7 +467,7 @@ mod tests {
         assert!(url.path().ends_with(".wav"));
     }
 
-    #[test]
+    #[kithara::test]
     fn create_hls_builder_preserves_inline_spec() {
         let spec = HlsFixtureBuilder::new()
             .variant_count(2)
@@ -479,7 +480,7 @@ mod tests {
         assert!(matches!(spec.data_mode, DataMode::TestPattern));
     }
 
-    #[test]
+    #[kithara::test]
     fn packaged_audio_builder_resets_legacy_inputs() {
         let spec = HlsFixtureBuilder::new()
             .data_mode(DataMode::SawWav {
@@ -498,7 +499,7 @@ mod tests {
         assert!(spec.packaged_audio.is_some());
     }
 
-    #[test]
+    #[kithara::test]
     fn legacy_data_overrides_clear_packaged_audio() {
         let spec = HlsFixtureBuilder::new()
             .packaged_audio_aac_lc(44_100, 2)
@@ -509,7 +510,7 @@ mod tests {
         assert!(matches!(spec.data_mode, DataMode::CustomData(_)));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn created_hls_reuses_single_token_across_urls() {
         let helper = TestServerHelper::new().await;
         let created = helper

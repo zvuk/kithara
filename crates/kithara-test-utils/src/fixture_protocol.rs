@@ -283,8 +283,9 @@ pub fn create_wav_init_header(sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kithara;
 
-    #[test]
+    #[kithara::test]
     fn packaged_audio_codec_json_uses_snake_case_strings() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -298,7 +299,7 @@ mod tests {
         assert_eq!(req.channels, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn packaged_audio_sine_signal_json_roundtrips() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -314,7 +315,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn delay_rule_matches_variant_and_segment_gte() {
         let rule = DelayRule {
             variant: Some(0),
@@ -328,7 +329,7 @@ mod tests {
         assert_eq!(rule.matches(1, 5), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn eval_delay_first_match_wins() {
         let rules = vec![
             DelayRule {
@@ -347,7 +348,7 @@ mod tests {
         assert_eq!(eval_delay(&rules, 0, 0), 10);
     }
 
-    #[test]
+    #[kithara::test]
     fn generate_segment_has_correct_prefix() {
         let data = generate_segment(1, 2, 100);
         assert!(data.starts_with(b"V1-SEG-2:TEST_SEGMENT_DATA"));
@@ -355,7 +356,7 @@ mod tests {
         assert_eq!(data[99], 0xFF);
     }
 
-    #[test]
+    #[kithara::test]
     fn wav_init_header_is_44_bytes() {
         let header = create_wav_init_header(44100, 2);
         assert_eq!(header.len(), 44);

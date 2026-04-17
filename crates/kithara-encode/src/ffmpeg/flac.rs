@@ -304,6 +304,7 @@ fn normalize_timestamp(value: i64, origin: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_utils::kithara;
 
     use super::{FlacFFmpegEncoder, normalize_flac_codec_config};
     use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
@@ -311,7 +312,7 @@ mod tests {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
 
-    #[test]
+    #[kithara::test]
     fn normalize_flac_codec_config_accepts_mp4_metadata_block() {
         let data = [
             0x80, 0x00, 0x00, 0x22, 0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41,
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
     }
 
-    #[test]
+    #[kithara::test]
     fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         let total_frames = 4 * FlacFFmpegEncoder::frame_samples();
         let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);

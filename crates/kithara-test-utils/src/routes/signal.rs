@@ -329,13 +329,13 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
     use super::*;
-    use crate::http_server::TestHttpServer;
+    use crate::{http_server::TestHttpServer, kithara};
 
     fn encode(json: &str) -> String {
         URL_SAFE_NO_PAD.encode(json)
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn signal_routes_smoke_test() {
         let server = TestHttpServer::new(router().with_state(TestServerState::new())).await;
         let saw = encode(r#"{"seconds":1,"sample_rate":44100,"channels":2}"#);

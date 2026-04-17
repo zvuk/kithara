@@ -96,22 +96,20 @@ impl EncoderFactory {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
     use crate::{BytesEncodeTarget, InnerEncoder};
 
-    #[test]
-    fn frame_samples_match_aac_runtime_contract() {
-        let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc).expect("aac");
-        assert_eq!(frame_samples, 1024);
+    #[kithara::test]
+    #[case::aac(AudioCodec::AacLc, 1024)]
+    #[case::flac(AudioCodec::Flac, 4608)]
+    fn frame_samples_match_runtime_contract(#[case] codec: AudioCodec, #[case] expected: usize) {
+        let frame_samples = EncoderFactory::frame_samples(codec).expect("supported codec");
+        assert_eq!(frame_samples, expected);
     }
 
-    #[test]
-    fn frame_samples_match_flac_runtime_contract() {
-        let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac).expect("flac");
-        assert_eq!(frame_samples, 4608);
-    }
-
-    #[test]
+    #[kithara::test]
     fn frame_samples_reject_unknown_packaged_codec() {
         let error = EncoderFactory::frame_samples(AudioCodec::Mp3).expect_err("unsupported");
         assert!(matches!(
@@ -120,7 +118,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn create_bytes_returns_public_encoder_abstraction() {
         let encoder: Box<dyn InnerEncoder> =
             EncoderFactory::create_bytes(BytesEncodeTarget::Mp3).expect("mp3 encoder");
@@ -130,23 +128,18 @@ mod tests {
         assert_eq!(frame_samples, 1024);
     }
 
-    #[test]
-    fn create_packaged_returns_public_encoder_abstraction() {
+    #[kithara::test]
+    #[case::aac(AudioCodec::AacLc, 1024)]
+    #[case::flac(AudioCodec::Flac, 4608)]
+    fn create_packaged_returns_public_encoder_abstraction(
+        #[case] codec: AudioCodec,
+        #[case] expected: usize,
+    ) {
         let encoder: Box<dyn InnerEncoder> =
-            EncoderFactory::create_packaged(AudioCodec::AacLc).expect("aac encoder");
+            EncoderFactory::create_packaged(codec).expect("packaged encoder");
         let frame_samples = encoder
-            .packaged_frame_samples(AudioCodec::AacLc)
-            .expect("aac");
-        assert_eq!(frame_samples, 1024);
-    }
-
-    #[test]
-    fn create_packaged_supports_flac() {
-        let encoder: Box<dyn InnerEncoder> =
-            EncoderFactory::create_packaged(AudioCodec::Flac).expect("flac encoder");
-        let frame_samples = encoder
-            .packaged_frame_samples(AudioCodec::Flac)
-            .expect("flac");
-        assert_eq!(frame_samples, 4608);
+            .packaged_frame_samples(codec)
+            .expect("packaged frame samples");
+        assert_eq!(frame_samples, expected);
     }
 }

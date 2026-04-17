@@ -71,13 +71,25 @@ pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn aac_lc_fmp4_token() {
-        let info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
-        assert_eq!(info.rfc6381_codec().as_deref(), Some("mp4a.40.2"));
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
     }
 
-    #[test]
+    #[kithara::test]
+    #[case::aac_lc_fmp4(AudioCodec::AacLc, ContainerFormat::Fmp4, Some("mp4a.40.2"))]
+    #[case::pcm_fmp4(AudioCodec::Pcm, ContainerFormat::Fmp4, None)]
+    #[case::mp3_mpeg_audio(AudioCodec::Mp3, ContainerFormat::MpegAudio, Some("mp4a.40.34"))]
+    #[case::flac_ogg(AudioCodec::Flac, ContainerFormat::Ogg, Some("flac"))]
+    fn rfc6381_codec_token_matches(
+        #[case] codec: AudioCodec,
+        #[case] container: ContainerFormat,
+        #[case] expected: Option<&str>,
+    ) {
+        let info = MediaInfo::new(Some(codec), Some(container));
+        assert_eq!(info.rfc6381_codec().as_deref(), expected);
+    }
+
+    #[kithara::test]
     fn aac_lc_defaults_container_to_fmp4_mapping() {
         let info = MediaInfo {
             codec: Some(AudioCodec::AacLc),
@@ -86,25 +98,7 @@ mod tests {
         assert_eq!(info.rfc6381_codec().as_deref(), Some("mp4a.40.2"));
     }
 
-    #[test]
-    fn pcm_has_no_rfc6381_token() {
-        let info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Fmp4));
-        assert!(info.rfc6381_codec().is_none());
-    }
-
-    #[test]
-    fn mp3_mpeg_audio_matches_elementary_mp3_token() {
-        let info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
-        assert_eq!(info.rfc6381_codec().as_deref(), Some("mp4a.40.34"));
-    }
-
-    #[test]
-    fn flac_in_ogg_matches_flac_token() {
-        let info = MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Ogg));
-        assert_eq!(info.rfc6381_codec().as_deref(), Some("flac"));
-    }
-
-    #[test]
+    #[kithara::test]
     fn fmp4_packaging_support_matches_supported_audio_codecs() {
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacLc));
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::Flac));

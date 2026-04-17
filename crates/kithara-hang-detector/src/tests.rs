@@ -1,9 +1,11 @@
 use std::time::Duration;
 
+use kithara_test_utils::kithara;
+
 const LOOP_BREAK_COUNT_3: i32 = 3;
 const LOOP_BREAK_COUNT_2: i32 = 2;
 
-#[test]
+#[kithara::test]
 fn attr_macro_loop_compiles_and_runs() {
     let mut count = 0;
 
@@ -23,7 +25,7 @@ fn attr_macro_loop_compiles_and_runs() {
     assert_eq!(count, LOOP_BREAK_COUNT_3);
 }
 
-#[test]
+#[kithara::test]
 fn attr_macro_while_compiles_and_runs() {
     let mut count = 0;
 
@@ -40,7 +42,7 @@ fn attr_macro_while_compiles_and_runs() {
     assert_eq!(count, LOOP_BREAK_COUNT_3);
 }
 
-#[test]
+#[kithara::test]
 fn attr_macro_with_thread_compiles_and_runs() {
     let mut count = 0;
 
@@ -60,7 +62,7 @@ fn attr_macro_with_thread_compiles_and_runs() {
     assert_eq!(count, LOOP_BREAK_COUNT_2);
 }
 
-#[test]
+#[kithara::test]
 fn attr_macro_with_timeout_compiles_and_runs() {
     let mut count = 0;
 
@@ -80,7 +82,7 @@ fn attr_macro_with_timeout_compiles_and_runs() {
     assert_eq!(count, LOOP_BREAK_COUNT_2);
 }
 
-#[test]
+#[kithara::test]
 fn attr_macro_with_thread_and_timeout_compiles_and_runs() {
     let mut count = 0;
 

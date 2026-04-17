@@ -62,8 +62,9 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kithara;
 
-    #[test]
+    #[kithara::test]
     fn phase_helpers_work() {
         assert_eq!(phase_from_f32(-1.0), 0);
         assert_eq!(phase_distance(0, SAW_PERIOD - 1), 1);

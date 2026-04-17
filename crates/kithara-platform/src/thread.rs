@@ -290,9 +290,11 @@ pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
 mod tests {
     use std::time::Instant;
 
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn native_thread_detectors_are_consistent() {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -303,7 +305,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn park_timeout_returns_after_unpark() {
         #[cfg(not(target_arch = "wasm32"))]
         {

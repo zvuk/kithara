@@ -172,9 +172,12 @@ pub fn signal_stream<S: signal::SignalFn>(source: SignalSource<S>) -> Stream<Sig
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal_pcm::{Finite, Infinite};
+    use crate::{
+        kithara,
+        signal_pcm::{Finite, Infinite},
+    };
 
-    #[test]
+    #[kithara::test]
     fn finite_eof() {
         let sample_rate = 48000;
         let pcm = SignalPcm::new(
@@ -190,7 +193,7 @@ mod tests {
         assert_eq!(src.read_at(total, &mut buf).unwrap(), ReadOutcome::Data(0));
     }
 
-    #[test]
+    #[kithara::test]
     fn media_info_correct() {
         let pcm = SignalPcm::new(signal::SineWave(440.0), 48000, 2, Infinite);
         let src = SignalSource::new(pcm);
@@ -201,7 +204,7 @@ mod tests {
         assert_eq!(info.channels, Some(2));
     }
 
-    #[test]
+    #[kithara::test]
     fn read_spanning_header_and_pcm() {
         let pcm = SignalPcm::new(signal::Silence, 44100, 1, Infinite);
         let mut src = SignalSource::new(pcm);
@@ -212,7 +215,7 @@ mod tests {
         assert_eq!(&buf[4..8], &[0, 0, 0, 0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn signal_stream_creates_stream() {
         let pcm = SignalPcm::new(signal::SineWave(440.0), 44100, 2, Infinite);
         let src = SignalSource::new(pcm);

@@ -17,6 +17,9 @@
 
 //! Shared test utilities for the kithara workspace.
 
+#[cfg(test)]
+extern crate self as kithara_test_utils;
+
 pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]

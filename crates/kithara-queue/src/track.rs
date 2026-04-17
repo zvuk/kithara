@@ -122,22 +122,24 @@ impl Tracks {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn track_source_from_str() {
         let src: TrackSource = "https://example.com/song.mp3".into();
         assert_eq!(src.uri(), Some("https://example.com/song.mp3"));
     }
 
-    #[test]
+    #[kithara::test]
     fn track_source_from_string() {
         let s = "https://example.com/track.m3u8".to_string();
         let src: TrackSource = s.into();
         assert_eq!(src.uri(), Some("https://example.com/track.m3u8"));
     }
 
-    #[test]
+    #[kithara::test]
     fn track_source_from_resource_config() {
         let cfg = ResourceConfig::new("https://example.com/a.mp3").expect("valid url");
         let src: TrackSource = cfg.into();

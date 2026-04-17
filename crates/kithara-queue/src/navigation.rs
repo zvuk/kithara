@@ -131,9 +131,11 @@ fn add_to_history(history: &mut VecDeque<usize>, track_idx: usize) {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn defaults() {
         let nav = NavigationState::new();
         assert_eq!(nav.current_index(), None);
@@ -141,7 +143,7 @@ mod tests {
         assert_eq!(nav.repeat_mode(), RepeatMode::Off);
     }
 
-    #[test]
+    #[kithara::test]
     fn select_updates_current_and_pushes_history() {
         let mut nav = NavigationState::new();
         nav.select(2);
@@ -152,7 +154,7 @@ mod tests {
         assert_eq!(nav.history.back(), Some(&2));
     }
 
-    #[test]
+    #[kithara::test]
     fn select_dedupes_adjacent_history() {
         let mut nav = NavigationState::new();
         nav.select(1);
@@ -161,19 +163,19 @@ mod tests {
         assert!(nav.history.is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn next_from_empty_queue_is_none() {
         let mut nav = NavigationState::new();
         assert_eq!(nav.next(0), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn next_from_unselected_starts_at_zero() {
         let mut nav = NavigationState::new();
         assert_eq!(nav.next(3), Some(0));
     }
 
-    #[test]
+    #[kithara::test]
     fn next_wraps_with_repeat_all() {
         let mut nav = NavigationState::new();
         nav.set_repeat(RepeatMode::All);
@@ -183,14 +185,14 @@ mod tests {
         assert_eq!(nav.next(3), Some(0)); // wrap
     }
 
-    #[test]
+    #[kithara::test]
     fn next_stops_at_end_with_repeat_off() {
         let mut nav = NavigationState::new();
         nav.select(2);
         assert_eq!(nav.next(3), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn next_returns_current_with_repeat_one() {
         let mut nav = NavigationState::new();
         nav.select(1);
@@ -199,20 +201,20 @@ mod tests {
         assert_eq!(nav.next(3), Some(1));
     }
 
-    #[test]
+    #[kithara::test]
     fn prev_at_zero_is_none() {
         let mut nav = NavigationState::new();
         nav.select(0);
         assert_eq!(nav.prev(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn prev_at_unselected_is_none() {
         let mut nav = NavigationState::new();
         assert_eq!(nav.prev(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn prev_decrements() {
         let mut nav = NavigationState::new();
         nav.select(2);
@@ -221,7 +223,7 @@ mod tests {
         assert_eq!(nav.prev(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn history_caps_at_max() {
         let mut nav = NavigationState::new();
         nav.select(0);
@@ -231,7 +233,7 @@ mod tests {
         assert_eq!(nav.history.len(), MAX_HISTORY_SIZE);
     }
 
-    #[test]
+    #[kithara::test]
     fn shuffle_toggle() {
         let mut nav = NavigationState::new();
         assert!(!nav.is_shuffle_enabled());
@@ -241,7 +243,7 @@ mod tests {
         assert!(!nav.is_shuffle_enabled());
     }
 
-    #[test]
+    #[kithara::test]
     fn repeat_mode_roundtrip() {
         let mut nav = NavigationState::new();
         nav.set_repeat(RepeatMode::All);

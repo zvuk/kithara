@@ -210,6 +210,7 @@ fn normalize_timestamp(value: i64, origin: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_utils::kithara;
 
     use super::AacFFmpegEncoder;
     use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
@@ -217,7 +218,7 @@ mod tests {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
 
-    #[test]
+    #[kithara::test]
     fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
         let total_frames = 4 * AacFFmpegEncoder::frame_samples();
         let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);

@@ -870,7 +870,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
     }

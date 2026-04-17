@@ -31,9 +31,11 @@ pub trait InnerEncoder: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn trait_is_object_safe() {
         fn _accepts_boxed(_: Box<dyn InnerEncoder>) {}
     }

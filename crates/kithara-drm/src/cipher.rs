@@ -89,6 +89,8 @@ impl UniqueBinaryCipher {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn encrypt(cipher: &UniqueBinaryCipher, data: Bytes) -> Bytes {
@@ -119,7 +121,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn round_trip_text() {
         let cipher = UniqueBinaryCipher::new("my super secret key");
         assert_round_trip(&cipher, "");
@@ -127,7 +129,7 @@ mod tests {
         assert_round_trip(&cipher, "Hello, World!");
     }
 
-    #[test]
+    #[kithara::test]
     fn different_keys_produce_different_ciphertext() {
         let c1 = UniqueBinaryCipher::new("k1");
         let c2 = UniqueBinaryCipher::new("k2");

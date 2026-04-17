@@ -72,6 +72,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kithara::test as kithara_test;
+
 /// Locate the compiled `suite_light` binary next to our own test binary.
 ///
 /// `std::env::current_exe()` returns path to *this* red test binary, which
@@ -132,7 +134,7 @@ fn spawn_and_measure_leak_gap() -> Duration {
     exited_at.saturating_duration_since(eof_at)
 }
 
-#[test]
+#[kithara_test(native)]
 fn red_env_guard_no_leak_in_isolation() {
     let gap = spawn_and_measure_leak_gap();
     assert!(
@@ -143,7 +145,7 @@ fn red_env_guard_no_leak_in_isolation() {
     );
 }
 
-#[test]
+#[kithara_test(native)]
 fn red_env_guard_no_leak_under_env_lock_contention() {
     // Reproduce LEAK conditions: many in-parent workers hammer the
     // `test_env_lock` while the child subprocess runs its own env test.

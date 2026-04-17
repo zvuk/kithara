@@ -528,9 +528,10 @@ mod tests {
         fixture_protocol::{DataMode, EncryptionRequest},
         hls_spec::parse_hls_spec_with,
         hls_url::{HlsSpec, encode_hls_spec},
+        kithara,
     };
 
-    #[test]
+    #[kithara::test]
     fn builds_master_and_media_playlist() {
         let spec =
             parse_hls_spec_with(&encode_hls_spec(&HlsSpec::default()), |_| unreachable!()).unwrap();
@@ -548,7 +549,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn encrypts_segment_payload() {
         let spec = parse_hls_spec_with(
             &encode_hls_spec(&HlsSpec {
@@ -569,7 +570,7 @@ mod tests {
         assert_ne!(bytes, generate_segment(0, 0, 32));
     }
 
-    #[test]
+    #[kithara::test]
     fn packaged_segments_can_exceed_requested_segment_count() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)

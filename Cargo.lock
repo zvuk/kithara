@@ -3915,6 +3915,8 @@ dependencies = [
  "kithara",
  "kithara-drm",
  "kithara-queue",
+ "kithara-test-macros",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "obfstr",
  "rand 0.10.0",
@@ -4064,6 +4066,8 @@ version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
  "kithara-stream",
+ "kithara-test-macros",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "tempfile",
  "thiserror 2.0.18",

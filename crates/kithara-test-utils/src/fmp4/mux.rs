@@ -340,6 +340,7 @@ mod tests {
     use kithara_stream::{ContainerFormat, MediaInfo};
 
     use super::*;
+    use crate::kithara;
 
     fn test_track() -> EncodedTrack {
         EncodedTrack {
@@ -419,7 +420,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn init_segment_contains_ftyp_and_moov() {
         let track = test_track();
         let packaged = mux_audio_track(&track).unwrap();
@@ -431,7 +432,7 @@ mod tests {
         assert_eq!(packaged.rfc6381_codec.as_ref(), "mp4a.40.2");
     }
 
-    #[test]
+    #[kithara::test]
     fn media_segments_keep_tfdt_monotonic() {
         let track = test_track();
         let packaged = mux_audio_track(&track).unwrap();
@@ -451,7 +452,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn init_segment_contains_flac_sample_entry_and_dfla() {
         let track = flac_track();
         let packaged = mux_audio_track(&track).unwrap();

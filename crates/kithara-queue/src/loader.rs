@@ -133,6 +133,7 @@ mod tests {
     use derive_setters::Setters;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_play::PlayerConfig;
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::track::TrackEntry;
@@ -174,7 +175,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = LoaderBuilder::default().build().loader;
         let Ok(given) = ResourceConfig::new("https://example.com/a.mp3") else {
@@ -190,7 +191,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors() {
         let loader = LoaderBuilder::default().build().loader;
         let Err(err) = loader.build_config(TrackSource::Uri("not-a-url".into())) else {
@@ -199,7 +200,7 @@ mod tests {
         assert!(matches!(err, QueueError::InvalidUrl(_)));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn load_invalid_uri_returns_invalid_url_error() {
         let loader = LoaderBuilder::default().build().loader;
         let Err(err) = loader
@@ -211,7 +212,7 @@ mod tests {
         assert!(matches!(err, QueueError::InvalidUrl(_)));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[kithara::test(tokio, multi_thread)]
     async fn semaphore_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("2 > 0");
         let loader = LoaderBuilder::default().with_cap(cap).build().loader;

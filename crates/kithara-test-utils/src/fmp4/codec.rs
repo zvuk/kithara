@@ -128,8 +128,9 @@ mod tests {
     use kithara_stream::AudioCodec;
 
     use super::CodecDescriptor;
+    use crate::kithara;
 
-    #[test]
+    #[kithara::test]
     fn flac_descriptor_emits_flac_sample_entry_and_dfla() {
         let codec_config = vec![0x12; 34];
         let descriptor = CodecDescriptor::for_codec(AudioCodec::Flac).expect("flac descriptor");
