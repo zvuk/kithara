@@ -110,19 +110,65 @@ public final class KitharaPlayer: @unchecked Sendable {
 
     // MARK: - Init
 
+    /// A single DRM rule: a key processor bound to one or more domain
+    /// patterns (exact `"example.com"` or wildcard `"*.example.com"`),
+    /// plus optional headers / query params sent with matching key
+    /// requests.
+    public struct KeyRule: Sendable {
+        public let processor: KeyProcessor
+        public let domains: [String]
+        public let headers: [String: String]?
+        public let queryParams: [String: String]?
+
+        public init(
+            processor: KeyProcessor,
+            domains: [String],
+            headers: [String: String]? = nil,
+            queryParams: [String: String]? = nil
+        ) {
+            self.processor = processor
+            self.domains = domains
+            self.headers = headers
+            self.queryParams = queryParams
+        }
+    }
+
     /// Configuration for player creation.
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
         public var eqBandCount: Int
+        /// Domain-scoped DRM rules. Evaluated in order; first match wins.
+        public var keyRules: [KeyRule]
+        /// Optional cache directory path. `nil` uses the platform default.
+        public var cacheDir: String?
 
-        public init(eqBandCount: Int = 10) {
+        public init(
+            eqBandCount: Int = 10,
+            keyRules: [KeyRule] = [],
+            cacheDir: String? = nil
+        ) {
             self.eqBandCount = eqBandCount
+            self.keyRules = keyRules
+            self.cacheDir = cacheDir
         }
     }
 
     /// Create a new player instance.
     public init(config: Config = Config()) {
-        self._inner = AudioPlayer(config: FfiPlayerConfig(eqBandCount: UInt32(config.eqBandCount)))
+        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
+            FfiKeyRule(
+                processor: KeyProcessorBridge(processor: rule.processor),
+                domains: rule.domains,
+                headers: rule.headers,
+                queryParams: rule.queryParams
+            )
+        }
+        let ffiConfig = FfiPlayerConfig(
+            eqBandCount: UInt32(config.eqBandCount),
+            keyOptions: FfiKeyOptions(rules: ffiRules),
+            store: StoreOptions(cacheDir: config.cacheDir)
+        )
+        self._inner = AudioPlayer(config: ffiConfig)
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
@@ -261,21 +307,6 @@ public final class KitharaPlayer: @unchecked Sendable {
     public var crossfadeDuration: Float {
         get { _inner.crossfadeDuration() }
         set { _inner.setCrossfadeDuration(seconds: newValue) }
-    }
-
-    // MARK: - Key processing (DRM)
-
-    /// Set a key processor for HLS DRM key decryption.
-    ///
-    /// The processor is applied to all items' key requests when loading.
-    /// Optional `headers` are sent with every key request (e.g. `X-Encrypted-Key`).
-    ///
-    /// - Parameters:
-    ///   - processor: Callback that receives encrypted key bytes and returns decrypted bytes.
-    ///   - headers: Optional HTTP headers for key requests only.
-    public func setKeyProcessor(_ processor: KeyProcessor, headers: [String: String]? = nil) {
-        let bridge = KeyProcessorBridge(processor: processor)
-        _inner.setKeyProcessor(processor: bridge, headers: headers)
     }
 
 }

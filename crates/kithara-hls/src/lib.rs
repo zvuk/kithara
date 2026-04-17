@@ -44,8 +44,9 @@ pub(crate) mod stream_index;
 
 // Public API re-exports
 
-pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
+pub use config::{HlsConfig, KeyOptions};
 pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
 pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use stream::Hls;

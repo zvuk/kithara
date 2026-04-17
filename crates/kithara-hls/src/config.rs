@@ -1,67 +1,34 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, fmt, fmt::Debug, sync::Arc};
-
-use bytes::Bytes;
 use derivative::Derivative;
 use derive_setters::Setters;
+// Re-export ABR types from kithara-abr crate
+pub use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
 use kithara_assets::{BytePool, StoreOptions};
+use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::error::HlsResult;
-
-/// AES initialization vector length in bytes.
-const IV_LEN: usize = 16;
-
-#[derive(Clone, Debug)]
-pub struct KeyContext {
-    pub iv: Option<[u8; IV_LEN]>,
-    pub url: Url,
-}
-
-/// Callback for processing encryption keys.
-pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>;
-
-// Re-export ABR types from kithara-abr crate
-pub use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
-
 /// Encryption key handling configuration.
+///
+/// DRM key processing is routed through [`KeyProcessorRegistry`] so
+/// different providers (zvuk, custom in-house DRM, etc.) can coexist
+/// with different processors, headers, and query params — all scoped
+/// by URL domain.
 #[derive(Clone, Default, Derivative, Setters)]
 #[derivative(Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct KeyOptions {
-    /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
-    #[derivative(Debug(format_with = "fmt_key_processor"))]
-    pub key_processor: Option<KeyProcessor>,
-    /// Query parameters to append to key URLs.
-    pub query_params: Option<HashMap<String, String>>,
-    /// Headers to include in key requests.
-    pub request_headers: Option<HashMap<String, String>>,
-    /// Domain-scoped processor registry. When set, takes precedence
-    /// over the global `key_processor` — the registry is consulted
-    /// first; if no rule matches the key URL's domain, the global
-    /// processor (if any) is tried as fallback.
-    #[derivative(Debug(format_with = "fmt_registry"))]
-    pub registry: Option<kithara_drm::KeyProcessorRegistry>,
-}
-
-fn fmt_registry(
-    val: &Option<kithara_drm::KeyProcessorRegistry>,
-    f: &mut fmt::Formatter,
-) -> fmt::Result {
-    Debug::fmt(&val.as_ref().map(|_| "KeyProcessorRegistry"), f)
-}
-
-fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut fmt::Formatter) -> fmt::Result {
-    Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
+    /// Domain-scoped processor registry. Key URLs whose host matches
+    /// a rule get that rule's processor + headers + query params;
+    /// unmatched URLs use the raw key as-is.
+    pub key_registry: Option<KeyProcessorRegistry>,
 }
 
 impl KeyOptions {
-    /// Create default key options.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

@@ -1,15 +1,17 @@
 //! FFI wrapper for audio player items.
 //!
 //! `AudioPlayerItem` is a handle, analogous to `AVPlayerItem`. It holds
-//! the source URL plus caller-supplied preferences (headers, preferred
-//! peak bitrate, ABR mode, store options). The actual resource loading
-//! is owned by [`crate::player::AudioPlayer`] via `kithara_queue::Queue`:
+//! caller-supplied per-item preferences ([`FfiItemConfig`] — URL,
+//! headers, bitrate caps, ABR mode). Resource loading is owned by
+//! [`crate::player::AudioPlayer`] via `kithara_queue::Queue`:
 //!
-//! 1. `AudioPlayerItem::new(url, headers)` — creates the handle.
-//! 2. `AudioPlayer::insert(item)` — registers the URL with the Queue, which
-//!    assigns a [`TrackId`] (stored in the item) and starts background load.
-//! 3. Per-item events flow through [`set_observer`] — the bridge subscribes
-//!    to the scoped event bus attached by `AudioPlayer::insert`.
+//! 1. `AudioPlayerItem::new(config)` — creates the handle; preferences
+//!    are frozen at construction.
+//! 2. `AudioPlayer::insert(item)` — registers the URL with the Queue,
+//!    which assigns a [`TrackId`] (stored in the item) and starts the
+//!    background load.
+//! 3. Per-item events flow through [`set_observer`] — the bridge
+//!    subscribes to the scoped event bus attached by `insert`.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -19,19 +21,16 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    config::StoreOptions, item_bridge::ItemEventBridge, observer::ItemObserver, types::FfiAbrMode,
+    item_bridge::ItemEventBridge,
+    observer::ItemObserver,
+    types::{FfiAbrMode, FfiItemConfig},
 };
 
 /// FFI-facing audio player item with UUID identity.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
     id: Uuid,
-    url: String,
-    headers: Option<HashMap<String, String>>,
-    preferred_peak_bitrate: Mutex<f64>,
-    preferred_peak_bitrate_expensive: Mutex<f64>,
-    abr_mode: Mutex<Option<FfiAbrMode>>,
-    store: Mutex<StoreOptions>,
+    config: FfiItemConfig,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
@@ -47,19 +46,15 @@ pub struct AudioPlayerItem {
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl AudioPlayerItem {
-    /// Create a new item. Loading starts automatically when the item is
-    /// inserted into an [`crate::player::AudioPlayer`].
+    /// Create a new item with frozen preferences. Loading starts
+    /// automatically when the item is inserted into an
+    /// [`crate::player::AudioPlayer`].
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
-    pub fn new(url: String, additional_headers: Option<HashMap<String, String>>) -> Arc<Self> {
+    pub fn new(config: FfiItemConfig) -> Arc<Self> {
         Arc::new(Self {
             id: Uuid::new_v4(),
-            url,
-            headers: additional_headers,
-            preferred_peak_bitrate: Mutex::new(0.0),
-            preferred_peak_bitrate_expensive: Mutex::new(0.0),
-            abr_mode: Mutex::new(None),
-            store: Mutex::new(StoreOptions::default()),
+            config,
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             bus: Mutex::new(None),
@@ -73,43 +68,20 @@ impl AudioPlayerItem {
     }
 
     pub fn url(&self) -> String {
-        self.url.clone()
+        self.config.url.clone()
     }
 
     pub fn preferred_peak_bitrate(&self) -> f64 {
-        *self.preferred_peak_bitrate.lock_sync()
-    }
-
-    pub fn set_preferred_peak_bitrate(&self, bitrate: f64) {
-        *self.preferred_peak_bitrate.lock_sync() = bitrate;
+        self.config.preferred_peak_bitrate
     }
 
     pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
-        *self.preferred_peak_bitrate_expensive.lock_sync()
-    }
-
-    pub fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64) {
-        *self.preferred_peak_bitrate_expensive.lock_sync() = bitrate;
-    }
-
-    /// Set ABR mode. Must be called before inserting into the player.
-    pub fn set_abr_mode(&self, mode: FfiAbrMode) {
-        *self.abr_mode.lock_sync() = Some(mode);
-    }
-
-    /// No-op kept for API compatibility. Queue-backed player loads
-    /// automatically on [`crate::player::AudioPlayer::insert`].
-    pub fn load(self: Arc<Self>) {
-        // Queue owns loading; item holds no Resource of its own.
+        self.config.preferred_peak_bitrate_expensive
     }
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
         *self.observer.lock_sync() = Some(observer);
         self.restart_bridge();
-    }
-
-    pub fn set_store_options(&self, store: StoreOptions) {
-        *self.store.lock_sync() = store;
     }
 }
 
@@ -120,15 +92,11 @@ impl AudioPlayerItem {
     }
 
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
-        self.headers.clone()
-    }
-
-    pub(crate) fn store_options(&self) -> StoreOptions {
-        self.store.lock_sync().clone()
+        self.config.headers.clone()
     }
 
     pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
-        *self.abr_mode.lock_sync()
+        self.config.abr_mode
     }
 
     /// (Re)subscribe the bridge to the currently-attached scoped bus.
@@ -153,36 +121,36 @@ impl AudioPlayerItem {
 mod tests {
     use super::*;
 
+    fn item_for(url: &str) -> Arc<AudioPlayerItem> {
+        AudioPlayerItem::new(FfiItemConfig::with_url(url.to_string()))
+    }
+
     #[kithara::test]
     fn new_item_has_unique_id() {
-        let a = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
-        let b = AudioPlayerItem::new("https://example.com/b.mp3".into(), None);
+        let a = item_for("https://example.com/a.mp3");
+        let b = item_for("https://example.com/b.mp3");
         assert_ne!(a.id(), b.id());
     }
 
     #[kithara::test]
     fn url_preserved() {
-        let item = AudioPlayerItem::new("https://example.com/song.mp3".into(), None);
+        let item = item_for("https://example.com/song.mp3");
         assert_eq!(item.url(), "https://example.com/song.mp3");
     }
 
     #[kithara::test]
-    fn preferred_peak_bitrate_roundtrip() {
-        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
-        assert_eq!(item.preferred_peak_bitrate(), 0.0);
-        item.set_preferred_peak_bitrate(256_000.0);
+    fn preferred_peak_bitrate_from_config() {
+        let config = FfiItemConfig {
+            preferred_peak_bitrate: 256_000.0,
+            ..FfiItemConfig::with_url("https://example.com/a.mp3".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
         assert_eq!(item.preferred_peak_bitrate(), 256_000.0);
     }
 
     #[kithara::test]
-    fn load_before_insert_does_not_panic() {
-        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
-        item.load();
-    }
-
-    #[kithara::test]
     fn track_id_initially_none() {
-        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        let item = item_for("https://example.com/a.mp3");
         assert!(item.track_id.lock_sync().is_none());
     }
 
@@ -190,7 +158,11 @@ mod tests {
     fn headers_roundtrip() {
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), "Bearer token".into());
-        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), Some(headers));
+        let config = FfiItemConfig {
+            headers: Some(headers),
+            ..FfiItemConfig::with_url("https://example.com/a.mp3".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
         let returned = item.headers().expect("headers set");
         assert_eq!(returned.get("Authorization"), Some(&"Bearer token".into()));
     }

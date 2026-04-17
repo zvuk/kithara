@@ -1,10 +1,11 @@
 package com.kithara
 
 import com.kithara.ffi.AudioPlayerItem as FfiAudioPlayerItem
+import com.kithara.ffi.FfiAbrMode
+import com.kithara.ffi.FfiItemConfig
 import com.kithara.ffi.FfiItemEvent
 import com.kithara.ffi.FfiItemStatus
 import com.kithara.ffi.ItemObserver
-import com.kithara.ffi.StoreOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,29 +14,39 @@ import kotlinx.coroutines.flow.update
 /**
  * A single audio item that can be queued in [KitharaPlayer].
  *
- * Call [load] to start preparing the resource, then insert the item into a player queue.
- * Errors during load are delivered via [state] as [ItemState.error].
- * Call [Kithara.initialize] before creating any instance.
+ * All preferences (bitrate caps, ABR mode, headers) are frozen at
+ * construction. Loading starts automatically when the item is inserted
+ * into a [KitharaPlayer].
  *
  * ```kotlin
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
- * item.load()
  * player.insert(item)
  * player.play()
  * ```
  *
  * @param url The audio source URL.
  * @param additionalHeaders Optional HTTP headers included in all requests for this item.
+ * @param preferredPeakBitrate Peak bitrate ceiling in bits/sec. `0.0` means no cap.
+ * @param preferredPeakBitrateForExpensiveNetworks Peak bitrate ceiling on
+ *   expensive networks (cellular). `0.0` means no cap.
+ * @param abrMode Optional per-item ABR mode override.
  */
 class KitharaPlayerItem(
     url: String,
     additionalHeaders: Map<String, String>? = null,
+    preferredPeakBitrate: Double = 0.0,
+    preferredPeakBitrateForExpensiveNetworks: Double = 0.0,
+    abrMode: FfiAbrMode? = null,
 ) {
-    internal val inner: FfiAudioPlayerItem = FfiAudioPlayerItem(url, additionalHeaders)
-
-    init {
-        inner.setStoreOptions(StoreOptions(cacheDir = Kithara.cacheDir))
-    }
+    internal val inner: FfiAudioPlayerItem = FfiAudioPlayerItem(
+        FfiItemConfig(
+            url = url,
+            headers = additionalHeaders,
+            preferredPeakBitrate = preferredPeakBitrate,
+            preferredPeakBitrateExpensive = preferredPeakBitrateForExpensiveNetworks,
+            abrMode = abrMode,
+        )
+    )
 
     /**
      * Source URL for this item.
@@ -86,30 +97,14 @@ class KitharaPlayerItem(
     /**
      * Preferred peak bitrate in bits per second. Zero means no limit.
      */
-    var preferredPeakBitrate: Double
+    val preferredPeakBitrate: Double
         get() = inner.preferredPeakBitrate()
-        set(value) {
-            inner.setPreferredPeakBitrate(value)
-        }
 
     /**
      * Preferred peak bitrate for expensive networks in bits per second. Zero means no limit.
      */
-    var preferredPeakBitrateForExpensiveNetworks: Double
+    val preferredPeakBitrateForExpensiveNetworks: Double
         get() = inner.preferredPeakBitrateForExpensiveNetworks()
-        set(value) {
-            inner.setPreferredPeakBitrateForExpensiveNetworks(value)
-        }
-
-    /**
-     * Starts loading the underlying resource (fire-and-forget).
-     *
-     * Safe to call before inserting into a [KitharaPlayer] — the call is idempotent.
-     * Errors are reported through [state] as [ItemState.error].
-     */
-    fun load() {
-        inner.load()
-    }
 
     private fun updateState(update: (ItemState) -> ItemState) {
         stateFlow.update(update)
@@ -152,3 +147,4 @@ private fun FfiItemStatus.toItemStatus(): ItemStatus = when (this) {
     FfiItemStatus.FAILED -> ItemStatus.Failed
     FfiItemStatus.UNKNOWN -> ItemStatus.Unknown
 }
+

@@ -4,12 +4,12 @@ import KitharaFFI
 
 /// A single audio item that can be queued in ``KitharaPlayer``.
 ///
-/// Create with a URL, then call ``load()`` before inserting into the player.
-/// If inserted before loading completes, the player will auto-load the item.
+/// All preferences (bitrate caps, ABR mode, headers) are frozen at
+/// construction. Loading starts automatically when the item is inserted
+/// into a ``KitharaPlayer``.
 ///
 /// ```swift
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-/// item.load()
 /// try player.insert(item)
 /// ```
 public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
@@ -32,25 +32,12 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
 
     /// Preferred peak bitrate in bits per second. Zero means no limit.
     public nonisolated var preferredPeakBitrate: Double {
-        get { _inner.preferredPeakBitrate() }
-        set { _inner.setPreferredPeakBitrate(bitrate: newValue) }
+        _inner.preferredPeakBitrate()
     }
 
     /// Preferred peak bitrate for expensive networks in bits per second. Zero means no limit.
     public nonisolated var preferredPeakBitrateForExpensiveNetworks: Double {
-        get { _inner.preferredPeakBitrateForExpensiveNetworks() }
-        set { _inner.setPreferredPeakBitrateForExpensiveNetworks(bitrate: newValue) }
-    }
-
-    // MARK: - ABR
-
-    /// Set ABR mode. Must be called before ``load()``.
-    public func setAbrMode(_ mode: AbrMode) {
-        let ffiMode: FfiAbrMode = switch mode {
-        case .auto: .auto
-        case .manual(let variantIndex): .manual(variantIndex: UInt32(variantIndex))
-        }
-        _inner.setAbrMode(mode: ffiMode)
+        _inner.preferredPeakBitrateForExpensiveNetworks()
     }
 
     // MARK: - Internal
@@ -59,13 +46,36 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
 
     // MARK: - Init
 
-    /// Create a new item for the given URL.
+    /// Create a new item.
     ///
     /// - Parameters:
     ///   - url: The audio source URL.
     ///   - additionalHeaders: Optional HTTP headers included in all requests for this item.
-    public init(url: String, additionalHeaders: [String: String]? = nil) {
-        self._inner = AudioPlayerItem(url: url, additionalHeaders: additionalHeaders)
+    ///   - preferredPeakBitrate: Peak bitrate ceiling in bits/sec. `0` means no cap.
+    ///   - preferredPeakBitrateForExpensiveNetworks: Peak bitrate ceiling on
+    ///     expensive networks (cellular). `0` means no cap.
+    ///   - abrMode: Optional per-item ABR mode override.
+    public init(
+        url: String,
+        additionalHeaders: [String: String]? = nil,
+        preferredPeakBitrate: Double = 0,
+        preferredPeakBitrateForExpensiveNetworks: Double = 0,
+        abrMode: AbrMode? = nil
+    ) {
+        let ffiAbrMode: FfiAbrMode? = abrMode.map {
+            switch $0 {
+            case .auto: return .auto
+            case .manual(let variantIndex): return .manual(variantIndex: UInt32(variantIndex))
+            }
+        }
+        let config = FfiItemConfig(
+            url: url,
+            headers: additionalHeaders,
+            preferredPeakBitrate: preferredPeakBitrate,
+            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks,
+            abrMode: ffiAbrMode
+        )
+        self._inner = AudioPlayerItem(config: config)
         self.id = _inner.id()
         self.url = url
 
@@ -78,17 +88,6 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         self._inner = inner
         self.id = inner.id()
         self.url = inner.url()
-    }
-
-    // MARK: - Loading
-
-    /// Start loading the underlying resource (fire-and-forget).
-    ///
-    /// Errors are reported through ``eventPublisher`` as `.error` events.
-    /// Safe to call before inserting into a ``KitharaPlayer`` — the player
-    /// will also auto-load if the item is not yet ready.
-    public func load() {
-        _inner.load()
     }
 }
 

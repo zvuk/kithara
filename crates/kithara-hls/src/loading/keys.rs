@@ -7,18 +7,16 @@
 //! [`crate::playlist_cache::PlaylistCache`] so the cache lookup,
 //! network fetch, and write-back logic is not duplicated.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 use kithara_assets::AssetStore;
-use kithara_drm::DecryptContext;
+use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 
 use super::atomic_fetch::fetch_atomic_body;
-use crate::{HlsError, HlsResult, KeyContext, config::KeyProcessor};
+use crate::{HlsError, HlsResult};
 
 /// AES-128 key / IV length in bytes.
 const AES_KEY_LEN: usize = 16;
@@ -26,21 +24,18 @@ const AES_KEY_LEN: usize = 16;
 /// Start offset for sequence number in the 16-byte IV.
 const IV_SEQUENCE_OFFSET: usize = 8;
 
-/// DRM key fetch + optional processor pipeline.
+/// DRM key fetch + processor pipeline.
 ///
-/// Reads through the unified [`PeerHandle`] and persists key bodies in
-/// the supplied [`AssetStore`] via the shared
-/// [`fetch_atomic_body`] helper. No dependency on `FetchManager`.
+/// Routes per-provider processing (headers, query params, key
+/// decryption) through a [`KeyProcessorRegistry`] — each key URL's
+/// host is looked up in the registry to pick the matching rule.
 #[derive(Clone)]
 pub struct KeyManager {
     downloader: PeerHandle,
     backend: AssetStore<DecryptContext>,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
-    key_processor: Option<KeyProcessor>,
-    key_query_params: Option<HashMap<String, String>>,
-    key_request_headers: Option<HashMap<String, String>>,
-    registry: Option<kithara_drm::KeyProcessorRegistry>,
+    key_registry: Option<KeyProcessorRegistry>,
 }
 
 impl KeyManager {
@@ -49,19 +44,13 @@ impl KeyManager {
         downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
-        key_processor: Option<KeyProcessor>,
-        key_query_params: Option<HashMap<String, String>>,
-        key_request_headers: Option<HashMap<String, String>>,
-        registry: Option<kithara_drm::KeyProcessorRegistry>,
+        key_registry: Option<KeyProcessorRegistry>,
     ) -> Self {
         Self {
             downloader,
             backend,
             base_headers,
-            key_processor,
-            key_query_params,
-            key_request_headers,
-            registry,
+            key_registry,
         }
     }
 
@@ -73,36 +62,30 @@ impl KeyManager {
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
     ) -> Self {
-        Self::new(
-            downloader,
-            backend,
-            base_headers,
-            options.key_processor,
-            options.query_params,
-            options.request_headers,
-            options.registry,
-        )
+        Self::new(downloader, backend, base_headers, options.key_registry)
     }
 
     /// Load, optionally preprocess, and return the raw key bytes.
     ///
-    /// Appends configured query parameters, merges key request headers
-    /// over the cache-wide base headers, and routes the fetch through
-    /// [`fetch_atomic_body`] so the disk cache and unified downloader
-    /// are reused.
+    /// Looks up the matching rule in [`KeyProcessorRegistry`] by the
+    /// key URL's host, applies the rule's query params + headers to
+    /// the request, and runs the rule's processor on the response.
     ///
     /// # Errors
-    /// Returns an error when the fetch or custom processor fails.
-    pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
+    /// Returns an error when the fetch or the processor fails.
+    pub async fn get_raw_key(&self, url: &Url, _iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
+        let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         let mut fetch_url = url.clone();
-        if let Some(ref params) = self.key_query_params {
+        if let Some(r) = rule
+            && let Some(params) = r.query_params.as_ref()
+        {
             let mut pairs = fetch_url.query_pairs_mut();
             for (key, value) in params {
                 pairs.append_pair(key, value);
             }
         }
 
-        let headers = self.merged_headers_for(&fetch_url);
+        let headers = self.merged_headers(rule.and_then(|r| r.headers.as_ref()));
         let rel_path = rel_path_from_url(&fetch_url);
         let raw_key = fetch_atomic_body(
             &self.downloader,
@@ -114,7 +97,11 @@ impl KeyManager {
         )
         .await?;
 
-        self.process_key(raw_key, fetch_url, iv)
+        match rule {
+            Some(r) => r.processor()(raw_key)
+                .map_err(|e| HlsError::KeyProcessing(format!("registry processor: {e}"))),
+            None => Ok(raw_key),
+        }
     }
 
     /// Synchronous cache-only key lookup.
@@ -126,8 +113,11 @@ impl KeyManager {
     /// # Errors
     /// Returns an error when the key is missing from cache or the read fails.
     pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
+        let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         let mut fetch_url = url.clone();
-        if let Some(ref params) = self.key_query_params {
+        if let Some(r) = rule
+            && let Some(params) = r.query_params.as_ref()
+        {
             let mut pairs = fetch_url.query_pairs_mut();
             for (key, value) in params {
                 pairs.append_pair(key, value);
@@ -151,20 +141,13 @@ impl KeyManager {
         Ok(Bytes::copy_from_slice(&buf[..n]))
     }
 
-    /// Merge key-specific request headers on top of the base headers.
-    /// Key-specific entries take precedence on key conflict.
-    fn merged_headers_for(&self, key_url: &Url) -> Option<Headers> {
-        let rule_headers = self
-            .registry
-            .as_ref()
-            .and_then(|r| r.find(key_url))
-            .and_then(|(_, h)| h)
-            .cloned()
-            .map(Headers::from);
-
-        let global_headers = self.key_request_headers.clone().map(Headers::from);
-        let extra = rule_headers.or(global_headers);
-
+    /// Merge per-rule headers on top of base headers.
+    /// Rule-specific entries take precedence on key conflict.
+    fn merged_headers(
+        &self,
+        rule_headers: Option<&std::collections::HashMap<String, String>>,
+    ) -> Option<Headers> {
+        let extra = rule_headers.cloned().map(Headers::from);
         match (self.base_headers.clone(), extra) {
             (None, None) => None,
             (Some(base), None) => Some(base),
@@ -176,21 +159,6 @@ impl KeyManager {
                 }
                 Some(merged)
             }
-        }
-    }
-
-    fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
-        if let Some(registry) = &self.registry
-            && let Some((processor, _)) = registry.find(&url)
-        {
-            return processor(key)
-                .map_err(|e| HlsError::KeyProcessing(format!("registry processor: {e}")));
-        }
-        let context = KeyContext { iv, url };
-        if let Some(processor) = &self.key_processor {
-            processor(key, context)
-        } else {
-            Ok(key)
         }
     }
 

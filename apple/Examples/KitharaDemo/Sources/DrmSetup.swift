@@ -1,19 +1,24 @@
 import Foundation
 import Kithara
 
-/// Configure DRM key processing on the player.
+/// Build DRM key rules for the configured zvuk domains.
 ///
 /// Reads cipher key from `.env` file in the app bundle (key `DRM_KEY`),
-/// falls back to `"kithara"` if not found.
-/// Generates a random seed, creates a cipher, and sets up the key processor
-/// with `X-Encrypted-Key` header.
-func configureDrm(on player: KitharaPlayer) {
+/// falls back to `"kithara"` if not found. Generates a random seed,
+/// creates a cipher, and returns a [`KitharaPlayer.KeyRule`] scoped to
+/// zvuk-owned domains. Pass the result to `KitharaPlayer.Config.keyRules`.
+func makeZvukKeyRules() -> [KitharaPlayer.KeyRule] {
     let cipherKey = readEnvValue("DRM_KEY") ?? "kithara"
     let seed = randomAlphanumericSeed(length: 16)
     let secret = cipherKey + seed
     let cipher = Cipher(key: secret)
 
-    player.setKeyProcessor(cipher, headers: ["X-Encrypted-Key": seed])
+    let rule = KitharaPlayer.KeyRule(
+        processor: cipher,
+        domains: ["*.zvq.me", "*.zvuk.com"],
+        headers: ["X-Encrypted-Key": seed]
+    )
+    return [rule]
 }
 
 /// Read a value from `.env` file bundled in the app.

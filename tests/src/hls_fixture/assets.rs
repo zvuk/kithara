@@ -3,12 +3,11 @@
 //! Provides `TestAssets` and helper functions for creating test assets.
 //! On native: disk-backed with temp directory. On WASM: ephemeral (in-memory).
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    hls::KeyProcessor,
     internal::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
@@ -108,18 +107,13 @@ pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCac
 /// `Hls::create` so integration tests exercise the same wiring.
 pub fn test_key_manager(
     assets: &TestAssets,
-    key_processor: Option<KeyProcessor>,
-    key_query_params: Option<HashMap<String, String>>,
-    key_request_headers: Option<HashMap<String, String>>,
+    key_registry: Option<kithara_drm::KeyProcessorRegistry>,
 ) -> KeyManager {
     KeyManager::new(
         create_test_peer_handle(),
         assets.assets().clone(),
         None,
-        key_processor,
-        key_query_params,
-        key_request_headers,
-        None,
+        key_registry,
     )
 }
 

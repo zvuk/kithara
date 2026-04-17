@@ -4047,6 +4047,8 @@ dependencies = [
  "aes",
  "bytes",
  "cbc",
+ "derivative",
+ "derive_setters",
  "kithara-drm",
  "kithara-test-utils",
  "kithara-workspace-hack",

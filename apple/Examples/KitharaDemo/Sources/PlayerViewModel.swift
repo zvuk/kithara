@@ -44,7 +44,9 @@ final class PlayerViewModel: ObservableObject {
     @Published var selectedVariantIndex: UInt32?
     @Published var crossfadeDuration: Float = 0
 
-    private let player = KitharaPlayer()
+    private let player = KitharaPlayer(
+        config: KitharaPlayer.Config(keyRules: makeZvukKeyRules())
+    )
     private var cancellables = Set<AnyCancellable>()
     /// Per-item event subscriptions keyed by `KitharaPlayerItem.id`.
     /// Variant discovery and item-level duration flow through here;
@@ -65,7 +67,6 @@ final class PlayerViewModel: ObservableObject {
     ]
 
     init() {
-        configureDrm(on: player)
         volume = player.volume
         isMuted = player.isMuted
         player.defaultRate = selectedRate

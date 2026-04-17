@@ -119,11 +119,16 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 }
 
 /// FFI-friendly player configuration.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
     /// Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
     pub eq_band_count: u32,
+    /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
+    /// no DRM is needed.
+    pub key_options: FfiKeyOptions,
+    /// Storage options shared by all items (cache directory, etc.).
+    pub store: crate::config::StoreOptions,
 }
 
 /// Default number of log-spaced EQ bands.
@@ -133,6 +138,77 @@ impl Default for FfiPlayerConfig {
     fn default() -> Self {
         Self {
             eq_band_count: DEFAULT_EQ_BAND_COUNT,
+            key_options: FfiKeyOptions::default(),
+            store: crate::config::StoreOptions::default(),
+        }
+    }
+}
+
+/// FFI-friendly mirror of [`kithara::hls::KeyOptions`].
+///
+/// Holds domain-scoped DRM rules — providers with different key
+/// processors and headers can coexist.
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiKeyOptions {
+    pub rules: Vec<FfiKeyRule>,
+}
+
+impl std::fmt::Debug for FfiKeyOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FfiKeyOptions")
+            .field("rules", &self.rules.len())
+            .finish()
+    }
+}
+
+/// A single DRM rule: domain patterns + key processor + optional
+/// per-provider headers / query params.
+#[derive(Clone)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiKeyRule {
+    pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
+    /// Domain patterns — exact (`"example.com"`) or wildcard
+    /// subdomain (`"*.example.com"`).
+    pub domains: Vec<String>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    pub query_params: Option<std::collections::HashMap<String, String>>,
+}
+
+impl std::fmt::Debug for FfiKeyRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FfiKeyRule")
+            .field("domains", &self.domains)
+            .field("headers", &self.headers)
+            .field("query_params", &self.query_params)
+            .finish_non_exhaustive()
+    }
+}
+
+/// FFI-friendly per-item configuration. All fields immutable after
+/// [`crate::item::AudioPlayerItem::new`].
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiItemConfig {
+    pub url: String,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
+    pub preferred_peak_bitrate: f64,
+    /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
+    /// means no cap.
+    pub preferred_peak_bitrate_expensive: f64,
+    pub abr_mode: Option<FfiAbrMode>,
+}
+
+impl FfiItemConfig {
+    #[must_use]
+    pub fn with_url(url: String) -> Self {
+        Self {
+            url,
+            headers: None,
+            preferred_peak_bitrate: 0.0,
+            preferred_peak_bitrate_expensive: 0.0,
+            abr_mode: None,
         }
     }
 }

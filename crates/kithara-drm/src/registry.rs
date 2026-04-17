@@ -1,6 +1,8 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use bytes::Bytes;
+use derivative::Derivative;
+use derive_setters::Setters;
 use url::Url;
 
 /// Result of processing a key through a [`KeyProcessor`].
@@ -46,28 +48,61 @@ impl DomainMatcher {
     }
 }
 
-/// A rule binding domain patterns to a key processor + optional headers.
-#[derive(Clone)]
+/// A rule binding domain patterns to a key processor + per-provider
+/// request shape (headers, query params).
+///
+/// Build with [`KeyProcessorRule::new`] + `.with_headers(...)` /
+/// `.with_query_params(...)` setters.
+#[derive(Clone, Derivative, Setters)]
+#[derivative(Debug)]
+#[setters(prefix = "with_", strip_option)]
 pub struct KeyProcessorRule {
+    #[setters(skip)]
     matchers: Vec<DomainMatcher>,
+    #[setters(skip)]
+    #[derivative(Debug(format_with = "fmt_processor"))]
     processor: KeyProcessor,
-    headers: Option<HashMap<String, String>>,
+    /// Headers appended to key requests that match this rule.
+    pub headers: Option<HashMap<String, String>>,
+    /// Query parameters appended to key URLs that match this rule.
+    pub query_params: Option<HashMap<String, String>>,
 }
 
-impl fmt::Debug for KeyProcessorRule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KeyProcessorRule")
-            .field("matchers", &self.matchers)
-            .field("processor", &"<fn>")
-            .field("headers", &self.headers)
-            .finish()
+fn fmt_processor(_: &KeyProcessor, f: &mut fmt::Formatter) -> fmt::Result {
+    f.write_str("<fn>")
+}
+
+impl KeyProcessorRule {
+    /// Create a rule bound to `patterns` (parsed via
+    /// [`DomainMatcher::parse`]) with the given `processor`. Headers
+    /// and query params default to `None`.
+    #[must_use]
+    pub fn new<P, I>(patterns: I, processor: KeyProcessor) -> Self
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = P>,
+    {
+        Self {
+            matchers: patterns
+                .into_iter()
+                .map(|p| DomainMatcher::parse(p.as_ref()))
+                .collect(),
+            processor,
+            headers: None,
+            query_params: None,
+        }
+    }
+
+    #[must_use]
+    pub fn processor(&self) -> &KeyProcessor {
+        &self.processor
     }
 }
 
 /// Registry of domain-scoped key processors.
 ///
 /// When HLS fetches a DRM key from a URL, the registry is consulted to
-/// find a matching processor. The first rule whose domain pattern matches
+/// find a matching rule. The first rule whose domain pattern matches
 /// the key URL's host wins. Unmatched URLs use the raw key as-is.
 #[derive(Clone, Default, Debug)]
 pub struct KeyProcessorRegistry {
@@ -80,35 +115,22 @@ impl KeyProcessorRegistry {
         Self::default()
     }
 
-    /// Add a rule: `patterns` is a list of domain patterns (see
-    /// [`DomainMatcher::parse`]), `processor` transforms key bytes,
-    /// `headers` are sent with the key request.
-    pub fn add(
-        &mut self,
-        patterns: &[&str],
-        processor: KeyProcessor,
-        headers: Option<HashMap<String, String>>,
-    ) -> &mut Self {
-        self.rules.push(KeyProcessorRule {
-            matchers: patterns.iter().map(|p| DomainMatcher::parse(p)).collect(),
-            processor,
-            headers,
-        });
+    /// Append a [`KeyProcessorRule`] to the registry.
+    pub fn add(&mut self, rule: KeyProcessorRule) -> &mut Self {
+        self.rules.push(rule);
         self
     }
 
-    /// Find a processor + headers for the given key URL.
+    /// Find the first rule matching `key_url` by host.
     ///
-    /// Returns `None` if no rule matches — caller should use the raw key.
+    /// Returns `None` if no rule matches — caller should use the raw
+    /// key, no extra headers, no extra query params.
     #[must_use]
-    pub fn find(&self, key_url: &Url) -> Option<(&KeyProcessor, Option<&HashMap<String, String>>)> {
+    pub fn find(&self, key_url: &Url) -> Option<&KeyProcessorRule> {
         let host = key_url.host_str()?;
-        for rule in &self.rules {
-            if rule.matchers.iter().any(|m| m.matches(host)) {
-                return Some((&rule.processor, rule.headers.as_ref()));
-            }
-        }
-        None
+        self.rules
+            .iter()
+            .find(|rule| rule.matchers.iter().any(|m| m.matches(host)))
     }
 
     /// Whether the registry has any rules.
@@ -120,6 +142,8 @@ impl KeyProcessorRegistry {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn noop_processor() -> KeyProcessor {
@@ -134,7 +158,7 @@ mod tests {
         })
     }
 
-    #[test]
+    #[kithara::test]
     fn exact_match() {
         let m = DomainMatcher::parse("zvuk.com");
         assert!(m.matches("zvuk.com"));
@@ -143,7 +167,7 @@ mod tests {
         assert!(!m.matches("nozvuk.com"));
     }
 
-    #[test]
+    #[kithara::test]
     fn wildcard_match() {
         let m = DomainMatcher::parse("*.zvuk.com");
         assert!(m.matches("cdn.zvuk.com"));
@@ -152,18 +176,36 @@ mod tests {
         assert!(!m.matches("nozvuk.com"));
     }
 
-    #[test]
+    #[kithara::test]
     fn wildcard_case_insensitive() {
         let m = DomainMatcher::parse("*.ZVQ.ME");
         assert!(m.matches("cdn-edge.zvq.me"));
         assert!(m.matches("CDN-EDGE.ZVQ.ME"));
     }
 
-    #[test]
+    #[kithara::test]
+    fn rule_builder_sets_headers_and_query_params() {
+        let mut headers = HashMap::new();
+        headers.insert("X-Encrypted-Key".to_string(), "seed123".to_string());
+        let mut params = HashMap::new();
+        params.insert("token".to_string(), "abc".to_string());
+
+        let rule = KeyProcessorRule::new(["*.zvuk.com"], noop_processor())
+            .with_headers(headers.clone())
+            .with_query_params(params.clone());
+
+        assert_eq!(rule.headers.as_ref().expect("headers"), &headers);
+        assert_eq!(rule.query_params.as_ref().expect("params"), &params);
+    }
+
+    #[kithara::test]
     fn registry_find_first_match() {
         let mut reg = KeyProcessorRegistry::new();
-        reg.add(&["*.zvuk.com", "*.zvq.me"], noop_processor(), None);
-        reg.add(&["other.com"], reverse_processor(), None);
+        reg.add(KeyProcessorRule::new(
+            ["*.zvuk.com", "*.zvq.me"],
+            noop_processor(),
+        ));
+        reg.add(KeyProcessorRule::new(["other.com"], reverse_processor()));
 
         let url = Url::parse("https://cdn-edge.zvq.me/keys/track.key").expect("url");
         assert!(reg.find(&url).is_some());
@@ -175,43 +217,67 @@ mod tests {
         assert!(reg.find(&url).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn registry_returns_per_rule_headers() {
         let mut reg = KeyProcessorRegistry::new();
         let mut headers = HashMap::new();
         headers.insert("X-Encrypted-Key".to_string(), "seed123".to_string());
-        reg.add(&["*.zvuk.com"], noop_processor(), Some(headers));
-        reg.add(&["silvercomet.top"], noop_processor(), None);
+        reg.add(
+            KeyProcessorRule::new(["*.zvuk.com"], noop_processor()).with_headers(headers.clone()),
+        );
+        reg.add(KeyProcessorRule::new(["silvercomet.top"], noop_processor()));
 
         let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("url");
-        let (_, hdrs) = reg.find(&url).expect("matched");
-        assert!(hdrs.is_some());
-        assert_eq!(hdrs.expect("headers")["X-Encrypted-Key"], "seed123");
+        let rule = reg.find(&url).expect("matched");
+        assert_eq!(
+            rule.headers.as_ref().expect("headers")["X-Encrypted-Key"],
+            "seed123"
+        );
 
         let url = Url::parse("https://silvercomet.top/key.bin").expect("url");
-        let (_, hdrs) = reg.find(&url).expect("matched");
-        assert!(hdrs.is_none());
+        let rule = reg.find(&url).expect("matched");
+        assert!(rule.headers.is_none());
     }
 
-    #[test]
+    #[kithara::test]
+    fn registry_returns_per_rule_query_params() {
+        let mut reg = KeyProcessorRegistry::new();
+        let mut params = HashMap::new();
+        params.insert("token".to_string(), "xyz".to_string());
+        reg.add(
+            KeyProcessorRule::new(["*.zvuk.com"], noop_processor())
+                .with_query_params(params.clone()),
+        );
+        reg.add(KeyProcessorRule::new(["silvercomet.top"], noop_processor()));
+
+        let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("url");
+        let rule = reg.find(&url).expect("matched");
+        assert_eq!(rule.query_params.as_ref().expect("params")["token"], "xyz");
+
+        let url = Url::parse("https://silvercomet.top/key.bin").expect("url");
+        let rule = reg.find(&url).expect("matched");
+        assert!(rule.query_params.is_none());
+    }
+
+    #[kithara::test]
     fn registry_processor_transforms_key() {
         let mut reg = KeyProcessorRegistry::new();
-        reg.add(&["example.com"], reverse_processor(), None);
+        reg.add(KeyProcessorRule::new(["example.com"], reverse_processor()));
 
         let url = Url::parse("https://example.com/key.bin").expect("url");
-        let (proc, _) = reg.find(&url).expect("matched");
-        let result = proc(Bytes::from_static(b"abcd")).expect("ok");
+        let rule = reg.find(&url).expect("matched");
+        let result = rule.processor()(Bytes::from_static(b"abcd")).expect("ok");
         assert_eq!(&result[..], b"dcba");
     }
 
-    #[test]
+    #[kithara::test]
     fn no_match_returns_none() {
         let reg = KeyProcessorRegistry::new();
         let url = Url::parse("https://example.com/key.bin").expect("url");
         assert!(reg.find(&url).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn empty_registry() {
         let reg = KeyProcessorRegistry::new();
         assert!(reg.is_empty());

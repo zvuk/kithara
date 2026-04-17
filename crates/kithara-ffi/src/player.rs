@@ -13,7 +13,7 @@ use bytes::Bytes;
 use kithara::{
     abr::{AbrController, AbrMode, AbrOptions},
     audio::generate_log_spaced_bands,
-    hls::KeyOptions,
+    hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::NetOptions,
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
@@ -24,10 +24,10 @@ use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config,
+    config::{self, StoreOptions},
     event_bridge::EventBridge,
     item::AudioPlayerItem,
-    observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
+    observer::{PlayerObserver, SeekCallback},
     types::{FfiAbrMode, FfiError, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
@@ -40,15 +40,40 @@ pub struct AudioPlayer {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    /// Shared storage options (cache dir, etc.) applied to every item.
+    store: StoreOptions,
+    /// Immutable [`KeyOptions`] built once from [`FfiPlayerConfig`].
+    key_options: KeyOptions,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
-    key_processor: Mutex<Option<Arc<dyn FfiKeyProcessor>>>,
-    key_request_headers: Mutex<Option<HashMap<String, String>>>,
     /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
     /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+}
+
+/// Convert the FFI-level [`crate::types::FfiKeyOptions`] into a
+/// core-level [`KeyOptions`] with a populated registry.
+fn build_key_options(ffi: crate::types::FfiKeyOptions) -> KeyOptions {
+    if ffi.rules.is_empty() {
+        return KeyOptions::new();
+    }
+    let mut registry = KeyProcessorRegistry::new();
+    for r in ffi.rules {
+        let processor = r.processor;
+        let proc: kithara_drm::KeyProcessor =
+            Arc::new(move |key: Bytes| Ok(Bytes::from(processor.process_key(key.to_vec()))));
+        let mut rule = KeyProcessorRule::new(&r.domains, proc);
+        if let Some(h) = r.headers {
+            rule = rule.with_headers(h);
+        }
+        if let Some(q) = r.query_params {
+            rule = rule.with_query_params(q);
+        }
+        registry.add(rule);
+    }
+    KeyOptions::new().with_key_registry(registry)
 }
 
 /// Methods exported across the FFI boundary.
@@ -77,13 +102,14 @@ impl AudioPlayer {
                 .with_net(net)
                 .with_runtime(crate::FFI_RUNTIME.clone()),
         );
+        let key_options = build_key_options(config.key_options);
         Arc::new(Self {
             queue: Arc::new(Queue::new(queue_config)),
             downloader,
+            store: config.store,
+            key_options,
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
-            key_processor: Mutex::new(None),
-            key_request_headers: Mutex::new(None),
             items: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -353,22 +379,6 @@ impl AudioPlayer {
         }
     }
 
-    /// Set a key processor callback for HLS DRM key decryption.
-    ///
-    /// The processor is applied globally: `AudioPlayer::insert` builds a
-    /// `KeyOptions` from it and attaches the keys to every new
-    /// `ResourceConfig` so HLS keys fetched for any item go through the
-    /// same processor. Optional `headers` are sent with every key
-    /// request (e.g. `X-Encrypted-Key`).
-    pub fn set_key_processor(
-        &self,
-        processor: Arc<dyn FfiKeyProcessor>,
-        headers: Option<HashMap<String, String>>,
-    ) {
-        *self.key_processor.lock_sync() = Some(processor);
-        *self.key_request_headers.lock_sync() = headers;
-    }
-
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
         let rx = self.queue.subscribe();
 
@@ -396,18 +406,6 @@ impl AudioPlayer {
         self.observer.lock_sync().clone()
     }
 
-    /// Build `KeyOptions` from the player-level key processor and headers.
-    pub(crate) fn key_options(&self) -> Option<KeyOptions> {
-        let processor = self.key_processor.lock_sync().clone()?;
-        let mut opts = KeyOptions::new().with_key_processor(Arc::new(move |key: Bytes, _ctx| {
-            Ok(Bytes::from(processor.process_key(key.to_vec())))
-        }));
-        if let Some(headers) = self.key_request_headers.lock_sync().clone() {
-            opts = opts.with_request_headers(headers);
-        }
-        Some(opts)
-    }
-
     /// Build a [`TrackSource::Config`] from the item's fields. Also
     /// attaches a scoped bus so the item's per-resource event bridge
     /// captures events published during `Resource::new`
@@ -419,7 +417,7 @@ impl AudioPlayer {
                 reason: e.to_string(),
             })?;
 
-        config::configure_resource(&mut config, &item.store_options());
+        config::configure_resource(&mut config, &self.store);
 
         let bitrate = item.preferred_peak_bitrate();
         if bitrate > 0.0 {
@@ -436,8 +434,8 @@ impl AudioPlayer {
 
         config = config.with_downloader(self.downloader.clone());
 
-        if let Some(keys) = self.key_options() {
-            config = config.with_keys(keys);
+        if self.key_options.key_registry.is_some() {
+            config = config.with_keys(self.key_options.clone());
         }
 
         if let Some(mode) = item.abr_mode() {
@@ -503,7 +501,10 @@ mod tests {
 
     #[kithara::test]
     fn eq_band_count_from_config() {
-        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        let player = AudioPlayer::new(FfiPlayerConfig {
+            eq_band_count: 3,
+            ..FfiPlayerConfig::default()
+        });
         assert_eq!(player.eq_band_count(), 3);
     }
 
@@ -529,7 +530,10 @@ mod tests {
 
     #[kithara::test]
     fn eq_gain_out_of_range_band() {
-        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        let player = AudioPlayer::new(FfiPlayerConfig {
+            eq_band_count: 3,
+            ..FfiPlayerConfig::default()
+        });
         assert!((player.eq_gain(99) - 0.0).abs() < f32::EPSILON);
     }
 }

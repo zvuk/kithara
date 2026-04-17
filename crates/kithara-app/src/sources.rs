@@ -1,32 +1,21 @@
-use kithara::prelude::ResourceConfig;
+use kithara::{hls::KeyOptions, prelude::ResourceConfig};
 use kithara_queue::TrackSource;
-use url::Url;
 
 use crate::{config::AppConfig, drm};
 
-/// Whether the host portion of `url` matches one of the configured DRM
-/// domains.
-fn needs_drm(url: &str, drm_domains: &[String]) -> bool {
-    Url::parse(url)
-        .ok()
-        .and_then(|u| {
-            u.host_str()
-                .map(|h| drm_domains.iter().any(|d| h.ends_with(d.as_str())))
-        })
-        .unwrap_or(false)
-}
-
-/// Build a [`TrackSource`] for `url`, applying zvuk DRM keys when the
-/// host matches `config.drm_domains`, the `danger_accept_invalid_certs`
-/// net-option from the app config, and the shared
-/// [`Downloader`](kithara::stream::dl::Downloader) so every track reuses
-/// the same HTTP pool.
+/// Build a [`TrackSource`] for `url`.
+///
+/// Attaches the shared [`Downloader`](kithara::stream::dl::Downloader)
+/// and a domain-scoped [`KeyProcessorRegistry`] so DRM keys are routed
+/// to the correct processor by URL domain. Non-DRM streams (e.g.
+/// silvercomet) get raw keys — no processor applied.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
     match ResourceConfig::new(url) {
         Ok(mut cfg) => {
-            if needs_drm(url, &config.drm_domains) {
-                cfg = cfg.with_keys(drm::make_key_options());
+            if !config.drm_domains.is_empty() {
+                let registry = drm::make_key_registry(&config.drm_domains);
+                cfg = cfg.with_keys(KeyOptions::new().with_key_registry(registry));
             }
             cfg = cfg.with_downloader(config.downloader.clone());
             TrackSource::Config(Box::new(cfg))

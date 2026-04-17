@@ -2,6 +2,9 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiKeyOptions
+import com.kithara.ffi.FfiKeyProcessor
+import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
@@ -9,6 +12,7 @@ import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
+import com.kithara.ffi.StoreOptions as FfiStoreOptions
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -31,8 +35,28 @@ import kotlinx.coroutines.flow.update
  * player.play()
  * ```
  */
-class KitharaPlayer() {
-    private val inner: FfiAudioPlayer = FfiAudioPlayer(FfiPlayerConfig(eqBandCount = 10u))
+class KitharaPlayer(config: Config = Config()) {
+    /**
+     * A single DRM rule: a key processor bound to one or more domain
+     * patterns (exact `"example.com"` or wildcard `"*.example.com"`),
+     * plus optional headers / query params sent with matching key
+     * requests.
+     */
+    data class KeyRule(
+        val processor: KeyProcessor,
+        val domains: List<String>,
+        val headers: Map<String, String>? = null,
+        val queryParams: Map<String, String>? = null,
+    )
+
+    /** Configuration for [KitharaPlayer] creation. */
+    data class Config(
+        val eqBandCount: Int = 10,
+        val keyRules: List<KeyRule> = emptyList(),
+        val cacheDir: String? = null,
+    )
+
+    private val inner: FfiAudioPlayer = FfiAudioPlayer(config.toFfi())
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
@@ -302,6 +326,33 @@ private fun Transition.toFfi(): FfiTransition = when (this) {
     is Transition.None -> FfiTransition.None
     is Transition.Crossfade -> FfiTransition.Crossfade
     is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(seconds)
+}
+
+/**
+ * Callback for processing (decrypting) HLS encryption keys.
+ */
+fun interface KeyProcessor {
+    fun processKey(key: ByteArray): ByteArray
+}
+
+private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
+    override fun processKey(key: ByteArray): ByteArray = processor.processKey(key)
+}
+
+private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
+    val ffiRules = keyRules.map { rule ->
+        FfiKeyRule(
+            processor = KeyProcessorBridge(rule.processor),
+            domains = rule.domains,
+            headers = rule.headers,
+            queryParams = rule.queryParams,
+        )
+    }
+    return FfiPlayerConfig(
+        eqBandCount = eqBandCount.toUInt(),
+        keyOptions = FfiKeyOptions(rules = ffiRules),
+        store = FfiStoreOptions(cacheDir = cacheDir),
+    )
 }
 
 private fun List<KitharaPlayerItem>.inserted(
