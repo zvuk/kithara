@@ -36,18 +36,21 @@ use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
 
-const D: SawWav = SawWav::DEFAULT;
-const SEGMENT_COUNT: usize = 40;
-const VARIANT_COUNT: usize = 3;
-const STRESS_SEEK_ITERATIONS: usize = 2000;
+struct Consts;
+impl Consts {
+    const D: SawWav = SawWav::DEFAULT;
+    const SEGMENT_COUNT: usize = 40;
+    const VARIANT_COUNT: usize = 3;
+    const STRESS_SEEK_ITERATIONS: usize = 2000;
 
-/// Maximum consecutive zero-reads before declaring the pipeline stuck.
-const MAX_ZERO_READS: usize = 50;
+    /// Maximum consecutive zero-reads before declaring the pipeline stuck.
+    const MAX_ZERO_READS: usize = 50;
+}
 
 /// Read with retry: keeps trying until data arrives or stuck.
 /// Returns (`samples_read`, `retries_needed`).
 fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize) {
-    for retry in 0..MAX_ZERO_READS {
+    for retry in 0..Consts::MAX_ZERO_READS {
         if audio.is_eof() {
             return (0, retry);
         }
@@ -58,7 +61,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         // Give background worker some time to fill the buffer
         thread::sleep(Duration::from_millis(1));
     }
-    (0, MAX_ZERO_READS)
+    (0, Consts::MAX_ZERO_READS)
 }
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
@@ -75,51 +78,51 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast: AbrOptions) {
-    let init_segment = Arc::new(create_wav_header(D.sample_rate, D.channels, None));
+    let init_segment = Arc::new(create_wav_header(Consts::D.sample_rate, Consts::D.channels, None));
     let v0_pcm = Arc::new(
         SignalPcm::new(
             signal::Sawtooth,
-            D.sample_rate,
-            D.channels,
-            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+            Consts::D.sample_rate,
+            Consts::D.channels,
+            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
         )
         .into_vec(),
     );
     let v1_pcm = Arc::new(
         SignalPcm::new(
             signal::SawtoothDescending,
-            D.sample_rate,
-            D.channels,
-            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+            Consts::D.sample_rate,
+            Consts::D.channels,
+            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
         )
         .into_vec(),
     );
     let v2_pcm = Arc::new(
         SignalPcm::new(
             signal::SawtoothShifted,
-            D.sample_rate,
-            D.channels,
-            Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+            Consts::D.sample_rate,
+            Consts::D.channels,
+            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
         )
         .into_vec(),
     );
 
     let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
-    let total_secs = segment_duration * SEGMENT_COUNT as f64;
+        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let total_secs = segment_duration * Consts::SEGMENT_COUNT as f64;
 
     info!(
-        segments = SEGMENT_COUNT,
-        variants = VARIANT_COUNT,
+        segments = Consts::SEGMENT_COUNT,
+        variants = Consts::VARIANT_COUNT,
         segment_duration,
         total_secs = format!("{total_secs:.2}"),
         "Test data generated"
     );
 
     let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: VARIANT_COUNT,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        variant_count: Consts::VARIANT_COUNT,
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![
             Arc::clone(&v0_pcm),
@@ -150,7 +153,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        let cap = NonZeroUsize::new(SEGMENT_COUNT * VARIANT_COUNT + 20).expect("nz");
+        let cap = NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
         store.ephemeral = true;
     }
@@ -217,7 +220,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         }
 
         // Phase 2: 2000 rapid random seeks
-        info!("Phase 2: {STRESS_SEEK_ITERATIONS} rapid random seeks");
+        info!("Phase 2: {Consts::STRESS_SEEK_ITERATIONS} rapid random seeks");
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;
         let mut total_retries = 0u64;
@@ -225,7 +228,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut integrity_errors = 0u64;
         let mut channel_mismatches = 0u64;
 
-        for i in 0..STRESS_SEEK_ITERATIONS {
+        for i in 0..Consts::STRESS_SEEK_ITERATIONS {
             // Mix of random positions: 10% chance to seek near start (< 1s),
             // 10% chance to seek near the end (last 2s), 80% random.
             let r = rng.next_f64();
@@ -259,7 +262,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                         pos_secs,
                         is_eof = audio.is_eof(),
                         retries,
-                        "STUCK: read returned 0 after {MAX_ZERO_READS} retries"
+                        "STUCK: read returned 0 after {Consts::MAX_ZERO_READS} retries"
                     );
                 }
                 continue;
@@ -308,10 +311,10 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
         // Tolerate a small number of dead seeks (decoder restart race)
         // but not more than 1% of total iterations.
-        let max_dead = (STRESS_SEEK_ITERATIONS as u64) / 100;
+        let max_dead = (Consts::STRESS_SEEK_ITERATIONS as u64) / 100;
         assert!(
             dead_seeks <= max_dead,
-            "too many dead seeks: {dead_seeks}/{STRESS_SEEK_ITERATIONS} \
+            "too many dead seeks: {dead_seeks}/{Consts::STRESS_SEEK_ITERATIONS} \
              (>{max_dead} = 1% threshold) — pipeline stalls after seek"
         );
         assert_eq!(
@@ -342,10 +345,10 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 if audio.is_eof() {
                     break;
                 }
-                if retries >= MAX_ZERO_READS {
+                if retries >= Consts::MAX_ZERO_READS {
                     panic!(
                         "STUCK at position {:.3}s after seek to 0: \
-                         read returned 0 after {MAX_ZERO_READS} retries, \
+                         read returned 0 after {Consts::MAX_ZERO_READS} retries, \
                          total_frames_read={total_frames_read}, is_eof={}",
                         audio.position().as_secs_f64(),
                         audio.is_eof()
@@ -433,7 +436,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
         assert!(audio.is_eof(), "expected EOF after full track read");
 
-        let expected_frames = (SEGMENT_COUNT * D.segment_size) / (D.channels as usize * 2);
+        let expected_frames = (Consts::SEGMENT_COUNT * Consts::D.segment_size) / (Consts::D.channels as usize * 2);
         let frame_diff = total_frames_read.abs_diff(expected_frames as u64);
         let tolerance = (expected_frames as u64) / 50; // 2%
 
