@@ -281,7 +281,7 @@ mmap-io = { version = "0.9", default-features = false }
 dashmap = "6.1.0"
 derivative = "2.2"
 derive_setters = "0.1"
-lru = "0.16"
+lru = "0.17"
 
 # fuzzing
 libfuzzer-sys = "0.4"
