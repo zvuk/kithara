@@ -1,0 +1,27 @@
+id: style.no-impl-only-consts
+message: "Do not create an inherent `impl` block that only contains constants. Constants should be in the same `impl` block as the methods that use them. `struct Consts` is allowed only for grouping >2 constants."
+severity: error
+language: Rust
+rule:
+  all:
+    - kind: impl_item
+    - not:
+        has:
+          pattern: "impl $TRAIT for $TYPE { $$$ }"
+    - not:
+        has:
+          kind: type_identifier
+          regex: "^Consts?$"
+    - has:
+        kind: declaration_list
+        has:
+          any:
+            - kind: const_item
+            - kind: static_item
+    - not:
+        has:
+          kind: declaration_list
+          has:
+            any:
+              - kind: function_item
+              - kind: type_item

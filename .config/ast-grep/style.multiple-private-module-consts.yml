@@ -1,0 +1,26 @@
+id: style.multiple-private-module-consts
+message: "Multiple private module-level constants found. If >2, group them into a `struct Consts` or separate module. If used in a single impl, move to that impl."
+severity: error
+language: Rust
+rule:
+  all:
+    - any:
+        - kind: const_item
+        - kind: static_item
+    - not: { has: { kind: visibility_modifier } }
+    - not: { inside: { any: [kind: impl_item, kind: trait_item, kind: function_item, kind: foreign_mod_item, kind: block] } }
+    - any:
+        - follows:
+            all:
+              - any:
+                  - kind: const_item
+                  - kind: static_item
+              - not: { has: { kind: visibility_modifier } }
+            stopBy: end
+        - precedes:
+            all:
+              - any:
+                  - kind: const_item
+                  - kind: static_item
+              - not: { has: { kind: visibility_modifier } }
+            stopBy: end
