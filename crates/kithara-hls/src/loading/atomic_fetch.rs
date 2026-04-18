@@ -14,7 +14,7 @@ use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -100,9 +100,11 @@ async fn download_atomic_bytes(
 ) -> HlsResult<Bytes> {
     let cmd = FetchCmd::get(url.clone()).headers(headers);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
+    // reqwest normalises header names to lowercase; "content-type" is always lowercase.
     if let Some(ct) = resp.headers.get("content-type")
         && ct.starts_with("text/html")
     {
+        warn!(url = %url, content_type = ct, "kithara-hls: rejected HTML response");
         return Err(HlsError::InvalidContent(format!(
             "{url}: unexpected content-type {ct}"
         )));
