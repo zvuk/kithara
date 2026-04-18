@@ -46,6 +46,7 @@ mod pipeline;
 mod resampler;
 #[cfg(feature = "rodio")]
 mod rodio;
+mod runtime;
 mod traits;
 pub(crate) mod worker;
 
@@ -58,7 +59,8 @@ pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_l
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
+    track_fsm::TrackPhaseTag,
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};
-pub use worker::{handle::AudioWorkerHandle, types::ServiceClass};
+pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};

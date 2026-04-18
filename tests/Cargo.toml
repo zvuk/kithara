@@ -16,7 +16,7 @@ ignored = ["serial_test"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "test-utils", "internal"] }
-kithara-audio = { workspace = true, features = ["internal"] }
+kithara-audio = { workspace = true, features = ["internal", "test-utils"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true, features = ["internal"] }
 kithara-drm = { workspace = true }

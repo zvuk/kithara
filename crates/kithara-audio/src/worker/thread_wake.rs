@@ -17,8 +17,10 @@ impl ThreadWake {
     pub(crate) fn register_current(&self) {
         *self.waiter.lock_sync() = Some(thread::current());
     }
+}
 
-    pub(crate) fn wake(&self) {
+impl crate::runtime::WakeSignal for ThreadWake {
+    fn wake(&self) {
         let waiter = self.waiter.lock_sync().as_ref().cloned();
         if let Some(waiter) = waiter {
             waiter.unpark();
@@ -36,6 +38,7 @@ mod tests {
         time::Duration,
     };
 
+    use crate::runtime::WakeSignal;
     use kithara_platform::thread::{park_timeout, sleep, spawn};
     use kithara_test_utils::kithara;
 

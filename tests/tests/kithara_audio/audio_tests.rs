@@ -8,7 +8,6 @@ use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::{create_test_wav, kithara};
-use ringbuf::traits::Consumer;
 use tempfile::NamedTempFile;
 
 /// Write test WAV to a temp file and return config for it.
@@ -44,7 +43,7 @@ async fn test_audio_receive_chunks() {
     let mut chunk_count = 0;
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline {
-        if let Some(fetch) = audio.pcm_rx().try_pop() {
+        if let Some(fetch) = test_try_pop_pcm(&mut audio) {
             if fetch.is_eof() {
                 break;
             }
@@ -168,7 +167,7 @@ async fn test_rodio_source_try_seek() {
         .await
         .unwrap();
 
-    let result = ::rodio::Source::try_seek(&mut audio, Duration::from_millis(250));
+    let result = rodio::Source::try_seek(&mut audio, Duration::from_millis(250));
     assert!(
         result.is_ok(),
         "rodio::Source::try_seek must delegate to Audio::seek"
