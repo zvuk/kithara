@@ -29,7 +29,6 @@ use kithara_test_utils::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 struct Consts;
@@ -46,6 +45,7 @@ impl Consts {
 }
 
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
+
 
 
     let channels = chunk.meta.spec.channels as usize;
@@ -220,7 +220,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     loop {
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
-                "ABR switch not detected within {Consts::WARMUP_TIMEOUT_SECS}s \
+                "ABR switch not detected within {}s", Consts::WARMUP_TIMEOUT_SECS \
                  (ascending={warmup_ascending}, unknown={warmup_unknown})"
             );
         }
@@ -269,7 +269,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     }
 
     // Phase 2: Post-switch sequential read — frame_offset continuity
-    info!("Phase 2: verifying {Consts::POST_SWITCH_CHUNKS} post-switch chunks...");
+    info!("Phase 2: verifying {} post-switch", Consts::POST_SWITCH_CHUNKS chunks...");
 
     let mut prev_frame_offset: Option<u64> = None;
     let mut prev_frames: Option<usize> = None;
@@ -349,7 +349,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     info!(
         continuity_breaks,
-        "Phase 2 complete: {Consts::POST_SWITCH_CHUNKS} post-switch chunks verified"
+        "Phase 2 complete: {} post-switch", Consts::POST_SWITCH_CHUNKS chunks verified"
     );
 
     // We don't assert on frame_offset continuity in phase 2 because
@@ -357,7 +357,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // We track it for diagnostics.
 
     // Phase 3: Random seeks — 200 iterations, 5 chunks each
-    info!("Phase 3: {Consts::SEEK_ITERATIONS} random seek + {Consts::CHUNKS_PER_SEEK} chunk reads...");
+    info!("Phase 3: {} random seek + {} chunk", Consts::SEEK_ITERATIONS, Consts::CHUNKS_PER_SEEK reads...");
 
     let total_duration = audio.duration();
     let total_secs = total_duration.map_or(Consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
@@ -528,7 +528,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         inter_sample_breaks,
         intra_breaks,
         direction_errors,
-        "Phase 3 complete: {Consts::SEEK_ITERATIONS} seek cycles"
+        "Phase 3 complete: {} seek cycles", Consts::SEEK_ITERATIONS"
     );
 
     if intra_breaks > 0 {
