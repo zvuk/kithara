@@ -25,7 +25,7 @@ foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath = { version = "0.14", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -59,7 +59,7 @@ foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath = { version = "0.14", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -134,7 +134,7 @@ futures-io = { version = "0.3" }
 getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher"] }
-hotpath-macros = { version = "0.14", features = ["hotpath"] }
+hotpath-macros = { version = "0.15", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
@@ -205,7 +205,7 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 futures-io = { version = "0.3" }
 getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath-macros = { version = "0.14", features = ["hotpath"] }
+hotpath-macros = { version = "0.15", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
@@ -273,7 +273,7 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 futures-io = { version = "0.3" }
 getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath-macros = { version = "0.14", features = ["hotpath"] }
+hotpath-macros = { version = "0.15", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 indexmap = { version = "2" }
