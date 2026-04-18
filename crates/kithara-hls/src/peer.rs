@@ -97,9 +97,7 @@ impl HlsPeer {
             }
         });
     }
-}
 
-impl HlsPeer {
     /// Release the stashed [`HlsState`] and cancel the waker task.
     ///
     /// Must be called when the owning [`HlsSource`] drops, otherwise

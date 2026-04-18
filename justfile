@@ -85,7 +85,7 @@ ast-grep-blocking:
       exit 1; \
     fi; \
     {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
-      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml)$'
+      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg)$'
 
 ast-grep-advisory:
     @if [[ -z "{{ast-grep-bin}}" ]]; then \

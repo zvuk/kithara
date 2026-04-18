@@ -1,0 +1,9 @@
+id: style.no-duplicate-impl
+message: "Found multiple inherent impl blocks for `$T` in the same file. Consolidate them or move to another file."
+severity: error
+language: Rust
+rule:
+  all:
+    - pattern: "impl $T { $$$1 }"
+    - precedes:
+        pattern: "impl $T { $$$2 }"

@@ -1,0 +1,12 @@
+id: style.no-noop-in-impl
+message: "No-op function found in inherent impl block. Default implementations are for traits only."
+severity: error
+language: Rust
+rule:
+  all:
+    - pattern: "fn $NAME($$$ARGS) {}"
+    - inside:
+        kind: impl_item
+    - not:
+        inside:
+          pattern: "impl $TRAIT for $TYPE { $$$ }"

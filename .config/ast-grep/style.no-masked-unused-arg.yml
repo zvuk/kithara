@@ -1,0 +1,21 @@
+id: style.no-masked-unused-arg
+message: "Argument `$NAME` is masked with an underscore but not used in the function body. Use `_` if the name is not needed."
+severity: error
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - has:
+        kind: parameter
+        has:
+          kind: identifier
+          pattern: $NAME
+          where:
+            NAME:
+              regex: "^_[a-zA-Z0-9]+$"
+    - not:
+        has:
+          kind: identifier
+          pattern: $NAME
+          inside:
+            kind: block
