@@ -6,12 +6,11 @@ rule:
   all:
     - kind: impl_item
     - not:
-        has:
-          pattern: "impl $TRAIT for $TYPE { $$$ }"
+        pattern: "impl $TRAIT for $TYPE { $$$ }"
     - not:
         has:
           kind: type_identifier
-          regex: "^Consts?$"
+          regex: "^Consts$"
     - has:
         kind: declaration_list
         has:

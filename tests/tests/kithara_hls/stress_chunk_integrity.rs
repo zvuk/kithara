@@ -29,7 +29,10 @@ use kithara_test_utils::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+use crate::common::test_defaults::SawWav;
 
 struct Consts;
 impl Consts {
@@ -73,8 +76,8 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     for f in 1..frames {
         let prev_phase = phase_from_f32(chunk.pcm[(f - 1) * channels]);
         let curr_phase = phase_from_f32(chunk.pcm[f * channels]);
-        let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-        let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+        let expected_asc = (prev_phase as usize + 1) % SawWav::SAW_PERIOD;
+        let expected_desc = (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
             breaks += 1;
         }
@@ -220,8 +223,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     loop {
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
-                "ABR switch not detected within {}s", Consts::WARMUP_TIMEOUT_SECS \
-                 (ascending={warmup_ascending}, unknown={warmup_unknown})"
+                "ABR switch not detected within {}s (ascending={}, unknown={})",
+                Consts::WARMUP_TIMEOUT_SECS, warmup_ascending, warmup_unknown
             );
         }
 
@@ -233,8 +236,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .await
         else {
             panic!(
-                "Hit EOF before ABR switch \
-                 (ascending={warmup_ascending}, unknown={warmup_unknown})"
+                "Hit EOF before ABR switch (ascending={}, unknown={})",
+                warmup_ascending, warmup_unknown
             );
         };
 
@@ -269,7 +272,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     }
 
     // Phase 2: Post-switch sequential read — frame_offset continuity
-    info!("Phase 2: verifying {} post-switch", Consts::POST_SWITCH_CHUNKS chunks...");
+    info!("Phase 2: verifying {} post-switch chunks...", Consts::POST_SWITCH_CHUNKS);
 
     let mut prev_frame_offset: Option<u64> = None;
     let mut prev_frames: Option<usize> = None;
@@ -349,7 +352,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     info!(
         continuity_breaks,
-        "Phase 2 complete: {} post-switch", Consts::POST_SWITCH_CHUNKS chunks verified"
+        "Phase 2 complete: {} post-switch chunks verified", Consts::POST_SWITCH_CHUNKS
     );
 
     // We don't assert on frame_offset continuity in phase 2 because
@@ -357,7 +360,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // We track it for diagnostics.
 
     // Phase 3: Random seeks — 200 iterations, 5 chunks each
-    info!("Phase 3: {} random seek + {} chunk", Consts::SEEK_ITERATIONS, Consts::CHUNKS_PER_SEEK reads...");
+    info!(
+        "Phase 3: {} random seek + {} chunk reads...",
+        Consts::SEEK_ITERATIONS, Consts::CHUNKS_PER_SEEK
+    );
 
     let total_duration = audio.duration();
     let total_secs = total_duration.map_or(Consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
@@ -474,8 +480,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 let curr_first = chunk.pcm[0]; // first sample (L channel)
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
-                let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-                let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let expected_asc = (prev_phase as usize + 1) % SawWav::SAW_PERIOD;
+                let expected_desc = (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {
@@ -528,8 +534,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         inter_sample_breaks,
         intra_breaks,
         direction_errors,
-        "Phase 3 complete: {} seek cycles", Consts::SEEK_ITERATIONS"
+        "Phase 3 complete: {} seek cycles", Consts::SEEK_ITERATIONS
     );
+
 
     if intra_breaks > 0 {
         warn!(

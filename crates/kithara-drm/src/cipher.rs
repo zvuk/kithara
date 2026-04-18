@@ -99,11 +99,11 @@ mod tests {
 
         for (i, &b) in data.iter().enumerate() {
             state = UniqueBinaryCipher::xorshift64_star(state ^ i as u64);
-            let keystream_byte = (state >> Self::KEYSTREAM_SHIFT) as u8;
-            let rot = (state & u64::from(Self::ROTATION_MASK)) as u8;
+            let keystream_byte = (state >> UniqueBinaryCipher::KEYSTREAM_SHIFT) as u8;
+            let rot = (state & u64::from(UniqueBinaryCipher::ROTATION_MASK)) as u8;
 
             let mixed = b.wrapping_add(keystream_byte);
-            let cipher_byte = mixed.rotate_left(u32::from(rot) & u32::from(Self::ROTATION_MASK));
+            let cipher_byte = mixed.rotate_left(u32::from(rot) & u32::from(UniqueBinaryCipher::ROTATION_MASK));
             out.extend_from_slice(&[cipher_byte]);
             state ^= u64::from(cipher_byte);
         }

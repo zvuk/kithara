@@ -1461,11 +1461,12 @@ mod tests {
              {reader_byte_pos}). With cache_capacity=4 on an ephemeral \
              store, re-fetching segments 0..{reader_seg_before} evicts \
              the reader's live window (segments \
-             {LIVE_START}..{Consts::NUM_SEGMENTS}) the decoder is actively \
+             {LIVE_START}..{num_segs}) the decoder is actively \
              reading, so `wait_range` exceeds its budget and \
              `next_chunk_with_timeout` fires the assert at \
              live_stress_real_stream.rs:190 with \
-             `stage='ephemeral_small_cache' (is_eof=false)`."
+             `stage='ephemeral_small_cache' (is_eof=false)`.",
+            num_segs = Consts::NUM_SEGMENTS
         );
     }
 }

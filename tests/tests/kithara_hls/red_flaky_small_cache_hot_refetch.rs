@@ -102,17 +102,18 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     audio.preload();
 
     // Warmup: read a few chunks so byte_position advances past seg 0.
-    info!("warmup: reading {Consts::WARMUP_CHUNKS} chunks");
+    info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
     let mut chunks_read = 0usize;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
     while chunks_read < Consts::WARMUP_CHUNKS {
         if Instant::now() > warmup_deadline {
             panic!(
                 "RED: warmup stalled before reader could advance past seg 0 — \
-                 only {chunks_read}/{Consts::WARMUP_CHUNKS} chunks drained in 10 s. \
+                 only {chunks_read}/{} chunks drained in 10 s. \
                  This matches the hot-refetch loop: the LRU evicts seg 0 \
                  before the reader reaches byte 0 of it, and the scheduler \
-                 keeps re-fetching seg 0 forever."
+                 keeps re-fetching seg 0 forever.",
+                Consts::WARMUP_CHUNKS
             );
         }
         if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
@@ -173,11 +174,12 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
 
     assert!(
         drained >= Consts::MIN_PROGRESS_CHUNKS,
-        "RED: reader crawled through only {drained} chunks in {Consts::PLAYBACK_BUDGET_SECS}s \
-         (expected >= {Consts::MIN_PROGRESS_CHUNKS}). With cache_capacity=1 on an ephemeral \
+        "RED: reader crawled through only {} chunks in {}s \
+         (expected >= {}). With cache_capacity=1 on an ephemeral \
          store the scheduler re-fetches every segment multiple times, and each \
          re-fetch evicts the reader's live window before it can be decoded. \
          The production flake `live_ephemeral_small_cache_playback_hls` hits \
-         the same pattern at cap=4 under CPU contention."
+         the same pattern at cap=4 under CPU contention.",
+        drained, Consts::PLAYBACK_BUDGET_SECS, Consts::MIN_PROGRESS_CHUNKS
     );
 }

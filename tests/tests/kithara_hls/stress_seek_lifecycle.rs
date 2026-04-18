@@ -10,7 +10,7 @@
 //!
 //! Phases:
 //! 1. **Warmup**: read until ABR switch from V0→V1
-//! 2. **Stress**: 2000 random seeks — verify `read()` always produces data
+//! 2. **Stress**: 2000 random seeks - verify `read()` always produces data
 //! 3. **Reset**: seek to 0 → read the entire track beginning to end,
 //!    verify saw-tooth continuity on every frame
 
@@ -42,8 +42,6 @@ impl Consts {
     const SEGMENT_COUNT: usize = 40;
     const VARIANT_COUNT: usize = 3;
     const STRESS_SEEK_ITERATIONS: usize = 2000;
-
-    /// Maximum consecutive zero-reads before declaring the pipeline stuck.
     const MAX_ZERO_READS: usize = 50;
 }
 
@@ -186,7 +184,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
         // Phase 1: Warmup until ABR switch
-        info!("Phase 1: warmup — reading until ABR switch");
+        info!("Phase 1: warmup - reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
         let warmup_deadline = Instant::now() + Duration::from_secs(10);
@@ -216,11 +214,11 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         }
 
         if !switch_detected {
-            warn!("ABR switch not detected during warmup — continuing anyway");
+            warn!("ABR switch not detected during warmup - continuing anyway");
         }
 
         // Phase 2: 2000 rapid random seeks
-        info!("Phase 2: {Consts::STRESS_SEEK_ITERATIONS} rapid random seeks");
+        info!("Phase 2: {} rapid random seeks", Consts::STRESS_SEEK_ITERATIONS);
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;
         let mut total_retries = 0u64;
@@ -262,7 +260,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                         pos_secs,
                         is_eof = audio.is_eof(),
                         retries,
-                        "STUCK: read returned 0 after {Consts::MAX_ZERO_READS} retries"
+                        "STUCK: read returned 0 after {} retries", Consts::MAX_ZERO_READS
                     );
                 }
                 continue;
@@ -314,8 +312,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let max_dead = (Consts::STRESS_SEEK_ITERATIONS as u64) / 100;
         assert!(
             dead_seeks <= max_dead,
-            "too many dead seeks: {dead_seeks}/{Consts::STRESS_SEEK_ITERATIONS} \
-             (>{max_dead} = 1% threshold) — pipeline stalls after seek"
+            "too many dead seeks: {}/{} (>{max_dead} = 1% threshold) - pipeline stalls after seek",
+            dead_seeks, Consts::STRESS_SEEK_ITERATIONS
         );
         assert_eq!(
             integrity_errors, 0,
@@ -323,11 +321,11 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         );
         assert_eq!(
             channel_mismatches, 0,
-            "L/R channel mismatches — data corruption"
+            "L/R channel mismatches - data corruption"
         );
 
         // ── Phase 3: Seek to 0 → full track read with continuity check ──
-        info!("Phase 3: seek to 0 — full track integrity verification");
+        info!("Phase 3: seek to 0 - full track integrity verification");
 
         audio.seek(Duration::ZERO).expect("seek to 0 must succeed");
 
@@ -348,9 +346,11 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 if retries >= Consts::MAX_ZERO_READS {
                     panic!(
                         "STUCK at position {:.3}s after seek to 0: \
-                         read returned 0 after {Consts::MAX_ZERO_READS} retries, \
-                         total_frames_read={total_frames_read}, is_eof={}",
+                         read returned 0 after {} retries, \
+                         total_frames_read={}, is_eof={}",
                         audio.position().as_secs_f64(),
+                        Consts::MAX_ZERO_READS,
+                        total_frames_read,
                         audio.is_eof()
                     );
                 }
@@ -363,8 +363,10 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample at frame {} (total_frames_read={total_frames_read}): {sample}",
+                    "invalid sample at frame {} (total_frames_read={}): {}",
                     total_frames_read + (j / channels) as u64,
+                    total_frames_read,
+                    sample
                 );
             }
 
@@ -375,8 +377,9 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                     let r_val = buf[f * 2 + 1];
                     assert!(
                         (l - r_val).abs() <= f32::EPSILON,
-                        "L/R mismatch at frame {}: L={l}, R={r_val}",
+                        "L/R mismatch at frame {}: L={}, R={}",
                         total_frames_read + f as u64,
+                        l, r_val
                     );
                 }
             }
@@ -428,8 +431,9 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
             if read_attempts > max_read_attempts {
                 panic!(
-                    "exceeded {max_read_attempts} read attempts in phase 3, \
-                     total_frames_read={total_frames_read} — possible infinite loop"
+                    "exceeded {} read attempts in phase 3, \
+                     total_frames_read={} - possible infinite loop",
+                    max_read_attempts, total_frames_read
                 );
             }
         }
@@ -447,8 +451,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
         assert!(
             frame_diff <= tolerance,
-            "frame count mismatch after seek-to-0: \
-             got {total_frames_read}, expected ~{expected_frames} (±{tolerance})"
+            "frame count mismatch after seek-to-0: got {}, expected ~{} (+-{})",
+            total_frames_read, expected_frames, tolerance
         );
 
         // Allow a few continuity breaks at segment/decoder boundaries,
@@ -456,8 +460,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let max_breaks = 10u64;
         assert!(
             continuity_breaks <= max_breaks,
-            "too many continuity breaks after seek-to-0: \
-             {continuity_breaks} (>{max_breaks} tolerance) — data corruption or segment gap"
+            "too many continuity breaks after seek-to-0: {} (>{} tolerance) - data corruption or segment gap",
+            continuity_breaks, max_breaks
         );
 
         info!("All phases passed");

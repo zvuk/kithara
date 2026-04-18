@@ -286,13 +286,13 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             channel_mismatches,
             continuity_errors,
             position_errors,
-            "All {Consts::SEEK_ITERATIONS} seek+read iterations done"
+            "All {} seek+read iterations done", Consts::SEEK_ITERATIONS
         );
 
         assert_eq!(successful_reads, Consts::SEEK_ITERATIONS as u64);
         assert_eq!(
             channel_mismatches, 0,
-            "L/R channel data diverged {channel_mismatches} times — data corruption"
+            "L/R channel data diverged {channel_mismatches} times - data corruption"
         );
         if continuity_errors > 0 {
             tracing::warn!(
@@ -302,7 +302,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         }
         assert!(
             continuity_errors <= 5,
-            "{continuity_errors} continuity breaks (>5 tolerance) — decoder returned non-contiguous data"
+            "{continuity_errors} continuity breaks (>5 tolerance) - decoder returned non-contiguous data"
         );
         if position_errors > 0 {
             tracing::warn!(
@@ -312,7 +312,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         }
         assert!(
             position_errors <= 3,
-            "{position_errors} position mismatches (>3 tolerance) — seek landed in wrong place"
+            "{position_errors} position mismatches (>3 tolerance) - seek landed in wrong place"
         );
 
         // Step 6: Final seek near the end → read to EOF
@@ -346,9 +346,9 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             "expected EOF after reading all remaining data from {final_seek_secs:.4}s"
         );
 
-        info!(remaining_samples, "Final read done — EOF confirmed");
+        info!(remaining_samples, "Final read done - EOF confirmed");
 
-        // Step 7: Regression check — seek after EOF must resume playback.
+        // Step 7: Regression check - seek after EOF must resume playback.
         // This catches false-EOF races where seek re-queues demand, but the downloader 
         // marks EOF before demand is processed.
         let resume_positions = [0.5_f64, total_secs * 0.25, total_secs * 0.75];

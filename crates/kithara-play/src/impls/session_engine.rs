@@ -446,15 +446,19 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     })
 }
 
+mod session_holder {
+    use super::*;
+
+    /// Singleton session client shared across the process. First caller
+    /// wins — either `session_client()` (production, spawns cpal) or
+    /// [`try_init_offline_session`] (tests, spawns offline).
+    pub(super) static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
+}
+
 pub(crate) fn session_client() -> Arc<SessionClient> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        /// Singleton session client shared across the process. First caller
-        /// wins — either `session_client()` (production, spawns cpal) or
-        /// [`try_init_offline_session`] (tests, spawns offline).
-        static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
-
-        SESSION_CLIENT
+        session_holder::SESSION_CLIENT
             .get_or_init(|| {
                 spawn_session_client::<firewheel::cpal::CpalBackend>(
                     "kithara-engine",
@@ -907,7 +911,7 @@ fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
 /// code path (e.g. cpal via `session_client()`).
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 pub(crate) fn try_init_offline_session() -> Result<(), String> {
-    if SESSION_CLIENT.get().is_some() {
+    if session_holder::SESSION_CLIENT.get().is_some() {
         return Ok(());
     }
     let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SessionState::<firewheel::cpal::CpalBackend>::CMD_RINGBUF_CAPACITY).split();
@@ -919,7 +923,7 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
         cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
     });
-    SESSION_CLIENT.set(client).map_err(|_| {
+    session_holder::SESSION_CLIENT.set(client).map_err(|_| {
         "session client already initialized — call init_offline_backend() \
          before any Queue/PlayerImpl instantiation"
             .to_string()
