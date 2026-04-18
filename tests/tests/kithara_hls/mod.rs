@@ -9,6 +9,7 @@ mod deferred_abr_debug;
 mod drm_stream_integrity;
 mod driver_test;
 mod ephemeral;
+mod html_error_body;
 mod keys_integration;
 mod live_stress_real_stream;
 mod playlist_integration;

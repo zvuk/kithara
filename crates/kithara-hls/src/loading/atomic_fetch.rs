@@ -98,7 +98,14 @@ async fn download_atomic_bytes(
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
-    let cmd = FetchCmd::get(url).headers(headers);
+    let cmd = FetchCmd::get(url.clone()).headers(headers);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
+    if let Some(ct) = resp.headers.get("content-type")
+        && ct.starts_with("text/html")
+    {
+        return Err(HlsError::InvalidContent(format!(
+            "{url}: unexpected content-type {ct}"
+        )));
+    }
     resp.body.collect().await.map_err(HlsError::from)
 }

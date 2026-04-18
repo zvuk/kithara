@@ -34,6 +34,9 @@ pub enum HlsError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    #[error("Invalid response content: {0}")]
+    InvalidContent(String),
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;
