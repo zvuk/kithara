@@ -22,10 +22,6 @@ use crate::{
     track::{TrackEntry, TrackSource, Tracks},
 };
 
-/// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
-/// events emitted by crossfade fade-outs of non-current tracks.
-const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
-
 /// Transition style for a track switch.
 ///
 /// Mirrors the Apple-idiomatic pattern of a namespace-style type with
@@ -744,6 +740,10 @@ impl Queue {
     }
 
     fn process_player_event(&self, ev: &Event) {
+        /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
+        /// events emitted by crossfade fade-outs of non-current tracks.
+        const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
+
         match ev {
             Event::Player(PlayerEvent::ItemDidPlayToEnd) => {
                 let pos = self.player.position_seconds().unwrap_or(0.0);
@@ -797,7 +797,6 @@ impl Queue {
 ///   `crossfade` seconds (with crossfade > 0) or [`END_PROXIMITY_SECONDS`]
 ///   (no crossfade, trigger right at the tail), AND
 /// - we haven't already armed for this track this play-through.
-#[must_use]
 pub(crate) fn should_arm_crossfade(
     pos: f64,
     dur: f64,
@@ -805,6 +804,11 @@ pub(crate) fn should_arm_crossfade(
     current_id: TrackId,
     armed_for: Option<TrackId>,
 ) -> bool {
+    /// How close to the end we arm the next-track advance when there is
+    /// no crossfade configured — gives the queue a brief window to select
+    /// and start the next track before the current one goes silent.
+    const END_PROXIMITY_SECONDS: f64 = 0.25;
+
     if dur <= 0.0 || pos <= 0.0 {
         return false;
     }
@@ -818,11 +822,6 @@ pub(crate) fn should_arm_crossfade(
     }
     armed_for != Some(current_id)
 }
-
-/// How close to the end we arm the next-track advance when there is
-/// no crossfade configured — gives the queue a brief window to select
-/// and start the next track before the current one goes silent.
-const END_PROXIMITY_SECONDS: f64 = 0.25;
 
 fn extract_track_name(source: &TrackSource) -> String {
     let raw = match source {
@@ -1033,26 +1032,23 @@ mod tests {
         assert_eq!(queue.len(), 3);
     }
 
-    const TRACK_ID_0: TrackId = TrackId(0);
-    const TRACK_ID_1: TrackId = TrackId(1);
-
     #[kithara::test]
-    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TRACK_ID_1, None, true)]
-    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TRACK_ID_1, None, true)]
-    #[case::far_from_end(100.0, 162.0, 5.0, TRACK_ID_1, None, false)]
-    #[case::already_armed_for_same_track(160.0, 162.0, 5.0, TRACK_ID_1, Some(TRACK_ID_1), false)]
+    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TrackId(1), None, true)]
+    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TrackId(1), None, true)]
+    #[case::far_from_end(100.0, 162.0, 5.0, TrackId(1), None, false)]
+    #[case::already_armed_for_same_track(160.0, 162.0, 5.0, TrackId(1), Some(TrackId(1)), false)]
     #[case::armed_for_different_track_still_arms(
         160.0,
         162.0,
         5.0,
-        TRACK_ID_1,
-        Some(TRACK_ID_0),
+        TrackId(1),
+        Some(TrackId(0)),
         true
     )]
-    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TRACK_ID_1, None, true)]
-    #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TRACK_ID_1, None, false)]
-    #[case::zero_position_rejected(0.0, 162.0, 5.0, TRACK_ID_1, None, false)]
-    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TRACK_ID_1, None, false)]
+    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TrackId(1), None, true)]
+    #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
+    #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]
+    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), None, false)]
     fn should_arm_crossfade_cases(
         #[case] pos: f64,
         #[case] dur: f64,
