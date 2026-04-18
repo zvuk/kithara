@@ -103,8 +103,8 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
 // wasm postbuild
 // ---------------------------------------------------------------------------
 
-struct WasmPatcher;
-impl WasmPatcher {
+struct Consts;
+impl Consts {
     const TEXT_DECODER_POLYFILL: &'static str = "\
 if(typeof TextDecoder===\"undefined\"){\
 globalThis.TextDecoder=class{constructor(){}\
@@ -216,7 +216,7 @@ fn rewrite_paths(content: &str) -> String {
 fn apply_text_decoder_polyfill(content: &str) -> String {
     content.replace(
         "let cachedTextDecoder",
-        &format!("{}let cachedTextDecoder", WasmPatcher::TEXT_DECODER_POLYFILL),
+        &format!("{}let cachedTextDecoder", Consts::TEXT_DECODER_POLYFILL),
     )
 }
 
@@ -235,7 +235,7 @@ fn apply_inline_patches(content: &str) -> String {
         // 3. Inject boot lock function.
         .replace(
             "let __wstExitStatePtr = 0;",
-            &format!("let __wstExitStatePtr = 0; {}", WasmPatcher::BOOT_LOCK_FN),
+            &format!("let __wstExitStatePtr = 0; {}", Consts::BOOT_LOCK_FN),
         )
         // 4. Replace initSync with locked version.
         .replace(
@@ -306,7 +306,7 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     if js.exists() {
         let content = fs::read_to_string(&js).context("read kithara-wasm.js")?;
         let content = apply_text_decoder_polyfill(&content);
-        let mut content = content + WasmPatcher::CHECK_RUNTIME_JS;
+        let mut content = content + Consts::CHECK_RUNTIME_JS;
         if let Some(class) = generate_player_class(&content) {
             content.push('\n');
             content.push_str(&class);

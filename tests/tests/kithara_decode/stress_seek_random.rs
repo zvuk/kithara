@@ -21,23 +21,6 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-const D: SawWav = SawWav::DEFAULT;
-const DURATION_SECS: f64 = 10.0;
-const SAMPLE_COUNT: usize = (D.sample_rate as f64 * DURATION_SECS) as usize;
-const SEEK_ITERATIONS: usize = 1000;
-
-// Stress Test
-
-/// 1000 random seek+read cycles with data verification.
-///
-/// Scenario:
-/// 1. Generate synthetic WAV (N MB, X seconds)
-/// 2. Create `Audio<Stream<File>>` (local decoder pipeline)
-/// 3. Query duration in seconds
-/// 4. Compute optimal random chunk size (proportional to stream, capped)
-/// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
-/// 6. For each: seek → read → verify data (valid range, L==R channels)
-/// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
 #[kithara::test(
     native,
     serial,
@@ -46,6 +29,10 @@ const SEEK_ITERATIONS: usize = 1000;
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn stress_random_seek_read_synthetic_wav() {
+    const DURATION_SECS: f64 = 10.0;
+    const SAMPLE_COUNT: usize = (SawWav::DEFAULT.sample_rate as f64 * DURATION_SECS) as usize;
+    const SEEK_ITERATIONS: usize = 1000;
+
     // Step 1: Create synthetic WAV
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
     let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
@@ -185,7 +172,7 @@ async fn stress_random_seek_read_synthetic_wav() {
             total_samples_read,
             channel_mismatches,
             zero_reads,
-            "All {SEEK_ITERATIONS} seek+read iterations done"
+            "All {} seek+read iterations done", SEEK_ITERATIONS
         );
 
         if zero_reads > 0 {
@@ -193,11 +180,11 @@ async fn stress_random_seek_read_synthetic_wav() {
         }
         assert!(
             zero_reads <= 3,
-            "{zero_reads} zero-reads out of {SEEK_ITERATIONS} (>3 tolerance) — decoder EOF race"
+            "{} zero-reads out of {} (>3 tolerance) — decoder EOF race", zero_reads, SEEK_ITERATIONS
         );
         assert!(
             successful_reads >= SEEK_ITERATIONS as u64 - 3,
-            "only {successful_reads} successful reads out of {SEEK_ITERATIONS}"
+            "only {} successful reads out of {}", successful_reads, SEEK_ITERATIONS
         );
         assert_eq!(
             channel_mismatches, 0,

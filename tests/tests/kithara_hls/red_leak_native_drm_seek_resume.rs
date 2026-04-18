@@ -58,9 +58,12 @@ use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-const ITERATIONS: usize = 4;
-const SEEK_TARGETS_SECS: &[f64] = &[30.0, 60.0, 10.0];
-const SETTLE_MS: u64 = 250;
+struct Consts;
+impl Consts {
+    const ITERATIONS: usize = 4;
+    const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
+    const SETTLE_MS: u64 = 250;
+}
 
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -112,7 +115,7 @@ async fn run_drm_seek_resume_cycle(
     }
 
     // Reproduce the seek sequence from the real test.
-    for (seek_idx, &seek_secs) in SEEK_TARGETS_SECS.iter().enumerate() {
+    for (seek_idx, &seek_secs) in Consts::SEEK_TARGETS_SECS.iter().enumerate() {
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
@@ -156,14 +159,14 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     // Warm-up iteration: exclude first-time tokio pool / thread spawn growth
     // from the baseline.
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
-    sleep(Duration::from_millis(SETTLE_MS)).await;
+    sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
 
     let threads_baseline = active_named_thread_count();
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
-    for i in 1..=ITERATIONS {
+    for i in 1..=Consts::ITERATIONS {
         run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, i).await;
-        sleep(Duration::from_millis(SETTLE_MS)).await;
+        sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
         let now = active_named_thread_count();
         info!(
             iter = i,
@@ -189,7 +192,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
          (HlsPeer, KeyManager cache, ProcessedResource, decoder state) \
          are not released on Audio::drop.",
         growth,
-        ITERATIONS,
+        Consts::ITERATIONS,
         threads_baseline,
         threads_after,
     );

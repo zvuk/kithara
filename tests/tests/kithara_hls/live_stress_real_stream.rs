@@ -24,66 +24,69 @@ use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, te
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
-const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
-const WARMUP_TIMEOUT_SECS: u64 = 10;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 5;
-const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
-const RANDOM_SEEK_OPS_MAX: usize = 400;
-const MIN_RANDOM_SEEKS: usize = 50;
-const WASM_MIN_RANDOM_SEEKS: usize = 40;
-const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-const FAST_SEEK_BURST: usize = 60;
-const WASM_FAST_SEEK_BURST: usize = 48;
-const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 40;
-const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
-const REVISIT_SEEKS: usize = 60;
-const WASM_REVISIT_SEEKS: usize = 48;
-const WASM_MAX_SEEK_SECS: f64 = 90.0;
-const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
-const WASM_SMALL_CACHE_WARMUP_CHUNKS: usize = 32;
-const SMALL_CACHE_SEEKS: usize = 10;
-const WASM_SMALL_CACHE_SEEKS: usize = 4;
-const SMALL_CACHE_CHUNKS_PER_SEEK: usize = 10;
-const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
-const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
+struct Consts;
+impl Consts {
+    const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
+    const WASM_NEXT_CHUNK_TIMEOUT_MS: u64 = 45_000;
+    const WARMUP_TIMEOUT_SECS: u64 = 10;
+    const RANDOM_PHASE_BUDGET_SECS: u64 = 5;
+    const WASM_RANDOM_PHASE_BUDGET_SECS: u64 = 48;
+    const RANDOM_SEEK_OPS_MAX: usize = 400;
+    const MIN_RANDOM_SEEKS: usize = 50;
+    const WASM_MIN_RANDOM_SEEKS: usize = 40;
+    const CHUNKS_PER_RANDOM_SEEK: usize = 2;
+    const FAST_SEEK_BURST: usize = 60;
+    const WASM_FAST_SEEK_BURST: usize = 48;
+    const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 40;
+    const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
+    const REVISIT_SEEKS: usize = 60;
+    const WASM_REVISIT_SEEKS: usize = 48;
+    const WASM_MAX_SEEK_SECS: f64 = 90.0;
+    const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
+    const WASM_SMALL_CACHE_WARMUP_CHUNKS: usize = 32;
+    const SMALL_CACHE_SEEKS: usize = 10;
+    const WASM_SMALL_CACHE_SEEKS: usize = 4;
+    const SMALL_CACHE_CHUNKS_PER_SEEK: usize = 10;
+    const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
+    const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
 
-fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
-    if cfg!(target_arch = "wasm32") {
-        Duration::from_secs(wasm_secs)
-    } else {
-        Duration::from_secs(native_secs)
+    fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
+        if cfg!(target_arch = "wasm32") {
+            Duration::from_secs(wasm_secs)
+        } else {
+            Duration::from_secs(native_secs)
+        }
     }
-}
 
-fn browser_u64(native: u64, wasm: u64) -> u64 {
-    if cfg!(target_arch = "wasm32") {
-        wasm
-    } else {
-        native
+    fn browser_u64(native: u64, wasm: u64) -> u64 {
+        if cfg!(target_arch = "wasm32") {
+            wasm
+        } else {
+            native
+        }
     }
-}
 
-fn browser_usize(native: usize, wasm: usize) -> usize {
-    if cfg!(target_arch = "wasm32") {
-        wasm
-    } else {
-        native
+    fn browser_usize(native: usize, wasm: usize) -> usize {
+        if cfg!(target_arch = "wasm32") {
+            wasm
+        } else {
+            native
+        }
     }
-}
 
-fn next_chunk_timeout() -> Duration {
-    Duration::from_millis(browser_u64(
-        NEXT_CHUNK_TIMEOUT_MS,
-        WASM_NEXT_CHUNK_TIMEOUT_MS,
-    ))
-}
+    fn next_chunk_timeout() -> Duration {
+        Duration::from_millis(Self::browser_u64(
+            Self::NEXT_CHUNK_TIMEOUT_MS,
+            Self::WASM_NEXT_CHUNK_TIMEOUT_MS,
+        ))
+    }
 
-fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
-    if cfg!(target_arch = "wasm32") {
-        max_seek_secs.min(wasm_cap)
-    } else {
-        max_seek_secs
+    fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
+        if cfg!(target_arch = "wasm32") {
+            max_seek_secs.min(wasm_cap)
+        } else {
+            max_seek_secs
+        }
     }
 }
 
@@ -200,7 +203,7 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(60, 75)),
+    timeout(Consts::browser_timeout(60, 75)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -221,7 +224,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
-        browser_timeout(10, 15),
+        Consts::browser_timeout(10, 15),
         Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config)),
     )
     .await
@@ -234,8 +237,8 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     let mut chunks_read = 0usize;
     while chunks_read < 8 {
         let Some(_chunk) = timeout(
-            browser_timeout(10, 15),
-            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "drm_playback_smoke"),
+            Consts::browser_timeout(10, 15),
+            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "drm_playback_smoke"),
         )
         .await
         .expect("waiting for DRM chunk timed out") else {
@@ -256,7 +259,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(30, 120)),
+    timeout(Consts::browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing(
         "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -341,16 +344,16 @@ async fn live_ephemeral_revisit_sequence_regression(
         }
     });
 
-    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "repro_warmup").await;
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "repro_warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
+    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
     let mut seek_positions = Vec::with_capacity(64);
     for _ in 0..64 {
@@ -362,15 +365,15 @@ async fn live_ephemeral_revisit_sequence_regression(
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} seek must not fail at idx={idx}"));
         audio.preload();
-        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("repro_random_seek_{idx}_chunk_{read_idx}");
-            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
                 .await
                 .unwrap_or_else(|| panic!("{label} random seek stopped early at idx={idx}"));
         }
     }
 
-    for _ in 0..FAST_SEEK_BURST {
+    for _ in 0..Consts::FAST_SEEK_BURST {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
         audio
             .seek(Duration::from_secs_f64(pos_secs))
@@ -384,9 +387,9 @@ async fn live_ephemeral_revisit_sequence_regression(
         .unwrap_or_else(|_| panic!("{label} final seek before sequential read must not fail"));
     audio.preload();
 
-    for idx in 0..SEQUENTIAL_CHUNKS_AFTER_BURST {
+    for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
         let stage = format!("repro_sequential_after_burst_{idx}");
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
             .unwrap_or_else(|| panic!("{label} sequential read stopped early at chunk {idx}"));
     }
@@ -397,7 +400,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             .unwrap_or_else(|_| panic!("{label} revisit seek must not fail at idx={idx}"));
         audio.preload();
         let stage = format!("repro_revisit_{idx}");
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
             .unwrap_or_else(|| panic!("{label} revisit stopped early at idx={idx}"));
     }
@@ -489,10 +492,10 @@ async fn live_real_stream_fixed_seek_window_regression(
         }
     });
 
-    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
         let _ =
-            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "fixed_window_warmup").await;
+            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "fixed_window_warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
@@ -513,9 +516,9 @@ async fn live_real_stream_fixed_seek_window_regression(
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} fixed-window seek must not fail at idx={idx}"));
         audio.preload();
-        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("fixed_window_{idx}_chunk_{read_idx}");
-            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
                 .await
                 .unwrap_or_else(|| panic!("{label} fixed-window read stopped early at idx={idx}"));
         }
@@ -608,17 +611,17 @@ async fn live_real_stream_random_seek_prefix_regression(
         }
     });
 
-    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
         let _ =
-            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "rng_prefix_warmup").await;
+            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "rng_prefix_warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
+    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
 
     for idx in 0..80 {
@@ -627,9 +630,9 @@ async fn live_real_stream_random_seek_prefix_regression(
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} rng-prefix seek must not fail at idx={idx}"));
         audio.preload();
-        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("rng_prefix_{idx}_chunk_{read_idx}");
-            let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+            let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
                 .await
                 .unwrap_or_else(|| panic!("{label} rng-prefix read stopped early at idx={idx}"));
         }
@@ -676,7 +679,7 @@ async fn live_real_stream_seek_resume_native(
 
     for warmup_idx in 0..4 {
         let stage = format!("drm_seek_warmup_{warmup_idx}");
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
             .expect("warmup chunk");
     }
@@ -693,7 +696,7 @@ async fn live_real_stream_seek_resume_native(
         for chunk_idx in 0..3 {
             let stage = format!("drm_seek_{seek_idx}_chunk_{chunk_idx}");
             let Some(_chunk) =
-                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
+                next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage).await
             else {
                 break;
             };
@@ -720,7 +723,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(60, 360)),
+    timeout(Consts::browser_timeout(60, 360)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -820,9 +823,9 @@ async fn live_stress_real_stream_seek_read_cache(
     });
 
     info!(ephemeral, %path, label, "Phase 1: warmup until ABR switch");
-    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "warmup").await;
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
@@ -834,21 +837,21 @@ async fn live_stress_real_stream_seek_read_cache(
     );
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = capped_seek_secs((duration_secs - 2.0).max(20.0), WASM_MAX_SEEK_SECS);
+    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
-    let mut seek_positions = Vec::with_capacity(RANDOM_SEEK_OPS_MAX);
-    for _ in 0..RANDOM_SEEK_OPS_MAX {
+    let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
+    for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
         seek_positions.push(rng.range_f64(1.0, max_seek_secs));
     }
 
     info!(
-        operations_max = RANDOM_SEEK_OPS_MAX,
-        phase_budget_secs = RANDOM_PHASE_BUDGET_SECS,
-        chunks_per_seek = CHUNKS_PER_RANDOM_SEEK,
+        operations_max = Consts::RANDOM_SEEK_OPS_MAX,
+        phase_budget_secs = Consts::RANDOM_PHASE_BUDGET_SECS,
+        chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
     let random_deadline =
-        Instant::now() + browser_timeout(RANDOM_PHASE_BUDGET_SECS, WASM_RANDOM_PHASE_BUDGET_SECS);
+        Instant::now() + Consts::browser_timeout(Consts::RANDOM_PHASE_BUDGET_SECS, Consts::WASM_RANDOM_PHASE_BUDGET_SECS);
     let mut random_ops_done = 0usize;
     let mut chunks_read = 0usize;
     let mut variant_match_checks = 0usize;
@@ -864,10 +867,10 @@ async fn live_stress_real_stream_seek_read_cache(
         random_ops_done = random_ops_done.saturating_add(1);
 
         let expected_variant = current_variant(&stats);
-        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("random_seek_{idx}_chunk_{read_idx}");
             let Some(chunk) =
-                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
+                next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage).await
             else {
                 break;
             };
@@ -884,13 +887,13 @@ async fn live_stress_real_stream_seek_read_cache(
         }
     }
     assert!(
-        random_ops_done >= browser_usize(MIN_RANDOM_SEEKS, WASM_MIN_RANDOM_SEEKS),
+        random_ops_done >= Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
         "stress seek underflow: expected at least {} seek ops, got {}",
-        browser_usize(MIN_RANDOM_SEEKS, WASM_MIN_RANDOM_SEEKS),
+        Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
         random_ops_done
     );
     let min_chunks_by_ops = random_ops_done
-        .saturating_mul(CHUNKS_PER_RANDOM_SEEK)
+        .saturating_mul(Consts::CHUNKS_PER_RANDOM_SEEK)
         .saturating_mul(85)
         / 100;
     assert!(
@@ -902,7 +905,7 @@ async fn live_stress_real_stream_seek_read_cache(
         random_ops_done
     );
 
-    let fast_seek_burst = browser_usize(FAST_SEEK_BURST, WASM_FAST_SEEK_BURST);
+    let fast_seek_burst = Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
     info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
     for _ in 0..fast_seek_burst {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
@@ -920,20 +923,20 @@ async fn live_stress_real_stream_seek_read_cache(
     audio.preload();
 
     info!(
-        sequential_chunks = browser_usize(
-            SEQUENTIAL_CHUNKS_AFTER_BURST,
-            WASM_SEQUENTIAL_CHUNKS_AFTER_BURST
+        sequential_chunks = Consts::browser_usize(
+            Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+            Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST
         ),
         "Phase 4: sequential read after fast seeks"
     );
     let mut seq_epoch = None;
     let mut seq_end_frame = None;
-    for idx in 0..browser_usize(
-        SEQUENTIAL_CHUNKS_AFTER_BURST,
-        WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
+    for idx in 0..Consts::browser_usize(
+        Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+        Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
     ) {
         let stage = format!("sequential_after_burst_{idx}");
-        let chunk = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+        let chunk = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
             .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
         if let Some(epoch) = seq_epoch {
@@ -956,7 +959,7 @@ async fn live_stress_real_stream_seek_read_cache(
     }
 
     let before_revisit = snapshot(&stats);
-    let revisit_limit = browser_usize(REVISIT_SEEKS, WASM_REVISIT_SEEKS).min(random_ops_done);
+    let revisit_limit = Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS).min(random_ops_done);
     info!(seeks = revisit_limit, "Phase 5: revisit same positions");
     assert!(
         revisit_limit > 0,
@@ -968,7 +971,7 @@ async fn live_stress_real_stream_seek_read_cache(
             .expect("revisit seek must not fail");
         audio.preload();
         let stage = format!("revisit_{idx}");
-        let _ = next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await;
+        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage).await;
     }
     let after_revisit = snapshot(&stats);
 
@@ -1030,7 +1033,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(30, 120)),
+    timeout(Consts::browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1065,7 +1068,7 @@ async fn live_ephemeral_small_cache_playback(
 
     while Instant::now() < deadline {
         let Some(_chunk) =
-            next_chunk_with_timeout(&mut audio, next_chunk_timeout(), "ephemeral_small_cache")
+            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "ephemeral_small_cache")
                 .await
         else {
             break;
@@ -1092,7 +1095,7 @@ async fn live_ephemeral_small_cache_playback(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(30, 120)),
+    timeout(Consts::browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1133,9 +1136,9 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     // Warmup: read a few chunks so the stream is initialized
     info!(%path, label, "Warmup: reading initial chunks");
-    for i in 0..browser_usize(SMALL_CACHE_WARMUP_CHUNKS, WASM_SMALL_CACHE_WARMUP_CHUNKS) {
+    for i in 0..Consts::browser_usize(Consts::SMALL_CACHE_WARMUP_CHUNKS, Consts::WASM_SMALL_CACHE_WARMUP_CHUNKS) {
         let stage = format!("warmup_{i}");
-        if next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage)
+        if next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
             .is_none()
         {
@@ -1145,15 +1148,15 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
     let max_seek_secs =
-        capped_seek_secs((duration_secs - 2.0).max(10.0), SMALL_CACHE_MAX_SEEK_SECS);
+        Consts::capped_seek_secs((duration_secs - 2.0).max(10.0), Consts::SMALL_CACHE_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
     let mut total_chunks = 0usize;
     let mut seeks_done = 0usize;
 
-    let small_cache_seeks = browser_usize(SMALL_CACHE_SEEKS, WASM_SMALL_CACHE_SEEKS);
-    let chunks_per_seek = browser_usize(
-        SMALL_CACHE_CHUNKS_PER_SEEK,
-        WASM_SMALL_CACHE_CHUNKS_PER_SEEK,
+    let small_cache_seeks = Consts::browser_usize(Consts::SMALL_CACHE_SEEKS, Consts::WASM_SMALL_CACHE_SEEKS);
+    let chunks_per_seek = Consts::browser_usize(
+        Consts::SMALL_CACHE_CHUNKS_PER_SEEK,
+        Consts::WASM_SMALL_CACHE_CHUNKS_PER_SEEK,
     );
     info!(
         small_cache_seeks,
@@ -1172,7 +1175,7 @@ async fn live_ephemeral_small_cache_seek_stress(
         for chunk_idx in 0..chunks_per_seek {
             let stage = format!("seek_{seek_idx}_chunk_{chunk_idx}");
             let Some(_chunk) =
-                next_chunk_with_timeout(&mut audio, next_chunk_timeout(), &stage).await
+                next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage).await
             else {
                 break;
             };

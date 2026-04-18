@@ -1577,10 +1577,13 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
 
 // Encoded ABR switch test — verify no samples lost during decoder recreation
 
-const SAMPLES_PER_SEGMENT: usize = 1200;
-const SEGMENTS_PER_VARIANT: usize = 32;
-const V0_SAMPLE_SIZE: usize = 4;
-const V1_SAMPLE_SIZE: usize = 16;
+struct Consts;
+impl Consts {
+    const SAMPLES_PER_SEGMENT: usize = 1200;
+    const SEGMENTS_PER_VARIANT: usize = 32;
+    const V0_SAMPLE_SIZE: usize = 4;
+    const V1_SAMPLE_SIZE: usize = 16;
+}
 
 // -- Byte-level encoding (what Source delivers) --
 
@@ -1616,17 +1619,17 @@ fn decode_v1_sample(bytes: &[u8; 16]) -> (u32, u32, u64) {
 fn generate_encoded_stream(segments: &[(u32, u32, u64, usize)]) -> Vec<u8> {
     let mut data = Vec::new();
     for &(variant, segment, start_gsi, sample_size) in segments {
-        for i in 0..SAMPLES_PER_SEGMENT {
+        for i in 0..Consts::SAMPLES_PER_SEGMENT {
             let gsi = start_gsi + i as u64;
             match sample_size {
-                V0_SAMPLE_SIZE => {
+                Consts::V0_SAMPLE_SIZE => {
                     data.extend_from_slice(&encode_v0_sample(
                         variant as u8,
                         segment as u8,
                         gsi as u16,
                     ));
                 }
-                V1_SAMPLE_SIZE => {
+                Consts::V1_SAMPLE_SIZE => {
                     data.extend_from_slice(&encode_v1_sample(variant, segment, gsi));
                 }
                 _ => panic!("unsupported sample_size {sample_size}"),
@@ -1720,11 +1723,11 @@ impl InnerDecoder for EncodedDecoder {
             }
 
             let (variant, segment, gsi) = match self.sample_size {
-                V0_SAMPLE_SIZE => {
+                Consts::V0_SAMPLE_SIZE => {
                     let bytes: [u8; 4] = sample_buf[..4].try_into().unwrap();
                     decode_v0_sample(bytes)
                 }
-                V1_SAMPLE_SIZE => {
+                Consts::V1_SAMPLE_SIZE => {
                     let bytes: [u8; 16] = sample_buf[..16].try_into().unwrap();
                     decode_v1_sample(&bytes)
                 }
@@ -1752,8 +1755,8 @@ impl InnerDecoder for EncodedDecoder {
             self.expected_variant = Some(variant);
 
             // Encode as f32: variant_segment encodes both variant and segment
-            let local_segment = segment - variant * SEGMENTS_PER_VARIANT as u32;
-            let variant_segment = (variant * SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
+            let local_segment = segment - variant * Consts::SEGMENTS_PER_VARIANT as u32;
+            let variant_segment = (variant * Consts::SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
             pcm.push(encode_pcm_sample(variant_segment, gsi as u32));
         }
 
@@ -1943,29 +1946,29 @@ fn v1_info() -> MediaInfo {
 /// Catches: wrong `base_offset`, forgotten seek, cross-variant data, sample gaps.
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn abr_switch_must_not_lose_samples() {
-    let segments_per_variant = SEGMENTS_PER_VARIANT;
-    let samples_per_segment = SAMPLES_PER_SEGMENT;
+    let segments_per_variant = Consts::SEGMENTS_PER_VARIANT;
+    let samples_per_segment = Consts::SAMPLES_PER_SEGMENT;
 
     // Build segment descriptors: V0 (segments 0..n), V1 (segments n..2n)
     let mut segments = Vec::new();
     for seg in 0..segments_per_variant {
         let gsi = (seg * samples_per_segment) as u64;
-        segments.push((0, seg as u32, gsi, V0_SAMPLE_SIZE));
+        segments.push((0, seg as u32, gsi, Consts::V0_SAMPLE_SIZE));
     }
     for seg in 0..segments_per_variant {
         let global_seg = segments_per_variant + seg;
         let gsi = (global_seg * samples_per_segment) as u64;
-        segments.push((1, global_seg as u32, gsi, V1_SAMPLE_SIZE));
+        segments.push((1, global_seg as u32, gsi, Consts::V1_SAMPLE_SIZE));
     }
 
     let data = generate_encoded_stream(&segments);
-    let v0_bytes = segments_per_variant * samples_per_segment * V0_SAMPLE_SIZE; // 153600
-    let v1_bytes = segments_per_variant * samples_per_segment * V1_SAMPLE_SIZE; // 614400
+    let v0_bytes = segments_per_variant * samples_per_segment * Consts::V0_SAMPLE_SIZE; // 153600
+    let v1_bytes = segments_per_variant * samples_per_segment * Consts::V1_SAMPLE_SIZE; // 614400
     let total_bytes = v0_bytes + v1_bytes; // 768000
     assert_eq!(data.len(), total_bytes);
 
     // First V1 segment byte range (for format_change_range)
-    let v1_first_seg_end = v0_bytes + samples_per_segment * V1_SAMPLE_SIZE;
+    let v1_first_seg_end = v0_bytes + samples_per_segment * Consts::V1_SAMPLE_SIZE;
 
     // Setup TestSource with variant map
     let source = TestSource::new(data, Some(total_bytes as u64));
@@ -1996,13 +1999,13 @@ fn abr_switch_must_not_lose_samples() {
         Box::new(EncodedDecoder::new(
             reader,
             v0_mono_spec,
-            V0_SAMPLE_SIZE,
+            Consts::V0_SAMPLE_SIZE,
             50,
         ))
     };
 
     // Factory: V1 (16 bytes/sample)
-    let factory = make_encoded_factory(v1_spec(), V1_SAMPLE_SIZE);
+    let factory = make_encoded_factory(v1_spec(), Consts::V1_SAMPLE_SIZE);
 
     let epoch = Arc::new(AtomicU64::new(0));
     let mut src = new_stream_audio_source(

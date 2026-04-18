@@ -27,4 +27,8 @@ impl SawWav {
         #[cfg(target_arch = "wasm32")]
         segment_size: 32_000,
     };
+
+    pub(crate) fn default() -> Self {
+        Self::DEFAULT
+    }
 }

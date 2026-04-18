@@ -25,20 +25,27 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-const D: SawWav = SawWav::DEFAULT;
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_COUNT: usize = 10;
-#[cfg(target_arch = "wasm32")]
-const SEGMENT_COUNT: usize = 4;
-#[cfg(target_arch = "wasm32")]
-const MAX_ZERO_READS: usize = 200;
+struct Consts;
+impl Consts {
+    const D: SawWav = SawWav::DEFAULT;
+    #[cfg(not(target_arch = "wasm32"))]
+    const SEGMENT_COUNT: usize = 10;
+    #[cfg(target_arch = "wasm32")]
+    const SEGMENT_COUNT: usize = 4;
+    #[cfg(target_arch = "wasm32")]
+    const MAX_ZERO_READS: usize = 200;
+}
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
+    let total_bytes = Consts::SEGMENT_COUNT * Consts::D.segment_size;
+    let bytes_per_frame = Consts::D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, D.sample_rate, D.channels))
+    Arc::new(create_test_wav(
+        sample_count,
+        Consts::D.sample_rate,
+        Consts::D.channels,
+    ))
 }
 
 /// Outcome of one instance.
@@ -73,7 +80,7 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut total = 0u64;
     let mut zero_reads = 0usize;
 
-    while zero_reads < MAX_ZERO_READS {
+    while zero_reads < Consts::MAX_ZERO_READS {
         let n = audio.read(&mut buf);
         if n == 0 {
             if audio.is_eof() {
@@ -94,10 +101,10 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 /// Create a healthy HLS server (no delays).
 async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
     let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(Arc::clone(wav_data)),
         ..Default::default()

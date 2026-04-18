@@ -3,13 +3,6 @@
 //! Provides deterministic local fixtures for decode tests (no external network).
 //! Includes tiny MP3/AAC test assets embedded in the test binary.
 
-/// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
-/// This is a minimal valid WAV file for testing.
-const TINY_WAV_BYTES: &[u8] = include_bytes!("../../assets/silence_1s.wav");
-
-/// A test MP3 file (short audio clip)
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../../assets/test.mp3");
-
 /// Embedded audio data for tests that don't need HTTP
 pub struct EmbeddedAudio {
     /// WAV data (0.1 seconds of silence)
@@ -19,11 +12,18 @@ pub struct EmbeddedAudio {
 }
 
 impl EmbeddedAudio {
+    /// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
+    /// This is a minimal valid WAV file for testing.
+    const TINY_WAV_BYTES: &'static [u8] = include_bytes!("../../assets/silence_1s.wav");
+
+    /// A test MP3 file (short audio clip)
+    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
+
     /// Get the embedded audio data
     pub fn get() -> Self {
         Self {
-            wav: TINY_WAV_BYTES,
-            mp3: TEST_MP3_BYTES,
+            wav: Self::TINY_WAV_BYTES,
+            mp3: Self::TEST_MP3_BYTES,
         }
     }
 
