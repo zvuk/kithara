@@ -17,11 +17,6 @@ use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestServerHelper, TestTempDir};
 use tracing::info;
 
-#[cfg(target_arch = "wasm32")]
-const MAX_ZERO_READS: usize = 200;
-#[cfg(target_arch = "wasm32")]
-const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
-
 /// Read all PCM data from an `Audio` instance to EOF.
 ///
 /// Returns the total number of samples read.
@@ -45,6 +40,9 @@ fn read_to_eof(audio: &mut Audio<Stream<File>>) -> u64 {
 
 #[cfg(target_arch = "wasm32")]
 fn read_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
+    const MAX_ZERO_READS: usize = 200;
+    const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
+
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     let mut zero_reads = 0usize;

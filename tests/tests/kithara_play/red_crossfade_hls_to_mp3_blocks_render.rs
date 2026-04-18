@@ -47,9 +47,12 @@ use tracing::info;
 
 use crate::continuity::render_offline_window;
 
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
-const BLOCK: usize = 512;
-const SR: u32 = 44_100;
+struct Consts;
+impl Consts {
+    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+    const BLOCK: usize = 512;
+    const SR: u32 = 44_100;
+}
 
 #[kithara::test(
     tokio,
@@ -89,7 +92,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     let hls_url = hls_server.url("/master.m3u8");
 
     let worker = AudioWorkerHandle::new();
-    let mut player = OfflinePlayer::new(SR);
+    let mut player = OfflinePlayer::new(Consts::SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
@@ -121,7 +124,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
                 .await
                 .expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
-            timeout(READ_TIMEOUT, r.preload())
+            timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload");
             r
@@ -140,7 +143,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls, &format!("red_hls_{iter}"));
         let _hls_warmup =
-            render_offline_window(&mut player, 40, &format!("HLS warmup #{iter}"), BLOCK, SR);
+            render_offline_window(&mut player, 40, &format!("HLS warmup #{iter}"), Consts::BLOCK, Consts::SR);
 
         // Crossfade HLS→MP3. This is where the render thread can block.
         let mp3 = make_mp3(worker.clone()).await;
@@ -148,7 +151,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let before_fade = Instant::now();
         player.load_and_fadein(mp3, &format!("red_mp3_{iter}"));
         let fade_stats =
-            render_offline_window(&mut player, 60, &format!("HLS→MP3 red #{iter}"), BLOCK, SR);
+            render_offline_window(&mut player, 60, &format!("HLS→MP3 red #{iter}"), Consts::BLOCK, Consts::SR);
         info!(
             "iter {iter}: {fade_stats}, wall={:?}",
             before_fade.elapsed()

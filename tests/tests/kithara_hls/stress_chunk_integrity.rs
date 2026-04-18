@@ -32,8 +32,6 @@ use kithara_test_utils::{
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use tracing::{info, warn};
-
 struct Consts;
 impl Consts {
     const D: SawWav = SawWav::DEFAULT;
@@ -48,6 +46,7 @@ impl Consts {
 }
 
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
+
 
     let channels = chunk.meta.spec.channels as usize;
     detect_direction(&chunk.pcm, channels)

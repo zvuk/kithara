@@ -71,9 +71,12 @@ use kithara_platform::{
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
-const STREAM_ITERATIONS: usize = 4;
-const SEEKS_PER_STREAM: usize = 8;
-const PACKAGED_SEGMENT_SIZE: u64 = 200_000;
+struct Consts;
+impl Consts {
+    const STREAM_ITERATIONS: usize = 4;
+    const SEEKS_PER_STREAM: usize = 8;
+    const PACKAGED_SEGMENT_SIZE: u64 = 200_000;
+}
 
 async fn build_small_cache_stream(
     server: &TestServer,
@@ -100,11 +103,11 @@ fn exercise_stream_blocking(mut stream: Stream<Hls>) {
     let mut buf = vec![0u8; 4096];
     let _ = stream.read(&mut buf[..64]);
 
-    for i in 0..SEEKS_PER_STREAM {
+    for i in 0..Consts::SEEKS_PER_STREAM {
         // Pseudo-random positions across 3 segments (each 200_000 bytes).
         let seg = (i * 7) % 3;
-        let within = ((i * 53) as u64) % PACKAGED_SEGMENT_SIZE;
-        let pos = seg as u64 * PACKAGED_SEGMENT_SIZE + within;
+        let within = ((i * 53) as u64) % Consts::PACKAGED_SEGMENT_SIZE;
+        let pos = seg as u64 * Consts::PACKAGED_SEGMENT_SIZE + within;
         if stream.seek(SeekFrom::Start(pos)).is_err() {
             continue;
         }
@@ -139,7 +142,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
 
     let threads_baseline = live_thread_count();
 
-    for i in 0..STREAM_ITERATIONS {
+    for i in 0..Consts::STREAM_ITERATIONS {
         let cancel = CancellationToken::new();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
@@ -167,7 +170,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
          this is the same class of leak nextest reports as LEAK on \
          live_ephemeral_small_cache_seek_stress_*.",
         growth,
-        STREAM_ITERATIONS,
+        Consts::STREAM_ITERATIONS,
         threads_baseline,
         threads_after,
     );

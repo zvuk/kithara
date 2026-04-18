@@ -16,10 +16,11 @@ use kithara::{
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::{TestHttpServer, TestTempDir, temp_dir};
 
-// Test Server Fixtures
-
-const AUDIO_DATA: &[u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
-const LARGE_DATA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
+struct Consts;
+impl Consts {
+    const AUDIO_DATA: &'static [u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
+    const LARGE_DATA: &'static [u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
+}
 
 /// Serve data with HTTP Range request support.
 #[expect(
@@ -64,11 +65,11 @@ fn serve_with_range(data: &'static [u8], req: Request) -> Response {
 }
 
 async fn test_audio_endpoint(req: Request) -> Response {
-    serve_with_range(AUDIO_DATA, req)
+    serve_with_range(Consts::AUDIO_DATA, req)
 }
 
 async fn test_large_endpoint(req: Request) -> Response {
-    serve_with_range(LARGE_DATA, req)
+    serve_with_range(Consts::LARGE_DATA, req)
 }
 
 fn test_app() -> Router {

@@ -22,15 +22,18 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-const D: SawWav = SawWav::DEFAULT;
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
-#[cfg(target_arch = "wasm32")]
-const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
-#[cfg(target_arch = "wasm32")]
-const MAX_ZERO_READS: usize = 200;
-#[cfg(target_arch = "wasm32")]
-const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
+struct Consts;
+impl Consts {
+    const D: SawWav = SawWav::DEFAULT;
+    #[cfg(not(target_arch = "wasm32"))]
+    const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
+    #[cfg(target_arch = "wasm32")]
+    const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
+    #[cfg(target_arch = "wasm32")]
+    const MAX_ZERO_READS: usize = 200;
+    #[cfg(target_arch = "wasm32")]
+    const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
+}
 
 /// Read all PCM data from an `Audio<Stream<Hls>>` instance to EOF.
 ///
@@ -58,7 +61,7 @@ fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut total = 0u64;
     let mut zero_reads = 0usize;
 
-    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
+    while total < Consts::MIN_SAMPLES_PER_INSTANCE && zero_reads < Consts::MAX_ZERO_READS {
         let n = audio.read(&mut buf);
         if n == 0 {
             if audio.is_eof() {
@@ -77,8 +80,8 @@ fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
     }
 
     assert!(
-        total >= MIN_SAMPLES_PER_INSTANCE,
-        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
+        total >= Consts::MIN_SAMPLES_PER_INSTANCE,
+        "expected at least {Consts::MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
     );
     total
 }
@@ -91,11 +94,11 @@ fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
 /// Create an HLS server with WAV segments.
 async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
     let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(wav_data),
         ..Default::default()
@@ -106,12 +109,12 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
 /// Create an HLS server with 2 ABR variants of different bandwidth.
 async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
     let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(wav_data),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
@@ -166,11 +169,11 @@ async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio
 
 /// Generate WAV data for the test (total size = segments * `segment_size`).
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = SEGMENT_COUNT * D.segment_size;
-    let bytes_per_frame = D.channels as usize * 2;
+    let total_bytes = Consts::SEGMENT_COUNT * Consts::D.segment_size;
+    let bytes_per_frame = Consts::D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, D.sample_rate, D.channels))
+    Arc::new(create_test_wav(sample_count, Consts::D.sample_rate, Consts::D.channels))
 }
 
 // Tests

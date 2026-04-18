@@ -56,18 +56,21 @@ use kithara_platform::time::{Instant, sleep};
 use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tracing::info;
 
-const PLAYBACK_BUDGET_SECS: u64 = 12;
-const WARMUP_CHUNKS: usize = 4;
-const NEXT_CHUNK_TIMEOUT: Duration = Duration::from_millis(3_000);
-// Slow the reader so downloads race ahead and LRU evicts the reader's
-// live segment. Each chunk ≈ 20 ms of audio; a 30 ms sleep per chunk
-// means the downloader finishes well before the reader exits seg 0.
-const READER_SLEEP_MS: u64 = 30;
-// Expected lower bound. With 12s budget and 30ms/chunk rate-limit, a
-// healthy pipeline yields ~400 chunks. The hot-refetch loop collapses
-// this to near-zero because every completed fetch evicts the reader's
-// live window before it can be read.
-const MIN_PROGRESS_CHUNKS: usize = 100;
+struct Consts;
+impl Consts {
+    const PLAYBACK_BUDGET_SECS: u64 = 12;
+    const WARMUP_CHUNKS: usize = 4;
+    const NEXT_CHUNK_TIMEOUT: Duration = Duration::from_millis(3_000);
+    // Slow the reader so downloads race ahead and LRU evicts the reader's
+    // live segment. Each chunk ≈ 20 ms of audio; a 30 ms sleep per chunk
+    // means the downloader finishes well before the reader exits seg 0.
+    const READER_SLEEP_MS: u64 = 30;
+    // Expected lower bound. With 12s budget and 30ms/chunk rate-limit, a
+    // healthy pipeline yields ~400 chunks. The hot-refetch loop collapses
+    // this to near-zero because every completed fetch evicts the reader's
+    // live window before it can be read.
+    const MIN_PROGRESS_CHUNKS: usize = 100;
+}
 
 #[kithara::test(
     tokio,
@@ -99,14 +102,14 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     audio.preload();
 
     // Warmup: read a few chunks so byte_position advances past seg 0.
-    info!("warmup: reading {WARMUP_CHUNKS} chunks");
+    info!("warmup: reading {Consts::WARMUP_CHUNKS} chunks");
     let mut chunks_read = 0usize;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
-    while chunks_read < WARMUP_CHUNKS {
+    while chunks_read < Consts::WARMUP_CHUNKS {
         if Instant::now() > warmup_deadline {
             panic!(
                 "RED: warmup stalled before reader could advance past seg 0 — \
-                 only {chunks_read}/{WARMUP_CHUNKS} chunks drained in 10 s. \
+                 only {chunks_read}/{Consts::WARMUP_CHUNKS} chunks drained in 10 s. \
                  This matches the hot-refetch loop: the LRU evicts seg 0 \
                  before the reader reaches byte 0 of it, and the scheduler \
                  keeps re-fetching seg 0 forever."
@@ -123,22 +126,22 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     }
     info!(chunks_read, "warmup done");
 
-    // Drain for PLAYBACK_BUDGET_SECS. With the hot-refetch bug, the reader
+    // Drain for Consts::PLAYBACK_BUDGET_SECS. With the hot-refetch bug, the reader
     // stalls or crawls as soon as its current segment is evicted by a
     // parallel re-fetch of a behind-reader segment.
-    let deadline = Instant::now() + Duration::from_secs(PLAYBACK_BUDGET_SECS);
+    let deadline = Instant::now() + Duration::from_secs(Consts::PLAYBACK_BUDGET_SECS);
     let mut drained = 0usize;
     let mut stall_at: Option<Duration> = None;
     let started = Instant::now();
     while Instant::now() < deadline {
-        let chunk_deadline = Instant::now() + NEXT_CHUNK_TIMEOUT;
+        let chunk_deadline = Instant::now() + Consts::NEXT_CHUNK_TIMEOUT;
         let mut got_chunk = false;
         while Instant::now() < chunk_deadline {
             if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
                 drained += 1;
                 got_chunk = true;
                 // Rate-limit the reader.
-                sleep(Duration::from_millis(READER_SLEEP_MS)).await;
+                sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
                 break;
             }
             if audio.is_eof() {
@@ -169,9 +172,9 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     }
 
     assert!(
-        drained >= MIN_PROGRESS_CHUNKS,
-        "RED: reader crawled through only {drained} chunks in {PLAYBACK_BUDGET_SECS}s \
-         (expected >= {MIN_PROGRESS_CHUNKS}). With cache_capacity=1 on an ephemeral \
+        drained >= Consts::MIN_PROGRESS_CHUNKS,
+        "RED: reader crawled through only {drained} chunks in {Consts::PLAYBACK_BUDGET_SECS}s \
+         (expected >= {Consts::MIN_PROGRESS_CHUNKS}). With cache_capacity=1 on an ephemeral \
          store the scheduler re-fetches every segment multiple times, and each \
          re-fetch evicts the reader's live window before it can be decoded. \
          The production flake `live_ephemeral_small_cache_playback_hls` hits \

@@ -24,22 +24,23 @@ use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
-// Constants
+struct Consts;
+impl Consts {
+    /// Actual segment body size returned by GET.
+    const ACTUAL_SEGMENT_SIZE: usize = 200_000;
 
-/// Actual segment body size returned by GET.
-const ACTUAL_SEGMENT_SIZE: usize = 200_000;
+    /// Content-Length reported by HEAD (smaller, simulating compressed size).
+    /// ~800 bytes less per segment — matches real-world gzip/brotli overhead.
+    const HEAD_REPORTED_SIZE: usize = 199_200;
 
-/// Content-Length reported by HEAD (smaller, simulating compressed size).
-/// ~800 bytes less per segment — matches real-world gzip/brotli overhead.
-const HEAD_REPORTED_SIZE: usize = 199_200;
+    const NUM_SEGMENTS: usize = 3;
 
-const NUM_SEGMENTS: usize = 3;
+    /// HEAD-based total across all segments (no init segments in this test).
+    const HEAD_TOTAL: u64 = (Self::HEAD_REPORTED_SIZE * Self::NUM_SEGMENTS) as u64; // 597_600
 
-/// HEAD-based total across all segments (no init segments in this test).
-const HEAD_TOTAL: u64 = (HEAD_REPORTED_SIZE * NUM_SEGMENTS) as u64; // 597_600
-
-/// Actual total bytes that will be downloaded and cached.
-const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_000
+    /// Actual total bytes that will be downloaded and cached.
+    const ACTUAL_TOTAL: u64 = (Self::ACTUAL_SEGMENT_SIZE * Self::NUM_SEGMENTS) as u64; // 600_000
+}
 
 // Tests
 
@@ -62,9 +63,9 @@ async fn seek_beyond_head_total_within_actual_total(
 ) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: NUM_SEGMENTS,
-        segment_size: ACTUAL_SEGMENT_SIZE,
-        head_reported_segment_size: Some(HEAD_REPORTED_SIZE),
+        segments_per_variant: Consts::NUM_SEGMENTS,
+        segment_size: Consts::ACTUAL_SEGMENT_SIZE,
+        head_reported_segment_size: Some(Consts::HEAD_REPORTED_SIZE),
         ..Default::default()
     })
     .await;
@@ -95,24 +96,24 @@ async fn seek_beyond_head_total_within_actual_total(
 
         // Verify we got more data than HEAD reported.
         assert!(
-            all_data.len() as u64 > HEAD_TOTAL,
+            all_data.len() as u64 > Consts::HEAD_TOTAL,
             "Read {} bytes, expected more than HEAD total {}",
             all_data.len(),
-            HEAD_TOTAL,
+            Consts::HEAD_TOTAL,
         );
 
         // Step 2: Seek to a position between HEAD total and actual total.
         // This position is valid (data exists) but would be rejected
         // if expected_total_length only reflects HEAD Content-Lengths.
-        let seek_target = HEAD_TOTAL + 1; // 597_601
+        let seek_target = Consts::HEAD_TOTAL + 1; // 597_601
         let result = stream.seek(SeekFrom::Start(seek_target));
 
         assert!(
             result.is_ok(),
             "Seek to {} should succeed (HEAD total={}, actual total={}): {:?}",
             seek_target,
-            HEAD_TOTAL,
-            ACTUAL_TOTAL,
+            Consts::HEAD_TOTAL,
+            Consts::ACTUAL_TOTAL,
             result.err(),
         );
 
