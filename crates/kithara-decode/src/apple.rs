@@ -36,6 +36,42 @@ use kithara_bufpool::PcmPool;
 use kithara_stream::ContainerFormat;
 use tracing::{debug, trace, warn};
 
+struct Consts;
+impl Consts {
+    const noErr: OSStatus = 0;
+    const kAudioFileStreamError_NotOptimized: OSStatus = 0x6f707469;
+    const kAudioConverterErr_NoDataNow: OSStatus = 0x21646174;
+    const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d;
+    const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320;
+    const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d7033;
+    const kAudioFormatFLAC: AudioFormatID = 0x666c6163;
+    const kAudioFormatAppleLossless: AudioFormatID = 0x616c6163;
+    const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
+    const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
+    const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
+    kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    const kAudioFileAAC_ADTSType: AudioFileTypeID = 0x61647473;
+    const kAudioFileM4AType: AudioFileTypeID = 0x6d346166;
+    const kAudioFileMP3Type: AudioFileTypeID = 0x4d504733;
+    const kAudioFileFLACType: AudioFileTypeID = 0x666c6163;
+    const kAudioFileCAFType: AudioFileTypeID = 0x63616666;
+    const kAudioFileStreamProperty_ReadyToProducePackets: AudioFileStreamPropertyID = 0x72656479;
+    const kAudioFileStreamProperty_DataFormat: AudioFileStreamPropertyID = 0x64666d74;
+    const kAudioFileStreamProperty_MagicCookieData: AudioFileStreamPropertyID = 0x6d676963;
+    const kAudioFileStreamProperty_DataOffset: AudioFileStreamPropertyID = 0x646f6666;
+    const kAudioFileStreamProperty_AudioDataPacketCount: AudioFileStreamPropertyID = 0x70636e74;
+    const kAudioFileStreamParseFlag_Discontinuity: UInt32 = 1;
+    const BYTES_PER_F32_SAMPLE: u32 = 4;
+    const BITS_PER_F32_SAMPLE: u32 = 32;
+    const PARSE_READ_BUFFER_SIZE: usize = 32768;
+    const MAX_PARSE_BYTES: usize = 1024 * 1024;
+    const DEFAULT_BUFFER_FRAMES: usize = 1024;
+    const MIN_PACKETS_FOR_DECODE: usize = 4;
+    const DEFAULT_SEEK_DURATION_SECS: f64 = 300.0;
+    const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763;
+    const kAudioConverterPrimeInfo: u32 = 0x7072696d;
+}
+
 use crate::{
     error::{DecodeError, DecodeResult},
     hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
@@ -54,59 +90,58 @@ type UInt32 = u32;
 type SInt64 = i64;
 type Float64 = f64;
 
-const noErr: OSStatus = 0;
-const kAudioFileStreamError_NotOptimized: OSStatus = 0x6f707469; // 'opti'
-const kAudioConverterErr_NoDataNow: OSStatus = 0x21646174; // '!dat' (2003329140 in decimal, but signed)
+
+ // 'opti'
+ // '!dat' (2003329140 in decimal, but signed)
 
 // Audio Format IDs
-const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d; // 'lpcm'
-const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320; // 'aac '
-const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d7033; // '.mp3'
-const kAudioFormatFLAC: AudioFormatID = 0x666c6163; // 'flac'
-const kAudioFormatAppleLossless: AudioFormatID = 0x616c6163; // 'alac'
+ // 'lpcm'
+ // 'aac '
+ // '.mp3'
+ // 'flac'
+ // 'alac'
 
 // Audio Format Flags
-const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
-const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
-const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
-    kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+
+
+
 
 // File Type IDs
-const kAudioFileAAC_ADTSType: AudioFileTypeID = 0x61647473; // 'adts'
-const kAudioFileM4AType: AudioFileTypeID = 0x6d346166; // 'm4af'
-const kAudioFileMP3Type: AudioFileTypeID = 0x4d504733; // 'MPG3'
-const kAudioFileFLACType: AudioFileTypeID = 0x666c6163; // 'flac'
-const kAudioFileCAFType: AudioFileTypeID = 0x63616666; // 'caff'
+ // 'adts'
+ // 'm4af'
+ // 'MPG3'
+ // 'flac'
+ // 'caff'
 
 // AudioFileStream Property IDs
-const kAudioFileStreamProperty_ReadyToProducePackets: AudioFileStreamPropertyID = 0x72656479; // 'redy'
-const kAudioFileStreamProperty_DataFormat: AudioFileStreamPropertyID = 0x64666d74; // 'dfmt'
-const kAudioFileStreamProperty_MagicCookieData: AudioFileStreamPropertyID = 0x6d676963; // 'mgic'
-const kAudioFileStreamProperty_DataOffset: AudioFileStreamPropertyID = 0x646f6666; // 'doff'
-const kAudioFileStreamProperty_AudioDataPacketCount: AudioFileStreamPropertyID = 0x70636e74; // 'pcnt'
+ // 'redy'
+ // 'dfmt'
+ // 'mgic'
+ // 'doff'
+ // 'pcnt'
 
 // AudioFileStream Parse Flags
-const kAudioFileStreamParseFlag_Discontinuity: UInt32 = 1;
+
 
 // PCM output format constants
 
 /// Bytes per f32 sample.
-const BYTES_PER_F32_SAMPLE: u32 = 4;
+
 /// Bits per f32 sample.
-const BITS_PER_F32_SAMPLE: u32 = 32;
+
 
 /// Initial read buffer size for parsing (32 KB).
-const PARSE_READ_BUFFER_SIZE: usize = 32768;
+
 /// Maximum bytes to parse before giving up on format detection (1 MB).
-const MAX_PARSE_BYTES: usize = 1024 * 1024;
+
 
 /// Default PCM buffer size in frames.
-const DEFAULT_BUFFER_FRAMES: usize = 1024;
+
 /// Minimum packet count before attempting decode.
-const MIN_PACKETS_FOR_DECODE: usize = 4;
+
 
 /// Default seek duration assumption (5 minutes) when total duration is unknown.
-const DEFAULT_SEEK_DURATION_SECS: f64 = 300.0;
+
 
 // AudioStreamPacketDescription
 #[repr(C)]
@@ -247,8 +282,8 @@ unsafe extern "C" {
 }
 
 // AudioConverter Property IDs
-const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
-const kAudioConverterPrimeInfo: u32 = 0x7072696d; // 'prim'
+ // 'dmgc'
+ // 'prim'
 
 /// Priming information reported by `AudioConverter`.
 ///
@@ -263,8 +298,8 @@ struct AudioConverterPrimeInfo {
 }
 
 fn os_status_to_string(status: OSStatus) -> String {
-    if status == noErr {
-        return "noErr".to_string();
+    if status == Consts::noErr {
+        return "Consts::noErr".to_string();
     }
     let bytes = status.to_be_bytes();
     if bytes.iter().all(|&b| b.is_ascii_graphic() || b == b' ') {
@@ -277,11 +312,11 @@ fn os_status_to_string(status: OSStatus) -> String {
 
 fn container_to_file_type(container: ContainerFormat) -> Option<AudioFileTypeID> {
     match container {
-        ContainerFormat::Fmp4 => Some(kAudioFileM4AType),
-        ContainerFormat::Adts => Some(kAudioFileAAC_ADTSType),
-        ContainerFormat::MpegAudio => Some(kAudioFileMP3Type),
-        ContainerFormat::Flac => Some(kAudioFileFLACType),
-        ContainerFormat::Caf => Some(kAudioFileCAFType),
+        ContainerFormat::Fmp4 => Some(Consts::kAudioFileM4AType),
+        ContainerFormat::Adts => Some(Consts::kAudioFileAAC_ADTSType),
+        ContainerFormat::MpegAudio => Some(Consts::kAudioFileMP3Type),
+        ContainerFormat::Flac => Some(Consts::kAudioFileFLACType),
+        ContainerFormat::Caf => Some(Consts::kAudioFileCAFType),
         _ => None,
     }
 }
@@ -517,7 +552,7 @@ impl AppleInner {
             )
         };
 
-        if status != noErr {
+        if status != Consts::noErr {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, "Apple decoder: AudioFileStreamOpen failed");
             return Err(recoverable_hardware_error(
@@ -532,7 +567,7 @@ impl AppleInner {
         debug!("Apple decoder: AudioFileStream opened");
 
         // Read initial data to get format info
-        let mut read_buffer = vec![0u8; PARSE_READ_BUFFER_SIZE];
+        let mut read_buffer = vec![0u8; Consts::PARSE_READ_BUFFER_SIZE];
         let mut total_parsed = 0usize;
 
         // Parse until we have format info or hit EOF
@@ -581,7 +616,7 @@ impl AppleInner {
                 )
             };
 
-            if status != noErr && status != kAudioFileStreamError_NotOptimized {
+            if status != Consts::noErr && status != Consts::kAudioFileStreamError_NotOptimized {
                 // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
                 unsafe {
                     AudioFileStreamClose(stream_parser);
@@ -625,7 +660,7 @@ impl AppleInner {
             }
 
             // Safety limit
-            if total_parsed > MAX_PARSE_BYTES {
+            if total_parsed > Consts::MAX_PARSE_BYTES {
                 // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
                 unsafe {
                     AudioFileStreamClose(stream_parser);
@@ -663,13 +698,13 @@ impl AppleInner {
         // Create output format (PCM f32 interleaved)
         let output_format = AudioStreamBasicDescription {
             mSampleRate: format.mSampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
-            mBytesPerPacket: BYTES_PER_F32_SAMPLE * u32::from(channels),
+            mFormatID: Consts::kAudioFormatLinearPCM,
+            mFormatFlags: Consts::kAudioFormatFlagsNativeFloatPacked,
+            mBytesPerPacket: Consts::BYTES_PER_F32_SAMPLE * u32::from(channels),
             mFramesPerPacket: 1,
-            mBytesPerFrame: BYTES_PER_F32_SAMPLE * u32::from(channels),
+            mBytesPerFrame: Consts::BYTES_PER_F32_SAMPLE * u32::from(channels),
             mChannelsPerFrame: u32::from(channels),
-            mBitsPerChannel: BITS_PER_F32_SAMPLE,
+            mBitsPerChannel: Consts::BITS_PER_F32_SAMPLE,
             mReserved: 0,
         };
 
@@ -678,7 +713,7 @@ impl AppleInner {
         // SAFETY: `format` and `output_format` are valid C structs on the stack; `converter` receives the new handle.
         let status = unsafe { AudioConverterNew(&format, &output_format, &mut converter) };
 
-        if status != noErr {
+        if status != Consts::noErr {
             // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
             unsafe {
                 AudioFileStreamClose(stream_parser);
@@ -707,13 +742,13 @@ impl AppleInner {
             let status = unsafe {
                 AudioConverterSetProperty(
                     converter,
-                    kAudioConverterDecompressionMagicCookie,
+                    Consts::kAudioConverterDecompressionMagicCookie,
                     cookie.len() as UInt32,
                     cookie.as_ptr() as *const c_void,
                 )
             };
 
-            if status != noErr {
+            if status != Consts::noErr {
                 warn!(
                     status,
                     err = %os_status_to_string(status),
@@ -739,12 +774,12 @@ impl AppleInner {
             let status = unsafe {
                 AudioConverterGetProperty(
                     converter,
-                    kAudioConverterPrimeInfo,
+                    Consts::kAudioConverterPrimeInfo,
                     &mut size,
                     &mut info as *mut _ as *mut c_void,
                 )
             };
-            if status == noErr {
+            if status == Consts::noErr {
                 debug!(
                     leading_frames = info.leading_frames,
                     trailing_frames = info.trailing_frames,
@@ -771,7 +806,7 @@ impl AppleInner {
             .clone()
             .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
 
-        let buffer_frames = DEFAULT_BUFFER_FRAMES;
+        let buffer_frames = Consts::DEFAULT_BUFFER_FRAMES;
         let pcm_buffer = vec![0.0f32; buffer_frames * channels as usize];
 
         let converter_input = Box::new(ConverterInputState::new());
@@ -824,7 +859,7 @@ impl AppleInner {
         self.assert_thread_affinity();
         loop {
             // Ensure we have packets to decode
-            while self.parser_state.packet_buffer.len() < MIN_PACKETS_FOR_DECODE && !self.source_eof
+            while self.parser_state.packet_buffer.len() < Consts::MIN_PACKETS_FOR_DECODE && !self.source_eof
             {
                 self.feed_parser()?;
             }
@@ -852,9 +887,9 @@ impl AppleInner {
             let frames_per_packet = self
                 .parser_state
                 .format
-                .map_or(DEFAULT_BUFFER_FRAMES, |f| f.mFramesPerPacket as usize);
+                .map_or(Consts::DEFAULT_BUFFER_FRAMES, |f| f.mFramesPerPacket as usize);
 
-            let output_frames = frames_per_packet.max(DEFAULT_BUFFER_FRAMES);
+            let output_frames = frames_per_packet.max(Consts::DEFAULT_BUFFER_FRAMES);
             if self.pcm_buffer.len() < output_frames * channels {
                 self.pcm_buffer.resize(output_frames * channels, 0.0);
             }
@@ -867,7 +902,7 @@ impl AppleInner {
                 mNumberBuffers: 1,
                 mBuffers: [AudioBuffer {
                     mNumberChannels: u32::from(self.spec.channels),
-                    mDataByteSize: (self.pcm_buffer.len() * BYTES_PER_F32_SAMPLE as usize) as u32,
+                    mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize) as u32,
                     mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
                 }],
             };
@@ -894,12 +929,12 @@ impl AppleInner {
             };
 
             // Converter needs more input packets.
-            if status == kAudioConverterErr_NoDataNow {
+            if status == Consts::kAudioConverterErr_NoDataNow {
                 trace!("Apple decoder: converter needs more data");
                 continue;
             }
 
-            if status != noErr && output_packets == 0 {
+            if status != Consts::noErr && output_packets == 0 {
                 let err_str = os_status_to_string(status);
                 warn!(
                     status,
@@ -990,7 +1025,7 @@ impl AppleInner {
             )
         };
 
-        if status != noErr && status != kAudioFileStreamError_NotOptimized {
+        if status != Consts::noErr && status != Consts::kAudioFileStreamError_NotOptimized {
             let err_str = os_status_to_string(status);
             warn!(status, err = %err_str, bytes = n, "Apple decoder: parse failed");
             return Err(DecodeError::Backend(Box::new(IoError::new(
@@ -1043,7 +1078,7 @@ impl AppleInner {
         // Reset converter
         // SAFETY: `self.converter` is a valid handle from `AudioConverterNew`.
         let status = unsafe { AudioConverterReset(self.converter) };
-        if status != noErr {
+        if status != Consts::noErr {
             warn!(
                 status,
                 err = %os_status_to_string(status),
@@ -1062,7 +1097,7 @@ impl AppleInner {
         self.source_eof = false;
 
         // Parse with discontinuity flag to signal decoder reset
-        self.feed_parser_with_flags(kAudioFileStreamParseFlag_Discontinuity)?;
+        self.feed_parser_with_flags(Consts::kAudioFileStreamParseFlag_Discontinuity)?;
 
         // Update position tracking
         self.position = pos;
@@ -1096,7 +1131,7 @@ impl AppleInner {
         let total_duration = self.estimate_total_duration();
         if total_duration.as_secs_f64() <= 0.0 {
             // Can't estimate, use linear interpolation
-            let ratio = pos.as_secs_f64() / DEFAULT_SEEK_DURATION_SECS;
+            let ratio = pos.as_secs_f64() / Consts::DEFAULT_SEEK_DURATION_SECS;
             #[expect(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
@@ -1120,7 +1155,7 @@ impl AppleInner {
         self.data_offset + offset
     }
 
-    /// Query kAudioConverterPrimeInfo from the converter.
+    /// Query Consts::kAudioConverterPrimeInfo from the converter.
     fn query_prime_info(&self) -> Option<(u32, u32)> {
         self.assert_thread_affinity();
         if self.converter.is_null() {
@@ -1136,12 +1171,12 @@ impl AppleInner {
         let status = unsafe {
             AudioConverterGetProperty(
                 self.converter,
-                kAudioConverterPrimeInfo,
+                Consts::kAudioConverterPrimeInfo,
                 &mut size,
                 &mut info as *mut _ as *mut c_void,
             )
         };
-        if status == noErr {
+        if status == Consts::noErr {
             Some((info.leading_frames, info.trailing_frames))
         } else {
             None
@@ -1295,7 +1330,7 @@ extern "C" fn property_listener_callback(
     let state = unsafe { &mut *(client_data as *mut StreamParserState) };
 
     match property_id {
-        kAudioFileStreamProperty_DataFormat => {
+        Consts::kAudioFileStreamProperty_DataFormat => {
             let mut format = AudioStreamBasicDescription::default();
             #[expect(
                 clippy::cast_possible_truncation,
@@ -1307,13 +1342,13 @@ extern "C" fn property_listener_callback(
             let status = unsafe {
                 AudioFileStreamGetProperty(
                     audio_file_stream,
-                    kAudioFileStreamProperty_DataFormat,
+                    Consts::kAudioFileStreamProperty_DataFormat,
                     &mut size,
                     &mut format as *mut _ as *mut c_void,
                 )
             };
 
-            if status == noErr {
+            if status == Consts::noErr {
                 state.format = Some(format);
                 trace!(
                     sample_rate = format.mSampleRate,
@@ -1328,7 +1363,7 @@ extern "C" fn property_listener_callback(
                 ));
             }
         }
-        kAudioFileStreamProperty_MagicCookieData => {
+        Consts::kAudioFileStreamProperty_MagicCookieData => {
             let mut size: UInt32 = 0;
             let mut writable: u8 = 0;
 
@@ -1336,31 +1371,31 @@ extern "C" fn property_listener_callback(
             let status = unsafe {
                 AudioFileStreamGetPropertyInfo(
                     audio_file_stream,
-                    kAudioFileStreamProperty_MagicCookieData,
+                    Consts::kAudioFileStreamProperty_MagicCookieData,
                     &mut size,
                     &mut writable,
                 )
             };
 
-            if status == noErr && size > 0 {
+            if status == Consts::noErr && size > 0 {
                 let mut cookie = vec![0u8; size as usize];
                 // SAFETY: `audio_file_stream` is a valid handle; `cookie` is a live buffer of `size` bytes.
                 let status = unsafe {
                     AudioFileStreamGetProperty(
                         audio_file_stream,
-                        kAudioFileStreamProperty_MagicCookieData,
+                        Consts::kAudioFileStreamProperty_MagicCookieData,
                         &mut size,
                         cookie.as_mut_ptr() as *mut c_void,
                     )
                 };
 
-                if status == noErr {
+                if status == Consts::noErr {
                     state.magic_cookie = Some(cookie);
                     trace!(size, "Apple decoder callback: magic cookie received");
                 }
             }
         }
-        kAudioFileStreamProperty_AudioDataPacketCount => {
+        Consts::kAudioFileStreamProperty_AudioDataPacketCount => {
             let mut count: SInt64 = 0;
             #[expect(
                 clippy::cast_possible_truncation,
@@ -1372,22 +1407,22 @@ extern "C" fn property_listener_callback(
             let status = unsafe {
                 AudioFileStreamGetProperty(
                     audio_file_stream,
-                    kAudioFileStreamProperty_AudioDataPacketCount,
+                    Consts::kAudioFileStreamProperty_AudioDataPacketCount,
                     &mut size,
                     &mut count as *mut _ as *mut c_void,
                 )
             };
 
-            if status == noErr && count > 0 {
+            if status == Consts::noErr && count > 0 {
                 state.audio_data_packet_count = Some(count.cast_unsigned());
                 trace!(count, "Apple decoder callback: audio data packet count");
             }
         }
-        kAudioFileStreamProperty_ReadyToProducePackets => {
+        Consts::kAudioFileStreamProperty_ReadyToProducePackets => {
             state.ready = true;
             trace!("Apple decoder callback: ready to produce packets");
         }
-        kAudioFileStreamProperty_DataOffset => {
+        Consts::kAudioFileStreamProperty_DataOffset => {
             let mut offset: SInt64 = 0;
             #[expect(
                 clippy::cast_possible_truncation,
@@ -1399,13 +1434,13 @@ extern "C" fn property_listener_callback(
             let status = unsafe {
                 AudioFileStreamGetProperty(
                     audio_file_stream,
-                    kAudioFileStreamProperty_DataOffset,
+                    Consts::kAudioFileStreamProperty_DataOffset,
                     &mut size,
                     &mut offset as *mut _ as *mut c_void,
                 )
             };
 
-            if status == noErr {
+            if status == Consts::noErr {
                 state.data_offset = offset;
                 trace!(offset, "Apple decoder callback: data offset");
             }
@@ -1495,7 +1530,7 @@ extern "C" fn converter_input_callback(
         unsafe {
             *io_num_packets = 0;
         }
-        return kAudioConverterErr_NoDataNow;
+        return Consts::kAudioConverterErr_NoDataNow;
     };
 
     // Store packet data in state to keep it alive during conversion
@@ -1533,7 +1568,7 @@ extern "C" fn converter_input_callback(
         }
     }
 
-    noErr
+    Consts::noErr
 }
 
 /// Apple `AudioToolbox` streaming decoder parameterized by codec type.
@@ -1560,7 +1595,7 @@ impl<C: CodecType> Apple<C> {
     /// and trailing padding, if available.
     ///
     /// This is the same information `AVPlayer` uses internally via
-    /// `kAudioConverterPrimeInfo`. Values come directly from the codec,
+    /// `Consts::kAudioConverterPrimeInfo`. Values come directly from the codec,
     /// not from container metadata or audio analysis.
     ///
     /// Re-queries the converter each time, since `PrimeInfo` may become
@@ -1701,11 +1736,11 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::fmp4(ContainerFormat::Fmp4, Some(kAudioFileM4AType))]
-    #[case::adts(ContainerFormat::Adts, Some(kAudioFileAAC_ADTSType))]
-    #[case::mpeg(ContainerFormat::MpegAudio, Some(kAudioFileMP3Type))]
-    #[case::flac(ContainerFormat::Flac, Some(kAudioFileFLACType))]
-    #[case::caf(ContainerFormat::Caf, Some(kAudioFileCAFType))]
+    #[case::fmp4(ContainerFormat::Fmp4, Some(Consts::kAudioFileM4AType))]
+    #[case::adts(ContainerFormat::Adts, Some(Consts::kAudioFileAAC_ADTSType))]
+    #[case::mpeg(ContainerFormat::MpegAudio, Some(Consts::kAudioFileMP3Type))]
+    #[case::flac(ContainerFormat::Flac, Some(Consts::kAudioFileFLACType))]
+    #[case::caf(ContainerFormat::Caf, Some(Consts::kAudioFileCAFType))]
     #[case::wav(ContainerFormat::Wav, None)]
     fn test_container_to_file_type(
         #[case] container: ContainerFormat,
@@ -1716,7 +1751,7 @@ mod tests {
 
     #[kithara::test]
     fn test_os_status_to_string() {
-        assert_eq!(os_status_to_string(noErr), "noErr");
+        assert_eq!(os_status_to_string(Consts::noErr), "Consts::noErr");
         // 'wht?' = 0x7768743f
         assert!(os_status_to_string(0x7768743f).contains("wht?"));
     }

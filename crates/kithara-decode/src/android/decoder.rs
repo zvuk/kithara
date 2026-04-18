@@ -36,9 +36,6 @@ use crate::{
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
-const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
-const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
-
 struct AndroidInner {
     media_source: OwnedMediaDataSource,
     extractor: OwnedExtractor,
@@ -77,6 +74,9 @@ impl<C: CodecType> fmt::Debug for Android<C> {
 }
 
 impl<C: CodecType> Android<C> {
+    const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+
     fn bootstrap(
         source: BoxedSource,
         config: AndroidConfig,
@@ -380,7 +380,7 @@ impl<C: CodecType> InnerDecoder for Android<C> {
                 .map_err(AndroidBackendError::into_decode_error)?;
 
             if let Some(chunk_opt) = self
-                .try_drain_output(OUTPUT_DEQUEUE_TIMEOUT_US)
+                .try_drain_output(Self::OUTPUT_DEQUEUE_TIMEOUT_US)
                 .map_err(AndroidBackendError::into_decode_error)?
             {
                 if let Some(chunk) = chunk_opt {
