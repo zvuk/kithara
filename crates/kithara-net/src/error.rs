@@ -1,15 +1,6 @@
 use reqwest::{Error as ReqwestError, Url};
 use thiserror::Error;
 
-/// Minimum HTTP status code for server errors (5xx).
-const HTTP_SERVER_ERROR_MIN: u16 = 500;
-
-/// HTTP 429 Too Many Requests.
-const HTTP_TOO_MANY_REQUESTS: u16 = 429;
-
-/// HTTP 408 Request Timeout.
-const HTTP_REQUEST_TIMEOUT: u16 = 408;
-
 pub type NetResult<T> = Result<T, NetError>;
 
 /// Centralized error type for kithara-net
@@ -34,6 +25,15 @@ pub enum NetError {
 }
 
 impl NetError {
+    /// Minimum HTTP status code for server errors (5xx).
+    const HTTP_SERVER_ERROR_MIN: u16 = 500;
+
+    /// HTTP 429 Too Many Requests.
+    const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+
+    /// HTTP 408 Request Timeout.
+    const HTTP_REQUEST_TIMEOUT: u16 = 408;
+
     /// Creates a timeout error
     #[must_use]
     pub fn timeout() -> Self {
@@ -62,9 +62,9 @@ impl NetError {
             Self::Timeout => true,
             Self::HttpError { status, .. } => {
                 // Retry on 5xx server errors and 429 Too Many Requests
-                *status >= HTTP_SERVER_ERROR_MIN
-                    || *status == HTTP_TOO_MANY_REQUESTS
-                    || *status == HTTP_REQUEST_TIMEOUT
+                *status >= Self::HTTP_SERVER_ERROR_MIN
+                    || *status == Self::HTTP_TOO_MANY_REQUESTS
+                    || *status == Self::HTTP_REQUEST_TIMEOUT
             }
             Self::RetryExhausted { .. } | Self::Unimplemented | Self::Cancelled => false,
         }
