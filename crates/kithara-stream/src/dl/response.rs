@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 use kithara_net::{ByteStream, Headers, NetError};
 use kithara_platform::{
     CancelGroup,
@@ -50,7 +50,7 @@ impl BodyStream {
     /// Empty body (for HEAD responses).
     pub(super) fn empty() -> Self {
         Self {
-            inner: Box::pin(futures::stream::empty()),
+            inner: Box::pin(stream::empty()),
         }
     }
 
@@ -130,7 +130,7 @@ fn wrap_with_cancel(
     cancel: CancelGroup,
     chunk_timeout: Duration,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>> {
-    Box::pin(futures::stream::unfold(
+    Box::pin(stream::unfold(
         WrapState {
             stream: byte_stream,
             cancel,

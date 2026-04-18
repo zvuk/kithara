@@ -9,8 +9,9 @@ use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use dashmap::DashMap;
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, AvailabilityObserver, ResourceExt};
+use kithara_storage::{Atomic, AvailabilityObserver, ResourceExt, StorageError};
 use rangemap::RangeSet;
+use rkyv::option::ArchivedOption;
 
 use super::schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile};
 use crate::{
@@ -194,8 +195,8 @@ impl AvailabilityIndex {
                 }
 
                 let final_len: Option<u64> = match res_record.final_len {
-                    rkyv::option::ArchivedOption::Some(ref l) => Some(l.to_native()),
-                    rkyv::option::ArchivedOption::None => None,
+                    ArchivedOption::Some(ref l) => Some(l.to_native()),
+                    ArchivedOption::None => None,
                 };
 
                 if let Some(flen) = final_len {
@@ -248,9 +249,8 @@ impl AvailabilityIndex {
             }
         }
 
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&availability_file).map_err(|e| {
-            AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
-        })?;
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&availability_file)
+            .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
         res.write_all(&bytes)?;
 
         Ok(())

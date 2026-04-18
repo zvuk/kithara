@@ -3,6 +3,7 @@
 use std::{
     cell::Cell,
     fmt,
+    io::Cursor,
     marker::PhantomData,
     sync::{
         Arc,
@@ -118,7 +119,7 @@ impl<C: CodecType> Android<C> {
         let extractor_bootstrap = match bootstrap_extractor(media_source, C::CODEC) {
             Ok(bootstrap) => bootstrap,
             Err((media_source, error)) => {
-                return Err(recover_extractor_failure(media_source, error));
+                return Err(recover_media_source_failure(media_source, error));
             }
         };
 
@@ -179,7 +180,7 @@ impl<C: CodecType> Android<C> {
         let Some(input) = self
             .inner
             .codec
-            .dequeue_input_buffer(INPUT_DEQUEUE_TIMEOUT_US)?
+            .dequeue_input_buffer(Self::INPUT_DEQUEUE_TIMEOUT_US)?
         else {
             return Ok(false);
         };
@@ -465,13 +466,6 @@ pub(crate) fn try_create_android_decoder(
     }
 }
 
-fn recover_extractor_failure(
-    media_source: OwnedMediaDataSource,
-    error: AndroidBackendError,
-) -> RecoverableHardwareError {
-    recover_media_source_failure(media_source, error)
-}
-
 fn recover_codec_failure(
     bootstrap: super::extractor::ExtractorBootstrap,
     error: AndroidBackendError,
@@ -487,7 +481,7 @@ fn recover_media_source_failure(
     match media_source.into_source() {
         Ok(source) => recoverable_hardware_error(source, error.into_decode_error()),
         Err(recover_error) => RecoverableHardwareError {
-            source: Box::new(std::io::Cursor::new(Vec::<u8>::new())),
+            source: Box::new(Cursor::new(Vec::<u8>::new())),
             error: recover_error.into_decode_error(),
         },
     }

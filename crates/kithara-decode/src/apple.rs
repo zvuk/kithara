@@ -33,7 +33,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::ContainerFormat;
+use kithara_stream::{AudioCodec, ContainerFormat};
 use tracing::{debug, trace, warn};
 
 struct Consts;
@@ -1656,32 +1656,32 @@ pub(crate) type AppleFlac = Apple<Flac>;
 pub(crate) type AppleAlac = Apple<Alac>;
 
 pub(crate) fn try_create_apple_decoder(
-    codec: kithara_stream::AudioCodec,
+    codec: AudioCodec,
     source: BoxedSource,
     config: &AppleConfig,
 ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
     match codec {
-        kithara_stream::AudioCodec::AacLc
-        | kithara_stream::AudioCodec::AacHe
-        | kithara_stream::AudioCodec::AacHeV2 => AppleInner::try_new(source, config).map(|inner| {
-            Box::new(Apple::<Aac> {
-                inner,
-                _codec: PhantomData,
-            }) as Box<dyn InnerDecoder>
-        }),
-        kithara_stream::AudioCodec::Mp3 => AppleInner::try_new(source, config).map(|inner| {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+            AppleInner::try_new(source, config).map(|inner| {
+                Box::new(Apple::<Aac> {
+                    inner,
+                    _codec: PhantomData,
+                }) as Box<dyn InnerDecoder>
+            })
+        }
+        AudioCodec::Mp3 => AppleInner::try_new(source, config).map(|inner| {
             Box::new(Apple::<Mp3> {
                 inner,
                 _codec: PhantomData,
             }) as Box<dyn InnerDecoder>
         }),
-        kithara_stream::AudioCodec::Flac => AppleInner::try_new(source, config).map(|inner| {
+        AudioCodec::Flac => AppleInner::try_new(source, config).map(|inner| {
             Box::new(Apple::<Flac> {
                 inner,
                 _codec: PhantomData,
             }) as Box<dyn InnerDecoder>
         }),
-        kithara_stream::AudioCodec::Alac => AppleInner::try_new(source, config).map(|inner| {
+        AudioCodec::Alac => AppleInner::try_new(source, config).map(|inner| {
             Box::new(Apple::<Alac> {
                 inner,
                 _codec: PhantomData,

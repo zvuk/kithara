@@ -33,6 +33,8 @@ use ringbuf::{
 use ringbuf::{HeapProd, HeapRb, traits::Split};
 use tracing::warn;
 
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+use super::offline_backend::OfflineBackend;
 use super::{
     master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
     shared_eq::SharedEq, shared_player_state::SharedPlayerState,
@@ -844,11 +846,11 @@ fn start_stream_web_audio(
     ctx.start_stream(config).map_err(|err| err.to_string())
 }
 
-// ─── offline backend (test-only) ─────────────────────────────────────
+// offline backend (test-only)
 
 #[cfg(any(test, feature = "test-utils"))]
 fn start_stream_offline(
-    ctx: &mut FirewheelCtx<super::offline_backend::OfflineBackend>,
+    ctx: &mut FirewheelCtx<OfflineBackend>,
     sample_rate: u32,
 ) -> Result<(), String> {
     /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
@@ -878,7 +880,6 @@ fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
     /// firewheel graph is driven at close-to-realtime cadence.
     const OFFLINE_PARK_MS: u64 = 10;
 
-    use super::offline_backend::OfflineBackend;
     let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
     loop {
         while let Some(msg) = cmd_rx.try_pop() {

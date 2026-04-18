@@ -11,7 +11,6 @@ description = "Progressive file download for MP3, AAC, and other audio formats"
 workspace = true
 
 [dependencies]
-bytes = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-assets = { workspace = true }

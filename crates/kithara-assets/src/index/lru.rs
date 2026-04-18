@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kithara_bufpool::BytePool;
-use kithara_storage::{Atomic, ResourceExt};
+use kithara_storage::{Atomic, ResourceExt, StorageError};
 
 use super::schema::{LruEntryFile, LruIndexFile};
 use crate::error::{AssetsError, AssetsResult};
@@ -55,9 +55,8 @@ impl<R: ResourceExt> LruIndex<R> {
     /// Persist the provided state to storage atomically.
     pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file).map_err(|e| {
-            AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
-        })?;
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+            .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
         self.res.write_all(&bytes)?;
         Ok(())
     }
@@ -205,7 +204,7 @@ impl LruState {
     }
 
     fn to_file(&self) -> LruIndexFile {
-        let mut entries = std::collections::BTreeMap::new();
+        let mut entries = BTreeMap::new();
         for (root, entry) in &self.by_root {
             entries.insert(
                 root.clone(),

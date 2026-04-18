@@ -1,7 +1,6 @@
 //! RED test: nextest LEAK on `live_ephemeral_small_cache_seek_stress_*`.
 //!
 //! Hypothesis
-//! ----------
 //! On the `*_hw`/`*_sw` variants the test body returns quickly but the
 //! process is marked `LEAK [~0.6s]` by nextest, meaning the test process
 //! still has live tasks / threads past nextest's leak-timeout (~100 ms).
@@ -36,7 +35,6 @@
 //!    spawn occurs inside that path and isn't joined, it lingers.
 //!
 //! Strategy of this RED
-//! --------------------
 //! This file contains a native-only, packaged-fixture leak probe:
 //!
 //! * start `TestServer`, build `Stream<Hls>` with the *same* store

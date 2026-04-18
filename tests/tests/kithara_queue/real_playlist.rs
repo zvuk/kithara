@@ -24,6 +24,7 @@ use std::{
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
+use kithara_play::internal::init_offline_backend;
 use kithara_queue::{Queue, QueueConfig, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{Xorshift64, kithara};
@@ -32,7 +33,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-// ─── shared test context ────────────────────────────────────────────
+// shared test context
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -54,7 +55,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
             // Claim the session singleton with OfflineBackend *before*
             // any PlayerImpl / Queue construction. Once.call_once
             // guarantees exactly one initialization per process.
-            test_statics::INIT_OFFLINE.call_once(kithara_play::internal::init_offline_backend);
+            test_statics::INIT_OFFLINE.call_once(init_offline_backend);
 
             let net = NetOptions {
                 insecure: true,
@@ -81,7 +82,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
         .await
 }
 
-// ─── event/position helpers ─────────────────────────────────────────
+// event/position helpers
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
@@ -197,7 +198,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     }
 }
 
-// ─── per-track parametrized smoke ────────────────────────────────────
+// per-track parametrized smoke
 
 /// For each URL in the production playlist: load → play → seek ×3
 /// random → position consistency. Isolates track-specific regressions
@@ -297,7 +298,7 @@ async fn track_plays_end_to_end(#[case] url: &str, #[case] rng_seed: u64) {
     ctx.queue.remove(track_id).expect("remove");
 }
 
-// ─── scenario: whole-playlist behaviour ──────────────────────────────
+// scenario: whole-playlist behaviour
 
 async fn wait_for_queue_event<F>(
     rx: &mut EventReceiver,
@@ -344,7 +345,7 @@ async fn queue_playlist_behavior() {
         .map(|u| ctx.queue.append(build_source(u, &ctx.config)))
         .collect();
 
-    // === (1) First track starts ===
+    // (1) First track starts
     ctx.queue
         .select(ids[0], Transition::None)
         .expect("select first");
@@ -361,7 +362,7 @@ async fn queue_playlist_behavior() {
         .await
         .expect("first track position");
 
-    // === (2) Pause/resume — position must not reset to 0 ===
+    // (2) Pause/resume — position must not reset to 0
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.pause();
     sleep(Duration::from_secs(2)).await;
@@ -382,7 +383,7 @@ async fn queue_playlist_behavior() {
         "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
     );
 
-    // === (3) Seek mid-track ===
+    // (3) Seek mid-track
     let duration_0 = ctx
         .queue
         .duration_seconds()
@@ -393,7 +394,7 @@ async fn queue_playlist_behavior() {
         .await
         .expect("seek landed near target");
 
-    // === (4) Manual crossfade to track 1 ===
+    // (4) Manual crossfade to track 1
     // Ensure the next track is Loaded before advance so Queue can
     // actually emit CrossfadeStarted (otherwise select queues a
     // pending and the event fires only after load finishes).
@@ -429,7 +430,7 @@ async fn queue_playlist_behavior() {
     .await
     .expect("CurrentTrackChanged to track 1 after crossfade");
 
-    // === (5..=N-1) Auto-advance through remaining tracks ===
+    // (5..=N-1) Auto-advance through remaining tracks
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
         let url = urls[i];
@@ -472,7 +473,7 @@ async fn queue_playlist_behavior() {
         per_track.push((url.to_string(), result));
     }
 
-    // === (N) Last track → seek near end → QueueEnded ===
+    // (N) Last track → seek near end → QueueEnded
     let last_result: Result<(), String> = async {
         let dur = ctx
             .queue
@@ -492,7 +493,7 @@ async fn queue_playlist_behavior() {
     }
     .await;
 
-    // === Report: collect per-track failures ===
+    // Report: collect per-track failures
     let mut fails: Vec<String> = per_track
         .iter()
         .filter_map(|(u, r)| r.as_ref().err().map(|e| format!("  - {u}: {e}")))

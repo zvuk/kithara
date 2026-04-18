@@ -12,13 +12,9 @@ pub(crate) fn ensure_current_thread_attached() -> Result<(), AndroidBackendError
         )
     })?;
 
-    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.map_err(|error| {
-        AndroidBackendError::operation("jni-java-vm-from-raw", error.to_string())
-    })?;
-
-    let _env = vm.attach_current_thread_permanently().map_err(|error| {
-        AndroidBackendError::operation("jni-attach-current-thread", error.to_string())
-    })?;
-
-    Ok(())
+    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) };
+    vm.attach_current_thread(|_env| Ok::<(), jni::errors::Error>(()))
+        .map_err(|error| {
+            AndroidBackendError::operation("jni-attach-current-thread", error.to_string())
+        })
 }

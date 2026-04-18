@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{io::Error as IoError, time::Duration};
 
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use kithara_stream::{AudioCodec, ContainerFormat, StreamContext};
@@ -117,9 +117,9 @@ pub(crate) fn duration_from_presentation_time_us(
     presentation_time_us: i64,
 ) -> Result<Duration, DecodeError> {
     if presentation_time_us < 0 {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            format!("negative presentation timestamp: {presentation_time_us}"),
-        ))));
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "negative presentation timestamp: {presentation_time_us}"
+        )))));
     }
 
     Ok(Duration::from_micros(presentation_time_us.cast_unsigned()))
@@ -167,24 +167,22 @@ pub(crate) fn decode_pcm16_to_f32(
 ) -> Result<PcmBuf, DecodeError> {
     let channels = usize::from(channels);
     if channels == 0 {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+        return Err(DecodeError::Backend(Box::new(IoError::other(
             "PCM16 output reported zero channels",
         ))));
     }
     if !bytes.len().is_multiple_of(2) {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            format!(
-                "PCM16 payload length {} is not aligned to 2 bytes",
-                bytes.len()
-            ),
-        ))));
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "PCM16 payload length {} is not aligned to 2 bytes",
+            bytes.len()
+        )))));
     }
 
     let total_samples = bytes.len() / 2;
     if !total_samples.is_multiple_of(channels) {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            format!("PCM16 sample count {total_samples} is not aligned to {channels} channels"),
-        ))));
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "PCM16 sample count {total_samples} is not aligned to {channels} channels"
+        )))));
     }
 
     let total_frames = total_samples / channels;
@@ -211,24 +209,22 @@ pub(crate) fn copy_pcm_float_to_pool(
 ) -> Result<PcmBuf, DecodeError> {
     let channels = usize::from(channels);
     if channels == 0 {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+        return Err(DecodeError::Backend(Box::new(IoError::other(
             "PCM float output reported zero channels",
         ))));
     }
     if !bytes.len().is_multiple_of(4) {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            format!(
-                "PCM float payload length {} is not aligned to 4 bytes",
-                bytes.len()
-            ),
-        ))));
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "PCM float payload length {} is not aligned to 4 bytes",
+            bytes.len()
+        )))));
     }
 
     let total_samples = bytes.len() / 4;
     if !total_samples.is_multiple_of(channels) {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            format!("PCM float sample count {total_samples} is not aligned to {channels} channels"),
-        ))));
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "PCM float sample count {total_samples} is not aligned to {channels} channels"
+        )))));
     }
 
     let total_frames = total_samples / channels;

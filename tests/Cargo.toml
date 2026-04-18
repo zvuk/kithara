@@ -26,7 +26,6 @@ kithara-queue = { workspace = true }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true }
 rkyv = { workspace = true }
-bytecheck = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -48,20 +47,17 @@ serial_test = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto (for HLS encryption tests)
-hex = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
 
 # Misc
 futures = { workspace = true }
-uuid = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
@@ -108,9 +104,6 @@ tokio-stream = { workspace = true }
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-test-macros = { workspace = true }
-
-# uuid needs js feature on WASM
-uuid = { workspace = true, features = ["js"] }
 
 # WASM-specific
 js-sys = { workspace = true }

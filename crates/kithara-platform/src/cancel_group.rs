@@ -60,7 +60,7 @@ impl CancelGroup {
     }
 }
 
-// ── From ────────────────────────────────────────────────────────
+// From
 
 impl From<CancellationToken> for CancelGroup {
     fn from(token: CancellationToken) -> Self {
@@ -74,7 +74,7 @@ impl From<Vec<CancellationToken>> for CancelGroup {
     }
 }
 
-// ── BitOr: group | group ───────────────────────────────────────
+// BitOr: group | group
 
 impl BitOr for CancelGroup {
     type Output = Self;
@@ -86,7 +86,7 @@ impl BitOr for CancelGroup {
     }
 }
 
-// ── BitOr: group | token ───────────────────────────────────────
+// BitOr: group | token
 
 impl BitOr<CancellationToken> for CancelGroup {
     type Output = Self;
@@ -98,7 +98,7 @@ impl BitOr<CancellationToken> for CancelGroup {
     }
 }
 
-// ── BitOr: token | group ───────────────────────────────────────
+// BitOr: token | group
 
 impl BitOr<CancelGroup> for CancellationToken {
     type Output = CancelGroup;
@@ -115,11 +115,12 @@ mod tests {
     use std::time::Duration;
 
     use kithara_test_utils::kithara;
+    use tokio::{spawn, task, time as tokio_time};
     use tokio_util::sync::CancellationToken;
 
     use super::CancelGroup;
 
-    // ── Helpers ──────────────────────────────────────────────────
+    // Helpers
 
     #[derive(Clone, Debug)]
     enum Src {
@@ -178,7 +179,7 @@ mod tests {
         }
     }
 
-    // ── Sync parametrized tests ─────────────────────────────────
+    // Sync parametrized tests
 
     macro_rules! sync_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr, $expected:expr;)*) => {
@@ -220,7 +221,7 @@ mod tests {
             [Src::Fresh, Src::ChildOf(0), Src::PreCancelled], Act::None, true;
     }
 
-    // ── Async parametrized tests ────────────────────────────────
+    // Async parametrized tests
 
     macro_rules! async_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr;)*) => {
@@ -229,14 +230,14 @@ mod tests {
                 async fn $name() {
                     let s = build(&$spec);
                     let group2 = s.group.clone();
-                    let handle = tokio::spawn(async move { group2.cancelled().await });
+                    let handle = spawn(async move { group2.cancelled().await });
 
-                    tokio::task::yield_now().await;
+                    task::yield_now().await;
 
                     assert!(!s.group.is_cancelled(), "must not be cancelled before action");
                     fire(&$action, &s);
 
-                    tokio::time::timeout(Duration::from_secs(2), handle)
+                    tokio_time::timeout(Duration::from_secs(2), handle)
                         .await
                         .expect("cancelled() must resolve within timeout")
                         .expect("task must not panic");
@@ -262,7 +263,7 @@ mod tests {
             [Src::ChildOf(0), Src::ChildOf(1)], Act::Parent(1);
     }
 
-    // ── Edge cases ──────────────────────────────────────────────
+    // Edge cases
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn cancelled_resolves_immediately_when_pre_cancelled() {
@@ -270,7 +271,7 @@ mod tests {
         tok.cancel();
         let group = CancelGroup::new(vec![tok, CancellationToken::new()]);
 
-        tokio::time::timeout(Duration::from_secs(1), group.cancelled())
+        tokio_time::timeout(Duration::from_secs(1), group.cancelled())
             .await
             .expect("cancelled() must return immediately for pre-cancelled source");
     }
@@ -284,7 +285,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn empty_group_cancelled_never_resolves() {
         let group = CancelGroup::new(vec![]);
-        let result = tokio::time::timeout(Duration::from_millis(50), group.cancelled()).await;
+        let result = tokio_time::timeout(Duration::from_millis(50), group.cancelled()).await;
         assert!(
             result.is_err(),
             "cancelled() on empty group must not resolve"
@@ -302,7 +303,7 @@ mod tests {
         assert!(cloned.is_cancelled());
     }
 
-    // ── BitOr composition tests ─────────────────────────────────
+    // BitOr composition tests
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn token_bitor_token() {
@@ -369,13 +370,13 @@ mod tests {
         let group = CancelGroup::from(a.clone()) | b.clone();
 
         let g2 = group.clone();
-        let handle = tokio::spawn(async move { g2.cancelled().await });
-        tokio::task::yield_now().await;
+        let handle = spawn(async move { g2.cancelled().await });
+        task::yield_now().await;
 
         assert!(!group.is_cancelled());
         b.cancel();
 
-        tokio::time::timeout(Duration::from_secs(2), handle)
+        tokio_time::timeout(Duration::from_secs(2), handle)
             .await
             .expect("cancelled() must resolve")
             .expect("task must not panic");

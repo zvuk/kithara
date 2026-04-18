@@ -26,7 +26,6 @@ kithara-bufpool = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
-biquad = { workspace = true }
 thunderdome = { workspace = true }
 
 # Async & channels

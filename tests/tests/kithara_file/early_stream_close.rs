@@ -30,7 +30,10 @@ use futures::stream;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig, FileSrc},
-    stream::Stream,
+    stream::{
+        Stream,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_platform::{
     thread,
@@ -185,8 +188,8 @@ async fn file_stream_closes_early_seek_still_works() {
     let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, _server) = setup_server(file_data).await;
 
-    let dl = kithara::stream::dl::Downloader::new(
-        kithara::stream::dl::DownloaderConfig::default()
+    let dl = Downloader::new(
+        DownloaderConfig::default()
             .with_net(kithara_net::NetOptions {
                 request_timeout: Duration::from_secs(1),
                 ..Default::default()

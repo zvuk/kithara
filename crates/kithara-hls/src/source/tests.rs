@@ -8,13 +8,19 @@ use std::{
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
+use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_platform::{
     time::Duration,
-    tokio::time::{Duration as TokioDuration, timeout},
+    tokio::{
+        sync::broadcast::error::TryRecvError,
+        time::{Duration as TokioDuration, timeout},
+    },
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError};
+use kithara_stream::{
+    ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    dl::{Downloader, DownloaderConfig, PeerHandle},
+};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
@@ -33,10 +39,8 @@ use crate::{
     stream_index::{SegmentData, StreamIndex},
 };
 
-fn test_peer_handle(cancel: &CancellationToken) -> kithara_stream::dl::PeerHandle {
-    let dl = kithara_stream::dl::Downloader::new(
-        kithara_stream::dl::DownloaderConfig::default().with_cancel(cancel.child_token()),
-    );
+fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
+    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     dl.register(Arc::new(crate::peer::HlsPeer::new()))
 }
 
@@ -151,10 +155,6 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
     source
 }
 
-fn build_test_source(num_variants: usize) -> HlsSource {
-    build_test_source_with_segments(num_variants, 1)
-}
-
 fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     let cancel = CancellationToken::new();
     let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
@@ -245,7 +245,7 @@ fn make_anchor(variant: usize, segment: usize, offset: u64) -> SourceSeekAnchor 
 
 #[kithara::test]
 fn same_variant_seek_preserves_segments() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     push_segment(&source.segments, 0, 0, 0, 100);
     push_segment(&source.segments, 0, 1, 100, 100);
 
@@ -336,7 +336,7 @@ fn commit_seek_landing_keeps_switched_tail_in_mixed_layout() {
 
 #[kithara::test]
 fn resolve_current_variant_uses_layout_variant() {
-    let source = build_test_source(2);
+    let source = build_test_source_with_segments(2, 1);
     source.coord.abr_variant_index.store(1, Ordering::Release);
 
     // resolve_current_variant uses layout_variant, not ABR
@@ -416,7 +416,7 @@ fn abr_does_not_affect_any_seek_state() {
 
 #[kithara::test]
 fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
-    let mut source = build_test_source(2);
+    let mut source = build_test_source_with_segments(2, 1);
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[100, 100]);
 
@@ -478,7 +478,7 @@ fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix(
 
 #[kithara::test(tokio)]
 async fn on_demand_request_notifies_downloader_once() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     let wake = source.coord.reader_advanced.notified();
 
     let queued = source.push_segment_request(0, 0, 7);
@@ -499,7 +499,7 @@ async fn on_demand_request_notifies_downloader_once() {
 
 #[kithara::test]
 fn on_demand_request_returns_false_when_dedupe_suppresses_enqueue() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     let request = SegmentRequest {
         variant: 0,
         segment_index: 0,
@@ -522,7 +522,7 @@ fn on_demand_request_returns_false_when_dedupe_suppresses_enqueue() {
 
 #[kithara::test]
 fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
-    let source = build_test_source(2);
+    let source = build_test_source_with_segments(2, 1);
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[100, 100]);
 
@@ -745,7 +745,7 @@ fn layout_variant_preserves_total_length() {
 
 #[kithara::test]
 fn set_seek_epoch_drains_pending_segment_requests() {
-    let mut source = build_test_source(1);
+    let mut source = build_test_source_with_segments(1, 1);
     source.coord.enqueue_segment_request(SegmentRequest {
         variant: 0,
         segment_index: 1,
@@ -799,7 +799,7 @@ fn wait_range_uses_known_total_bytes_for_exact_eof() {
 
 #[kithara::test]
 fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
     let media_key = ResourceKey::from_url(&media_url);
     let media_res = &source.backend.acquire_resource(&media_key).unwrap();
@@ -826,7 +826,7 @@ fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
 
 #[kithara::test]
 fn read_at_does_not_advance_timeline_position() {
-    let mut source = build_test_source(1);
+    let mut source = build_test_source_with_segments(1, 1);
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
     let media_key = ResourceKey::from_url(&media_url);
     let media_res = &source.backend.acquire_resource(&media_key).unwrap();
@@ -1005,7 +1005,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
 /// Build source for phase tests — resets `stopped` flag that
 /// `HlsScheduler::drop` sets when the downloader half is discarded.
 fn build_phase_test_source(num_variants: usize) -> HlsSource {
-    let source = build_test_source(num_variants);
+    let source = build_test_source_with_segments(num_variants, 1);
     source.coord.stopped.store(false, Ordering::Release);
     source
 }
@@ -1060,7 +1060,7 @@ fn hls_phase_eof_when_past_effective_total() {
 
 #[kithara::test]
 fn hls_phase_cancelled_when_cancel_token_set() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     source.coord.cancel.cancel();
 
     assert_eq!(source.phase_at(0..50), SourcePhase::Cancelled);
@@ -1068,7 +1068,7 @@ fn hls_phase_cancelled_when_cancel_token_set() {
 
 #[kithara::test]
 fn hls_phase_cancelled_when_stopped() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     source.coord.stopped.store(true, Ordering::Release);
 
     assert_eq!(source.phase_at(0..50), SourcePhase::Cancelled);
@@ -1118,7 +1118,7 @@ fn hls_phase_parameterless_waiting_when_no_segments() {
 
 #[kithara::test]
 fn queue_segment_request_resolves_offset_to_segment() {
-    let source = build_test_source(1);
+    let source = build_test_source_with_segments(1, 1);
     source.coord.stopped.store(false, Ordering::Release);
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[100, 100]);
 
@@ -1192,8 +1192,6 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
 /// test pins that behaviour: the post-reacquire read still returns `Data`.
 #[kithara::test]
 fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
-    use kithara_stream::ReadOutcome;
-
     let mut source = build_test_source_with_segments(1, 1);
     let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid segment URL");
     let media_key = ResourceKey::from_url(&media_url);
@@ -1275,12 +1273,6 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
 /// dedup invariant, it drains exactly 8.
 #[kithara::test]
 fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
-    use kithara_assets::AssetStoreBuilder;
-    use kithara_drm::DecryptContext;
-    use kithara_events::{Event, HlsEvent};
-    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-    use kithara_storage::ResourceExt;
-
     const NUM_SEGMENTS: usize = 8;
     const SEGMENT_LEN: usize = 256;
     const POLL_CYCLES: usize = 5;

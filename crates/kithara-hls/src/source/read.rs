@@ -1,6 +1,6 @@
-use std::ops::Range;
+use std::{io::ErrorKind, ops::Range};
 
-use kithara_assets::ResourceKey;
+use kithara_assets::{AssetsError, ResourceKey};
 use kithara_storage::ResourceExt;
 
 use super::{core::HlsSource, types::ReadSegment};
@@ -98,9 +98,7 @@ impl HlsSource {
             }
             let resource = match self.backend.open_resource(&key) {
                 Ok(res) => res,
-                Err(kithara_assets::AssetsError::Io(e))
-                    if e.kind() == std::io::ErrorKind::NotFound =>
-                {
+                Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => {
                     return Ok(None);
                 }
                 Err(e) => return Err(e.into()),
@@ -142,7 +140,7 @@ impl HlsSource {
         }
         let resource = match self.backend.open_resource(&key) {
             Ok(res) => res,
-            Err(kithara_assets::AssetsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => {
                 return Ok(None);
             }
             Err(e) => return Err(e.into()),

@@ -20,7 +20,10 @@ use kithara::{
     play::{
         PlayerConfig, PlayerImpl, Resource, ResourceConfig, internal::offline::resource_from_reader,
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stream::{
+        AudioCodec, ContainerFormat, MediaInfo, Stream,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -1156,9 +1159,7 @@ async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir:
         request_timeout: Duration::from_secs(25),
         ..NetOptions::default()
     };
-    let downloader = kithara::stream::dl::Downloader::new(
-        kithara::stream::dl::DownloaderConfig::default().with_net(net),
-    );
+    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
     let config = ResourceConfig::new(url)
         .expect("valid URL")
         .with_store(store)

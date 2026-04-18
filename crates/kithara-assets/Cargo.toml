@@ -15,7 +15,6 @@ internal = []  # Expose internal types for testing
 
 [dependencies]
 rkyv = { workspace = true }
-bytecheck = { workspace = true }
 bitflags = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }

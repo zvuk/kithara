@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
+use kithara_events::TrackStatus as TS;
 use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
@@ -286,7 +287,6 @@ pub enum FfiTrackStatus {
 
 impl From<kithara_events::TrackStatus> for FfiTrackStatus {
     fn from(s: kithara_events::TrackStatus) -> Self {
-        use kithara_events::TrackStatus as TS;
         match s {
             TS::Loading => Self::Loading,
             TS::Slow => Self::Slow,

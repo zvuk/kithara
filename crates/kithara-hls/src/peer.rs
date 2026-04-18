@@ -1,5 +1,5 @@
 use std::{
-    io,
+    io::Error as IoError,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -9,9 +9,10 @@ use std::{
 
 use kithara_events::HlsEvent;
 use kithara_net::NetError;
-use kithara_platform::{Mutex, time::Instant};
+use kithara_platform::{Mutex, time::Instant, tokio};
 use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, Peer, Priority, WriterFn};
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
@@ -25,7 +26,7 @@ struct HlsState {
     scheduler: HlsScheduler,
     loader: Arc<SegmentLoader>,
     waker: Option<Waker>,
-    epoch_cancel: tokio_util::sync::CancellationToken,
+    epoch_cancel: CancellationToken,
 }
 
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
@@ -36,7 +37,7 @@ pub(crate) struct HlsPeer {
     /// Waker stored before activation (`poll_next` called but state is None).
     pending_waker: Mutex<Option<Waker>>,
     /// Cancels the waker-forwarding micro-task on drop.
-    wake_cancel: tokio_util::sync::CancellationToken,
+    wake_cancel: CancellationToken,
 }
 
 impl HlsPeer {
@@ -44,7 +45,7 @@ impl HlsPeer {
         Self {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_cancel: tokio_util::sync::CancellationToken::new(),
+            wake_cancel: CancellationToken::new(),
         }
     }
 
@@ -58,7 +59,7 @@ impl HlsPeer {
                 scheduler,
                 loader,
                 waker: None,
-                epoch_cancel: tokio_util::sync::CancellationToken::new(),
+                epoch_cancel: CancellationToken::new(),
             });
         }
 
@@ -78,9 +79,9 @@ impl HlsPeer {
         // `HlsSource::drop` — nextest flagged this as a rotating LEAK.
         let peer_weak = Arc::downgrade(self);
         let wake_cancel = self.wake_cancel.clone();
-        kithara_platform::tokio::task::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
-                kithara_platform::tokio::select! {
+                tokio::select! {
                     biased;
                     () = cancel.cancelled() => return,
                     () = wake_cancel.cancelled() => return,
@@ -248,7 +249,7 @@ impl Peer for HlsPeer {
     }
 }
 
-// --- poll_next helper types and functions ---
+// poll_next helper types and functions
 
 #[cfg_attr(test, derive(Debug))]
 enum DemandResult {
@@ -278,7 +279,7 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     if req.seek_epoch != sched.active_seek_epoch {
         // New seek epoch — full reset.
         state.epoch_cancel.cancel();
-        state.epoch_cancel = tokio_util::sync::CancellationToken::new();
+        state.epoch_cancel = CancellationToken::new();
         sched.demand_throttle_until = None;
 
         let (is_variant_switch, is_midstream_switch) =
@@ -614,7 +615,7 @@ fn build_fetch_cmd(
     let off_w = Arc::clone(&offset);
     let writer: WriterFn = Box::new(move |data: &[u8]| {
         let pos = off_w.fetch_add(data.len() as u64, Ordering::Relaxed);
-        res_w.write_at(pos, data).map_err(io::Error::other)
+        res_w.write_at(pos, data).map_err(IoError::other)
     });
 
     // on_complete closure.
@@ -680,9 +681,12 @@ mod tests {
 
     use std::{sync::Arc, task::Context, time::Duration};
 
+    use futures::task::noop_waker;
+    use kithara_abr::{AbrDecision, AbrReason};
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
+    use kithara_platform::time::Instant as PlatformInstant;
     use kithara_storage::ResourceExt;
     use kithara_stream::{
         TransferCoordination,
@@ -866,7 +870,7 @@ mod tests {
 
         // Call process_demand — this is what poll_next does first, BEFORE
         // the flushing gate. Today it consumes the demand via take().
-        let waker = futures::task::noop_waker();
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let _ = process_demand(&mut state, &mut cx);
 
@@ -1071,12 +1075,12 @@ mod tests {
         state.scheduler.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
         state.scheduler.abr.apply(
-            &kithara_abr::AbrDecision {
+            &AbrDecision {
                 target_variant_index: 1,
-                reason: kithara_abr::AbrReason::DownSwitch,
+                reason: AbrReason::DownSwitch,
                 changed: true,
             },
-            kithara_platform::time::Instant::now(),
+            PlatformInstant::now(),
         );
 
         assert_eq!(
@@ -1093,7 +1097,7 @@ mod tests {
         // Drive one poll_next cycle via the helpers, exactly as
         // `HlsPeer::poll_next` does. No demand is queued — this is a
         // prefetch poll after the reader is busy draining the decoder.
-        let waker = futures::task::noop_waker();
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
@@ -1179,7 +1183,7 @@ mod tests {
         enqueue_demand(&state, 0, 22);
 
         // Call process_demand — the buggy branch rewinds cursor 23 → 22.
-        let waker = futures::task::noop_waker();
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let _ = process_demand(&mut state, &mut cx);
 
@@ -1286,7 +1290,7 @@ mod tests {
         // (source_impl.rs:130, `queue_segment_request_for_offset`).
         enqueue_demand(&state, 0, 12);
 
-        let waker = futures::task::noop_waker();
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let _ = process_demand(&mut state, &mut cx);
 
@@ -1405,12 +1409,12 @@ mod tests {
         // After throughput measurement it decides to up-switch to
         // variant 1. `abr.get_current_variant_index()` now returns 1.
         state.scheduler.abr.apply(
-            &kithara_abr::AbrDecision {
+            &AbrDecision {
                 target_variant_index: 1,
-                reason: kithara_abr::AbrReason::UpSwitch,
+                reason: AbrReason::UpSwitch,
                 changed: true,
             },
-            kithara_platform::time::Instant::now(),
+            PlatformInstant::now(),
         );
 
         assert_eq!(
@@ -1422,7 +1426,7 @@ mod tests {
         // Drive the post-tail `poll_next` cycle through its helpers,
         // exactly as `HlsPeer::poll_next` does in production. No demand
         // is queued — this is a prefetch poll.
-        let waker = futures::task::noop_waker();
+        let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {

@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_events::{DownloaderEvent, Event, TrackId, TrackStatus};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
-use tokio::{sync::Semaphore, task::JoinHandle};
+use tokio::{spawn, sync::Semaphore, task::JoinHandle};
 use tracing::{debug, warn};
 
 use crate::{
@@ -72,7 +72,7 @@ impl Loader {
         let bus_for_slow = config.bus.clone();
         let tracks = Arc::clone(&self.tracks);
 
-        let slow_listener = tokio::spawn(async move {
+        let slow_listener = spawn(async move {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
@@ -98,7 +98,7 @@ impl Loader {
         source: TrackSource,
     ) -> JoinHandle<Result<Resource, QueueError>> {
         let this = Arc::clone(self);
-        tokio::spawn(async move {
+        spawn(async move {
             let permit = Arc::clone(&this.semaphore)
                 .acquire_owned()
                 .await
@@ -134,6 +134,10 @@ mod tests {
     use kithara_events::{EventBus, QueueEvent};
     use kithara_play::PlayerConfig;
     use kithara_test_utils::kithara;
+    use tokio::{
+        spawn,
+        time::{sleep as tokio_sleep, timeout as tokio_timeout},
+    };
 
     use super::*;
     use crate::track::TrackEntry;
@@ -225,11 +229,11 @@ mod tests {
             let sem = Arc::clone(&loader.semaphore);
             let in_flight = Arc::clone(&in_flight);
             let max_seen = Arc::clone(&max_seen);
-            handles.push(tokio::spawn(async move {
+            handles.push(spawn(async move {
                 let _permit = sem.acquire_owned().await.expect("acquire");
                 let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(cur, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio_sleep(Duration::from_millis(50)).await;
                 in_flight.fetch_sub(1, Ordering::SeqCst);
             }));
         }
@@ -262,7 +266,7 @@ mod tests {
         let mut saw_loading = false;
         let mut saw_failed = false;
         for _ in 0..8 {
-            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            match tokio_timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Loading,

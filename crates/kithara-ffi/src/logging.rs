@@ -5,7 +5,7 @@
 //! still layer the platform-native `tracing-android` adapter on top via
 //! `nativeInit` for `logcat` integration.
 
-use std::sync::Once;
+use std::{io::stderr, sync::Once};
 
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
@@ -18,7 +18,7 @@ pub fn init_logging(level: u8) {
         let _ = tracing_subscriber::registry()
             .with(
                 fmt::layer()
-                    .with_writer(std::io::stderr)
+                    .with_writer(stderr)
                     .with_target(true)
                     .with_ansi(false)
                     .with_filter(filter),

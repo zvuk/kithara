@@ -42,6 +42,7 @@ allow = [
   "BSD-1-Clause",
   "BSL-1.0",
   "NCSA",
+  "WTFPL",
 ]
 # In cargo-deny v2, any license NOT in the allow list is implicitly denied.
 # Copyleft licenses (GPL, AGPL, LGPL) are rejected automatically.

@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, atomic::AtomicUsize};
 
+use futures::task::AtomicWaker;
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
 use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
@@ -61,7 +62,7 @@ pub(super) struct DownloaderInner {
     pub(super) inflight: Arc<AtomicUsize>,
     /// Waker fired when a fetch task completes (inflight decremented).
     /// Wakes `poll_fn` in `Registry::tick` so it can spawn more work.
-    pub(super) fetch_waker: Arc<futures::task::AtomicWaker>,
+    pub(super) fetch_waker: Arc<AtomicWaker>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
@@ -88,7 +89,7 @@ impl Downloader {
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
-                fetch_waker: Arc::new(futures::task::AtomicWaker::new()),
+                fetch_waker: Arc::new(AtomicWaker::new()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
             }),

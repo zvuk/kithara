@@ -248,7 +248,7 @@ impl Resource {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
-    use kithara_events::{AudioEvent, Event, EventBus};
+    use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};
     use kithara_platform::{time, time::Duration};
     use kithara_test_utils::kithara;
 
@@ -353,8 +353,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
-        use kithara_events::AudioFormat;
-
         let (resource, bus) = make_resource_with_bus();
         let mut rx = resource.subscribe();
 

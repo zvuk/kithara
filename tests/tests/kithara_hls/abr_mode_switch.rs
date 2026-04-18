@@ -10,21 +10,25 @@
 //!   Raise quality during playback → switches. Replay Track 1 → cached
 //!   segments served from disk, quality transitions visible from cache.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    events::{Event, EventBus},
+    events::{Event, EventBus, HlsEvent},
     hls::{
         AbrMode, AbrOptions, Hls, HlsConfig,
         config::{AbrController, ThroughputEstimator},
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
@@ -86,7 +90,7 @@ impl EventCollector {
         spawn(async move {
             while let Ok(ev) = rx.recv().await {
                 match &ev {
-                    Event::Hls(kithara::prelude::HlsEvent::SegmentComplete {
+                    Event::Hls(HlsEvent::SegmentComplete {
                         variant,
                         segment_index,
                         cached,
@@ -98,10 +102,8 @@ impl EventCollector {
                             cached: *cached,
                         });
                     }
-                    Event::Hls(kithara::prelude::HlsEvent::VariantApplied {
-                        to_variant,
-                        reason,
-                        ..
+                    Event::Hls(HlsEvent::VariantApplied {
+                        to_variant, reason, ..
                     }) => {
                         info!(to = to_variant, ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
@@ -160,24 +162,22 @@ async fn vod_manual_switch_affects_future_segments() {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    let server = kithara_integration_tests::hls_fixture::HlsTestServer::new(
-        kithara_integration_tests::hls_fixture::HlsTestServerConfig {
-            variant_count: 2,
-            segments_per_variant: segment_count,
-            segment_size: D.segment_size,
-            segment_duration_secs: segment_duration_secs(),
-            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-            delay_rules: vec![DelayRule {
-                variant: Some(0),
-                segment_gte: Some(5),
-                delay_ms: 500,
-                ..Default::default()
-            }],
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(5),
+            delay_ms: 500,
             ..Default::default()
-        },
-    )
+        }],
+        ..Default::default()
+    })
     .await;
 
     let url = server.url("/master.m3u8");
@@ -280,18 +280,16 @@ async fn multi_track_shared_abr_with_cache() {
         let init = Arc::clone(&init_segment);
         let variant_count = bw.len();
         async move {
-            kithara_integration_tests::hls_fixture::HlsTestServer::new(
-                kithara_integration_tests::hls_fixture::HlsTestServerConfig {
-                    variant_count,
-                    segments_per_variant: segment_count,
-                    segment_size: D.segment_size,
-                    segment_duration_secs: seg_dur,
-                    custom_data_per_variant: Some(vec![Arc::clone(&pcm); variant_count]),
-                    init_data_per_variant: Some(vec![Arc::clone(&init); variant_count]),
-                    variant_bandwidths: Some(bw),
-                    ..Default::default()
-                },
-            )
+            HlsTestServer::new(HlsTestServerConfig {
+                variant_count,
+                segments_per_variant: segment_count,
+                segment_size: D.segment_size,
+                segment_duration_secs: seg_dur,
+                custom_data_per_variant: Some(vec![Arc::clone(&pcm); variant_count]),
+                init_data_per_variant: Some(vec![Arc::clone(&init); variant_count]),
+                variant_bandwidths: Some(bw),
+                ..Default::default()
+            })
             .await
         }
     };
@@ -313,7 +311,7 @@ async fn multi_track_shared_abr_with_cache() {
         ..AbrOptions::default()
     });
 
-    // --- Step 1: Track 1, Auto mode → downloads V0 ---
+    // Step 1: Track 1, Auto mode → downloads V0
     info!("=== Step 1: Track 1 Auto ===");
     let bus1 = EventBus::new(64);
     let collector1 = EventCollector::new(&bus1);
@@ -348,7 +346,7 @@ async fn multi_track_shared_abr_with_cache() {
         "Track 1 Auto should download V0 segments, got none"
     );
 
-    // --- Step 2: Switch to Manual(1) and load Track 2 ---
+    // Step 2: Switch to Manual(1) and load Track 2
     info!("=== Step 2: Manual(1) → Track 2 ===");
     abr.set_mode(AbrMode::Manual(1));
 
@@ -386,7 +384,7 @@ async fn multi_track_shared_abr_with_cache() {
         t2_segs.iter().map(|s| s.variant).collect::<Vec<_>>()
     );
 
-    // --- Step 3: Replay Track 1 with Manual(0) → uses cache from step 1 ---
+    // Step 3: Replay Track 1 with Manual(0) → uses cache from step 1
     abr.set_mode(AbrMode::Manual(0));
 
     let bus3 = EventBus::new(64);
@@ -457,25 +455,23 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    let server = kithara_integration_tests::hls_fixture::HlsTestServer::new(
-        kithara_integration_tests::hls_fixture::HlsTestServerConfig {
-            variant_count: 2,
-            segments_per_variant: segment_count,
-            segment_size: D.segment_size,
-            segment_duration_secs: segment_duration_secs(),
-            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-            // V0 segments 5+ delayed -> forces ABR downswitch to V1
-            delay_rules: vec![DelayRule {
-                variant: Some(0),
-                segment_gte: Some(5),
-                delay_ms: 500,
-                ..Default::default()
-            }],
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        // V0 segments 5+ delayed -> forces ABR downswitch to V1
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(5),
+            delay_ms: 500,
             ..Default::default()
-        },
-    )
+        }],
+        ..Default::default()
+    })
     .await;
 
     let url = server.url("/master.m3u8");
@@ -519,7 +515,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     // Count unique network fetches (excluding cache hits), deduplicated by
     // (variant, segment_index) so we count distinct segment downloads.
-    let mut unique_fetches = std::collections::HashSet::new();
+    let mut unique_fetches = HashSet::new();
     for s in segments.iter().filter(|s| !s.cached) {
         unique_fetches.insert((s.variant, s.segment_index));
     }

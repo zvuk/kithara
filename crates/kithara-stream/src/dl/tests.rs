@@ -1,19 +1,32 @@
 //! Tests for the unified downloader.
 
 use std::{
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    task::{Context, Poll},
     time::Instant,
 };
 
+use axum::{
+    Router,
+    routing::{get, head},
+};
+use bytes::Bytes;
+use futures::stream::iter as stream_iter;
+use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::NetOptions;
-use kithara_platform::time::Duration;
+use kithara_platform::{
+    Mutex,
+    time::Duration,
+    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn, time as tokio_time},
+};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer};
+use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, Priority};
 
 const POLL_MS: u64 = 50;
 
@@ -24,13 +37,12 @@ struct MockPeer;
 impl Peer for MockPeer {}
 
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
-    let stream =
-        futures::stream::iter(chunks.into_iter().map(|c| Ok(bytes::Bytes::from_static(c))));
+    let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
     BodyStream::from_raw(Box::pin(stream))
 }
 
-fn sleep(ms: u64) -> kithara_platform::tokio::time::Sleep {
-    kithara_platform::tokio::time::sleep(Duration::from_millis(ms))
+fn sleep(ms: u64) -> tokio_time::Sleep {
+    tokio_time::sleep(Duration::from_millis(ms))
 }
 
 // BodyStream tests
@@ -111,7 +123,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let handle = dl.register(Arc::new(MockPeer));
 
     let h2 = handle.clone();
-    let task = kithara_platform::tokio::task::spawn(async move {
+    let task = tokio_spawn(async move {
         let start = Instant::now();
         let result = h2
             .execute(FetchCmd::get(
@@ -124,7 +136,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     sleep(POLL_MS).await;
     handle.cancel().cancel();
 
-    let (elapsed, result) = kithara_platform::tokio::time::timeout(Duration::from_secs(2), task)
+    let (elapsed, result) = tokio_time::timeout(Duration::from_secs(2), task)
         .await
         .expect("task should complete within 2s")
         .expect("task should not panic");
@@ -153,10 +165,6 @@ async fn peer_handle_downloader_cancel_cascades() {
 /// HTTP connections, even when many commands are submitted at once.
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
 async fn max_concurrent_limits_inflight_connections() {
-    use std::net::SocketAddr;
-
-    use axum::{Router, routing::get};
-
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_REQUESTS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
@@ -185,18 +193,16 @@ async fn max_concurrent_limits_inflight_connections() {
                         break;
                     }
                 }
-                kithara_platform::tokio::time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
         }),
     );
 
-    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    kithara_platform::tokio::task::spawn(async move {
+    tokio_spawn(async move {
         axum::serve(listener, app.into_make_service())
             .await
             .expect("serve");
@@ -232,10 +238,6 @@ async fn max_concurrent_limits_inflight_connections() {
 /// Each submits a batch of HEAD requests. Global peak must stay bounded.
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
 async fn many_downloaders_global_peak_stays_bounded() {
-    use std::net::SocketAddr;
-
-    use axum::{Router, routing::get};
-
     const NUM_DOWNLOADERS: usize = 20;
     const REQUESTS_PER_DL: usize = 30;
     const MAX_CONCURRENT_PER_DL: usize = 3;
@@ -267,18 +269,16 @@ async fn many_downloaders_global_peak_stays_bounded() {
                         break;
                     }
                 }
-                kithara_platform::tokio::time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
         }),
     );
 
-    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    kithara_platform::tokio::task::spawn(async move {
+    tokio_spawn(async move {
         axum::serve(listener, app.into_make_service())
             .await
             .expect("serve");
@@ -290,7 +290,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
     let mut tasks = Vec::new();
     for _ in 0..NUM_DOWNLOADERS {
         let url = url.clone();
-        tasks.push(kithara_platform::tokio::task::spawn(async move {
+        tasks.push(tokio_spawn(async move {
             let config = DownloaderConfig {
                 max_concurrent: MAX_CONCURRENT_PER_DL,
                 ..DownloaderConfig::default()
@@ -328,15 +328,6 @@ async fn many_downloaders_global_peak_stays_bounded() {
 /// A Peer produces 1000 HEAD commands via poll_next. Peak must stay ≤ max_concurrent.
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
 async fn poll_next_respects_max_concurrent() {
-    use std::{
-        net::SocketAddr,
-        task::{Context, Poll},
-    };
-
-    use axum::{Router, routing::get};
-
-    use super::{FetchCmd, Peer, Priority};
-
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
@@ -364,18 +355,16 @@ async fn poll_next_respects_max_concurrent() {
                         break;
                     }
                 }
-                kithara_platform::tokio::time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
         }),
     );
 
-    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    kithara_platform::tokio::task::spawn(async move {
+    tokio_spawn(async move {
         axum::serve(listener, app.into_make_service())
             .await
             .expect("serve");
@@ -386,7 +375,7 @@ async fn poll_next_respects_max_concurrent() {
     /// Peer that produces `remaining` HEAD commands via poll_next.
     struct FloodPeer {
         url: Url,
-        remaining: kithara_platform::Mutex<usize>,
+        remaining: Mutex<usize>,
     }
 
     impl Peer for FloodPeer {
@@ -420,7 +409,7 @@ async fn poll_next_respects_max_concurrent() {
     let dl = Downloader::new(config);
     let peer = Arc::new(FloodPeer {
         url,
-        remaining: kithara_platform::Mutex::new(TOTAL_CMDS),
+        remaining: Mutex::new(TOTAL_CMDS),
     });
     let handle = dl.register(peer.clone());
 
@@ -429,7 +418,7 @@ async fn poll_next_respects_max_concurrent() {
     // Give plenty of headroom.
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        kithara_platform::tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio_time::sleep(Duration::from_millis(100)).await;
         if *peer.remaining.lock_sync() == 0 && concurrent.load(Ordering::SeqCst) == 0 {
             break;
         }
@@ -457,10 +446,6 @@ async fn poll_next_respects_max_concurrent() {
 /// All requests must succeed — no "Can't assign requested address".
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(60)))]
 async fn port_exhaustion_stress() {
-    use std::net::SocketAddr;
-
-    use axum::{Router, routing::head};
-
     const NUM_DOWNLOADERS: usize = 200;
     const REQUESTS_PER_DL: usize = 114; // 3 variants × 37 segments + inits
     const MAX_CONCURRENT: usize = 5;
@@ -477,11 +462,9 @@ async fn port_exhaustion_stress() {
         }),
     );
 
-    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    kithara_platform::tokio::task::spawn(async move {
+    tokio_spawn(async move {
         axum::serve(listener, app.into_make_service())
             .await
             .expect("serve");
@@ -492,7 +475,7 @@ async fn port_exhaustion_stress() {
     let mut tasks = Vec::new();
     for dl_idx in 0..NUM_DOWNLOADERS {
         let url = url.clone();
-        tasks.push(kithara_platform::tokio::task::spawn(async move {
+        tasks.push(tokio_spawn(async move {
             let config = DownloaderConfig {
                 max_concurrent: MAX_CONCURRENT,
                 ..DownloaderConfig::default()
@@ -539,25 +522,18 @@ async fn port_exhaustion_stress() {
 /// `kithara_queue::Loader` would set up) receives it.
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(10)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
-    use std::net::SocketAddr;
-
-    use axum::{Router, routing::get};
-    use kithara_events::{DownloaderEvent, Event, EventBus};
-
     // Server delays longer than our configured soft_timeout, but less
     // than the hard timeout / test timeout.
     let app = Router::new().route(
         "/slow",
         get(|| async {
-            kithara_platform::tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio_time::sleep(Duration::from_millis(500)).await;
             "ok"
         }),
     );
-    let listener = kithara_platform::tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    kithara_platform::tokio::task::spawn(async move {
+    tokio_spawn(async move {
         axum::serve(listener, app.into_make_service())
             .await
             .expect("serve");
@@ -583,7 +559,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut seen_slow = false;
     while Instant::now() < deadline {
-        match kithara_platform::tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+        match tokio_time::timeout(Duration::from_millis(200), rx.recv()).await {
             Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow))) => {
                 seen_slow = true;
                 break;

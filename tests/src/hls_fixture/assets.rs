@@ -11,6 +11,7 @@ use kithara::{
     internal::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
+use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
 use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -79,16 +80,12 @@ pub fn create_test_net() -> HttpClient {
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
-pub fn create_test_downloader() -> kithara_stream::dl::Downloader {
-    kithara_stream::dl::Downloader::new(kithara_stream::dl::DownloaderConfig::default())
+pub fn create_test_downloader() -> Downloader {
+    Downloader::new(DownloaderConfig::default())
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
-fn create_test_peer_handle() -> kithara_stream::dl::PeerHandle {
-    use std::sync::Arc;
-
-    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
-
+fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
     impl Peer for TestPeer {}
     let cancel = CancellationToken::new();

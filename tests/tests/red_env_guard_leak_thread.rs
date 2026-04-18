@@ -8,7 +8,6 @@
 //! ```
 //!
 //! What LEAK means in nextest
-//! --------------------------
 //! Each test runs in its own subprocess (invocation of the test binary with
 //! `--exact`).  After the test body completes, nextest waits up to
 //! `leak-timeout` (default **100 ms**) for the subprocess to close stdout,
@@ -16,7 +15,6 @@
 //! passes but its subprocess held resources past the grace window.
 //!
 //! Hypothesis
-//! ----------
 //! The `#[kithara::test(native, env(...), timeout(Duration::from_secs(5)))]`
 //! macro expands into a sync `#[test]` fn whose tail is:
 //!
@@ -44,7 +42,6 @@
 //! which is what triggers LEAK.
 //!
 //! What this RED test measures
-//! ---------------------------
 //! We launch the real test binary
 //! `env_guard::no_proxy_env_keeps_explicit_proxy_override` as a subprocess
 //! and measure the **wall-clock gap between our parent reading EOF on its

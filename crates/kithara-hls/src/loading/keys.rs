@@ -13,7 +13,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
@@ -180,7 +180,7 @@ impl KeyManager {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = kithara_assets::ResourceKey::from_url(url);
+        let cache_key = ResourceKey::from_url(url);
         let res = self
             .backend
             .open_resource(&cache_key)

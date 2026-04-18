@@ -314,7 +314,10 @@ where
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        num::NonZeroUsize,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
@@ -322,6 +325,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::AssetStoreBuilder;
 
     fn test_pool() -> BytePool {
         BytePool::new(4, PROCESS_CHUNK_SIZE)
@@ -504,8 +508,6 @@ mod tests {
     /// [`ProcessedResource::read_at`]).
     #[kithara::test]
     fn red_test_fixed_seek_window_open_resource_returns_uncommitted_processed_entry() {
-        use crate::{AssetStoreBuilder, ResourceKey};
-
         #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
         struct DrmCtx {
             xor_key: u8,
@@ -590,8 +592,6 @@ mod tests {
     /// `::drm` case of `live_ephemeral_small_cache_playback`).
     #[kithara::test]
     fn red_test_drm_small_cache_reactivate_preserves_processed_flag() {
-        use kithara_storage::ResourceStatus;
-
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
         let encrypted_first: Vec<u8> = b"first payload".iter().map(|b| b ^ 0x42).collect();
@@ -721,12 +721,6 @@ mod tests {
     /// commit")`, which is a hard error.
     #[kithara::test]
     fn red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader() {
-        use std::num::NonZeroUsize;
-
-        use kithara_storage::ResourceExt;
-
-        use crate::{AssetStoreBuilder, ResourceKey};
-
         #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
         struct DrmCtx {
             xor_key: u8,

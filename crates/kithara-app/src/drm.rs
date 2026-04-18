@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use kithara_drm::{KeyProcessorRegistry, KeyProcessorRule, UniqueBinaryCipher};
 use rand::{distr::Alphanumeric, prelude::*};
@@ -57,7 +57,7 @@ pub fn make_key_registry(domains: &[String], auth_token: Option<String>) -> KeyP
 
     let secret = format!("{cipher_key}{seed}");
     let cipher = UniqueBinaryCipher::new(&secret);
-    let mut headers = std::collections::HashMap::new();
+    let mut headers = HashMap::new();
     headers.insert("X-Encrypted-Key".to_string(), seed);
     if let Some(token) = auth_token {
         headers.insert("X-Auth-Token".to_string(), token);

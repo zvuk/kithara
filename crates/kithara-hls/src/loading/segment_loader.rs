@@ -7,7 +7,7 @@
 //! decryption contexts via an optional [`KeyManager`]. No dependency
 //! on `FetchManager` — all the segment loading state lives here.
 
-use std::{sync::Arc, time::Duration};
+use std::{io::Error as IoError, sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
@@ -138,9 +138,7 @@ impl SegmentLoader {
             .write_all(move |chunk| {
                 let pos = offset;
                 offset += chunk.len() as u64;
-                res_writer
-                    .write_at(pos, chunk)
-                    .map_err(std::io::Error::other)
+                res_writer.write_at(pos, chunk).map_err(IoError::other)
             })
             .await
             .map_err(|e| {
@@ -405,7 +403,6 @@ impl SegmentLoader {
     /// Returns number of bytes read, or `None` if the init segment
     /// isn't cached or can't be read.
     pub fn read_init_bytes(&self, variant: usize, buf: &mut Vec<u8>) -> Option<usize> {
-        use kithara_storage::ResourceExt;
         let meta = self.get_init_segment_cached(variant)?;
         let key = ResourceKey::from_url(&meta.url);
         let resource = self.backend.open_resource(&key).ok()?;

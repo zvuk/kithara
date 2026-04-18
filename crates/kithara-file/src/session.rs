@@ -6,7 +6,12 @@ use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, RangeSpec};
-use kithara_platform::{Mutex, time::Duration, tokio};
+use kithara_platform::{
+    Mutex,
+    time::Duration,
+    tokio,
+    tokio::{task, time as tokio_time},
+};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
@@ -145,14 +150,14 @@ impl FileSource {
         // Spawn full-file download task.
         let dl_inner = Arc::clone(&inner);
         let dl_peer = peer.clone();
-        tokio::task::spawn(async move {
+        task::spawn(async move {
             run_full_download(dl_inner, dl_peer, look_ahead_bytes).await;
         });
 
         // Spawn range-request watcher task.
         let rng_inner = Arc::clone(&inner);
         let rng_coord = Arc::clone(&coord);
-        tokio::task::spawn(async move {
+        task::spawn(async move {
             run_range_watcher(rng_inner, peer, rng_coord, cancel).await;
         });
 
@@ -292,7 +297,7 @@ async fn stream_body_to_resource(
                         if cancel.is_cancelled() {
                             return Err(StreamBodyError::Cancelled);
                         }
-                        tokio::time::sleep(THROTTLE_PAUSE).await;
+                        tokio_time::sleep(THROTTLE_PAUSE).await;
                     }
                 }
             }
@@ -360,7 +365,7 @@ async fn run_range_watcher(
             }
             let task_inner = Arc::clone(&inner);
             let task_peer = peer.clone();
-            tokio::task::spawn(async move {
+            task::spawn(async move {
                 run_range_download(task_inner, task_peer, range).await;
             });
         }

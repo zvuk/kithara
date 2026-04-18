@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use kithara_abr::AbrController;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -1156,7 +1157,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig::default()
-        .with_abr(kithara_abr::AbrController::new(AbrOptions {
+        .with_abr(AbrController::new(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
         }))

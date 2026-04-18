@@ -8,6 +8,7 @@ use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::{create_test_wav, kithara};
+use rodio::Source;
 use tempfile::NamedTempFile;
 
 /// Write test WAV to a temp file and return config for it.
@@ -167,7 +168,7 @@ async fn test_rodio_source_try_seek() {
         .await
         .unwrap();
 
-    let result = rodio::Source::try_seek(&mut audio, Duration::from_millis(250));
+    let result = Source::try_seek(&mut audio, Duration::from_millis(250));
     assert!(
         result.is_ok(),
         "rodio::Source::try_seek must delegate to Audio::seek"

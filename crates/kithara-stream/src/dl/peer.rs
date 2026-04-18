@@ -5,10 +5,11 @@ use std::{
     task::{Context, Poll},
 };
 
+use futures::future::join_all;
 use kithara_events::EventBus;
 use kithara_net::NetError;
 use kithara_platform::{
-    RwLock,
+    CancelGroup, RwLock,
     tokio::sync::{mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
@@ -60,7 +61,7 @@ pub(super) enum ResponseTarget {
 /// Per-peer command sent through the channel to the downloader loop.
 pub(super) struct InternalCmd {
     pub(super) cmd: FetchCmd,
-    pub(super) cancel: kithara_platform::CancelGroup,
+    pub(super) cancel: CancelGroup,
     pub(super) priority: Priority,
     pub(super) response: ResponseTarget,
     /// Arena index of the owning peer. `None` when sent from `PeerHandle`
@@ -160,7 +161,7 @@ impl PeerHandle {
     /// Returns [`NetError::Cancelled`] when the peer cancel fires,
     /// the downloader shuts down, or the HTTP request itself fails.
     pub async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        let cancel = kithara_platform::CancelGroup::new(vec![self.inner.cancel.child_token()]);
+        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let internal = InternalCmd {
             cmd,
@@ -192,7 +193,7 @@ impl PeerHandle {
         let bus = self.bus();
 
         for cmd in cmds {
-            let cancel = kithara_platform::CancelGroup::new(vec![self.inner.cancel.child_token()]);
+            let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
             let (resp_tx, resp_rx) = oneshot::channel();
             let internal = InternalCmd {
                 cmd,
@@ -210,7 +211,7 @@ impl PeerHandle {
         }
 
         // Await all responses concurrently, preserving array order.
-        futures::future::join_all(receivers.into_iter().map(|rx| async move {
+        join_all(receivers.into_iter().map(|rx| async move {
             match rx {
                 Some(resp_rx) => resp_rx.await.unwrap_or(Err(NetError::Cancelled)),
                 None => Err(NetError::Cancelled),

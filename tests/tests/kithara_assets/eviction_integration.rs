@@ -12,7 +12,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
-use kithara_assets::internal::schema::PinsIndexFile;
+use kithara_assets::{index::schema::ArchivedPinsIndexFile, internal::schema::PinsIndexFile};
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
@@ -66,10 +66,8 @@ fn eviction_max_assets_skips_pinned_assets(
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
-                && let Ok(archived) = rkyv::access::<
-                    kithara_assets::index::schema::ArchivedPinsIndexFile,
-                    rkyv::rancor::Error,
-                >(&pins_bytes)
+                && let Ok(archived) =
+                    rkyv::access::<ArchivedPinsIndexFile, rkyv::rancor::Error>(&pins_bytes)
             {
                 let pins_file: PinsIndexFile =
                     rkyv::deserialize::<PinsIndexFile, rkyv::rancor::Error>(archived).unwrap();

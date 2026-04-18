@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use kithara_bufpool::BytePool;
-use kithara_storage::{Atomic, ResourceExt};
+use kithara_storage::{Atomic, ResourceExt, StorageError};
 
 use super::schema::PinsIndexFile;
 use crate::{
@@ -72,9 +72,8 @@ impl<R: ResourceExt> PinsIndex<R> {
             pinned: map,
         };
 
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file).map_err(|e| {
-            AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
-        })?;
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+            .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
         self.res.write_all(&bytes)?;
 
         Ok(())

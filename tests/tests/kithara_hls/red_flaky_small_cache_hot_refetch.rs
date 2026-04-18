@@ -19,7 +19,6 @@
 //!     AND the 30 s nextest slow-timeout fires.
 //!
 //! Scenario of this RED test
-//! -------------------------
 //! Mirrors the real flake with one ratchet: `cache_capacity = 1` instead
 //! of 4, so the LRU is guaranteed to evict before the reader reaches its
 //! first chunk. The reader is also rate-limited (30 ms per chunk) so the
@@ -33,7 +32,6 @@
 //!      segment.
 //!
 //! Why this matches the production flake
-//! ------------------------------------
 //! Both failures share one root cause: `reader_segment_floor()` is too
 //! weak a clamp when the reader has not yet made a successful `read_at`
 //! (e.g. its segment was evicted before `byte_position` advanced). The

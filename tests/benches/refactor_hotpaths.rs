@@ -28,7 +28,10 @@ use kithara::{
     file::{File, FileConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     net::NetOptions,
-    stream::Stream,
+    stream::{
+        Stream,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_audio::internal::{ResamplerParams, ResamplerProcessor};
 use kithara_platform::tokio::runtime::{Builder, Runtime};
@@ -330,9 +333,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         pool_max_idle_per_host: 8,
                         ..NetOptions::default()
                     };
-                    let downloader = kithara::stream::dl::Downloader::new(
-                        kithara::stream::dl::DownloaderConfig::default().with_net(net),
-                    );
+                    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);

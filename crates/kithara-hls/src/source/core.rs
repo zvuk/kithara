@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::Range,
     sync::{Arc, atomic::Ordering},
 };
@@ -371,7 +371,7 @@ pub(crate) fn build_pair(
         download_variant: initial_variant,
         filling_layout_gap: false,
         demand_throttle_until: None,
-        announced_cached_count: std::collections::HashMap::new(),
+        announced_cached_count: HashMap::new(),
         in_flight_segments: HashSet::new(),
     };
 

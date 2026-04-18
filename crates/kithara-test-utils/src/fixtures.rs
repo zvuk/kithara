@@ -1,7 +1,11 @@
 //! Common fixtures for integration tests.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use kithara_abr::{AbrMode, AbrOptions};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 #[cfg(target_arch = "wasm32")]
@@ -89,10 +93,7 @@ pub fn cancel_token_cancelled() -> CancellationToken {
 
 #[must_use]
 #[kithara::fixture]
-pub fn abr_switch_trigger() -> kithara_abr::AbrOptions {
-    use std::time::Duration;
-
-    use kithara_abr::{AbrMode, AbrOptions};
+pub fn abr_switch_trigger() -> AbrOptions {
     AbrOptions {
         down_hysteresis_ratio: 1.0,
         down_switch_buffer_secs: 0.0,
@@ -110,10 +111,7 @@ pub fn abr_switch_trigger() -> kithara_abr::AbrOptions {
 
 #[must_use]
 #[kithara::fixture]
-pub fn abr_fast() -> kithara_abr::AbrOptions {
-    use std::time::Duration;
-
-    use kithara_abr::{AbrMode, AbrOptions};
+pub fn abr_fast() -> AbrOptions {
     AbrOptions {
         down_hysteresis_ratio: 0.9,
         down_switch_buffer_secs: 0.0,

@@ -1,5 +1,9 @@
-use std::sync::{Arc, Mutex as StdMutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex as StdMutex},
+};
 
+use futures::future::{join, join_all};
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
@@ -17,7 +21,7 @@ use crate::{
     coord::HlsCoord,
     error::HlsError,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
-    parsing::variant_info_from_master,
+    parsing::{EncryptionMethod, variant_info_from_master},
     peer::HlsPeer,
     playlist::PlaylistState,
     source::{HlsSource, build_pair},
@@ -202,10 +206,6 @@ async fn prefetch_init_and_keys(
     key_manager: &Arc<KeyManager>,
     media_playlists: &[(url::Url, crate::parsing::MediaPlaylist)],
 ) {
-    use std::collections::HashSet;
-
-    use crate::parsing::EncryptionMethod;
-
     let num_variants = media_playlists.len();
 
     let init_futs: Vec<_> = (0..num_variants)
@@ -243,11 +243,7 @@ async fn prefetch_init_and_keys(
         })
         .collect();
 
-    let (init_results, key_results) = futures::future::join(
-        futures::future::join_all(init_futs),
-        futures::future::join_all(key_futs),
-    )
-    .await;
+    let (init_results, key_results) = join(join_all(init_futs), join_all(key_futs)).await;
 
     for (variant, result) in init_results {
         if let Err(e) = result {

@@ -2,7 +2,6 @@
 //! cycle and the tear-down contract that breaks it.
 //!
 //! Background
-//! ----------
 //! `HlsPeer` is held by the `Downloader` Registry as `Arc<dyn Peer>`. The
 //! Registry only drops that Arc when `entry.peer_cancel.is_cancelled()`
 //! becomes true. `peer_cancel` is the `PeerHandle`'s inner cancel token,
@@ -17,7 +16,6 @@
 //! PeerInner (cancel unfired) → Registry keeps peer`.
 //!
 //! Contract
-//! --------
 //! Breaking the cycle requires *the peer* to release its internal
 //! `PeerHandle` clones when the user-visible source drops. In production
 //! this is done by `HlsSource::Drop` calling `HlsPeer::teardown()`, which

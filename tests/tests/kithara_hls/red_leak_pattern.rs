@@ -1,7 +1,6 @@
 //! RED test: systemic leak in `Downloader::Registry` peer lifecycle.
 //!
 //! Hypothesis
-//! ----------
 //! In `registry.rs::poll_peers`, a registered peer is only removed from
 //! `self.peers` when BOTH:
 //!

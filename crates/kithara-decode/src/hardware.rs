@@ -1,3 +1,5 @@
+use std::io::{Seek, SeekFrom};
+
 use kithara_stream::{AudioCodec, ContainerFormat};
 #[cfg(any(
     test,
@@ -32,7 +34,7 @@ pub(crate) fn recoverable_hardware_error(
     mut source: BoxedSource,
     error: DecodeError,
 ) -> RecoverableHardwareError {
-    if let Err(rewind_error) = std::io::Seek::seek(&mut *source, std::io::SeekFrom::Start(0)) {
+    if let Err(rewind_error) = Seek::seek(&mut *source, SeekFrom::Start(0)) {
         warn!(
             ?error,
             ?rewind_error,

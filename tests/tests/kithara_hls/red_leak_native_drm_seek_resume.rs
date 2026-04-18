@@ -8,7 +8,6 @@
 //! thread owned by the test refuses to join, which blocks process exit".
 //!
 //! Hypothesis
-//! ----------
 //! The DRM-path through `Audio<Stream<Hls>>` with `seek()` + `preload()`
 //! cycles leaves a thread/task artifact alive past `Audio::drop`:
 //!
@@ -31,7 +30,6 @@
 //! delaying process exit past leak-timeout.
 //!
 //! RED strategy
-//! ------------
 //! Exercise the same Audio<Stream<Hls>>::new + preload + seek() cycle with
 //! DRM, then drop everything. Count kithara-owned named threads (exposed
 //! by `kithara_platform::thread::active_named_thread_count`) across N

@@ -12,7 +12,6 @@
 //! persistence contract:
 //!
 //! | File              | Persisted by                       | Eagerly flushed?     |
-//! | ----------------- | ---------------------------------- | -------------------- |
 //! | `pins.bin`        | `LeaseAssets::pin` / `Drop` on      | yes, every pin/unpin |
 //! |                   | `LeaseGuard`                        |                      |
 //! | `lru.bin`         | `EvictAssets::touch_and_maybe_evict`| yes, every acquire   |
@@ -35,6 +34,7 @@ use kithara_assets::{
 };
 use kithara_storage::ResourceExt;
 use kithara_test_utils::{kithara, temp_dir};
+use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {
     root.join("_index")
@@ -115,8 +115,8 @@ fn read_archived_availability_final_len(path: &Path, asset_root: &str, key: &str
     let asset = archived.assets.get(asset_root).expect("asset entry");
     let res = asset.resources.get(key).expect("resource entry");
     match res.final_len {
-        rkyv::option::ArchivedOption::Some(ref l) => Some(l.to_native()),
-        rkyv::option::ArchivedOption::None => None,
+        ArchivedOption::Some(ref l) => Some(l.to_native()),
+        ArchivedOption::None => None,
     }
 }
 

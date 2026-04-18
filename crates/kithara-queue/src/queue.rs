@@ -10,7 +10,7 @@ use delegate::delegate;
 use kithara_events::{
     Event, EventBus, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
 };
-use kithara_play::{PlayError, PlayerConfig, PlayerImpl};
+use kithara_play::{PlayError, PlayerConfig, PlayerImpl, ResourceSrc};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, warn};
 
@@ -831,13 +831,13 @@ fn extract_track_name(source: &TrackSource) -> String {
     name_from_raw(raw)
 }
 
-fn name_from_src(src: &kithara_play::ResourceSrc) -> String {
+fn name_from_src(src: &ResourceSrc) -> String {
     match src {
-        kithara_play::ResourceSrc::Url(url) => {
+        ResourceSrc::Url(url) => {
             let path = url.path();
             name_from_raw(path)
         }
-        kithara_play::ResourceSrc::Path(p) => p.file_name().map_or_else(
+        ResourceSrc::Path(p) => p.file_name().map_or_else(
             || "Unknown".to_string(),
             |n| n.to_string_lossy().into_owned(),
         ),
@@ -857,6 +857,7 @@ mod tests {
 
     use kithara_events::PlayerEvent;
     use kithara_test_utils::kithara;
+    use tokio::time::{Instant as TokioInstant, timeout as tokio_timeout};
 
     use super::*;
 
@@ -872,13 +873,13 @@ mod tests {
     where
         F: FnMut(&QueueEvent) -> bool,
     {
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = TokioInstant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(TokioInstant::now());
             if remaining.is_zero() {
                 return false;
             }
-            match tokio::time::timeout(remaining, rx.recv()).await {
+            match tokio_timeout(remaining, rx.recv()).await {
                 Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,

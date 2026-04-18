@@ -5,6 +5,8 @@
 //! 2. Init segment bitrate — `avg_bitrate` from fMP4 `esds` descriptor.
 //! 3. HEAD requests — network fallback.
 
+use kithara_stream::dl::FetchCmd;
+use re_mp4::{Mp4, StsdBoxContent};
 use tracing::debug;
 
 use crate::{
@@ -169,11 +171,11 @@ fn try_init_bitrate(
 /// Walks `moov/trak/mdia/minf/stbl/stsd` → `Mp4a` → `esds` →
 /// `DecoderConfigDescriptor.avg_bitrate`.
 fn extract_avg_bitrate(data: &[u8]) -> Option<u32> {
-    let mp4 = re_mp4::Mp4::read_bytes(data).ok()?;
+    let mp4 = Mp4::read_bytes(data).ok()?;
     for track in mp4.tracks().values() {
         let trak = track.trak(&mp4);
         let stsd = &trak.mdia.minf.stbl.stsd;
-        if let re_mp4::StsdBoxContent::Mp4a(ref mp4a) = stsd.contents
+        if let StsdBoxContent::Mp4a(ref mp4a) = stsd.contents
             && let Some(ref esds) = mp4a.esds
         {
             let avg = esds.es_desc.dec_config.avg_bitrate;
@@ -201,8 +203,6 @@ async fn try_head_requests(
     num_segments: usize,
     headers: Option<&kithara_net::Headers>,
 ) -> Option<VariantSizeMap> {
-    use kithara_stream::dl::FetchCmd;
-
     let init_url = playlist_state.init_url(variant);
     let mut cmds: Vec<FetchCmd> = Vec::new();
     let has_init = init_url.is_some();

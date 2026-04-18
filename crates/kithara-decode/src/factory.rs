@@ -513,7 +513,7 @@ impl DecoderFactory {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{Cursor, Error as IoError};
 
     use kithara_test_utils::{create_test_wav, kithara};
 
@@ -550,7 +550,7 @@ mod tests {
         ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
             Err(recoverable_hardware_error(
                 source,
-                DecodeError::Backend(Box::new(std::io::Error::other("forced hardware failure"))),
+                DecodeError::Backend(Box::new(IoError::other("forced hardware failure"))),
             ))
         }
     }

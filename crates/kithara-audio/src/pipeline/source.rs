@@ -19,20 +19,14 @@ use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
 
-use crate::pipeline::fetch::Fetch;
-
-/// Convert a decoder's [`PcmSpec`] into the shared [`AudioFormat`]
-/// carried by `AudioEvent`. The two structs are intentionally
-/// decoupled — see [`AudioFormat`] for the dependency-cycle rationale.
-fn spec_to_format(spec: PcmSpec) -> AudioFormat {
-    AudioFormat::new(spec.channels, spec.sample_rate)
-}
-
 use crate::{
-    pipeline::track_fsm::{
-        ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState, ResumeState,
-        SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag, TrackState, TrackStep,
-        WaitContext, WaitingReason, map_source_phase,
+    pipeline::{
+        fetch::Fetch,
+        track_fsm::{
+            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState,
+            ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag,
+            TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
+        },
     },
     traits::AudioEffect,
     worker::{AudioWorkerSource, apply_effects, flush_effects, reset_effects},
@@ -314,7 +308,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             && let Some(ref emit) = self.emit
         {
             emit(AudioEvent::FormatDetected {
-                spec: spec_to_format(chunk.spec()),
+                spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate),
             });
             self.last_spec = Some(chunk.spec());
         }
@@ -324,8 +318,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             && old_spec != chunk.spec()
         {
             self.emit_event(AudioEvent::FormatChanged {
-                old: spec_to_format(old_spec),
-                new: spec_to_format(chunk.spec()),
+                old: AudioFormat::new(old_spec.channels, old_spec.sample_rate),
+                new: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate),
             });
             self.last_spec = Some(chunk.spec());
         }

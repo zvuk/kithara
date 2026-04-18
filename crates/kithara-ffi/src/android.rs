@@ -4,8 +4,9 @@ use std::sync::{
 };
 
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JClass, JObject},
+    Env, JNIEnv,
+    objects::{Global, JClass, JObject},
+    strings::JNIString,
     sys::jint,
 };
 use rustls_platform_verifier::android as rustls_android;
@@ -13,10 +14,10 @@ use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
 mod android_context {
-    use super::{AtomicBool, GlobalRef, OnceLock};
+    use super::{AtomicBool, Global, JObject, OnceLock};
 
     pub(super) static READY: AtomicBool = AtomicBool::new(false);
-    pub(super) static GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
+    pub(super) static GLOBAL: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 }
 
 #[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
@@ -34,23 +35,40 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
                 .with(layer.with_filter(filter))
                 .try_init();
         }
-        match init_android_context(&mut env, &context) {
-            Ok(()) => {
-                android_context::READY.store(true, Ordering::Release);
+
+        let mut init_ok = false;
+        let _ = env.with_env_no_catch(|env| -> Result<(), jni::errors::Error> {
+            match init_android_context(env, &context) {
+                Ok(()) => {
+                    android_context::READY.store(true, Ordering::Release);
+                    init_ok = true;
+                    Ok(())
+                }
+                Err(message) => {
+                    error!(message = %message);
+                    env.throw_new(
+                        JNIString::from("java/lang/IllegalStateException"),
+                        JNIString::from(message.as_str()),
+                    )
+                }
             }
-            Err(message) => {
-                error!(message = %message);
-                let _ = env.throw_new("java/lang/IllegalStateException", &message);
-                return;
-            }
+        });
+        if !init_ok {
+            return;
         }
     }
 
-    if let Err(err) = rustls_android::init_with_env(&mut env, context) {
-        let message = format!("failed to initialize rustls platform verifier: {err}");
-        error!(message = %message);
-        let _ = env.throw_new("java/lang/IllegalStateException", &message);
-    }
+    let _ = env.with_env_no_catch(|env| -> Result<(), jni::errors::Error> {
+        if let Err(err) = rustls_android::init_with_env(env, context) {
+            let message = format!("failed to initialize rustls platform verifier: {err}");
+            error!(message = %message);
+            env.throw_new(
+                JNIString::from("java/lang/IllegalStateException"),
+                JNIString::from(message.as_str()),
+            )?;
+        }
+        Ok(())
+    });
 }
 
 fn level_filter(ordinal: jint) -> LevelFilter {
@@ -68,7 +86,7 @@ fn level_filter(ordinal: jint) -> LevelFilter {
     }
 }
 
-fn init_android_context(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<(), String> {
+fn init_android_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), String> {
     let java_vm = env
         .get_java_vm()
         .map_err(|err| format!("failed to get JavaVM: {err}"))?;
@@ -92,7 +110,7 @@ fn init_android_context(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<(
     // so ndk_context is not auto-initialized by runtime.
     unsafe {
         ndk_context::initialize_android_context(
-            java_vm.get_java_vm_pointer().cast(),
+            java_vm.get_raw().cast(),
             global.as_obj().as_raw().cast(),
         );
     }
