@@ -31,14 +31,11 @@ pub struct AbrDecision {
     pub changed: bool,
 }
 
-const NO_SWITCH: u64 = 0;
-
 /// Adaptive bitrate controller.
 ///
 /// Clone-able: cloning shares the same internal state (all fields behind Arc).
 /// This allows sharing one controller between multiple players or holding a
 /// clone at the Resource level for runtime mode changes.
-const NO_BANDWIDTH_CAP: u64 = 0;
 
 #[derive(Clone)]
 pub struct AbrController<E: Estimator> {
@@ -64,11 +61,14 @@ struct SwitchContext {
 }
 
 impl<E: Estimator> AbrController<E> {
+    const NO_SWITCH: u64 = 0;
+    const NO_BANDWIDTH_CAP: u64 = 0;
+
     pub fn with_estimator(cfg: AbrOptions, estimator: E) -> Self {
         let initial_variant = cfg.initial_variant();
         let mode_val: usize = cfg.mode.into();
         let variants = cfg.variants.clone();
-        let max_bw = cfg.max_bandwidth_bps.unwrap_or(NO_BANDWIDTH_CAP);
+        let max_bw = cfg.max_bandwidth_bps.unwrap_or(Self::NO_BANDWIDTH_CAP);
         Self {
             variants: Arc::new(Mutex::new(variants)),
             max_bandwidth_bps: Arc::new(AtomicU64::new(max_bw)),
@@ -77,7 +77,7 @@ impl<E: Estimator> AbrController<E> {
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
             lock_count: Arc::new(AtomicUsize::new(0)),
             estimator: Arc::new(Mutex::new(estimator)),
-            last_switch_at_nanos: Arc::new(AtomicU64::new(NO_SWITCH)),
+            last_switch_at_nanos: Arc::new(AtomicU64::new(Self::NO_SWITCH)),
             reference_instant: Instant::now(),
         }
     }
@@ -114,12 +114,12 @@ impl<E: Estimator> AbrController<E> {
     #[must_use]
     pub fn max_bandwidth_bps(&self) -> Option<u64> {
         let v = self.max_bandwidth_bps.load(Ordering::Acquire);
-        if v == NO_BANDWIDTH_CAP { None } else { Some(v) }
+        if v == Self::NO_BANDWIDTH_CAP { None } else { Some(v) }
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
         self.max_bandwidth_bps
-            .store(cap.unwrap_or(NO_BANDWIDTH_CAP), Ordering::Release);
+            .store(cap.unwrap_or(Self::NO_BANDWIDTH_CAP), Ordering::Release);
     }
 
     #[must_use]
@@ -266,7 +266,7 @@ impl<E: Estimator> AbrController<E> {
 
     fn can_switch_now(&self, now: Instant) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
-        if nanos == NO_SWITCH {
+        if nanos == Self::NO_SWITCH {
             return true;
         }
         let last = self.reference_instant + Duration::from_nanos(nanos);
@@ -736,7 +736,7 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(ctrl.get_current_variant_index(), 1);
-        assert_eq!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), NO_SWITCH);
+        assert_eq!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), AbrController::<Unimock>::NO_SWITCH);
     }
 
     #[kithara::test]
@@ -754,7 +754,7 @@ mod tests {
             now,
         );
         assert_eq!(ctrl.get_current_variant_index(), 2);
-        assert_ne!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), NO_SWITCH);
+        assert_ne!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), AbrController::<Unimock>::NO_SWITCH);
         assert!(!ctrl.can_switch_now(now));
     }
 

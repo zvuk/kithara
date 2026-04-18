@@ -5,14 +5,14 @@ pub(crate) struct Ewma {
     total_weight: f64,
 }
 
-const HALF_LIFE_BASE: f64 = 0.5;
-const MIN_HALF_LIFE_SECS: f64 = 0.001;
-const MIN_ZERO_FACTOR: f64 = 1e-6;
-
 impl Ewma {
+    const HALF_LIFE_BASE: f64 = 0.5;
+    const MIN_HALF_LIFE_SECS: f64 = 0.001;
+    const MIN_ZERO_FACTOR: f64 = 1e-6;
+
     pub(crate) fn new(half_life_secs: f64) -> Self {
         Self {
-            alpha: f64::exp(HALF_LIFE_BASE.ln() / half_life_secs.max(MIN_HALF_LIFE_SECS)),
+            alpha: f64::exp(Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS)),
             last_estimate: 0.0,
             total_weight: 0.0,
         }
@@ -29,7 +29,7 @@ impl Ewma {
             0.0
         } else {
             let zero_factor = 1.0 - self.alpha.powf(self.total_weight);
-            self.last_estimate / zero_factor.max(MIN_ZERO_FACTOR)
+            self.last_estimate / zero_factor.max(Self::MIN_ZERO_FACTOR)
         }
     }
 }
