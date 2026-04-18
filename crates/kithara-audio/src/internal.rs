@@ -3,6 +3,10 @@
 pub mod audio {
     use std::sync::Arc;
 
+    #[cfg(any(test, feature = "test-utils"))]
+    use crate::pipeline::fetch::Fetch;
+    #[cfg(any(test, feature = "test-utils"))]
+    use kithara_decode::PcmChunk;
     use kithara_platform::tokio::sync::Notify;
 
     pub use crate::{AudioConfig, audio::Audio};
@@ -22,6 +26,18 @@ pub mod audio {
         pub fn test_seek_epoch(&self) -> u64 {
             self.validator.epoch
         }
+
+        #[cfg(any(test, feature = "test-utils"))]
+        #[must_use]
+        pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
+            self.pcm_rx()
+        }
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn test_try_pop_pcm<S>(audio: &mut Audio<S>) -> Option<Fetch<PcmChunk>> {
+        audio.test_pcm_rx().try_pop()
     }
 
     #[must_use]

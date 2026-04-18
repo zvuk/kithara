@@ -44,7 +44,7 @@ use crate::{
         WaitContext, WaitingReason, map_source_phase,
     },
     traits::AudioEffect,
-    worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects},
+    worker::{AudioWorkerSource, apply_effects, flush_effects, reset_effects},
 };
 
 /// Shared stream wrapper for format change detection.
@@ -1578,7 +1578,6 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;
-    type Command = AudioCommand;
 
     fn step_track(&mut self) -> TrackStep<PcmChunk> {
         // 1. Seek preemption: detect new seek epoch from Timeline.
@@ -1624,10 +1623,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 TrackStep::Failed
             }
         }
-    }
-
-    fn handle_command(&mut self, _cmd: Self::Command) {
-        // No commands left to handle. Seek flows through Timeline.
     }
 
     fn timeline(&self) -> &Timeline {

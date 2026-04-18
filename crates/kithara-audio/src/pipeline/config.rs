@@ -30,9 +30,6 @@ const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
 
-/// Default command channel capacity.
-const DEFAULT_COMMAND_CAPACITY: usize = 4;
-
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
@@ -42,8 +39,6 @@ const DEFAULT_COMMAND_CAPACITY: usize = 4;
 pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
-    /// Command channel capacity.
-    pub command_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     #[setters(skip)]
     pub hint: Option<String>,
@@ -91,7 +86,6 @@ impl<T: StreamType> AudioConfig<T> {
     pub fn new(stream: T::Config) -> Self {
         Self {
             byte_pool: None,
-            command_channel_capacity: DEFAULT_COMMAND_CAPACITY,
             hint: None,
             host_sample_rate: None,
             media_info: None,
