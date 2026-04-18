@@ -40,8 +40,11 @@ use kithara_platform::{
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 use tokio_util::sync::CancellationToken;
 
-const TOTAL_SIZE: usize = 1_024_000;
-const STREAM_CLOSES_AT: usize = 512_000;
+struct Consts;
+impl Consts {
+    const TOTAL_SIZE: usize = 1_024_000;
+    const STREAM_CLOSES_AT: usize = 512_000;
+}
 
 fn clean_temp_dir() -> TestTempDir {
     let dir = TestTempDir::new();
@@ -69,11 +72,11 @@ async fn handle_request(
 
     // HEAD request — return correct Content-Length
     if method == Method::HEAD {
-        tracing::info!("Server: HEAD request - Content-Length: {}", TOTAL_SIZE);
+        tracing::info!("Server: HEAD request - Content-Length: {}", Consts::TOTAL_SIZE);
         return (
             StatusCode::OK,
             [
-                (header::CONTENT_LENGTH, TOTAL_SIZE.to_string()),
+                (header::CONTENT_LENGTH, Consts::TOTAL_SIZE.to_string()),
                 (header::CONTENT_TYPE, "audio/mpeg".to_string()),
             ],
         )
@@ -102,13 +105,13 @@ async fn handle_request(
                 .get(1)
                 .filter(|s| !s.is_empty())
                 .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(TOTAL_SIZE - 1);
+                .unwrap_or(Consts::TOTAL_SIZE - 1);
 
-            let end = (end + 1).min(TOTAL_SIZE);
+            let end = (end + 1).min(Consts::TOTAL_SIZE);
             tracing::info!("Server: serving range [{}, {})", start, end);
 
             let chunk = Bytes::from(state.file_data[start..end].to_vec());
-            let content_range = format!("bytes {}-{}/{}", start, end - 1, TOTAL_SIZE);
+            let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
 
             return (
                 StatusCode::PARTIAL_CONTENT,
@@ -130,16 +133,16 @@ async fn handle_request(
     // We use a streaming body so hyper doesn't override our Content-Length.
     tracing::warn!(
         "Server: sequential request - sends {}KB of {}KB",
-        STREAM_CLOSES_AT / 1024,
-        TOTAL_SIZE / 1024
+        Consts::STREAM_CLOSES_AT / 1024,
+        Consts::TOTAL_SIZE / 1024
     );
 
-    let chunk = Bytes::from(state.file_data[0..STREAM_CLOSES_AT].to_vec());
+    let chunk = Bytes::from(state.file_data[0..Consts::STREAM_CLOSES_AT].to_vec());
     let body_stream = stream::iter(vec![Ok::<_, io::Error>(chunk)]);
 
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, TOTAL_SIZE.to_string())
+        .header(header::CONTENT_LENGTH, Consts::TOTAL_SIZE.to_string())
         .header(header::CONTENT_TYPE, "audio/mpeg")
         .body(Body::from_stream(body_stream))
         .expect("valid response")
@@ -176,7 +179,7 @@ async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
     let cancel_token = CancellationToken::new();
 
-    let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
+    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let dl = kithara::stream::dl::Downloader::new(
@@ -208,7 +211,7 @@ async fn file_stream_closes_early_seek_still_works() {
         tracing::info!(
             "Seeking to {}KB (beyond {}KB stream)",
             seek_offset / 1024,
-            STREAM_CLOSES_AT / 1024
+            Consts::STREAM_CLOSES_AT / 1024
         );
 
         match stream.seek(SeekFrom::Start(seek_offset)) {
@@ -241,7 +244,7 @@ async fn file_stream_closes_early_seek_still_works() {
         Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
         Err(_) => panic!(
             "DEADLOCK: seek hung waiting for data beyond {}KB. On-demand mode not working.",
-            STREAM_CLOSES_AT / 1024
+            Consts::STREAM_CLOSES_AT / 1024
         ),
     };
 
@@ -259,7 +262,7 @@ async fn file_stream_closes_early_seek_still_works() {
 async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();
 
-    let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
+    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     // Phase 1: partial download, then drop
@@ -307,7 +310,7 @@ async fn partial_cache_resume_works() {
         tracing::info!(
             "Phase 2: seeking to {}KB (beyond {}KB partial cache)",
             seek_offset / 1024,
-            STREAM_CLOSES_AT / 1024
+            Consts::STREAM_CLOSES_AT / 1024
         );
 
         let pos = stream2.seek(SeekFrom::Start(seek_offset)).unwrap();

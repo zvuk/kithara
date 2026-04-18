@@ -19,7 +19,12 @@ use kithara::{
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
+struct Consts;
+impl Consts {
+    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../../assets/test.mp3");
+    /// Expected duration of test.mp3 (ffprobe: 187.102041s).
+    const EXPECTED_DURATION_SECS: f64 = 187.0;
+}
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -30,7 +35,7 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
             .body(Body::empty())
             .unwrap();
     }
@@ -55,18 +60,18 @@ fn serve_mp3_with_range(req: Request) -> Response {
                     s.parse::<usize>().ok()
                 }
             })
-            .unwrap_or(TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(TEST_MP3_BYTES.len().saturating_sub(1));
+            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
+            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
 
-        if start <= end && start < TEST_MP3_BYTES.len() {
-            let chunk = &TEST_MP3_BYTES[start..=end];
+        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
+            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "audio/mpeg")
                 .header(header::CONTENT_LENGTH, chunk.len().to_string())
                 .header(
                     header::CONTENT_RANGE,
-                    format!("bytes {}-{}/{}", start, end, TEST_MP3_BYTES.len()),
+                    format!("bytes {}-{}/{}", start, end, Consts::TEST_MP3_BYTES.len()),
                 )
                 .body(Body::from(Bytes::from_static(chunk)))
                 .unwrap();
@@ -76,8 +81,8 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
-        .body(Body::from(Bytes::from_static(TEST_MP3_BYTES)))
+        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap()
 }
 
@@ -95,13 +100,13 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
             .body(Body::empty())
             .unwrap();
     }
 
     let chunk_size = 10 * 1024;
-    let chunks: Vec<Bytes> = TEST_MP3_BYTES
+    let chunks: Vec<Bytes> = Consts::TEST_MP3_BYTES
         .chunks(chunk_size)
         .map(Bytes::copy_from_slice)
         .collect();
@@ -115,7 +120,7 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
         .body(Body::from_stream(body_stream))
         .unwrap()
 }
@@ -133,7 +138,7 @@ fn app() -> Router {
 }
 
 /// Expected duration of test.mp3 (ffprobe: 187.102041s).
-const EXPECTED_DURATION_SECS: f64 = 187.0;
+const Consts::EXPECTED_DURATION_SECS: f64 = 187.0;
 
 #[kithara::test(tokio)]
 #[case::sw_ext_hint("/test.mp3", Some("mp3"), false)]
@@ -168,8 +173,8 @@ async fn audio_file_mp3_decodes_with_duration(
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{EXPECTED_DURATION_SECS}s, got {dur_secs:.1}s"
+        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path} hint={hint:?}: expected ~{Consts::EXPECTED_DURATION_SECS}s, got {dur_secs:.1}s"
     );
 
     // Decode at least 2 seconds of real PCM.
@@ -232,8 +237,8 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{EXPECTED_DURATION_SECS}s immediately, got {dur_secs:.1}s"
+        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path} hint={hint:?}: expected ~{Consts::EXPECTED_DURATION_SECS}s immediately, got {dur_secs:.1}s"
     );
 }
 

@@ -78,18 +78,6 @@ fn disk_backend_creates_mmap_resource() {
 
 use crate::common::test_defaults::SawWav;
 
-#[cfg(not(target_arch = "wasm32"))]
-const D: SawWav = SawWav::DEFAULT;
-/// Keeps `SAW_PERIOD` referenced when this suite is built without stress modules.
-#[cfg(not(target_arch = "wasm32"))]
-const _: usize = SawWav::SAW_PERIOD;
-/// Keep within default LRU cache capacity (5) to avoid auto-eviction of
-/// `MemResources` which would make `wait_range()` block forever.
-#[cfg(not(target_arch = "wasm32"))]
-const SEGMENT_COUNT: usize = 3;
-#[cfg(not(target_arch = "wasm32"))]
-const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size;
-
 /// Recursively count files inside a directory tree.
 #[cfg(not(target_arch = "wasm32"))]
 fn count_files(dir: &Path) -> usize {
@@ -119,16 +107,26 @@ fn count_files(dir: &Path) -> usize {
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn ephemeral_pipeline_no_disk_writes() {
+    /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
+    /// `MemResources` which would make `wait_range()` block forever.
+    const SEGMENT_COUNT: usize = 3;
+    const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
+
     // Generate saw-tooth WAV
-    let wav_data = create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
+    let wav_data = create_wav_exact_bytes(
+        signal::Sawtooth,
+        SawWav::DEFAULT.sample_rate,
+        SawWav::DEFAULT.channels,
+        TOTAL_BYTES,
+    );
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
     // Spawn HLS server
-    let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+    let segment_duration = SawWav::DEFAULT.segment_size as f64
+        / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        segment_size: SawWav::DEFAULT.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(Arc::new(wav_data)),
         ..Default::default()

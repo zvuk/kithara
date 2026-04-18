@@ -37,19 +37,22 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-const D: SawWav = SawWav::DEFAULT;
-const SEGMENT_COUNT: usize = 30;
+struct Consts;
+impl Consts {
+    const D: SawWav = SawWav::DEFAULT;
+    const SEGMENT_COUNT: usize = 30;
+}
 
 fn create_wav_init_segment() -> Vec<u8> {
-    create_wav_header(D.sample_rate, D.channels, None)
+    create_wav_header(Consts::D.sample_rate, Consts::D.channels, None)
 }
 
 fn create_pcm_segments() -> Vec<u8> {
     SignalPcm::new(
         signal::Sawtooth,
-        D.sample_rate,
-        D.channels,
-        Finite::from_segments(SEGMENT_COUNT, D.segment_size, D.channels),
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
     )
     .into_vec()
 }
@@ -74,12 +77,12 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
     let pcm_data = Arc::new(create_pcm_segments());
 
     let segment_duration =
-        D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: D.segment_size,
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
