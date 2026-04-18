@@ -21,15 +21,15 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
-const AAC_FRAME_SAMPLES: usize = 1024;
-
 /// AAC-LC encoder using `FFmpeg` (`libfdk-aac` or built-in AAC).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AacFFmpegEncoder;
 
 impl AacFFmpegEncoder {
+    pub(crate) const AAC_FRAME_SAMPLES: usize = 1024;
+
     pub(crate) const fn frame_samples() -> usize {
-        AAC_FRAME_SAMPLES
+        Self::AAC_FRAME_SAMPLES
     }
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
@@ -215,11 +215,11 @@ mod tests {
     use super::AacFFmpegEncoder;
     use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
 
-    const SAMPLE_RATE: u32 = 48_000;
-    const CHANNELS: u16 = 2;
-
     #[kithara::test]
     fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
+        const SAMPLE_RATE: u32 = 48_000;
+        const CHANNELS: u16 = 2;
+
         let total_frames = 4 * AacFFmpegEncoder::frame_samples();
         let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
         let media_info = MediaInfo::default()

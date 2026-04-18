@@ -23,20 +23,21 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
-const FLAC_FRAME_SAMPLES: usize = 4608;
-const FLAC_STREAMINFO_LEN: usize = 34;
-const FLAC_METADATA_HEADER_LEN: usize = 4;
-const FLAC_MIN_METADATA_BLOCK_LEN: usize = FLAC_METADATA_HEADER_LEN + FLAC_STREAMINFO_LEN;
-const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
-const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
-
 /// FLAC encoder using `FFmpeg`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FlacFFmpegEncoder;
 
 impl FlacFFmpegEncoder {
+    pub(crate) const FLAC_FRAME_SAMPLES: usize = 4608;
+    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    pub(crate) const FLAC_METADATA_HEADER_LEN: usize = 4;
+    pub(crate) const FLAC_MIN_METADATA_BLOCK_LEN: usize =
+        Self::FLAC_METADATA_HEADER_LEN + Self::FLAC_STREAMINFO_LEN;
+    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
+    pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
+
     pub(crate) const fn frame_samples() -> usize {
-        FLAC_FRAME_SAMPLES
+        Self::FLAC_FRAME_SAMPLES
     }
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
@@ -197,7 +198,7 @@ fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>
 }
 
 fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
-    if raw.len() == FLAC_STREAMINFO_LEN {
+    if raw.len() == FlacFFmpegEncoder::FLAC_STREAMINFO_LEN {
         return Ok(raw.to_vec());
     }
     if let Some(stream_info) = parse_flac_metadata_block(raw) {
@@ -221,16 +222,16 @@ fn extract_stream_info_from_flac_bytes(raw: &[u8]) -> EncodeResult<Vec<u8>> {
         EncodeError::InvalidInput("FLAC bytes are missing the `fLaC` marker".to_owned())
     })?;
 
-    while remaining.len() >= FLAC_METADATA_HEADER_LEN {
+    while remaining.len() >= FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN {
         let block_len = parse_block_body_len(remaining);
-        if remaining.len() < FLAC_METADATA_HEADER_LEN + block_len {
+        if remaining.len() < FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len {
             break;
         }
-        if remaining[0] & FLAC_BLOCK_TYPE_MASK == 0 {
-            return normalize_flac_codec_config(&remaining[..FLAC_METADATA_HEADER_LEN + block_len]);
+        if remaining[0] & FlacFFmpegEncoder::FLAC_BLOCK_TYPE_MASK == 0 {
+            return normalize_flac_codec_config(&remaining[..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len]);
         }
-        let is_last = remaining[0] & FLAC_LAST_BLOCK_FLAG != 0;
-        remaining = &remaining[FLAC_METADATA_HEADER_LEN + block_len..];
+        let is_last = remaining[0] & FlacFFmpegEncoder::FLAC_LAST_BLOCK_FLAG != 0;
+        remaining = &remaining[FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len..];
         if is_last {
             break;
         }
@@ -253,17 +254,17 @@ fn parse_block_body_len(header: &[u8]) -> usize {
 }
 
 fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
-    if raw.len() < FLAC_MIN_METADATA_BLOCK_LEN {
+    if raw.len() < FlacFFmpegEncoder::FLAC_MIN_METADATA_BLOCK_LEN {
         return None;
     }
-    if raw[0] & FLAC_BLOCK_TYPE_MASK != 0 {
+    if raw[0] & FlacFFmpegEncoder::FLAC_BLOCK_TYPE_MASK != 0 {
         return None;
     }
     let block_len = parse_block_body_len(raw);
-    if block_len != FLAC_STREAMINFO_LEN || raw.len() < FLAC_METADATA_HEADER_LEN + block_len {
+    if block_len != FlacFFmpegEncoder::FLAC_STREAMINFO_LEN || raw.len() < FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len {
         return None;
     }
-    Some(&raw[FLAC_METADATA_HEADER_LEN..FLAC_METADATA_HEADER_LEN + block_len])
+    Some(&raw[FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len])
 }
 
 fn collect_encoded_packets(
@@ -309,11 +310,15 @@ mod tests {
     use super::{FlacFFmpegEncoder, normalize_flac_codec_config};
     use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
 
-    const SAMPLE_RATE: u32 = 48_000;
-    const CHANNELS: u16 = 2;
+    struct Consts;
+    impl Consts {
+        const SAMPLE_RATE: u32 = 48_000;
+        const CHANNELS: u16 = 2;
+    }
 
     #[kithara::test]
     fn normalize_flac_codec_config_accepts_mp4_metadata_block() {
+
         let data = [
             0x80, 0x00, 0x00, 0x22, 0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41,
             0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3,
@@ -327,7 +332,7 @@ mod tests {
     #[kithara::test]
     fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         let total_frames = 4 * FlacFFmpegEncoder::frame_samples();
-        let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
+        let pcm = SawtoothPcmFixture::new(total_frames, Consts::SAMPLE_RATE, Consts::CHANNELS);
         let media_info = MediaInfo::default()
             .with_codec(AudioCodec::Flac)
             .with_container(ContainerFormat::Fmp4);
@@ -335,7 +340,7 @@ mod tests {
         let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
             pcm: &pcm,
             media_info,
-            timescale: SAMPLE_RATE,
+            timescale: Consts::SAMPLE_RATE,
             bit_rate: 512_000,
             packets_per_segment: 2,
         })
@@ -343,9 +348,9 @@ mod tests {
 
         assert_eq!(encoded.media_info.codec, Some(AudioCodec::Flac));
         assert_eq!(encoded.media_info.container, Some(ContainerFormat::Fmp4));
-        assert_eq!(encoded.media_info.sample_rate, Some(SAMPLE_RATE));
-        assert_eq!(encoded.media_info.channels, Some(CHANNELS));
-        assert_eq!(encoded.timescale, SAMPLE_RATE);
+        assert_eq!(encoded.media_info.sample_rate, Some(Consts::SAMPLE_RATE));
+        assert_eq!(encoded.media_info.channels, Some(Consts::CHANNELS));
+        assert_eq!(encoded.timescale, Consts::SAMPLE_RATE);
         assert_eq!(encoded.packets_per_segment, 2);
         assert_eq!(encoded.codec_config.len(), 34);
         assert!(
