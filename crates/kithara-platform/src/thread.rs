@@ -186,17 +186,16 @@ where
     })
 }
 
-/// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
-/// Workers use this to locate the JS module for `initSync`.
-#[cfg(target_arch = "wasm32")]
-const SHIM_NAME: &str = "kithara-wasm";
-
 #[cfg(target_arch = "wasm32")]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    /// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
+    /// Workers use this to locate the JS module for `initSync`.
+    const SHIM_NAME: &str = "kithara-wasm";
+
     WasmThreadBuilder::new()
         .shim_name(SHIM_NAME.to_owned())
         .spawn(move || {
