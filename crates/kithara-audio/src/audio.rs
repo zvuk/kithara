@@ -290,7 +290,8 @@ impl<S> Audio<S> {
     /// At rate > 1.0, position advances faster (fewer effective samples per second).
     /// At rate < 1.0, position advances slower.
     pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
+        let rate =
+            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,

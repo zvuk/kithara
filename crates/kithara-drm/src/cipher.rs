@@ -103,7 +103,8 @@ mod tests {
             let rot = (state & u64::from(UniqueBinaryCipher::ROTATION_MASK)) as u8;
 
             let mixed = b.wrapping_add(keystream_byte);
-            let cipher_byte = mixed.rotate_left(u32::from(rot) & u32::from(UniqueBinaryCipher::ROTATION_MASK));
+            let cipher_byte =
+                mixed.rotate_left(u32::from(rot) & u32::from(UniqueBinaryCipher::ROTATION_MASK));
             out.extend_from_slice(&[cipher_byte]);
             state ^= u64::from(cipher_byte);
         }

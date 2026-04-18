@@ -1039,7 +1039,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn boundary_end(&self, start: u64) -> u64 {
         self.shared_stream.len().map_or_else(
             || start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
-            |len| start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES).min(len),
+            |len| {
+                start
+                    .saturating_add(Self::DEFAULT_READ_AHEAD_BYTES)
+                    .min(len)
+            },
         )
     }
 

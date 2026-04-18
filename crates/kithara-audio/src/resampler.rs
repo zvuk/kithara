@@ -456,7 +456,8 @@ impl ResamplerProcessor {
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
+        let rate =
+            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
         if self.source_rate > 0 {
             f64::from(target_rate) / (f64::from(self.source_rate) * rate)
         } else {

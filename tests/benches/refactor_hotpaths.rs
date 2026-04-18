@@ -94,7 +94,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+            .header(
+                header::CONTENT_LENGTH,
+                Consts::TEST_MP3_BYTES.len().to_string(),
+            )
             .body(Body::empty())
             .unwrap_or_else(|e| panic!("failed to build head response: {e}"));
     }
@@ -140,7 +143,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .header(
+            header::CONTENT_LENGTH,
+            Consts::TEST_MP3_BYTES.len().to_string(),
+        )
         .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap_or_else(|e| panic!("failed to build full response: {e}"))
 }

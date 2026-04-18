@@ -172,7 +172,8 @@ async fn stress_random_seek_read_synthetic_wav() {
             total_samples_read,
             channel_mismatches,
             zero_reads,
-            "All {} seek+read iterations done", SEEK_ITERATIONS
+            "All {} seek+read iterations done",
+            SEEK_ITERATIONS
         );
 
         if zero_reads > 0 {
@@ -180,11 +181,15 @@ async fn stress_random_seek_read_synthetic_wav() {
         }
         assert!(
             zero_reads <= 3,
-            "{} zero-reads out of {} (>3 tolerance) — decoder EOF race", zero_reads, SEEK_ITERATIONS
+            "{} zero-reads out of {} (>3 tolerance) — decoder EOF race",
+            zero_reads,
+            SEEK_ITERATIONS
         );
         assert!(
             successful_reads >= SEEK_ITERATIONS as u64 - 3,
-            "only {} successful reads out of {}", successful_reads, SEEK_ITERATIONS
+            "only {} successful reads out of {}",
+            successful_reads,
+            SEEK_ITERATIONS
         );
         assert_eq!(
             channel_mismatches, 0,

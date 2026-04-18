@@ -76,13 +76,21 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast: AbrOptions) {
-    let init_segment = Arc::new(create_wav_header(Consts::D.sample_rate, Consts::D.channels, None));
+    let init_segment = Arc::new(create_wav_header(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        None,
+    ));
     let v0_pcm = Arc::new(
         SignalPcm::new(
             signal::Sawtooth,
             Consts::D.sample_rate,
             Consts::D.channels,
-            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+            Finite::from_segments(
+                Consts::SEGMENT_COUNT,
+                Consts::D.segment_size,
+                Consts::D.channels,
+            ),
         )
         .into_vec(),
     );
@@ -91,7 +99,11 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             signal::SawtoothDescending,
             Consts::D.sample_rate,
             Consts::D.channels,
-            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+            Finite::from_segments(
+                Consts::SEGMENT_COUNT,
+                Consts::D.segment_size,
+                Consts::D.channels,
+            ),
         )
         .into_vec(),
     );
@@ -100,13 +112,17 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             signal::SawtoothShifted,
             Consts::D.sample_rate,
             Consts::D.channels,
-            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+            Finite::from_segments(
+                Consts::SEGMENT_COUNT,
+                Consts::D.segment_size,
+                Consts::D.channels,
+            ),
         )
         .into_vec(),
     );
 
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let total_secs = segment_duration * Consts::SEGMENT_COUNT as f64;
 
     info!(
@@ -151,7 +167,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        let cap = NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
+        let cap =
+            NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
         store.ephemeral = true;
     }

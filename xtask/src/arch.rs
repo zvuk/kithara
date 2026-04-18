@@ -20,7 +20,8 @@ impl Consts {
     ];
 
     /// Base crates that must NOT depend on higher-level crates.
-    const BASE_CRATES: &'static [&'static str] = &["kithara-platform", "kithara-abr", "kithara-drm"];
+    const BASE_CRATES: &'static [&'static str] =
+        &["kithara-platform", "kithara-abr", "kithara-drm"];
 
     /// Higher-level crates that base crates must not reach.
     const HIGH_CRATES: &'static [&'static str] = &[

@@ -255,12 +255,16 @@ fn handle_key(
         return ControlOutcome::Quit;
     }
     match key {
-        KeyCode::Left => {
-            ControlOutcome::Continue(Some(apply_seek(queue, -Consts::SEEK_STEP_SECONDS_F64, dashboard)))
-        }
-        KeyCode::Right => {
-            ControlOutcome::Continue(Some(apply_seek(queue, Consts::SEEK_STEP_SECONDS_F64, dashboard)))
-        }
+        KeyCode::Left => ControlOutcome::Continue(Some(apply_seek(
+            queue,
+            -Consts::SEEK_STEP_SECONDS_F64,
+            dashboard,
+        ))),
+        KeyCode::Right => ControlOutcome::Continue(Some(apply_seek(
+            queue,
+            Consts::SEEK_STEP_SECONDS_F64,
+            dashboard,
+        ))),
         KeyCode::Up => {
             apply_volume(queue, Consts::VOLUME_STEP, dashboard);
             ControlOutcome::Continue(None)

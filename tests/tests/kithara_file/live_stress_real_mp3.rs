@@ -282,7 +282,10 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
     }
 
-    info!(seeks = Consts::REVISIT_SEEKS, "Phase 5: revisit same positions");
+    info!(
+        seeks = Consts::REVISIT_SEEKS,
+        "Phase 5: revisit same positions"
+    );
     let revisit_limit = Consts::REVISIT_SEEKS.min(random_ops_done);
     assert!(
         revisit_limit > 0,

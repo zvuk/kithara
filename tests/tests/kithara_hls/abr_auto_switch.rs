@@ -52,7 +52,11 @@ fn create_pcm_segments() -> Vec<u8> {
         signal::Sawtooth,
         Consts::D.sample_rate,
         Consts::D.channels,
-        Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+        Finite::from_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
+            Consts::D.channels,
+        ),
     )
     .into_vec()
 }
@@ -76,8 +80,8 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,

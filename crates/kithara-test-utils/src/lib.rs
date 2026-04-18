@@ -20,6 +20,7 @@
 #[cfg(test)]
 extern crate self as kithara_test_utils;
 
+pub(crate) mod consts;
 pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,7 +34,6 @@ pub mod hls_url;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
 mod log_filter;
-pub(crate) mod consts;
 pub mod memory_source;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]

@@ -100,8 +100,8 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 
 /// Create a healthy HLS server (no delays).
 async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
         segment_size: Consts::D.segment_size,

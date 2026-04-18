@@ -73,7 +73,12 @@ impl Consts {
 #[case::mmap(false)]
 async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     // Step 1: Generate WAV
-    let wav_data = create_wav_exact_bytes(signal::Sawtooth, Consts::D.sample_rate, Consts::D.channels, Consts::TOTAL_BYTES);
+    let wav_data = create_wav_exact_bytes(
+        signal::Sawtooth,
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        Consts::TOTAL_BYTES,
+    );
     let expected_dur = Consts::expected_duration_secs();
     info!(
         total_bytes = Consts::TOTAL_BYTES,
@@ -82,8 +87,8 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     );
 
     // Step 2: Spawn HLS server with custom WAV data
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
         segment_size: Consts::D.segment_size,
@@ -104,7 +109,8 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     if ephemeral {
         // Ephemeral mode auto-evicts MemResources from the LRU cache.
         // Increase capacity so all segments remain accessible for random seeks.
-        store.cache_capacity = Some(NonZeroUsize::new(Consts::SEGMENT_COUNT + 10).expect("nonzero"));
+        store.cache_capacity =
+            Some(NonZeroUsize::new(Consts::SEGMENT_COUNT + 10).expect("nonzero"));
         store.ephemeral = true;
     }
 

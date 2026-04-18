@@ -1756,7 +1756,8 @@ impl InnerDecoder for EncodedDecoder {
 
             // Encode as f32: variant_segment encodes both variant and segment
             let local_segment = segment - variant * Consts::SEGMENTS_PER_VARIANT as u32;
-            let variant_segment = (variant * Consts::SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
+            let variant_segment =
+                (variant * Consts::SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
             pcm.push(encode_pcm_sample(variant_segment, gsi as u32));
         }
 

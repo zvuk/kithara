@@ -238,7 +238,11 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     while chunks_read < 8 {
         let Some(_chunk) = timeout(
             Consts::browser_timeout(10, 15),
-            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "drm_playback_smoke"),
+            next_chunk_with_timeout(
+                &mut audio,
+                Consts::next_chunk_timeout(),
+                "drm_playback_smoke",
+            ),
         )
         .await
         .expect("waiting for DRM chunk timed out") else {
@@ -346,14 +350,16 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "repro_warmup").await;
+        let _ =
+            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "repro_warmup").await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
+    let max_seek_secs =
+        Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
     let mut seek_positions = Vec::with_capacity(64);
     for _ in 0..64 {
@@ -494,8 +500,12 @@ async fn live_real_stream_fixed_seek_window_regression(
 
     let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ =
-            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "fixed_window_warmup").await;
+        let _ = next_chunk_with_timeout(
+            &mut audio,
+            Consts::next_chunk_timeout(),
+            "fixed_window_warmup",
+        )
+        .await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
@@ -613,15 +623,20 @@ async fn live_real_stream_random_seek_prefix_regression(
 
     let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
-        let _ =
-            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "rng_prefix_warmup").await;
+        let _ = next_chunk_with_timeout(
+            &mut audio,
+            Consts::next_chunk_timeout(),
+            "rng_prefix_warmup",
+        )
+        .await;
         if snapshot(&stats).variant_switches > 0 {
             break;
         }
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
+    let max_seek_secs =
+        Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
 
     for idx in 0..80 {
@@ -837,7 +852,8 @@ async fn live_stress_real_stream_seek_read_cache(
     );
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
+    let max_seek_secs =
+        Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
     let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
     for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
@@ -850,8 +866,11 @@ async fn live_stress_real_stream_seek_read_cache(
         chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
-    let random_deadline =
-        Instant::now() + Consts::browser_timeout(Consts::RANDOM_PHASE_BUDGET_SECS, Consts::WASM_RANDOM_PHASE_BUDGET_SECS);
+    let random_deadline = Instant::now()
+        + Consts::browser_timeout(
+            Consts::RANDOM_PHASE_BUDGET_SECS,
+            Consts::WASM_RANDOM_PHASE_BUDGET_SECS,
+        );
     let mut random_ops_done = 0usize;
     let mut chunks_read = 0usize;
     let mut variant_match_checks = 0usize;
@@ -887,7 +906,8 @@ async fn live_stress_real_stream_seek_read_cache(
         }
     }
     assert!(
-        random_ops_done >= Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
+        random_ops_done
+            >= Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
         "stress seek underflow: expected at least {} seek ops, got {}",
         Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
         random_ops_done
@@ -905,7 +925,8 @@ async fn live_stress_real_stream_seek_read_cache(
         random_ops_done
     );
 
-    let fast_seek_burst = Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
+    let fast_seek_burst =
+        Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
     info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
     for _ in 0..fast_seek_burst {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
@@ -959,7 +980,8 @@ async fn live_stress_real_stream_seek_read_cache(
     }
 
     let before_revisit = snapshot(&stats);
-    let revisit_limit = Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS).min(random_ops_done);
+    let revisit_limit = Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS)
+        .min(random_ops_done);
     info!(seeks = revisit_limit, "Phase 5: revisit same positions");
     assert!(
         revisit_limit > 0,
@@ -1067,9 +1089,12 @@ async fn live_ephemeral_small_cache_playback(
     let mut chunks_read = 0usize;
 
     while Instant::now() < deadline {
-        let Some(_chunk) =
-            next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), "ephemeral_small_cache")
-                .await
+        let Some(_chunk) = next_chunk_with_timeout(
+            &mut audio,
+            Consts::next_chunk_timeout(),
+            "ephemeral_small_cache",
+        )
+        .await
         else {
             break;
         };
@@ -1136,7 +1161,10 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     // Warmup: read a few chunks so the stream is initialized
     info!(%path, label, "Warmup: reading initial chunks");
-    for i in 0..Consts::browser_usize(Consts::SMALL_CACHE_WARMUP_CHUNKS, Consts::WASM_SMALL_CACHE_WARMUP_CHUNKS) {
+    for i in 0..Consts::browser_usize(
+        Consts::SMALL_CACHE_WARMUP_CHUNKS,
+        Consts::WASM_SMALL_CACHE_WARMUP_CHUNKS,
+    ) {
         let stage = format!("warmup_{i}");
         if next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
@@ -1147,13 +1175,16 @@ async fn live_ephemeral_small_cache_seek_stress(
     }
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs =
-        Consts::capped_seek_secs((duration_secs - 2.0).max(10.0), Consts::SMALL_CACHE_MAX_SEEK_SECS);
+    let max_seek_secs = Consts::capped_seek_secs(
+        (duration_secs - 2.0).max(10.0),
+        Consts::SMALL_CACHE_MAX_SEEK_SECS,
+    );
     let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
     let mut total_chunks = 0usize;
     let mut seeks_done = 0usize;
 
-    let small_cache_seeks = Consts::browser_usize(Consts::SMALL_CACHE_SEEKS, Consts::WASM_SMALL_CACHE_SEEKS);
+    let small_cache_seeks =
+        Consts::browser_usize(Consts::SMALL_CACHE_SEEKS, Consts::WASM_SMALL_CACHE_SEEKS);
     let chunks_per_seek = Consts::browser_usize(
         Consts::SMALL_CACHE_CHUNKS_PER_SEEK,
         Consts::WASM_SMALL_CACHE_CHUNKS_PER_SEEK,

@@ -12,7 +12,9 @@ impl Ewma {
 
     pub(crate) fn new(half_life_secs: f64) -> Self {
         Self {
-            alpha: f64::exp(Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS)),
+            alpha: f64::exp(
+                Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS),
+            ),
             last_estimate: 0.0,
             total_weight: 0.0,
         }

@@ -314,12 +314,12 @@ fn normalize_length(
             });
         }
 
-        let data_bytes = total_file_bytes.checked_sub(Consts::WAV_HEADER_SIZE).ok_or(
-            SignalRequestError::InvalidField {
+        let data_bytes = total_file_bytes
+            .checked_sub(Consts::WAV_HEADER_SIZE)
+            .ok_or(SignalRequestError::InvalidField {
                 field: "file_bytes",
                 message: "must be at least 44 bytes for a WAV header",
-            },
-        )?;
+            })?;
 
         let bytes_per_frame = payload.channels as usize * size_of::<i16>();
         if data_bytes % bytes_per_frame != 0 {

@@ -914,7 +914,9 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
     if session_holder::SESSION_CLIENT.get().is_some() {
         return Ok(());
     }
-    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SessionState::<firewheel::cpal::CpalBackend>::CMD_RINGBUF_CAPACITY).split();
+    let (cmd_tx, cmd_rx) =
+        HeapRb::<CmdMsg>::new(SessionState::<firewheel::cpal::CpalBackend>::CMD_RINGBUF_CAPACITY)
+            .split();
     let handle = spawn_named("kithara-engine-offline", move || {
         engine_thread_offline(cmd_rx);
     });
@@ -1158,7 +1160,8 @@ fn allocate_slot<B: AudioBackend>(
     let slot_id = SlotId::new(state.players[idx].next_slot_id);
     state.players[idx].next_slot_id += 1;
 
-    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(SessionClient::PLAYER_CMD_RINGBUF_CAPACITY).split();
+    let (cmd_tx, cmd_rx) =
+        HeapRb::<PlayerCmd>::new(SessionClient::PLAYER_CMD_RINGBUF_CAPACITY).split();
     let shared_state = Arc::new(SharedPlayerState::new());
     let shared_eq = state.players[idx].shared_eq.clone();
 

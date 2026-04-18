@@ -211,7 +211,9 @@ fn validate_hls_shape(spec: &HlsSpec) -> Result<(), HlsSpecError> {
             message: "must be between 1 and 16",
         });
     }
-    if spec.segments_per_variant == 0 || spec.segments_per_variant > Consts::MAX_HLS_SEGMENTS_PER_VARIANT {
+    if spec.segments_per_variant == 0
+        || spec.segments_per_variant > Consts::MAX_HLS_SEGMENTS_PER_VARIANT
+    {
         return Err(HlsSpecError::InvalidField {
             field: "segments_per_variant",
             message: "must be between 1 and 4096",

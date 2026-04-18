@@ -1064,7 +1064,10 @@ mod tests {
         //     handle_tail_state exit path (layout==variant branch)
         //   - ABR wants variant 1 (throughput suggests up/down-switch)
         state.scheduler.download_variant = 0;
-        state.scheduler.cursor.reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
+        state
+            .scheduler
+            .cursor
+            .reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
         state.scheduler.abr.apply(
@@ -1113,7 +1116,9 @@ mod tests {
         // branch → returns true (Pending). In production that's fine,
         // BUT the NEXT poll then invokes apply_variant_readiness
         // without the filling_layout_gap guard.
-        let _is_tail = state.scheduler.handle_tail_state(variant, Consts::NUM_SEGMENTS);
+        let _is_tail = state
+            .scheduler
+            .handle_tail_state(variant, Consts::NUM_SEGMENTS);
 
         // The critical call: with filling_layout_gap=false and variant=1
         // from ABR, classify_variant_transition sees download_variant=0
@@ -1390,7 +1395,10 @@ mod tests {
         // `handle_tail_state` pass (layout==variant → `else` arm at
         // plan.rs:133).
         state.scheduler.download_variant = 0;
-        state.scheduler.cursor.reopen_fill(LIVE_START, Consts::NUM_SEGMENTS);
+        state
+            .scheduler
+            .cursor
+            .reopen_fill(LIVE_START, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
 
         // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
@@ -1433,7 +1441,9 @@ mod tests {
         // the `layout != variant` branch, finds no layout gap in the
         // reader's forward window, and falls through clearing
         // `filling_layout_gap`.
-        let _is_tail = state.scheduler.handle_tail_state(variant, Consts::NUM_SEGMENTS);
+        let _is_tail = state
+            .scheduler
+            .handle_tail_state(variant, Consts::NUM_SEGMENTS);
 
         // The critical call. With `download_variant=0`, `variant=1`
         // (from ABR up-switch), and `filling_layout_gap=false`,

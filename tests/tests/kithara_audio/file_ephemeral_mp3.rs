@@ -35,7 +35,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+            .header(
+                header::CONTENT_LENGTH,
+                Consts::TEST_MP3_BYTES.len().to_string(),
+            )
             .body(Body::empty())
             .unwrap();
     }
@@ -81,7 +84,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .header(
+            header::CONTENT_LENGTH,
+            Consts::TEST_MP3_BYTES.len().to_string(),
+        )
         .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap()
 }
@@ -100,7 +106,10 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+            .header(
+                header::CONTENT_LENGTH,
+                Consts::TEST_MP3_BYTES.len().to_string(),
+            )
             .body(Body::empty())
             .unwrap();
     }
@@ -120,7 +129,10 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .header(
+            header::CONTENT_LENGTH,
+            Consts::TEST_MP3_BYTES.len().to_string(),
+        )
         .body(Body::from_stream(body_stream))
         .unwrap()
 }
@@ -173,7 +185,8 @@ async fn audio_file_mp3_decodes_with_duration(
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s", Consts::EXPECTED_DURATION_SECS
+        "path={path} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
+        Consts::EXPECTED_DURATION_SECS
     );
 
     // Decode at least 2 seconds of real PCM.
@@ -237,7 +250,8 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s", Consts::EXPECTED_DURATION_SECS
+        "path={path} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
+        Consts::EXPECTED_DURATION_SECS
     );
 }
 

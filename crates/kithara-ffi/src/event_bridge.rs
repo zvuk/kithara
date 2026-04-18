@@ -86,7 +86,7 @@ impl EventBridge {
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         spawn(move || {
-            let interval = Duration::from_millis(EventBridge::TIME_POLL_INTERVAL_MS);
+            let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
 
@@ -103,7 +103,7 @@ impl EventBridge {
                 match time {
                     Some(t)
                         if last_time
-                            .is_none_or(|prev| (prev - t).abs() > EventBridge::TIME_UPDATE_THRESHOLD) =>
+                            .is_none_or(|prev| (prev - t).abs() > Self::TIME_UPDATE_THRESHOLD) =>
                     {
                         observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
                         last_time = Some(t);
@@ -117,7 +117,7 @@ impl EventBridge {
                 match duration {
                     Some(d)
                         if last_duration
-                            .is_none_or(|prev| (prev - d).abs() > EventBridge::TIME_UPDATE_THRESHOLD) =>
+                            .is_none_or(|prev| (prev - d).abs() > Self::TIME_UPDATE_THRESHOLD) =>
                     {
                         observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
                         last_duration = Some(d);

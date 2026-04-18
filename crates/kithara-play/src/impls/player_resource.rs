@@ -43,8 +43,8 @@ impl PlayerResource {
     pub(crate) fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
-        let buffer_len =
-            (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR) * channels.max(Self::STEREO_CHANNELS);
+        let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+            * channels.max(Self::STEREO_CHANNELS);
 
         let channel_buffers = [
             pool.get_with(|b: &mut Vec<f32>| {

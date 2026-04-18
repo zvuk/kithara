@@ -93,8 +93,8 @@ fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
 
 /// Create an HLS server with WAV segments.
 async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
@@ -108,8 +108,8 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
 
 /// Create an HLS server with 2 ABR variants of different bandwidth.
 async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
@@ -173,7 +173,11 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     let bytes_per_frame = Consts::D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, Consts::D.sample_rate, Consts::D.channels))
+    Arc::new(create_test_wav(
+        sample_count,
+        Consts::D.sample_rate,
+        Consts::D.channels,
+    ))
 }
 
 // Tests

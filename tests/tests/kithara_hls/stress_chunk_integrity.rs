@@ -48,9 +48,6 @@ impl Consts {
 }
 
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
-
-
-
     let channels = chunk.meta.spec.channels as usize;
     detect_direction(&chunk.pcm, channels)
 }
@@ -120,13 +117,21 @@ async fn next_chunk_with_timeout(
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // Generate WAV data for two variants
-    let init_segment = Arc::new(create_wav_header(Consts::D.sample_rate, Consts::D.channels, None));
+    let init_segment = Arc::new(create_wav_header(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        None,
+    ));
     let v0_pcm = Arc::new(
         SignalPcm::new(
             signal::Sawtooth,
             Consts::D.sample_rate,
             Consts::D.channels,
-            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+            Finite::from_segments(
+                Consts::SEGMENT_COUNT,
+                Consts::D.segment_size,
+                Consts::D.channels,
+            ),
         )
         .into_vec(),
     );
@@ -135,7 +140,11 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             signal::SawtoothDescending,
             Consts::D.sample_rate,
             Consts::D.channels,
-            Finite::from_segments(Consts::SEGMENT_COUNT, Consts::D.segment_size, Consts::D.channels),
+            Finite::from_segments(
+                Consts::SEGMENT_COUNT,
+                Consts::D.segment_size,
+                Consts::D.channels,
+            ),
         )
         .into_vec(),
     );
@@ -149,8 +158,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     );
 
     // Spawn HLS server
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
@@ -181,7 +190,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     if ephemeral {
         // Ephemeral mode auto-evicts MemResources from LRU cache.
         // 2 variants × Consts::SEGMENT_COUNT segments + headroom.
-        store.cache_capacity = Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
+        store.cache_capacity =
+            Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
         store.ephemeral = true;
     }
 
@@ -224,7 +234,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
                 "ABR switch not detected within {}s (ascending={}, unknown={})",
-                Consts::WARMUP_TIMEOUT_SECS, warmup_ascending, warmup_unknown
+                Consts::WARMUP_TIMEOUT_SECS,
+                warmup_ascending,
+                warmup_unknown
             );
         }
 
@@ -272,7 +284,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     }
 
     // Phase 2: Post-switch sequential read — frame_offset continuity
-    info!("Phase 2: verifying {} post-switch chunks...", Consts::POST_SWITCH_CHUNKS);
+    info!(
+        "Phase 2: verifying {} post-switch chunks...",
+        Consts::POST_SWITCH_CHUNKS
+    );
 
     let mut prev_frame_offset: Option<u64> = None;
     let mut prev_frames: Option<usize> = None;
@@ -352,7 +367,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     info!(
         continuity_breaks,
-        "Phase 2 complete: {} post-switch chunks verified", Consts::POST_SWITCH_CHUNKS
+        "Phase 2 complete: {} post-switch chunks verified",
+        Consts::POST_SWITCH_CHUNKS
     );
 
     // We don't assert on frame_offset continuity in phase 2 because
@@ -362,13 +378,15 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // Phase 3: Random seeks — 200 iterations, 5 chunks each
     info!(
         "Phase 3: {} random seek + {} chunk reads...",
-        Consts::SEEK_ITERATIONS, Consts::CHUNKS_PER_SEEK
+        Consts::SEEK_ITERATIONS,
+        Consts::CHUNKS_PER_SEEK
     );
 
     let total_duration = audio.duration();
-    let total_secs = total_duration.map_or(Consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
-        d.as_secs_f64()
-    });
+    let total_secs = total_duration
+        .map_or(Consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
+            d.as_secs_f64()
+        });
     let max_seek_secs = (total_secs - 0.5).max(0.1);
 
     let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
@@ -481,7 +499,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
                 let expected_asc = (prev_phase as usize + 1) % SawWav::SAW_PERIOD;
-                let expected_desc = (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let expected_desc =
+                    (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {
@@ -534,9 +553,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         inter_sample_breaks,
         intra_breaks,
         direction_errors,
-        "Phase 3 complete: {} seek cycles", Consts::SEEK_ITERATIONS
+        "Phase 3 complete: {} seek cycles",
+        Consts::SEEK_ITERATIONS
     );
-
 
     if intra_breaks > 0 {
         warn!(

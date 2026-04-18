@@ -118,9 +118,7 @@ mod hls_timeline {
         );
 
         let segment_duration = SawWav::DEFAULT.segment_size as f64
-            / (f64::from(SawWav::DEFAULT.sample_rate)
-                * f64::from(SawWav::DEFAULT.channels)
-                * 2.0);
+            / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
 
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,

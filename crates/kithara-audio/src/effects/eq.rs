@@ -383,9 +383,9 @@ impl IsolatorEq {
     /// Whether any band is still smoothing toward its target.
     #[must_use]
     pub fn is_smoothing(&self) -> bool {
-        self.gains
-            .iter()
-            .any(|g| (g.target_linear - g.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD)
+        self.gains.iter().any(|g| {
+            (g.target_linear - g.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
+        })
     }
 
     /// Process a single sample through the crossover EQ.

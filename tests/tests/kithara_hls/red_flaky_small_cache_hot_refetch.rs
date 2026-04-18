@@ -180,6 +180,8 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
          re-fetch evicts the reader's live window before it can be decoded. \
          The production flake `live_ephemeral_small_cache_playback_hls` hits \
          the same pattern at cap=4 under CPU contention.",
-        drained, Consts::PLAYBACK_BUDGET_SECS, Consts::MIN_PROGRESS_CHUNKS
+        drained,
+        Consts::PLAYBACK_BUDGET_SECS,
+        Consts::MIN_PROGRESS_CHUNKS
     );
 }

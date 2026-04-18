@@ -142,16 +142,26 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let hls = make_hls(worker.clone(), store.clone()).await;
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls, &format!("red_hls_{iter}"));
-        let _hls_warmup =
-            render_offline_window(&mut player, 40, &format!("HLS warmup #{iter}"), Consts::BLOCK, Consts::SR);
+        let _hls_warmup = render_offline_window(
+            &mut player,
+            40,
+            &format!("HLS warmup #{iter}"),
+            Consts::BLOCK,
+            Consts::SR,
+        );
 
         // Crossfade HLS→MP3. This is where the render thread can block.
         let mp3 = make_mp3(worker.clone()).await;
         sleep(Duration::from_millis(200)).await;
         let before_fade = Instant::now();
         player.load_and_fadein(mp3, &format!("red_mp3_{iter}"));
-        let fade_stats =
-            render_offline_window(&mut player, 60, &format!("HLS→MP3 red #{iter}"), Consts::BLOCK, Consts::SR);
+        let fade_stats = render_offline_window(
+            &mut player,
+            60,
+            &format!("HLS→MP3 red #{iter}"),
+            Consts::BLOCK,
+            Consts::SR,
+        );
         info!(
             "iter {iter}: {fade_stats}, wall={:?}",
             before_fade.elapsed()

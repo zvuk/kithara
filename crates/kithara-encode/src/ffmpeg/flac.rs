@@ -228,7 +228,9 @@ fn extract_stream_info_from_flac_bytes(raw: &[u8]) -> EncodeResult<Vec<u8>> {
             break;
         }
         if remaining[0] & FlacFFmpegEncoder::FLAC_BLOCK_TYPE_MASK == 0 {
-            return normalize_flac_codec_config(&remaining[..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len]);
+            return normalize_flac_codec_config(
+                &remaining[..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len],
+            );
         }
         let is_last = remaining[0] & FlacFFmpegEncoder::FLAC_LAST_BLOCK_FLAG != 0;
         remaining = &remaining[FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len..];
@@ -261,10 +263,15 @@ fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
         return None;
     }
     let block_len = parse_block_body_len(raw);
-    if block_len != FlacFFmpegEncoder::FLAC_STREAMINFO_LEN || raw.len() < FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len {
+    if block_len != FlacFFmpegEncoder::FLAC_STREAMINFO_LEN
+        || raw.len() < FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len
+    {
         return None;
     }
-    Some(&raw[FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len])
+    Some(
+        &raw[FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN
+            ..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len],
+    )
 }
 
 fn collect_encoded_packets(
@@ -318,7 +325,6 @@ mod tests {
 
     #[kithara::test]
     fn normalize_flac_codec_config_accepts_mp4_metadata_block() {
-
         let data = [
             0x80, 0x00, 0x00, 0x22, 0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41,
             0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3,

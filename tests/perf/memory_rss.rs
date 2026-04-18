@@ -83,7 +83,8 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                     break;
                 }
 
-                if last_sample.elapsed() >= Duration::from_millis(Consts::BUDGET_SAMPLE_INTERVAL_MS) {
+                if last_sample.elapsed() >= Duration::from_millis(Consts::BUDGET_SAMPLE_INTERVAL_MS)
+                {
                     if let Some(stats) = memory_stats() {
                         rss_samples.push(stats.physical_mem);
                     }

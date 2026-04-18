@@ -68,7 +68,7 @@ impl AudioBackend for OfflineBackend {
             max_block_frames: block,
             num_stream_in_channels: 0,
             #[expect(clippy::cast_possible_truncation)]
-            num_stream_out_channels: OfflineBackend::STEREO_CHANNELS as u32,
+            num_stream_out_channels: Self::STEREO_CHANNELS as u32,
             input_to_output_latency_seconds: 0.0,
             declick_frames: declick,
             output_device_id: String::from("offline"),

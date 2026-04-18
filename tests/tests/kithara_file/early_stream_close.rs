@@ -72,7 +72,10 @@ async fn handle_request(
 
     // HEAD request — return correct Content-Length
     if method == Method::HEAD {
-        tracing::info!("Server: HEAD request - Content-Length: {}", Consts::TOTAL_SIZE);
+        tracing::info!(
+            "Server: HEAD request - Content-Length: {}",
+            Consts::TOTAL_SIZE
+        );
         return (
             StatusCode::OK,
             [

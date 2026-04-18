@@ -349,7 +349,11 @@ pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
 }
 
 #[cfg(test)]
-#[allow(dead_code, unused_imports)]
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "test helpers kept for #[kithara::fixture] macro expansion"
+)]
 mod tests {
     use kithara_test_utils::kithara;
 

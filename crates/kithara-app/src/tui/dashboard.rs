@@ -142,7 +142,8 @@ impl Dashboard {
             let style = if is_failed {
                 Style::default().fg(c.danger).bg(c.bg)
             } else if is_slow && is_active {
-                let blink_on = (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
+                let blink_on =
+                    (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
                 let fg = if blink_on { c.warning } else { c.muted };
                 Style::default().fg(fg).bg(c.bg_panel)
             } else if is_slow {
@@ -200,7 +201,10 @@ impl Dashboard {
                 |progress| format!("xf {:>3.0}%", progress * Self::PERCENT_SCALE),
             ),
             format!("🔉{:>3.0}%", self.volume * Self::PERCENT_SCALE),
-            clamp_text(self.last_note.as_deref().unwrap_or("-"), Self::NOTE_MAX_CHARS),
+            clamp_text(
+                self.last_note.as_deref().unwrap_or("-"),
+                Self::NOTE_MAX_CHARS,
+            ),
         ];
 
         let style = Style::default().fg(c.text).bg(c.bg);

@@ -90,58 +90,33 @@ type UInt32 = u32;
 type SInt64 = i64;
 type Float64 = f64;
 
-
- // 'opti'
- // '!dat' (2003329140 in decimal, but signed)
+// 'opti'
+// '!dat' (2003329140 in decimal, but signed)
 
 // Audio Format IDs
- // 'lpcm'
- // 'aac '
- // '.mp3'
- // 'flac'
- // 'alac'
+// 'lpcm'
+// 'aac '
+// '.mp3'
+// 'flac'
+// 'alac'
 
 // Audio Format Flags
 
-
-
-
 // File Type IDs
- // 'adts'
- // 'm4af'
- // 'MPG3'
- // 'flac'
- // 'caff'
+// 'adts'
+// 'm4af'
+// 'MPG3'
+// 'flac'
+// 'caff'
 
 // AudioFileStream Property IDs
- // 'redy'
- // 'dfmt'
- // 'mgic'
- // 'doff'
- // 'pcnt'
+// 'redy'
+// 'dfmt'
+// 'mgic'
+// 'doff'
+// 'pcnt'
 
 // AudioFileStream Parse Flags
-
-
-// PCM output format constants
-
-/// Bytes per f32 sample.
-
-/// Bits per f32 sample.
-
-
-/// Initial read buffer size for parsing (32 KB).
-
-/// Maximum bytes to parse before giving up on format detection (1 MB).
-
-
-/// Default PCM buffer size in frames.
-
-/// Minimum packet count before attempting decode.
-
-
-/// Default seek duration assumption (5 minutes) when total duration is unknown.
-
 
 // AudioStreamPacketDescription
 #[repr(C)]
@@ -282,8 +257,8 @@ unsafe extern "C" {
 }
 
 // AudioConverter Property IDs
- // 'dmgc'
- // 'prim'
+// 'dmgc'
+// 'prim'
 
 /// Priming information reported by `AudioConverter`.
 ///
@@ -859,7 +834,8 @@ impl AppleInner {
         self.assert_thread_affinity();
         loop {
             // Ensure we have packets to decode
-            while self.parser_state.packet_buffer.len() < Consts::MIN_PACKETS_FOR_DECODE && !self.source_eof
+            while self.parser_state.packet_buffer.len() < Consts::MIN_PACKETS_FOR_DECODE
+                && !self.source_eof
             {
                 self.feed_parser()?;
             }
@@ -887,7 +863,9 @@ impl AppleInner {
             let frames_per_packet = self
                 .parser_state
                 .format
-                .map_or(Consts::DEFAULT_BUFFER_FRAMES, |f| f.mFramesPerPacket as usize);
+                .map_or(Consts::DEFAULT_BUFFER_FRAMES, |f| {
+                    f.mFramesPerPacket as usize
+                });
 
             let output_frames = frames_per_packet.max(Consts::DEFAULT_BUFFER_FRAMES);
             if self.pcm_buffer.len() < output_frames * channels {
@@ -902,7 +880,8 @@ impl AppleInner {
                 mNumberBuffers: 1,
                 mBuffers: [AudioBuffer {
                     mNumberChannels: u32::from(self.spec.channels),
-                    mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize) as u32,
+                    mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize)
+                        as u32,
                     mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
                 }],
             };
@@ -1155,7 +1134,7 @@ impl AppleInner {
         self.data_offset + offset
     }
 
-    /// Query Consts::kAudioConverterPrimeInfo from the converter.
+    /// Query `Consts::kAudioConverterPrimeInfo` from the converter.
     fn query_prime_info(&self) -> Option<(u32, u32)> {
         self.assert_thread_affinity();
         if self.converter.is_null() {

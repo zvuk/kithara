@@ -251,7 +251,11 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     .spacing(Consts::COMPACT_SPACING);
 
     if !state.variant_label.is_empty() {
-        col = col.push(text(&state.variant_label).size(Consts::CAPTION_FONT).color(p.muted));
+        col = col.push(
+            text(&state.variant_label)
+                .size(Consts::CAPTION_FONT)
+                .color(p.muted),
+        );
     }
 
     container(col)
@@ -280,9 +284,13 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
 
     container(
         row![
-            text(format_time(progress)).size(Consts::SMALL_FONT).color(p.muted),
+            text(format_time(progress))
+                .size(Consts::SMALL_FONT)
+                .color(p.muted),
             seek,
-            text(format_time(duration)).size(Consts::SMALL_FONT).color(p.muted)
+            text(format_time(duration))
+                .size(Consts::SMALL_FONT)
+                .color(p.muted)
         ]
         .spacing(Consts::ELEMENT_SPACING)
         .align_y(Alignment::Center),
@@ -386,9 +394,10 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
         } else {
             format!("{rate:.2}x")
         };
-        let btn_text = text(label)
-            .size(Consts::SMALL_FONT)
-            .color(if is_selected { p.bg } else { p.muted });
+        let btn_text =
+            text(label)
+                .size(Consts::SMALL_FONT)
+                .color(if is_selected { p.bg } else { p.muted });
         let btn = button(btn_text)
             .style(move |_theme, _status| button::Style {
                 background: Some(if is_selected {
@@ -494,14 +503,17 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         .into();
     }
 
-    let mut tracks = column![].spacing(Consts::PLAYLIST_SPACING).width(Length::Fill);
+    let mut tracks = column![]
+        .spacing(Consts::PLAYLIST_SPACING)
+        .width(Length::Fill);
 
     for (index, entry) in state.tracks_snapshot.iter().enumerate() {
         let is_current = state.current_track_index == Some(index);
         let is_selected = state.selected_track_index == Some(index);
         let is_failed = matches!(entry.status, TrackStatus::Failed(_));
         let is_slow = matches!(entry.status, TrackStatus::Slow);
-        let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR).is_multiple_of(Consts::BLINK_PERIOD);
+        let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
+            .is_multiple_of(Consts::BLINK_PERIOD);
         let text_color = if is_failed {
             p.danger
         } else if is_slow && is_current {
@@ -531,13 +543,18 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
                 text(format!("{:02}", index + 1))
                     .size(Consts::PLAYLIST_INDEX_FONT)
                     .color(index_color),
-                text(track_name).size(Consts::PLAYLIST_TRACK_FONT).color(text_color),
+                text(track_name)
+                    .size(Consts::PLAYLIST_TRACK_FONT)
+                    .color(text_color),
             ]
             .spacing(Consts::ELEMENT_SPACING)
             .align_y(Alignment::Center),
         )
         .width(Length::Fill)
-        .padding([Consts::PLAYLIST_ITEM_PADDING_Y, Consts::PLAYLIST_ITEM_PADDING_X])
+        .padding([
+            Consts::PLAYLIST_ITEM_PADDING_Y,
+            Consts::PLAYLIST_ITEM_PADDING_X,
+        ])
         .style(move |_theme, status| playlist_item_style(p, is_current, is_selected, status))
         .on_press(Message::SelectTrack(index));
 
@@ -550,7 +567,9 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let band_count = state.eq_bands.len();
-    let mut bands_row = row![].spacing(Consts::EQ_BAND_SPACING).align_y(Alignment::End);
+    let mut bands_row = row![]
+        .spacing(Consts::EQ_BAND_SPACING)
+        .align_y(Alignment::End);
 
     for index in 0..band_count {
         let value = state.eq_bands[index].clamp(Consts::EQ_MIN_DB, Consts::EQ_MAX_DB);
@@ -654,11 +673,15 @@ fn view_dj(state: &Kithara) -> Element<'_, Message> {
 
 fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let mut col =
-        column![text("Settings").size(Consts::HEADING_FONT).color(p.text),].spacing(Consts::SETTINGS_SPACING);
+    let mut col = column![text("Settings").size(Consts::HEADING_FONT).color(p.text),]
+        .spacing(Consts::SETTINGS_SPACING);
 
     // Quality picker (ABR mode)
-    col = col.push(text("Quality").size(Consts::SETTINGS_BODY_FONT).color(p.text));
+    col = col.push(
+        text("Quality")
+            .size(Consts::SETTINGS_BODY_FONT)
+            .color(p.text),
+    );
     let mut quality_row = row![].spacing(Consts::COMPACT_SPACING);
     quality_row = quality_row.push(abr_button(
         "Auto",
@@ -742,7 +765,9 @@ fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'st
     let content = column![
         row![
             icon.view(Consts::TAB_ICON_SIZE, icon_color),
-            text(label.to_string()).size(Consts::SMALL_FONT).color(label_color)
+            text(label.to_string())
+                .size(Consts::SMALL_FONT)
+                .color(label_color)
         ]
         .spacing(Consts::COMPACT_SPACING)
         .align_y(Alignment::Center),
@@ -802,12 +827,14 @@ fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonS
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Active => None,
-            ButtonStatus::Hovered => {
-                Some(Background::Color(with_alpha(p.bg_panel, Consts::ALPHA_GHOST_HOVER)))
-            }
-            ButtonStatus::Pressed => {
-                Some(Background::Color(with_alpha(p.accent, Consts::ALPHA_GHOST_PRESSED)))
-            }
+            ButtonStatus::Hovered => Some(Background::Color(with_alpha(
+                p.bg_panel,
+                Consts::ALPHA_GHOST_HOVER,
+            ))),
+            ButtonStatus::Pressed => Some(Background::Color(with_alpha(
+                p.accent,
+                Consts::ALPHA_GHOST_PRESSED,
+            ))),
             ButtonStatus::Disabled => Some(Background::Color(with_alpha(
                 p.bg_panel,
                 Consts::ALPHA_GHOST_DISABLED,
@@ -935,11 +962,18 @@ fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
 
 fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Element<'a, Message> {
     let text_color = if active { p.accent } else { p.muted };
-    button(text(label.to_string()).size(Consts::CAPTION_FONT).color(text_color))
-        .on_press(msg)
-        .padding(Padding::from([Consts::ABR_BUTTON_PADDING_Y, Consts::ABR_BUTTON_PADDING_X]))
-        .style(ghost_button_style(p))
-        .into()
+    button(
+        text(label.to_string())
+            .size(Consts::CAPTION_FONT)
+            .color(text_color),
+    )
+    .on_press(msg)
+    .padding(Padding::from([
+        Consts::ABR_BUTTON_PADDING_Y,
+        Consts::ABR_BUTTON_PADDING_X,
+    ]))
+    .style(ghost_button_style(p))
+    .into()
 }
 
 fn track_subtitle(state: &Kithara) -> String {

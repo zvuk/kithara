@@ -114,7 +114,11 @@ impl<E: Estimator> AbrController<E> {
     #[must_use]
     pub fn max_bandwidth_bps(&self) -> Option<u64> {
         let v = self.max_bandwidth_bps.load(Ordering::Acquire);
-        if v == Self::NO_BANDWIDTH_CAP { None } else { Some(v) }
+        if v == Self::NO_BANDWIDTH_CAP {
+            None
+        } else {
+            Some(v)
+        }
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
@@ -736,7 +740,10 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(ctrl.get_current_variant_index(), 1);
-        assert_eq!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), AbrController::<Unimock>::NO_SWITCH);
+        assert_eq!(
+            ctrl.last_switch_at_nanos.load(Ordering::Acquire),
+            AbrController::<Unimock>::NO_SWITCH
+        );
     }
 
     #[kithara::test]
@@ -754,7 +761,10 @@ mod tests {
             now,
         );
         assert_eq!(ctrl.get_current_variant_index(), 2);
-        assert_ne!(ctrl.last_switch_at_nanos.load(Ordering::Acquire), AbrController::<Unimock>::NO_SWITCH);
+        assert_ne!(
+            ctrl.last_switch_at_nanos.load(Ordering::Acquire),
+            AbrController::<Unimock>::NO_SWITCH
+        );
         assert!(!ctrl.can_switch_now(now));
     }
 

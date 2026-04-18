@@ -84,14 +84,16 @@ impl ItemEventBridge {
         variants: &mut Vec<crate::types::FfiVariant>,
     ) {
         if let Some(duration) = Self::duration_from_event(event)
-            && duration_seconds.is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
+            && duration_seconds
+                .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
         if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
-            && last_buffered.is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
+            && last_buffered
+                .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
         {
             *last_buffered = Some(buffered);
             observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });

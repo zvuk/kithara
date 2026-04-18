@@ -76,7 +76,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+            .header(
+                header::CONTENT_LENGTH,
+                Consts::TEST_MP3_BYTES.len().to_string(),
+            )
             .body(Body::empty())
             .unwrap();
     }
@@ -122,7 +125,10 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .header(
+            header::CONTENT_LENGTH,
+            Consts::TEST_MP3_BYTES.len().to_string(),
+        )
         .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap()
 }
@@ -292,7 +298,8 @@ async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
 }
 
 async fn open_audio_hls_server() -> HlsTestServer {
-    let segment_duration = Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
+    let segment_duration =
+        Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
         custom_data: Some(Arc::new(create_wav_exact_bytes(
             signal::Sawtooth,
@@ -1086,9 +1093,9 @@ async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path}: expected ~{}s, got {dur_secs:.1}s", Consts::EXPECTED_DURATION_SECS
+        "path={path}: expected ~{}s, got {dur_secs:.1}s",
+        Consts::EXPECTED_DURATION_SECS
     );
-
 
     // Decode real PCM data — at least 2 seconds.
     let (samples, position) = {

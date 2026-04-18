@@ -12,10 +12,11 @@ use rustls_platform_verifier::android as rustls_android;
 use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
-struct Consts;
-impl Consts {
-    static READY: AtomicBool = AtomicBool::new(false);
-    static GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
+mod android_context {
+    use super::{AtomicBool, GlobalRef, OnceLock};
+
+    pub(super) static READY: AtomicBool = AtomicBool::new(false);
+    pub(super) static GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
 }
 
 #[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
@@ -26,7 +27,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     context: JObject<'_>,
     log_level: jint,
 ) {
-    if !AndroidContext::READY.load(Ordering::Acquire) {
+    if !android_context::READY.load(Ordering::Acquire) {
         let filter = level_filter(log_level);
         if let Ok(layer) = tracing_android::layer("kithara") {
             let _ = tracing_subscriber::registry()
@@ -35,7 +36,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         }
         match init_android_context(&mut env, &context) {
             Ok(()) => {
-                AndroidContext::READY.store(true, Ordering::Release);
+                android_context::READY.store(true, Ordering::Release);
             }
             Err(message) => {
                 error!(message = %message);
@@ -77,8 +78,8 @@ fn init_android_context(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<(
         .new_global_ref(context)
         .map_err(|err| format!("failed to create global context ref: {err}"))?;
 
-    let _ = AndroidContext::GLOBAL.set(context_global);
-    let Some(global) = AndroidContext::GLOBAL.get() else {
+    let _ = android_context::GLOBAL.set(context_global);
+    let Some(global) = android_context::GLOBAL.get() else {
         return Err("failed to store android context global ref".into());
     };
 

@@ -103,7 +103,11 @@ impl KeyManager {
     /// despite matching the `is_none()` guard — this is logically
     /// impossible, expressed via `expect` instead of an unreachable
     /// assertion so the reason is attributed at the call site.
-    pub async fn get_raw_key(&self, url: &Url, _iv: Option<[u8; Self::AES_KEY_LEN]>) -> HlsResult<Bytes> {
+    pub async fn get_raw_key(
+        &self,
+        url: &Url,
+        _iv: Option<[u8; Self::AES_KEY_LEN]>,
+    ) -> HlsResult<Bytes> {
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             // Plain (non-DRM) key: disk-cache the raw bytes as before.
@@ -229,7 +233,7 @@ impl KeyManager {
         }
     }
 
-pub(crate) fn derive_iv(
+    pub(crate) fn derive_iv(
         key_info: &crate::parsing::KeyInfo,
         sequence: u64,
     ) -> [u8; Self::AES_KEY_LEN] {

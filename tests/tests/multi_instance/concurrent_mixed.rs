@@ -159,7 +159,11 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     let bytes_per_frame = Consts::D.channels as usize * 2;
     let header_size = 44;
     let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(sample_count, Consts::D.sample_rate, Consts::D.channels))
+    Arc::new(create_test_wav(
+        sample_count,
+        Consts::D.sample_rate,
+        Consts::D.channels,
+    ))
 }
 
 /// 2 File + 2 HLS instances running concurrently.
@@ -174,8 +178,8 @@ async fn mixed_two_file_two_hls() {
     let wav_data = generate_wav_data();
     let file_server = TestServerHelper::new().await;
 
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
@@ -278,8 +282,8 @@ async fn mixed_four_file_four_hls() {
     let wav_data = generate_wav_data();
     let file_server = TestServerHelper::new().await;
 
-    let segment_duration =
-        Consts::D.segment_size as f64 / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = Consts::D.segment_size as f64
+        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
