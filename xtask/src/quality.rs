@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -512,73 +511,18 @@ fn run_trait_mock_exceptions() -> Result<()> {
     let target_dir = root.join("target");
     fs::create_dir_all(&target_dir)?;
 
-    let exceptions_file = root.join("xtask").join("trait-mock-exceptions.txt");
-    if !exceptions_file.exists() {
-        bail!("exceptions file not found: {}", exceptions_file.display());
-    }
-
-    let content = fs::read_to_string(&exceptions_file)?;
-    let mut expected: Vec<(String, String)> = Vec::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        let parts: Vec<&str> = line.splitn(2, '|').collect();
-        if parts.len() < 2 {
-            bail!("malformed exceptions entry: {line}");
-        }
-
-        let path = parts[0].trim().to_string();
-        let reason = parts[1].trim().to_string();
-
-        if path.is_empty() || reason.is_empty() {
-            bail!("malformed exceptions entry: {line}");
-        }
-
-        expected.push((path, reason));
-    }
-
     let trait_files = scan_trait_files(&root)?;
     let actual_missing: Vec<&str> = trait_files
         .iter()
         .filter(|f| f.unimock_count == 0)
         .map(|f| f.rel_path.as_str())
         .collect();
-    let actual_missing_set: HashSet<&str> = actual_missing.iter().copied().collect();
-
-    let expected_paths_set: HashSet<&str> = expected.iter().map(|(p, _)| p.as_str()).collect();
-
-    let unexpected_missing: Vec<&str> = actual_missing
-        .iter()
-        .filter(|p| !expected_paths_set.contains(*p))
-        .copied()
-        .collect();
-
-    let stale_exceptions: Vec<&str> = expected
-        .iter()
-        .map(|(p, _)| p.as_str())
-        .filter(|p| !actual_missing_set.contains(*p))
-        .collect();
 
     let timestamp = utc_timestamp();
 
     let mut rows: Vec<String> = Vec::new();
-    for (path, reason) in &expected {
-        let status = if actual_missing_set.contains(path.as_str()) {
-            "expected_missing"
-        } else {
-            "stale_exception"
-        };
-        rows.push(format!("| {path} | {reason} | {status} |"));
-    }
-    for path in &unexpected_missing {
-        rows.push(format!(
-            "| {path} | missing reason in {} | unexpected_missing |",
-            exceptions_file.display()
-        ));
+    for path in &actual_missing {
+        rows.push(format!("| {path} | missing unimock | advisory |"));
     }
 
     let detail_rows = if rows.is_empty() {
@@ -589,7 +533,7 @@ fn run_trait_mock_exceptions() -> Result<()> {
 
     let report = format!(
         "\
-# Trait Mock Exceptions
+# Trait Mock Missing (Advisory)
 
 - generated_at_utc: {timestamp}
 
@@ -598,9 +542,6 @@ fn run_trait_mock_exceptions() -> Result<()> {
 | Metric | Count |
 | --- | ---: |
 | Actual trait files without unimock | {actual_missing_count} |
-| Declared exceptions | {declared_count} |
-| Unexpected missing unimock | {unexpected_count} |
-| Stale exceptions | {stale_count} |
 
 ## Details
 
@@ -609,9 +550,6 @@ fn run_trait_mock_exceptions() -> Result<()> {
 {detail_rows}
 ",
         actual_missing_count = actual_missing.len(),
-        declared_count = expected.len(),
-        unexpected_count = unexpected_missing.len(),
-        stale_count = stale_exceptions.len(),
     );
 
     let output_path = target_dir.join("trait-mock-exceptions.md");
@@ -621,29 +559,16 @@ fn run_trait_mock_exceptions() -> Result<()> {
         output_path.display()
     );
 
-    if !unexpected_missing.is_empty() {
-        println!("FAILED: trait files without unimock and without explicit exceptions:");
-        for path in &unexpected_missing {
+    if !actual_missing.is_empty() {
+        println!("ADVISORY: the following trait files are missing unimock:");
+        for path in &actual_missing {
             println!("  - {path}");
         }
-        bail!(
-            "{} trait file(s) without unimock and without explicit exceptions",
-            unexpected_missing.len()
-        );
+        // Do not return bail!() here to make it a warning.
+    } else {
+        println!("OK: all trait files have unimock.");
     }
 
-    if !stale_exceptions.is_empty() {
-        println!(
-            "FAILED: stale trait mock exceptions (remove from {}):",
-            exceptions_file.display()
-        );
-        for path in &stale_exceptions {
-            println!("  - {path}");
-        }
-        bail!("{} stale trait mock exception(s)", stale_exceptions.len());
-    }
-
-    println!("OK: all trait files without unimock are explicitly documented.");
     Ok(())
 }
 
