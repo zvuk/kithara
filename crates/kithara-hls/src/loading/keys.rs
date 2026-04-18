@@ -23,12 +23,6 @@ use url::Url;
 use super::atomic_fetch::fetch_atomic_body;
 use crate::{HlsError, HlsResult};
 
-/// AES-128 key / IV length in bytes.
-const AES_KEY_LEN: usize = 16;
-
-/// Start offset for sequence number in the 16-byte IV.
-const IV_SEQUENCE_OFFSET: usize = 8;
-
 /// DRM key fetch + processor pipeline.
 ///
 /// Routes per-provider processing (headers, query params, key
@@ -55,6 +49,12 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    /// AES-128 key / IV length in bytes.
+    const AES_KEY_LEN: usize = 16;
+
+    /// Start offset for sequence number in the 16-byte IV.
+    const IV_SEQUENCE_OFFSET: usize = 8;
+
     #[must_use]
     pub fn new(
         downloader: PeerHandle,
@@ -103,7 +103,7 @@ impl KeyManager {
     /// despite matching the `is_none()` guard — this is logically
     /// impossible, expressed via `expect` instead of an unreachable
     /// assertion so the reason is attributed at the call site.
-    pub async fn get_raw_key(&self, url: &Url, _iv: Option<[u8; AES_KEY_LEN]>) -> HlsResult<Bytes> {
+    pub async fn get_raw_key(&self, url: &Url, _iv: Option<[u8; Self::AES_KEY_LEN]>) -> HlsResult<Bytes> {
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             // Plain (non-DRM) key: disk-cache the raw bytes as before.
@@ -229,15 +229,15 @@ impl KeyManager {
         }
     }
 
-    pub(crate) fn derive_iv(
+pub(crate) fn derive_iv(
         key_info: &crate::parsing::KeyInfo,
         sequence: u64,
-    ) -> [u8; AES_KEY_LEN] {
+    ) -> [u8; Self::AES_KEY_LEN] {
         if let Some(iv) = key_info.iv {
             return iv;
         }
-        let mut iv = [0u8; AES_KEY_LEN];
-        iv[IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+        let mut iv = [0u8; Self::AES_KEY_LEN];
+        iv[Self::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
         iv
     }
 }

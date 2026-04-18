@@ -705,8 +705,11 @@ mod tests {
         stream_index::SegmentData,
     };
 
-    const NUM_VARIANTS: usize = 2;
-    const NUM_SEGMENTS: usize = 40;
+    struct Consts;
+    impl Consts {
+        const NUM_VARIANTS: usize = 2;
+        const NUM_SEGMENTS: usize = 40;
+    }
 
     fn make_variant_state(id: usize) -> VariantState {
         let base = Url::parse("https://example.com/").expect("valid base URL");
@@ -719,7 +722,7 @@ mod tests {
             codec: None,
             container: None,
             init_url: None,
-            segments: (0..NUM_SEGMENTS)
+            segments: (0..Consts::NUM_SEGMENTS)
                 .map(|index| SegmentState {
                     index,
                     url: base
@@ -747,9 +750,9 @@ mod tests {
             .build();
 
         let playlist_state = Arc::new(PlaylistState::new(
-            (0..NUM_VARIANTS).map(make_variant_state).collect(),
+            (0..Consts::NUM_VARIANTS).map(make_variant_state).collect(),
         ));
-        let parsed: Vec<VariantStream> = (0..NUM_VARIANTS)
+        let parsed: Vec<VariantStream> = (0..Consts::NUM_VARIANTS)
             .map(|i| VariantStream {
                 id: VariantId(i),
                 uri: format!("v{i}.m3u8"),
@@ -921,11 +924,11 @@ mod tests {
         scheduler
             .segments
             .lock_sync()
-            .set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
+            .set_expected_sizes(0, vec![SEG_SIZE; Consts::NUM_SEGMENTS]);
 
         // Commit every segment of variant 0 — downloader has walked the
         // full playlist once.
-        for seg_idx in 0..NUM_SEGMENTS {
+        for seg_idx in 0..Consts::NUM_SEGMENTS {
             commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
         }
         let scheduler = &mut state.scheduler;
@@ -936,19 +939,19 @@ mod tests {
         const CACHE_WINDOW: usize = 4;
         {
             let mut segments = scheduler.segments.lock_sync();
-            for seg_idx in 0..NUM_SEGMENTS - CACHE_WINDOW {
+            for seg_idx in 0..Consts::NUM_SEGMENTS - CACHE_WINDOW {
                 segments.on_segment_invalidated(0, seg_idx);
             }
         }
 
         // Cursor is past the tail — every segment was fetched once.
-        scheduler.cursor.reopen_fill(0, NUM_SEGMENTS);
-        assert_eq!(scheduler.current_segment_index(), NUM_SEGMENTS);
+        scheduler.cursor.reopen_fill(0, Consts::NUM_SEGMENTS);
+        assert_eq!(scheduler.current_segment_index(), Consts::NUM_SEGMENTS);
 
         // Reader's byte position is inside the cache window — seg
         // (NUM_SEGMENTS - 2) is still cached. Evicted segments (< 36)
         // are BEHIND the reader and must not be re-fetched.
-        let reader_seg = NUM_SEGMENTS - 2;
+        let reader_seg = Consts::NUM_SEGMENTS - 2;
         let reader_byte_pos = reader_seg as u64 * SEG_SIZE + 10;
         scheduler
             .coord
@@ -958,7 +961,7 @@ mod tests {
         // Tail-state handler: this is what poll_next calls every cycle
         // once the cursor is at num_segments. Today it unconditionally
         // rewinds to segment 0 via rewind_to_first_missing_segment.
-        let consumed = scheduler.handle_tail_state(0, NUM_SEGMENTS);
+        let consumed = scheduler.handle_tail_state(0, Consts::NUM_SEGMENTS);
 
         let cursor_after = scheduler.current_segment_index();
         assert!(
@@ -1025,11 +1028,11 @@ mod tests {
         const SEG_SIZE: u64 = 100;
         {
             let mut segs = state.scheduler.segments.lock_sync();
-            segs.set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
-            segs.set_expected_sizes(1, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_expected_sizes(0, vec![SEG_SIZE; Consts::NUM_SEGMENTS]);
+            segs.set_expected_sizes(1, vec![SEG_SIZE; Consts::NUM_SEGMENTS]);
             segs.set_layout_variant(0);
         }
-        for seg_idx in 0..NUM_SEGMENTS {
+        for seg_idx in 0..Consts::NUM_SEGMENTS {
             commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
             commit_segment_in_index(&state, 1, seg_idx, SEG_SIZE);
         }
@@ -1061,7 +1064,7 @@ mod tests {
         //     handle_tail_state exit path (layout==variant branch)
         //   - ABR wants variant 1 (throughput suggests up/down-switch)
         state.scheduler.download_variant = 0;
-        state.scheduler.cursor.reopen_fill(READER_SEG, NUM_SEGMENTS);
+        state.scheduler.cursor.reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
         state.scheduler.abr.apply(
@@ -1075,7 +1078,7 @@ mod tests {
 
         assert_eq!(
             state.scheduler.current_segment_index(),
-            NUM_SEGMENTS,
+            Consts::NUM_SEGMENTS,
             "precondition: cursor at tail"
         );
         assert_eq!(
@@ -1110,7 +1113,7 @@ mod tests {
         // branch → returns true (Pending). In production that's fine,
         // BUT the NEXT poll then invokes apply_variant_readiness
         // without the filling_layout_gap guard.
-        let _is_tail = state.scheduler.handle_tail_state(variant, NUM_SEGMENTS);
+        let _is_tail = state.scheduler.handle_tail_state(variant, Consts::NUM_SEGMENTS);
 
         // The critical call: with filling_layout_gap=false and variant=1
         // from ABR, classify_variant_transition sees download_variant=0
@@ -1348,11 +1351,11 @@ mod tests {
         const SEG_SIZE: u64 = 100;
         {
             let mut segs = state.scheduler.segments.lock_sync();
-            segs.set_expected_sizes(0, vec![SEG_SIZE; NUM_SEGMENTS]);
-            segs.set_expected_sizes(1, vec![SEG_SIZE; NUM_SEGMENTS]);
+            segs.set_expected_sizes(0, vec![SEG_SIZE; Consts::NUM_SEGMENTS]);
+            segs.set_expected_sizes(1, vec![SEG_SIZE; Consts::NUM_SEGMENTS]);
             segs.set_layout_variant(0);
         }
-        for seg_idx in 0..NUM_SEGMENTS {
+        for seg_idx in 0..Consts::NUM_SEGMENTS {
             commit_segment_in_index(&state, 0, seg_idx, SEG_SIZE);
             commit_segment_in_index(&state, 1, seg_idx, SEG_SIZE);
         }
@@ -1361,7 +1364,7 @@ mod tests {
         // BOTH variants — matches `.with_cache_capacity(NonZeroUsize::new(4))`
         // on the integration test's StoreOptions.
         const CACHE_WINDOW: usize = 4;
-        const LIVE_START: usize = NUM_SEGMENTS - CACHE_WINDOW;
+        const LIVE_START: usize = Consts::NUM_SEGMENTS - CACHE_WINDOW;
         {
             let mut segs = state.scheduler.segments.lock_sync();
             for seg_idx in 0..LIVE_START {
@@ -1374,7 +1377,7 @@ mod tests {
         // cached segment. This is the state right before the flake fires:
         // 55 seconds in, `chunks_read` ≈ 2000, decoder advancing, byte
         // position inside LIVE_START+2.
-        const READER_SEG: usize = NUM_SEGMENTS - 2;
+        const READER_SEG: usize = Consts::NUM_SEGMENTS - 2;
         let reader_byte_pos = READER_SEG as u64 * SEG_SIZE + 10;
         state
             .scheduler
@@ -1387,7 +1390,7 @@ mod tests {
         // `handle_tail_state` pass (layout==variant → `else` arm at
         // plan.rs:133).
         state.scheduler.download_variant = 0;
-        state.scheduler.cursor.reopen_fill(LIVE_START, NUM_SEGMENTS);
+        state.scheduler.cursor.reopen_fill(LIVE_START, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
 
         // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
@@ -1404,7 +1407,7 @@ mod tests {
 
         assert_eq!(
             state.scheduler.current_segment_index(),
-            NUM_SEGMENTS,
+            Consts::NUM_SEGMENTS,
             "precondition: cursor at tail"
         );
 
@@ -1430,7 +1433,7 @@ mod tests {
         // the `layout != variant` branch, finds no layout gap in the
         // reader's forward window, and falls through clearing
         // `filling_layout_gap`.
-        let _is_tail = state.scheduler.handle_tail_state(variant, NUM_SEGMENTS);
+        let _is_tail = state.scheduler.handle_tail_state(variant, Consts::NUM_SEGMENTS);
 
         // The critical call. With `download_variant=0`, `variant=1`
         // (from ABR up-switch), and `filling_layout_gap=false`,
@@ -1458,7 +1461,7 @@ mod tests {
              {reader_byte_pos}). With cache_capacity=4 on an ephemeral \
              store, re-fetching segments 0..{reader_seg_before} evicts \
              the reader's live window (segments \
-             {LIVE_START}..{NUM_SEGMENTS}) the decoder is actively \
+             {LIVE_START}..{Consts::NUM_SEGMENTS}) the decoder is actively \
              reading, so `wait_range` exceeds its budget and \
              `next_chunk_with_timeout` fires the assert at \
              live_stress_real_stream.rs:190 with \
