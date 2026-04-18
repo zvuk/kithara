@@ -80,14 +80,6 @@ pub struct MmapDriver {
     mode: OpenMode,
 }
 
-impl MmapDriver {
-    /// Default initial size for new mmap files (64 KB).
-    const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
-
-    /// Growth factor when the mmap file needs to be resized.
-    const MMAP_GROWTH_FACTOR: u64 = 2;
-}
-
 impl fmt::Debug for MmapDriver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MmapDriver")
@@ -95,6 +87,15 @@ impl fmt::Debug for MmapDriver {
             .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
+}
+
+struct Consts;
+impl Consts {
+    /// Default initial size for new mmap files (64 KB).
+    const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
+
+    /// Growth factor when the mmap file needs to be resized.
+    const MMAP_GROWTH_FACTOR: u64 = 2;
 }
 
 impl Driver for MmapDriver {
@@ -135,7 +136,7 @@ impl Driver for MmapDriver {
             if let Some(parent) = opts.path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let size = opts.initial_len.unwrap_or(Self::DEFAULT_INITIAL_SIZE);
+            let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
             let mmap_state = if size == 0 {
                 MmapState::Empty
             } else {
@@ -205,7 +206,7 @@ impl DriverIo for MmapDriver {
         let mmap = match &*mmap_guard {
             MmapState::Active(m) => {
                 if end > m.len() {
-                    let new_size = end.max(m.len() * Self::MMAP_GROWTH_FACTOR);
+                    let new_size = end.max(m.len() * Consts::MMAP_GROWTH_FACTOR);
                     m.resize(new_size)?;
                 }
                 m
@@ -216,7 +217,7 @@ impl DriverIo for MmapDriver {
                 ));
             }
             MmapState::Empty => {
-                let size = end.max(Self::DEFAULT_INITIAL_SIZE);
+                let size = end.max(Consts::DEFAULT_INITIAL_SIZE);
                 let m = MemoryMappedFile::create_rw(&self.path, size)?;
                 *mmap_guard = MmapState::Active(m);
                 match &*mmap_guard {
