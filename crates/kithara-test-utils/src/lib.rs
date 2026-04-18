@@ -33,6 +33,7 @@ pub mod hls_url;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
 mod log_filter;
+pub(crate) mod consts;
 pub mod memory_source;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]

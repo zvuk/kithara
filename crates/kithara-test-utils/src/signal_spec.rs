@@ -7,15 +7,7 @@ use base64::{
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::signal_pcm::SignalLength;
-
-const MAX_SPEC_BYTES: usize = 4096;
-const MIN_SAMPLE_RATE: u32 = 8_000;
-const MAX_SAMPLE_RATE: u32 = 192_000;
-const MAX_CHANNELS: u16 = 8;
-const MAX_SECONDS: f64 = 300.0;
-const MAX_PCM_BYTES: usize = 32 * 1024 * 1024;
-const WAV_HEADER_SIZE: usize = 44;
+use crate::{consts::Consts, signal_pcm::SignalLength};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignalKind {
@@ -167,7 +159,7 @@ fn split_spec_and_ext(spec_with_ext: &str) -> Result<(&str, Option<&str>), Signa
 }
 
 fn decode_signal_spec_payload(encoded: &str) -> Result<SignalSpecPayload, SignalRequestError> {
-    if encoded.len() > MAX_SPEC_BYTES {
+    if encoded.len() > Consts::MAX_SIGNAL_SPEC_BYTES {
         return Err(SignalRequestError::SpecTooLarge);
     }
 
@@ -211,14 +203,14 @@ fn normalize_signal_spec(
     format: SignalFormat,
     payload: &SignalSpecPayload,
 ) -> Result<ResolvedSignalSpec, SignalRequestError> {
-    if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&payload.sample_rate) {
+    if !(Consts::MIN_SAMPLE_RATE..=Consts::MAX_SAMPLE_RATE).contains(&payload.sample_rate) {
         return Err(SignalRequestError::InvalidField {
             field: "sample_rate",
             message: "must be between 8000 and 192000 Hz",
         });
     }
 
-    if payload.channels == 0 || payload.channels > MAX_CHANNELS {
+    if payload.channels == 0 || payload.channels > Consts::MAX_CHANNELS {
         return Err(SignalRequestError::InvalidField {
             field: "channels",
             message: "must be between 1 and 8",
@@ -283,7 +275,7 @@ fn normalize_length(
     }
 
     if let Some(seconds) = payload.seconds {
-        if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_SECONDS {
+        if !seconds.is_finite() || seconds <= 0.0 || seconds > Consts::MAX_SIGNAL_SECONDS {
             return Err(SignalRequestError::InvalidField {
                 field: "seconds",
                 message: "must be finite, > 0, and <= 300 seconds",
@@ -322,7 +314,7 @@ fn normalize_length(
             });
         }
 
-        let data_bytes = total_file_bytes.checked_sub(WAV_HEADER_SIZE).ok_or(
+        let data_bytes = total_file_bytes.checked_sub(Consts::WAV_HEADER_SIZE).ok_or(
             SignalRequestError::InvalidField {
                 field: "file_bytes",
                 message: "must be at least 44 bytes for a WAV header",
@@ -368,7 +360,7 @@ fn validate_pcm_budget(total_frames: usize, channels: u16) -> Result<(), SignalR
         .checked_mul(channels as usize)
         .and_then(|samples| samples.checked_mul(size_of::<i16>()))
         .ok_or(SignalRequestError::PcmBudgetExceeded)?;
-    if pcm_bytes > MAX_PCM_BYTES {
+    if pcm_bytes > Consts::MAX_SIGNAL_PCM_BYTES {
         return Err(SignalRequestError::PcmBudgetExceeded);
     }
 

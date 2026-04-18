@@ -8,21 +8,13 @@ use kithara_stream::{AudioCodec, ContainerFormat, audio_codec_supports_fmp4_pack
 use thiserror::Error;
 
 use crate::{
+    consts::Consts,
     fixture_protocol::{
         DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
         PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
     },
     hls_url::HlsSpec,
 };
-
-const MAX_SPEC_BYTES: usize = 32 * 1024;
-const MAX_VARIANTS: usize = 16;
-const MAX_SEGMENTS_PER_VARIANT: usize = 4096;
-const MAX_SEGMENT_SIZE: usize = 8 * 1024 * 1024;
-const MAX_DURATION_SECS: f64 = 600.0;
-const MIN_SAMPLE_RATE: u32 = 8_000;
-const MAX_SAMPLE_RATE: u32 = 192_000;
-const MAX_CHANNELS: u16 = 8;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedHlsSpec {
@@ -136,7 +128,7 @@ pub(crate) fn parse_hls_spec_with<F>(
 where
     F: Fn(&str) -> Result<Arc<Vec<u8>>, HlsSpecError>,
 {
-    if encoded.len() > MAX_SPEC_BYTES {
+    if encoded.len() > Consts::MAX_HLS_SPEC_BYTES {
         return Err(HlsSpecError::SpecTooLarge);
     }
 
@@ -213,19 +205,19 @@ where
 }
 
 fn validate_hls_shape(spec: &HlsSpec) -> Result<(), HlsSpecError> {
-    if spec.variant_count == 0 || spec.variant_count > MAX_VARIANTS {
+    if spec.variant_count == 0 || spec.variant_count > Consts::MAX_HLS_VARIANTS {
         return Err(HlsSpecError::InvalidField {
             field: "variant_count",
             message: "must be between 1 and 16",
         });
     }
-    if spec.segments_per_variant == 0 || spec.segments_per_variant > MAX_SEGMENTS_PER_VARIANT {
+    if spec.segments_per_variant == 0 || spec.segments_per_variant > Consts::MAX_HLS_SEGMENTS_PER_VARIANT {
         return Err(HlsSpecError::InvalidField {
             field: "segments_per_variant",
             message: "must be between 1 and 4096",
         });
     }
-    if spec.segment_size == 0 || spec.segment_size > MAX_SEGMENT_SIZE {
+    if spec.segment_size == 0 || spec.segment_size > Consts::MAX_HLS_SEGMENT_SIZE {
         return Err(HlsSpecError::InvalidField {
             field: "segment_size",
             message: "must be between 1 byte and 8 MiB",
@@ -233,7 +225,7 @@ fn validate_hls_shape(spec: &HlsSpec) -> Result<(), HlsSpecError> {
     }
     if !spec.segment_duration_secs.is_finite()
         || spec.segment_duration_secs <= 0.0
-        || spec.segment_duration_secs > MAX_DURATION_SECS
+        || spec.segment_duration_secs > Consts::MAX_HLS_DURATION_SECS
     {
         return Err(HlsSpecError::InvalidField {
             field: "segment_duration_secs",
@@ -337,13 +329,13 @@ where
 }
 
 fn validate_pcm_shape(sample_rate: u32, channels: u16) -> Result<(), HlsSpecError> {
-    if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) {
+    if !(Consts::MIN_SAMPLE_RATE..=Consts::MAX_SAMPLE_RATE).contains(&sample_rate) {
         return Err(HlsSpecError::InvalidField {
             field: "sample_rate",
             message: "must be between 8000 and 192000 Hz",
         });
     }
-    if channels == 0 || channels > MAX_CHANNELS {
+    if channels == 0 || channels > Consts::MAX_CHANNELS {
         return Err(HlsSpecError::InvalidField {
             field: "channels",
             message: "must be between 1 and 8",
