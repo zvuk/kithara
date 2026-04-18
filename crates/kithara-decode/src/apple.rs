@@ -49,7 +49,7 @@ impl Consts {
     const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
     const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
     const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
-    kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        Self::kAudioFormatFlagIsFloat | Self::kAudioFormatFlagIsPacked;
     const kAudioFileAAC_ADTSType: AudioFileTypeID = 0x61647473;
     const kAudioFileM4AType: AudioFileTypeID = 0x6d346166;
     const kAudioFileMP3Type: AudioFileTypeID = 0x4d504733;
