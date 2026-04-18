@@ -39,9 +39,8 @@ fn get_bool(val: &JsValue, key: &str) -> Option<bool> {
         .and_then(|v| v.as_bool())
 }
 
-static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
-
 pub(crate) fn next_request_id() -> u32 {
+    static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -92,11 +91,11 @@ pub(crate) fn reply_promise(request_id: u32) -> Result<Promise, JsValue> {
 
     Ok(promise)
 }
-/// Maximum number of events in the event log ring buffer.
-const MAX_EVENTS: u32 = 1024;
-
 /// Init event log receiver on the main thread.
 pub(crate) fn init_event_reader() {
+    /// Maximum number of events in the event log ring buffer.
+    const MAX_EVENTS: u32 = 1024;
+
     let global = js_sys::global();
     let init_key = JsValue::from_str("__kithara_event_reader_init");
     if Reflect::get(&global, &init_key)

@@ -16,26 +16,14 @@ macro_rules! clog {
     };
 }
 
-const CROSSFADE_SECONDS: f32 = 5.0;
-
-/// LRU cache capacity for WASM resources.
-const WASM_CACHE_CAPACITY: usize = 64;
-
-/// Milliseconds per second.
-const MS_PER_SECOND: f64 = 1000.0;
-
-/// Ducking mode for soft attenuation.
-const DUCKING_SOFT: u32 = 1;
-
-/// Ducking mode for hard attenuation.
-const DUCKING_HARD: u32 = 2;
-
 /// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
 #[kithara_wasm_macros::assert_not_main_thread]
 pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     clog!("[WORKER] engine worker started");
 
     task_spawn(async move {
+        const CROSSFADE_SECONDS: f32 = 5.0;
+
         clog!("[WORKER] spawn: creating PlayerConfig");
         let config = PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS);
         clog!("[WORKER] spawn: creating PlayerImpl");
@@ -57,6 +45,15 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
 }
 
 async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
+    /// Milliseconds per second.
+    const MS_PER_SECOND: f64 = 1000.0;
+
+    /// Ducking mode for soft attenuation.
+    const DUCKING_SOFT: u32 = 1;
+
+    /// Ducking mode for hard attenuation.
+    const DUCKING_HARD: u32 = 2;
+
     match cmd {
         WorkerCmd::SelectTrack { url, request_id } => {
             let result = handle_select_track(player, &url).await;
@@ -100,6 +97,9 @@ async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
 
 /// Load resource (async) and start playback.
 async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), String> {
+    /// LRU cache capacity for WASM resources.
+    const WASM_CACHE_CAPACITY: usize = 64;
+
     clog!("[WORKER] select_track: url={url}");
 
     let mut config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;

@@ -24,19 +24,10 @@ macro_rules! clog {
     };
 }
 
-const CROSSFADE_SECONDS: f32 = 5.0;
-const EQ_BANDS: usize = 10;
-
-/// Default initial volume.
-const DEFAULT_VOLUME: f32 = 0.5;
-
-/// Milliseconds per second.
-const MS_PER_SECOND: f64 = 1000.0;
-
 struct Player {
     volume: AtomicU32,
     crossfade_secs: AtomicU32,
-    eq_gains: [AtomicU32; EQ_BANDS],
+    eq_gains: [AtomicU32; Player::EQ_BANDS],
     ducking: AtomicU32,
     cmd_tx: LazyLock<Mutex<Option<mpsc::Sender<WorkerCmd>>>>,
     start_lock: LazyLock<Mutex<()>>,
@@ -46,7 +37,7 @@ struct Player {
 static PLAYER: Player = Player {
     volume: AtomicU32::new(0),
     crossfade_secs: AtomicU32::new(0),
-    eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
+    eq_gains: [const { AtomicU32::new(0) }; Player::EQ_BANDS],
     ducking: AtomicU32::new(0),
     cmd_tx: LazyLock::new(|| Mutex::new(None)),
     start_lock: LazyLock::new(|| Mutex::new(())),
@@ -58,6 +49,15 @@ fn player() -> &'static Player {
 }
 
 impl Player {
+    const CROSSFADE_SECONDS: f32 = 5.0;
+    const EQ_BANDS: usize = 10;
+
+    /// Default initial volume.
+    const DEFAULT_VOLUME: f32 = 0.5;
+
+    /// Milliseconds per second.
+    const MS_PER_SECOND: f64 = 1000.0;
+
     fn load_f32(a: &AtomicU32) -> f32 {
         f32::from_bits(a.load(Ordering::Relaxed))
     }
@@ -68,6 +68,10 @@ impl Player {
 
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
         self.cmd_tx.lock_sync()
+    }
+
+    fn find_player_idx(&self) -> Option<usize> {
+        None
     }
 
     fn clear_cmd_tx(&self) {
@@ -105,8 +109,8 @@ impl Player {
     }
 
     fn reset_cached_state(&self) {
-        Self::store_f32(&self.volume, DEFAULT_VOLUME);
-        Self::store_f32(&self.crossfade_secs, CROSSFADE_SECONDS);
+        Self::store_f32(&self.volume, Self::DEFAULT_VOLUME);
+        Self::store_f32(&self.crossfade_secs, Self::CROSSFADE_SECONDS);
         for gain in &self.eq_gains {
             Self::store_f32(gain, 0.0);
         }
@@ -211,12 +215,12 @@ impl Player {
 
     #[export]
     fn get_position_ms(&self) -> f64 {
-        wasm_support::bridge_position_secs() * MS_PER_SECOND
+        wasm_support::bridge_position_secs() * Self::MS_PER_SECOND
     }
 
     #[export]
     fn get_duration_ms(&self) -> f64 {
-        wasm_support::bridge_duration_secs() * MS_PER_SECOND
+        wasm_support::bridge_duration_secs() * Self::MS_PER_SECOND
     }
 
     #[export]
@@ -241,7 +245,7 @@ impl Player {
 
     #[export]
     fn eq_band_count(&self) -> u32 {
-        EQ_BANDS as u32
+        Self::EQ_BANDS as u32
     }
 
     #[export]
