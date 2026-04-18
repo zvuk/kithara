@@ -12,11 +12,14 @@ use crate::{
     theme::tui,
 };
 
-const CONTROL_POLL_MS: u64 = 50;
-const SEEK_STEP_SECONDS_F64: f64 = 5.0;
-const VOLUME_STEP: f32 = 0.05;
-const PERCENT_SCALE: f32 = 100.0;
-const MAX_DIGIT_TRACKS: usize = 9;
+struct Consts;
+impl Consts {
+    const CONTROL_POLL_MS: u64 = 50;
+    const SEEK_STEP_SECONDS_F64: f64 = 5.0;
+    const VOLUME_STEP: f32 = 0.05;
+    const PERCENT_SCALE: f32 = 100.0;
+    const MAX_DIGIT_TRACKS: usize = 9;
+}
 
 type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -72,8 +75,9 @@ fn run_ui_loop(
     let mut ui = UiSession::new(dashboard)?;
     ui.log_line(&format!(
         "controls: space play/pause, 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
-        track_count.min(MAX_DIGIT_TRACKS),
-        VOLUME_STEP * PERCENT_SCALE
+        track_count.min(Consts::MAX_DIGIT_TRACKS),
+        Consts::VOLUME_STEP * Consts::PERCENT_SCALE,
+        SEEK_STEP_SECONDS_F64 = Consts::SEEK_STEP_SECONDS_F64
     ))?;
     ui.log_line("auto-advances to next track with crossfade near end of each track")?;
     ui.draw()?;
@@ -145,7 +149,7 @@ fn run_ui_loop(
             }
         }
 
-        if event::poll(Duration::from_millis(CONTROL_POLL_MS))? {
+        if event::poll(Duration::from_millis(Consts::CONTROL_POLL_MS))? {
             match event::read()? {
                 TermEvent::Key(key)
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
@@ -216,7 +220,7 @@ fn handle_event(
                 PlayerEvent::VolumeChanged { volume } => {
                     ui.dashboard.set_volume(*volume);
                     ui.dashboard
-                        .set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
+                        .set_note(format!("volume {:.0}%", volume * Consts::PERCENT_SCALE));
                 }
                 _ => {}
             }
@@ -252,17 +256,17 @@ fn handle_key(
     }
     match key {
         KeyCode::Left => {
-            ControlOutcome::Continue(Some(apply_seek(queue, -SEEK_STEP_SECONDS_F64, dashboard)))
+            ControlOutcome::Continue(Some(apply_seek(queue, -Consts::SEEK_STEP_SECONDS_F64, dashboard)))
         }
         KeyCode::Right => {
-            ControlOutcome::Continue(Some(apply_seek(queue, SEEK_STEP_SECONDS_F64, dashboard)))
+            ControlOutcome::Continue(Some(apply_seek(queue, Consts::SEEK_STEP_SECONDS_F64, dashboard)))
         }
         KeyCode::Up => {
-            apply_volume(queue, VOLUME_STEP, dashboard);
+            apply_volume(queue, Consts::VOLUME_STEP, dashboard);
             ControlOutcome::Continue(None)
         }
         KeyCode::Down => {
-            apply_volume(queue, -VOLUME_STEP, dashboard);
+            apply_volume(queue, -Consts::VOLUME_STEP, dashboard);
             ControlOutcome::Continue(None)
         }
         KeyCode::Char(' ') => {
@@ -304,7 +308,7 @@ fn apply_volume(queue: &Queue, delta: f32, dashboard: &mut Dashboard) {
     let volume = (queue.volume() + delta).clamp(0.0, 1.0);
     queue.set_volume(volume);
     dashboard.set_volume(volume);
-    dashboard.set_note(format!("volume {:.0}%", volume * PERCENT_SCALE));
+    dashboard.set_note(format!("volume {:.0}%", volume * Consts::PERCENT_SCALE));
 }
 
 fn refresh_dashboard(dashboard: &mut Dashboard, queue: &Queue) {

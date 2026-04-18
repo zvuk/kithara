@@ -12,12 +12,6 @@ use crate::{
     theme::gui,
 };
 
-/// Default window width in logical pixels.
-const WINDOW_WIDTH: f32 = 448.0;
-
-/// Default window height in logical pixels.
-const WINDOW_HEIGHT: f32 = 734.0;
-
 /// Initialize tracing for GUI-only mode (no CRLF writer needed).
 ///
 /// # Errors
@@ -52,6 +46,12 @@ impl Frontend for GuiFrontend {
     }
 
     fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
+        /// Default window width in logical pixels.
+        const WINDOW_WIDTH: f32 = 448.0;
+
+        /// Default window height in logical pixels.
+        const WINDOW_HEIGHT: f32 = 734.0;
+
         let palette = self.palette;
         let config = self.config.clone();
 

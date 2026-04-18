@@ -11,33 +11,10 @@ use ratatui::{
 
 use crate::theme::tui::TuiPalette;
 
-const MIN_PROGRESS_BAR_WIDTH: usize = 4;
-const NOTE_MAX_CHARS: usize = 26;
-
-const PROGRESS_BAR_OVERHEAD: usize = 14;
-
-const BAR_COL_TRACK_PCT: u16 = 25;
-const BAR_COL_PROGRESS_PCT: u16 = 25;
-const BAR_COL_QUEUE_PCT: u16 = 12;
-const BAR_COL_CROSSFADE_PCT: u16 = 10;
-const BAR_COL_VOLUME_PCT: u16 = 8;
-const BAR_COL_NOTE_PCT: u16 = 20;
-
-const ELLIPSIS_LEN: usize = 3;
-
-const PERCENT_SCALE: f32 = 100.0;
-
-const MS_PER_SECOND: u64 = 1000;
-const SECONDS_PER_MINUTE: u64 = 60;
-
 /// TUI dashboard widget for the Kithara player.
 ///
 /// Renders playlist, progress bar, volume, and status information
 /// using ratatui inline viewport.
-/// Frames between blink toggles (~500ms at 100ms poll).
-const BLINK_DIVISOR: u64 = 5;
-const BLINK_PERIOD: u64 = 2;
-
 pub struct Dashboard {
     colors: TuiPalette,
     crossfade_progress: Option<f32>,
@@ -53,6 +30,29 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
+    const MIN_PROGRESS_BAR_WIDTH: usize = 4;
+    const NOTE_MAX_CHARS: usize = 26;
+
+    const PROGRESS_BAR_OVERHEAD: usize = 14;
+
+    const BAR_COL_TRACK_PCT: u16 = 25;
+    const BAR_COL_PROGRESS_PCT: u16 = 25;
+    const BAR_COL_QUEUE_PCT: u16 = 12;
+    const BAR_COL_CROSSFADE_PCT: u16 = 10;
+    const BAR_COL_VOLUME_PCT: u16 = 8;
+    const BAR_COL_NOTE_PCT: u16 = 20;
+
+    const ELLIPSIS_LEN: usize = 3;
+
+    const PERCENT_SCALE: f32 = 100.0;
+
+    const MS_PER_SECOND: u64 = 1000;
+    const SECONDS_PER_MINUTE: u64 = 60;
+
+    /// Frames between blink toggles (~500ms at 100ms poll).
+    const BLINK_DIVISOR: u64 = 5;
+    const BLINK_PERIOD: u64 = 2;
+
     #[must_use]
     pub fn new(palette: TuiPalette) -> Self {
         Self {
@@ -142,7 +142,7 @@ impl Dashboard {
             let style = if is_failed {
                 Style::default().fg(c.danger).bg(c.bg)
             } else if is_slow && is_active {
-                let blink_on = (self.frame_count / BLINK_DIVISOR).is_multiple_of(BLINK_PERIOD);
+                let blink_on = (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
                 let fg = if blink_on { c.warning } else { c.muted };
                 Style::default().fg(fg).bg(c.bg_panel)
             } else if is_slow {
@@ -162,18 +162,18 @@ impl Dashboard {
     fn render_bar(&self, frame: &mut Frame, area: Rect) {
         let c = &self.colors;
         let chunks = Layout::horizontal([
-            Constraint::Percentage(BAR_COL_TRACK_PCT),
-            Constraint::Percentage(BAR_COL_PROGRESS_PCT),
-            Constraint::Percentage(BAR_COL_QUEUE_PCT),
-            Constraint::Percentage(BAR_COL_CROSSFADE_PCT),
-            Constraint::Percentage(BAR_COL_VOLUME_PCT),
-            Constraint::Percentage(BAR_COL_NOTE_PCT),
+            Constraint::Percentage(Self::BAR_COL_TRACK_PCT),
+            Constraint::Percentage(Self::BAR_COL_PROGRESS_PCT),
+            Constraint::Percentage(Self::BAR_COL_QUEUE_PCT),
+            Constraint::Percentage(Self::BAR_COL_CROSSFADE_PCT),
+            Constraint::Percentage(Self::BAR_COL_VOLUME_PCT),
+            Constraint::Percentage(Self::BAR_COL_NOTE_PCT),
         ])
         .split(area);
 
         let progress_bar_width = usize::from(chunks[1].width)
-            .saturating_sub(PROGRESS_BAR_OVERHEAD)
-            .max(MIN_PROGRESS_BAR_WIDTH);
+            .saturating_sub(Self::PROGRESS_BAR_OVERHEAD)
+            .max(Self::MIN_PROGRESS_BAR_WIDTH);
         let icon = if self.playing { '▶' } else { '⏸' };
         let active_track = self
             .tracks
@@ -197,10 +197,10 @@ impl Dashboard {
             ),
             self.crossfade_progress.map_or_else(
                 || "xf -".to_string(),
-                |progress| format!("xf {:>3.0}%", progress * PERCENT_SCALE),
+                |progress| format!("xf {:>3.0}%", progress * Self::PERCENT_SCALE),
             ),
-            format!("🔉{:>3.0}%", self.volume * PERCENT_SCALE),
-            clamp_text(self.last_note.as_deref().unwrap_or("-"), NOTE_MAX_CHARS),
+            format!("🔉{:>3.0}%", self.volume * Self::PERCENT_SCALE),
+            clamp_text(self.last_note.as_deref().unwrap_or("-"), Self::NOTE_MAX_CHARS),
         ];
 
         let style = Style::default().fg(c.text).bg(c.bg);
@@ -240,10 +240,10 @@ fn clamp_text(text: &str, max_chars: usize) -> String {
     if count <= max_chars {
         return text.to_string();
     }
-    if max_chars <= ELLIPSIS_LEN {
+    if max_chars <= Dashboard::ELLIPSIS_LEN {
         return text.chars().take(max_chars).collect();
     }
-    let keep = max_chars - ELLIPSIS_LEN;
+    let keep = max_chars - Dashboard::ELLIPSIS_LEN;
     let mut out: String = text.chars().take(keep).collect();
     out.push_str("...");
     out
@@ -262,8 +262,8 @@ fn fit_cell(text: &str, width: usize) -> String {
 }
 
 fn format_ms(ms: u64) -> String {
-    let total_seconds = ms / MS_PER_SECOND;
-    let minutes = total_seconds / SECONDS_PER_MINUTE;
-    let seconds = total_seconds % SECONDS_PER_MINUTE;
+    let total_seconds = ms / Dashboard::MS_PER_SECOND;
+    let minutes = total_seconds / Dashboard::SECONDS_PER_MINUTE;
+    let seconds = total_seconds % Dashboard::SECONDS_PER_MINUTE;
     format!("{minutes:02}:{seconds:02}")
 }

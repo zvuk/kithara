@@ -2,40 +2,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-// Kithara dark + gold palette RGB values
-
-const BG_R: u8 = 26;
-const BG_G: u8 = 26;
-const BG_B: u8 = 46;
-
-const BG_PANEL_R: u8 = 34;
-const BG_PANEL_G: u8 = 34;
-const BG_PANEL_B: u8 = 68;
-
-const ACCENT_R: u8 = 187;
-const ACCENT_G: u8 = 148;
-const ACCENT_B: u8 = 66;
-
-const MUTED_R: u8 = 136;
-const MUTED_G: u8 = 136;
-const MUTED_B: u8 = 136;
-
-const TEXT_R: u8 = 230;
-const TEXT_G: u8 = 230;
-const TEXT_B: u8 = 230;
-
-const SUCCESS_R: u8 = 102;
-const SUCCESS_G: u8 = 204;
-const SUCCESS_B: u8 = 102;
-
-const DANGER_R: u8 = 230;
-const DANGER_G: u8 = 77;
-const DANGER_B: u8 = 77;
-
-const WARNING_R: u8 = 230;
-const WARNING_G: u8 = 179;
-const WARNING_B: u8 = 51;
-
 /// Application color palette shared between TUI and GUI frontends.
 ///
 /// Single source of truth — both frontends convert from this
@@ -61,18 +27,52 @@ pub struct Palette {
 }
 
 impl Palette {
+    // Kithara dark + gold palette RGB values
+
+    const BG_R: u8 = 26;
+    const BG_G: u8 = 26;
+    const BG_B: u8 = 46;
+
+    const BG_PANEL_R: u8 = 34;
+    const BG_PANEL_G: u8 = 34;
+    const BG_PANEL_B: u8 = 68;
+
+    const ACCENT_R: u8 = 187;
+    const ACCENT_G: u8 = 148;
+    const ACCENT_B: u8 = 66;
+
+    const MUTED_R: u8 = 136;
+    const MUTED_G: u8 = 136;
+    const MUTED_B: u8 = 136;
+
+    const TEXT_R: u8 = 230;
+    const TEXT_G: u8 = 230;
+    const TEXT_B: u8 = 230;
+
+    const SUCCESS_R: u8 = 102;
+    const SUCCESS_G: u8 = 204;
+    const SUCCESS_B: u8 = 102;
+
+    const DANGER_R: u8 = 230;
+    const DANGER_G: u8 = 77;
+    const DANGER_B: u8 = 77;
+
+    const WARNING_R: u8 = 230;
+    const WARNING_G: u8 = 179;
+    const WARNING_B: u8 = 51;
+
     /// Kithara dark + gold theme.
     #[must_use]
     pub const fn kithara() -> Self {
         Self {
-            bg: Rgb(BG_R, BG_G, BG_B),
-            bg_panel: Rgb(BG_PANEL_R, BG_PANEL_G, BG_PANEL_B),
-            accent: Rgb(ACCENT_R, ACCENT_G, ACCENT_B),
-            muted: Rgb(MUTED_R, MUTED_G, MUTED_B),
-            text: Rgb(TEXT_R, TEXT_G, TEXT_B),
-            success: Rgb(SUCCESS_R, SUCCESS_G, SUCCESS_B),
-            danger: Rgb(DANGER_R, DANGER_G, DANGER_B),
-            warning: Rgb(WARNING_R, WARNING_G, WARNING_B),
+            bg: Rgb(Self::BG_R, Self::BG_G, Self::BG_B),
+            bg_panel: Rgb(Self::BG_PANEL_R, Self::BG_PANEL_G, Self::BG_PANEL_B),
+            accent: Rgb(Self::ACCENT_R, Self::ACCENT_G, Self::ACCENT_B),
+            muted: Rgb(Self::MUTED_R, Self::MUTED_G, Self::MUTED_B),
+            text: Rgb(Self::TEXT_R, Self::TEXT_G, Self::TEXT_B),
+            success: Rgb(Self::SUCCESS_R, Self::SUCCESS_G, Self::SUCCESS_B),
+            danger: Rgb(Self::DANGER_R, Self::DANGER_G, Self::DANGER_B),
+            warning: Rgb(Self::WARNING_R, Self::WARNING_G, Self::WARNING_B),
         }
     }
 }
