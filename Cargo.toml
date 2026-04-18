@@ -209,7 +209,7 @@ smallvec = "1"
 firewheel = { version = "0.10.0", default-features = false, features = ["std", "pool", "all_nodes", "musical_transport", "scheduled_events", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 bevy_platform = { version = "0.18", default-features = false, features = ["alloc", "std", "web"] }
-biquad = "0.5.0"
+biquad = "0.6.0"
 thunderdome = { version = "0.6.1", default-features = false }
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
 
