@@ -3,7 +3,7 @@
 use std::io;
 
 use derive_setters::Setters;
-use kithara_net::{Headers, NetError, RangeSpec};
+use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -70,6 +70,10 @@ pub struct FetchCmd {
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
     #[setters(skip)]
     pub on_complete: Option<OnCompleteFn>,
+    /// Optional per-request response validator.
+    /// Called with the response headers after a successful HTTP response.
+    /// Return `Err` to reject the response before the body is consumed.
+    pub validator: Option<fn(&Headers) -> NetResult<()>>,
 }
 
 impl FetchCmd {
@@ -84,6 +88,7 @@ impl FetchCmd {
             cancel: None,
             writer: None,
             on_complete: None,
+            validator: None,
         }
     }
 
@@ -98,6 +103,7 @@ impl FetchCmd {
             cancel: None,
             writer: None,
             on_complete: None,
+            validator: None,
         }
     }
 
@@ -112,6 +118,13 @@ impl FetchCmd {
     #[must_use]
     pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
         self.on_complete = Some(cb);
+        self
+    }
+
+    /// Set the per-request response validator.
+    #[must_use]
+    pub fn with_validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
+        self.validator = Some(f);
         self
     }
 }

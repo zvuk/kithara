@@ -11,10 +11,10 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
-use kithara_net::Headers;
+use kithara_net::{Headers, NetResult};
 use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -92,22 +92,24 @@ pub(crate) async fn fetch_atomic_body(
     Ok(bytes)
 }
 
+fn check_content_type(headers: &Headers) -> NetResult<()> {
+    if let Some(ct) = headers.get("content-type")
+        && ct.starts_with("text/html")
+    {
+        return Err(kithara_net::NetError::InvalidContentType(ct.to_string()));
+    }
+    Ok(())
+}
+
 /// Fetch a URL and collect the full body into a `Bytes` buffer.
 async fn download_atomic_bytes(
     downloader: &PeerHandle,
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
-    let cmd = FetchCmd::get(url.clone()).headers(headers);
+    let cmd = FetchCmd::get(url)
+        .headers(headers)
+        .with_validator(check_content_type);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
-    // reqwest normalises header names to lowercase; "content-type" is always lowercase.
-    if let Some(ct) = resp.headers.get("content-type")
-        && ct.starts_with("text/html")
-    {
-        warn!(url = %url, content_type = ct, "kithara-hls: rejected HTML response");
-        return Err(HlsError::InvalidContent(format!(
-            "{url}: unexpected content-type {ct}"
-        )));
-    }
     resp.body.collect().await.map_err(HlsError::from)
 }

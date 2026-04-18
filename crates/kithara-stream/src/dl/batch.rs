@@ -134,6 +134,7 @@ async fn establish(
         url,
         range,
         headers,
+        validator,
         ..
     } = cmd;
 
@@ -158,6 +159,10 @@ async fn establish(
         () = cancel.cancelled() => return Err(NetError::Cancelled),
         r = with_soft_timeout(fetch, soft_timeout, bus.as_ref()) => r?,
     };
+
+    if let Some(validate) = validator {
+        validate(&byte_stream.headers)?;
+    }
 
     let resp_headers = byte_stream.headers.clone();
     let body = BodyStream::from_http(byte_stream, cancel.clone(), chunk_timeout);
