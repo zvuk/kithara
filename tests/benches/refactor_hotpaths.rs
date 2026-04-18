@@ -36,12 +36,19 @@ use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
 
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../../assets/test.mp3");
-const HLS_SEGMENT_COUNT: usize = 6;
-const HLS_SEGMENT_SIZE: usize = 96_000;
-const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
-const HLS_READ_TARGET_BYTES: usize = 196_608;
-const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+struct Consts;
+impl Consts {
+    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
+    const HLS_SEGMENT_COUNT: usize = 6;
+    const HLS_SEGMENT_SIZE: usize = 96_000;
+    const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
+    const HLS_READ_TARGET_BYTES: usize = 196_608;
+    const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+
+    const fn hls_total_bytes() -> usize {
+        Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE
+    }
+}
 
 fn make_runtime() -> Runtime {
     Builder::new_multi_thread()
@@ -87,7 +94,7 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
             .body(Body::empty())
             .unwrap_or_else(|e| panic!("failed to build head response: {e}"));
     }
@@ -112,18 +119,18 @@ fn serve_mp3_with_range(req: Request) -> Response {
                     s.parse::<usize>().ok()
                 }
             })
-            .unwrap_or(TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(TEST_MP3_BYTES.len().saturating_sub(1));
+            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
+            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
 
-        if start <= end && start < TEST_MP3_BYTES.len() {
-            let chunk = &TEST_MP3_BYTES[start..=end];
+        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
+            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "audio/mpeg")
                 .header(header::CONTENT_LENGTH, chunk.len().to_string())
                 .header(
                     header::CONTENT_RANGE,
-                    format!("bytes {start}-{end}/{}", TEST_MP3_BYTES.len()),
+                    format!("bytes {start}-{end}/{}", Consts::TEST_MP3_BYTES.len()),
                 )
                 .body(Body::from(Bytes::from_static(chunk)))
                 .unwrap_or_else(|e| panic!("failed to build partial response: {e}"));
@@ -133,8 +140,8 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
-        .body(Body::from(Bytes::from_static(TEST_MP3_BYTES)))
+        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap_or_else(|e| panic!("failed to build full response: {e}"))
 }
 
@@ -156,7 +163,7 @@ fn hls_media_playlist(variant: usize) -> String {
     let mut lines = String::from(
         "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n",
     );
-    for segment in 0..HLS_SEGMENT_COUNT {
+    for segment in 0..Consts::HLS_SEGMENT_COUNT {
         lines.push_str("#EXTINF:4.0,\n");
         lines.push_str(&format!("seg/{variant}/{segment}.bin\n"));
     }
@@ -170,7 +177,7 @@ fn hls_segment_data(variant: usize, segment: usize) -> Vec<u8> {
         reason = "synthetic fixture byte pattern is intentionally 8-bit"
     )]
     let pattern = ((variant * 37 + segment * 11) % 256) as u8;
-    vec![pattern; HLS_SEGMENT_SIZE]
+    vec![pattern; Consts::HLS_SEGMENT_SIZE]
 }
 
 async fn hls_master_endpoint() -> &'static str {
@@ -193,7 +200,7 @@ async fn hls_segment_endpoint(Path((variant, segment)): Path<(usize, String)>) -
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    if variant > 1 || segment_index >= HLS_SEGMENT_COUNT {
+    if variant > 1 || segment_index >= Consts::HLS_SEGMENT_COUNT {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -263,7 +270,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             || {
                 let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
                 let file_path = temp_dir.path().join("bench.mp3");
-                fs::write(&file_path, TEST_MP3_BYTES)
+                fs::write(&file_path, Consts::TEST_MP3_BYTES)
                     .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
                 (temp_dir, file_path)
             },
@@ -277,7 +284,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
 
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
-                    while total < AUDIO_READ_TARGET_SAMPLES {
+                    while total < Consts::AUDIO_READ_TARGET_SAMPLES {
                         let n = audio.read(&mut buf);
                         if n == 0 {
                             break;
@@ -340,7 +347,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
 
                     let mut buf = [0_u8; 8_192];
                     let mut total = 0usize;
-                    while total < HLS_READ_TARGET_BYTES {
+                    while total < Consts::HLS_READ_TARGET_BYTES {
                         let n = stream
                             .read(&mut buf)
                             .unwrap_or_else(|e| panic!("stream read failed: {e}"));
@@ -350,7 +357,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         total += n;
                     }
 
-                    for seek_pos in HLS_SEEK_POSITIONS {
+                    for seek_pos in Consts::HLS_SEEK_POSITIONS {
                         // Size maps are populated via HEAD and can transiently under-report.
                         if let Some(len) = stream.len()
                             && seek_pos > len

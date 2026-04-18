@@ -66,11 +66,6 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
         other => panic!("unsupported packaged single-variant codec: {other:?}"),
     }
 }
-const Consts::HLS_SEGMENT_COUNT: usize = 3;
-const Consts::HLS_SEGMENT_SIZE: usize = 200_000;
-const Consts::HLS_TOTAL_BYTES: usize = Consts::HLS_SEGMENT_COUNT * Consts::HLS_SEGMENT_SIZE;
-const Consts::HLS_SAMPLE_RATE: f64 = 44_100.0;
-const Consts::HLS_CHANNELS: f64 = 2.0;
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -1062,9 +1057,6 @@ async fn stress_offline_crossfade_no_gaps() {
     );
 }
 
-/// Expected duration of test.mp3 (ffprobe: 187.102041s).
-const Consts::EXPECTED_DURATION_SECS: f64 = 187.0;
-
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
 #[kithara::test(
@@ -1094,8 +1086,9 @@ async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path}: expected ~{}s", Consts::EXPECTED_DURATION_SECS, got {dur_secs:.1}s"
+        "path={path}: expected ~{}s, got {dur_secs:.1}s", Consts::EXPECTED_DURATION_SECS
     );
+
 
     // Decode real PCM data — at least 2 seconds.
     let (samples, position) = {
