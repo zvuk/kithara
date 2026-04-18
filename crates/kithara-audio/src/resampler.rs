@@ -26,39 +26,6 @@ use tracing::{debug, info, trace};
 
 use crate::traits::AudioEffect;
 
-/// Sinc filter length for normal quality (64-tap).
-const SINC_LEN_NORMAL: usize = 64;
-/// Sinc filter length for good quality (128-tap).
-const SINC_LEN_GOOD: usize = 128;
-/// Sinc filter length for high quality (256-tap).
-const SINC_LEN_HIGH: usize = 256;
-
-/// Cutoff frequency ratio for sinc filters.
-const SINC_CUTOFF: f32 = 0.95;
-
-/// Oversampling factor for good/high quality sinc filters.
-const OVERSAMPLING_HIGH: usize = 256;
-/// Oversampling factor for normal quality sinc filter.
-const OVERSAMPLING_NORMAL: usize = 128;
-
-/// Default resampler chunk size in frames.
-const DEFAULT_CHUNK_SIZE: usize = 4096;
-
-/// Maximum ratio adjustment factor for async resamplers.
-const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
-
-/// Sub-chunk count for FFT resampler.
-const FFT_SUB_CHUNKS: usize = 2;
-
-/// Minimum playback rate to avoid division by zero or extreme ratios.
-const MIN_PLAYBACK_RATE: f64 = 0.01;
-
-/// Passthrough detection tolerance for playback rate.
-const PASSTHROUGH_TOLERANCE: f64 = 0.0001;
-
-/// Maximum inline channel count for `SmallVec` buffers.
-const MAX_INLINE_CHANNELS: usize = 8;
-
 /// Quality preset for the audio resampler.
 ///
 /// Controls the resampling algorithm and interpolation parameters.
@@ -82,29 +49,44 @@ pub enum ResamplerQuality {
 }
 
 impl ResamplerQuality {
+    /// Sinc filter length for normal quality (64-tap).
+    const SINC_LEN_NORMAL: usize = 64;
+    /// Sinc filter length for good quality (128-tap).
+    const SINC_LEN_GOOD: usize = 128;
+    /// Sinc filter length for high quality (256-tap).
+    const SINC_LEN_HIGH: usize = 256;
+
+    /// Cutoff frequency ratio for sinc filters.
+    const SINC_CUTOFF: f32 = 0.95;
+
+    /// Oversampling factor for good/high quality sinc filters.
+    const OVERSAMPLING_HIGH: usize = 256;
+    /// Oversampling factor for normal quality sinc filter.
+    const OVERSAMPLING_NORMAL: usize = 128;
+
     fn sinc_params(self) -> SincInterpolationParameters {
         match self {
             Self::Good => SincInterpolationParameters {
-                sinc_len: SINC_LEN_GOOD,
-                f_cutoff: SINC_CUTOFF,
+                sinc_len: Self::SINC_LEN_GOOD,
+                f_cutoff: Self::SINC_CUTOFF,
                 interpolation: SincInterpolationType::Linear,
-                oversampling_factor: OVERSAMPLING_HIGH,
+                oversampling_factor: Self::OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
             Self::High => SincInterpolationParameters {
-                sinc_len: SINC_LEN_HIGH,
-                f_cutoff: SINC_CUTOFF,
+                sinc_len: Self::SINC_LEN_HIGH,
+                f_cutoff: Self::SINC_CUTOFF,
                 interpolation: SincInterpolationType::Cubic,
-                oversampling_factor: OVERSAMPLING_HIGH,
+                oversampling_factor: Self::OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
             // Normal, Fast and Maximum share the same default sinc params.
             // Fast and Maximum don't use sinc — unreachable from normal flow.
             Self::Normal | Self::Fast | Self::Maximum => SincInterpolationParameters {
-                sinc_len: SINC_LEN_NORMAL,
-                f_cutoff: SINC_CUTOFF,
+                sinc_len: Self::SINC_LEN_NORMAL,
+                f_cutoff: Self::SINC_CUTOFF,
                 interpolation: SincInterpolationType::Linear,
-                oversampling_factor: OVERSAMPLING_NORMAL,
+                oversampling_factor: Self::OVERSAMPLING_NORMAL,
                 window: WindowFunction::BlackmanHarris2,
             },
         }
@@ -201,7 +183,7 @@ impl ResamplerParams {
     pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
         Self {
             channels,
-            chunk_size: DEFAULT_CHUNK_SIZE,
+            chunk_size: ResamplerProcessor::DEFAULT_CHUNK_SIZE,
             host_sample_rate,
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             pool: None,
@@ -224,7 +206,7 @@ pub struct ResamplerProcessor {
     current_ratio: f64,
     host_sample_rate: Arc<AtomicU32>,
     /// Accumulated input buffer (planar format).
-    input_buffer: SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]>,
+    input_buffer: SmallVec<[Vec<f32>; 8]>,
     output_spec: PcmSpec,
     /// Shared atomic for dynamic playback rate tracking.
     playback_rate: Arc<AtomicF32>,
@@ -234,13 +216,28 @@ pub struct ResamplerProcessor {
     resampler: Option<ResamplerKind>,
     source_rate: u32,
     // Reusable temporary buffers
-    temp_deinterleave: SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]>,
-    temp_input_slice: SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]>,
-    temp_output_all: SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]>,
-    temp_output_bufs: SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]>,
+    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
+    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
+    temp_output_all: SmallVec<[Vec<f32>; 8]>,
+    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
 }
 
 impl ResamplerProcessor {
+    /// Default resampler chunk size in frames.
+    const DEFAULT_CHUNK_SIZE: usize = 4096;
+
+    /// Maximum ratio adjustment factor for async resamplers.
+    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
+
+    /// Sub-chunk count for FFT resampler.
+    const FFT_SUB_CHUNKS: usize = 2;
+
+    /// Minimum playback rate to avoid division by zero or extreme ratios.
+    const MIN_PLAYBACK_RATE: f64 = 0.01;
+
+    /// Passthrough detection tolerance for playback rate.
+    const PASSTHROUGH_TOLERANCE: f64 = 0.0001;
+
     /// Create a new resampler from configuration parameters.
     pub fn new(params: ResamplerParams) -> Self {
         let source_rate = params.source_sample_rate;
@@ -374,7 +371,7 @@ impl ResamplerProcessor {
 
     fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
         (source_rate == target_rate || target_rate == 0)
-            && (playback_rate - 1.0).abs() < PASSTHROUGH_TOLERANCE
+            && (playback_rate - 1.0).abs() < Self::PASSTHROUGH_TOLERANCE
     }
 
     fn create_resampler(
@@ -389,7 +386,7 @@ impl ResamplerProcessor {
             ResamplerQuality::Fast => {
                 let poly = Async::new_poly(
                     ratio,
-                    MAX_RATIO_ADJUSTMENT,
+                    Self::MAX_RATIO_ADJUSTMENT,
                     PolynomialDegree::Cubic,
                     chunk_size,
                     channels,
@@ -400,7 +397,7 @@ impl ResamplerProcessor {
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
                     ratio,
-                    MAX_RATIO_ADJUSTMENT,
+                    Self::MAX_RATIO_ADJUSTMENT,
                     &quality.sinc_params(),
                     chunk_size,
                     channels,
@@ -413,7 +410,7 @@ impl ResamplerProcessor {
                     source_rate as usize,
                     target_rate as usize,
                     chunk_size,
-                    FFT_SUB_CHUNKS,
+                    Self::FFT_SUB_CHUNKS,
                     channels,
                     FixedSync::Input,
                 )?;
@@ -426,11 +423,11 @@ impl ResamplerProcessor {
         let target_rate = self.target_rate();
         self.output_spec.sample_rate = target_rate;
         let new_playback_rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(MIN_PLAYBACK_RATE);
+            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
         let should_pt = Self::should_passthrough(self.source_rate, target_rate, new_playback_rate);
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
-        let ratio_changed = (new_ratio - self.current_ratio).abs() > PASSTHROUGH_TOLERANCE;
+        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::PASSTHROUGH_TOLERANCE;
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);
@@ -459,7 +456,7 @@ impl ResamplerProcessor {
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(MIN_PLAYBACK_RATE);
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
         if self.source_rate > 0 {
             f64::from(target_rate) / (f64::from(self.source_rate) * rate)
         } else {
@@ -719,7 +716,7 @@ impl ResamplerProcessor {
 
 /// Create a `SmallVec` of empty Vecs for each channel.
 #[cfg_attr(feature = "perf", hotpath::measure)]
-fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; MAX_INLINE_CHANNELS]> {
+fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
 }
 

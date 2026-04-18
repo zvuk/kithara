@@ -40,15 +40,6 @@ use crate::{
     },
 };
 
-/// Backoff duration between receive attempts.
-const RECV_BACKOFF: Duration = Duration::from_micros(100);
-
-/// Minimum playback rate to avoid division by zero.
-const MIN_PLAYBACK_RATE: f64 = 0.01;
-
-/// Probe buffer size in bytes for initial stream detection.
-const PROBE_BUFFER_SIZE: usize = 1024;
-
 enum ChunkOutcome {
     Continue,
     Return(Option<PcmChunk>),
@@ -166,6 +157,14 @@ pub struct Audio<S> {
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
+    /// Backoff duration between receive attempts.
+    const RECV_BACKOFF: Duration = Duration::from_micros(100);
+
+    /// Minimum playback rate to avoid division by zero.
+    const MIN_PLAYBACK_RATE: f64 = 0.01;
+
+    /// Probe buffer size in bytes for initial stream detection.
+    const PROBE_BUFFER_SIZE: usize = 1024;
     /// Whether non-blocking recv is active.
     ///
     /// Returns `false` after `seek()` until `preload()` is called again.
@@ -291,7 +290,7 @@ impl<S> Audio<S> {
     /// At rate > 1.0, position advances faster (fewer effective samples per second).
     /// At rate < 1.0, position advances slower.
     pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
-        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(MIN_PLAYBACK_RATE);
+        let rate = f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -498,15 +497,15 @@ impl<S> Audio<S> {
     fn wait_for_fetch() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            park_timeout(RECV_BACKOFF);
+            park_timeout(Self::RECV_BACKOFF);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             if is_worker_thread() {
-                park_timeout(RECV_BACKOFF);
+                park_timeout(Self::RECV_BACKOFF);
             } else {
-                thread_sleep(RECV_BACKOFF);
+                thread_sleep(Self::RECV_BACKOFF);
             }
         }
     }
@@ -595,7 +594,7 @@ where
         debug!("Audio::new — spawning probe task...");
         let stream = spawn_blocking(move || {
             let mut stream = stream;
-            let mut probe_buf = byte_pool.get_with(|b| b.resize(PROBE_BUFFER_SIZE, 0));
+            let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
             let _ = stream.read(&mut probe_buf);
             stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
             Ok::<_, DecodeError>(stream)

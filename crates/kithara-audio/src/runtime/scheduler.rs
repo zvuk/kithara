@@ -21,11 +21,6 @@ use crate::runtime::{
 /// Unique identifier for a slot in the scheduler.
 pub(crate) type SlotId = u64;
 
-/// Threshold for warning about slow `tick` calls.
-const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
-const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
-const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
-
 /// Command sent from `SchedulerHandle` to the scheduler thread.
 pub(crate) enum SchedulerCmd<N> {
     /// Register a new node.
@@ -131,6 +126,11 @@ pub(crate) struct Scheduler<N, O> {
 }
 
 impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
+    /// Threshold for warning about slow `tick` calls.
+    const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
+    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
+
     /// Spawn a new scheduler thread and return a handle.
     #[must_use]
     pub(crate) fn start(name: String, observer: O) -> SchedulerHandle<N> {
@@ -207,10 +207,10 @@ fn run_loop<N: Node, O: SchedulerObserver>(
                 yield_now();
             }
             PassOutcome::Waiting => {
-                wake.wait_timeout(IDLE_TIMEOUT);
+                wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
             }
             PassOutcome::Idle => {
-                wake.wait_timeout(EMPTY_TIMEOUT);
+                wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
             }
         }
     }
@@ -254,7 +254,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
         };
         let elapsed = start.elapsed();
 
-        if elapsed > SLOW_TICK_THRESHOLD {
+        if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
             observer.on_event(SchedulerEvent::SlowTick {
                 slot: slot.id,
                 elapsed,

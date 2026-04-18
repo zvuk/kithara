@@ -28,15 +28,6 @@ fn spec_to_format(spec: PcmSpec) -> AudioFormat {
     AudioFormat::new(spec.channels, spec.sample_rate)
 }
 
-/// Nanoseconds per second for frame/duration conversion.
-const NANOS_PER_SEC: u128 = 1_000_000_000;
-
-/// Decode progress logging interval in chunks.
-const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
-
-/// Default read-ahead size in bytes when segment range is unknown.
-const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
-
 use crate::{
     pipeline::track_fsm::{
         ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState, ResumeState,
@@ -213,6 +204,15 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
+    /// Nanoseconds per second for frame/duration conversion.
+    const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+    /// Decode progress logging interval in chunks.
+    const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
+
+    /// Default read-ahead size in bytes when segment range is unknown.
+    const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
+
     pub(crate) fn new(
         shared_stream: SharedStream<T>,
         decoder: Box<dyn InnerDecoder>,
@@ -793,7 +793,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return Duration::ZERO;
         }
         let nanos = (frames as u128)
-            .saturating_mul(NANOS_PER_SEC)
+            .saturating_mul(Self::NANOS_PER_SEC)
             .saturating_div(u128::from(spec.sample_rate));
         #[expect(
             clippy::cast_possible_truncation,
@@ -811,7 +811,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let frames = duration
             .as_nanos()
             .saturating_mul(u128::from(spec.sample_rate))
-            .saturating_div(NANOS_PER_SEC);
+            .saturating_div(Self::NANOS_PER_SEC);
         frames.min(usize::MAX as u128) as usize
     }
 
@@ -997,7 +997,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
                     if self
                         .chunks_decoded
-                        .is_multiple_of(DECODE_PROGRESS_LOG_INTERVAL)
+                        .is_multiple_of(Self::DECODE_PROGRESS_LOG_INTERVAL)
                     {
                         trace!(
                             chunks = self.chunks_decoded,
@@ -1038,8 +1038,8 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl<T: StreamType> StreamAudioSource<T> {
     fn boundary_end(&self, start: u64) -> u64 {
         self.shared_stream.len().map_or_else(
-            || start.saturating_add(DEFAULT_READ_AHEAD_BYTES),
-            |len| start.saturating_add(DEFAULT_READ_AHEAD_BYTES).min(len),
+            || start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
+            |len| start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES).min(len),
         )
     }
 
@@ -1069,7 +1069,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             .current_segment_range()
             .filter(|seg| seg.start <= pos && pos < seg.end)
             .map_or_else(
-                || pos.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+                || pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
                 |seg| seg.end,
             );
         let check_end = self

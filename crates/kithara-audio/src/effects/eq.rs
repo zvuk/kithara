@@ -15,68 +15,71 @@ use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
 
-/// Passthrough biquad coefficients (identity filter).
-const PASSTHROUGH: Coefficients<f32> = Coefficients {
-    a1: 0.0,
-    a2: 0.0,
-    b0: 1.0,
-    b1: 0.0,
-    b2: 0.0,
-};
+struct Consts;
+impl Consts {
+    /// Passthrough biquad coefficients (identity filter).
+    const PASSTHROUGH: Coefficients<f32> = Coefficients {
+        a1: 0.0,
+        a2: 0.0,
+        b0: 1.0,
+        b1: 0.0,
+        b2: 0.0,
+    };
 
-/// Smoothing time constant in milliseconds.
-const SMOOTH_TIME_MS: f32 = 10.0;
+    /// Smoothing time constant in milliseconds.
+    const SMOOTH_TIME_MS: f32 = 10.0;
 
-/// Number of samples between gain-smoothing steps.
-const SMOOTH_BLOCK_SIZE: usize = 32;
+    /// Number of samples between gain-smoothing steps.
+    const SMOOTH_BLOCK_SIZE: usize = 32;
 
-/// Q scaling factor for log-spaced band generation.
-const Q_SCALE_FACTOR: f32 = 1.4;
+    /// Q scaling factor for log-spaced band generation.
+    const Q_SCALE_FACTOR: f32 = 1.4;
 
-/// Reference band count for Q scaling normalization.
-const Q_REFERENCE_BANDS: f32 = 10.0;
+    /// Reference band count for Q scaling normalization.
+    const Q_REFERENCE_BANDS: f32 = 10.0;
 
-/// Base-10 exponent base for log-spaced frequency calculation.
-const LOG_FREQ_BASE: f32 = 10.0;
+    /// Base-10 exponent base for log-spaced frequency calculation.
+    const LOG_FREQ_BASE: f32 = 10.0;
+
+    /// Convergence threshold for linear gain smoothing.
+    const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
+
+    /// Lowest frequency for log-spaced EQ bands (Hz).
+    ///
+    /// 60 Hz produces a ~250 Hz low/mid crossover for 3 bands — close to the
+    /// industry-standard DJ EQ split point.
+    const BAND_MIN_FREQ: f32 = 60.0;
+
+    /// Highest frequency for log-spaced EQ bands (Hz).
+    const BAND_MAX_FREQ: f32 = 18000.0;
+
+    /// Milliseconds per second.
+    const MS_PER_SEC: f32 = 1000.0;
+
+    /// Minimum channel count for stereo processing.
+    const STEREO_CHANNELS: usize = 2;
+
+    /// Butterworth Q factor (1/√2) for LR-4 crossover construction.
+    const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+    /// `FilterKind::HighShelf` discriminant in the u8 representation.
+    const HIGH_SHELF_DISCRIMINANT: u8 = 2;
+
+    /// Standard dB-to-linear formula divisor: `10^(dB / DB_DIVISOR)`.
+    const DB_DIVISOR: f32 = 20.0;
+
+    /// Nyquist normalisation factor for `from_normalized_params`: `2 * f0 / fs`.
+    const NYQUIST_FACTOR: f32 = 2.0;
+
+    /// Minimum number of bands that requires crossover filters.
+    const MIN_CROSSOVER_BANDS: usize = 2;
+}
 
 /// Maximum EQ band gain in dB.
 pub const MAX_GAIN_DB: f32 = 6.0;
 
 /// Minimum EQ band gain in dB. At this value the band is fully killed.
 pub const MIN_GAIN_DB: f32 = -24.0;
-
-/// Convergence threshold for linear gain smoothing.
-const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
-
-/// Lowest frequency for log-spaced EQ bands (Hz).
-///
-/// 60 Hz produces a ~250 Hz low/mid crossover for 3 bands — close to the
-/// industry-standard DJ EQ split point.
-const BAND_MIN_FREQ: f32 = 60.0;
-
-/// Highest frequency for log-spaced EQ bands (Hz).
-const BAND_MAX_FREQ: f32 = 18000.0;
-
-/// Milliseconds per second.
-const MS_PER_SEC: f32 = 1000.0;
-
-/// Minimum channel count for stereo processing.
-const STEREO_CHANNELS: usize = 2;
-
-/// Butterworth Q factor (1/√2) for LR-4 crossover construction.
-const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-
-/// `FilterKind::HighShelf` discriminant in the u8 representation.
-const HIGH_SHELF_DISCRIMINANT: u8 = 2;
-
-/// Standard dB-to-linear formula divisor: `10^(dB / DB_DIVISOR)`.
-const DB_DIVISOR: f32 = 20.0;
-
-/// Nyquist normalisation factor for `from_normalized_params`: `2 * f0 / fs`.
-const NYQUIST_FACTOR: f32 = 2.0;
-
-/// Minimum number of bands that requires crossover filters.
-const MIN_CROSSOVER_BANDS: usize = 2;
 
 /// The type of biquad filter used for an EQ band.
 ///
@@ -95,7 +98,7 @@ impl From<u8> for FilterKind {
     fn from(v: u8) -> Self {
         match v {
             0 => Self::LowShelf,
-            HIGH_SHELF_DISCRIMINANT => Self::HighShelf,
+            Consts::HIGH_SHELF_DISCRIMINANT => Self::HighShelf,
             _ => Self::Peaking,
         }
     }
@@ -131,19 +134,19 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
         return Vec::new();
     }
 
-    let q_factor = Q_SCALE_FACTOR * (count as f32 / Q_REFERENCE_BANDS).sqrt();
+    let q_factor = Consts::Q_SCALE_FACTOR * (count as f32 / Consts::Q_REFERENCE_BANDS).sqrt();
 
     if count == 1 {
         return vec![EqBandConfig {
-            frequency: (BAND_MIN_FREQ * BAND_MAX_FREQ).sqrt(),
+            frequency: (Consts::BAND_MIN_FREQ * Consts::BAND_MAX_FREQ).sqrt(),
             q_factor,
             gain_db: 0.0,
             kind: FilterKind::Peaking,
         }];
     }
 
-    let log_min = BAND_MIN_FREQ.log10();
-    let log_max = BAND_MAX_FREQ.log10();
+    let log_min = Consts::BAND_MIN_FREQ.log10();
+    let log_max = Consts::BAND_MAX_FREQ.log10();
     let log_step = (log_max - log_min) / (count - 1) as f32;
     let last = count - 1;
 
@@ -157,7 +160,7 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
                 FilterKind::Peaking
             };
             EqBandConfig {
-                frequency: LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
+                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
                 q_factor,
                 gain_db: 0.0,
                 kind,
@@ -178,7 +181,7 @@ fn db_to_linear(db: f32) -> f32 {
     if db <= MIN_GAIN_DB {
         0.0
     } else {
-        LOG_FREQ_BASE.powf(db / DB_DIVISOR)
+        Consts::LOG_FREQ_BASE.powf(db / Consts::DB_DIVISOR)
     }
 }
 
@@ -208,9 +211,9 @@ impl LR4 {
 /// Audio EQ Cookbook's `f0/fs`, giving coefficients at 4× lower frequency.
 /// We bypass it with `from_normalized_params` and `2·f0/fs`.
 fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients<f32> {
-    let normalized = NYQUIST_FACTOR * freq / sample_rate;
-    Coefficients::<f32>::from_normalized_params(filter, normalized, BUTTERWORTH_Q)
-        .unwrap_or(PASSTHROUGH)
+    let normalized = Consts::NYQUIST_FACTOR * freq / sample_rate;
+    Coefficients::<f32>::from_normalized_params(filter, normalized, Consts::BUTTERWORTH_Q)
+        .unwrap_or(Consts::PASSTHROUGH)
 }
 
 /// Per-band gain with linear smoothing.
@@ -242,7 +245,7 @@ impl GainState {
     #[inline]
     fn smooth(&mut self, coeff: f32) {
         let diff = self.target_linear - self.current_linear;
-        if diff.abs() < SMOOTH_CONVERGENCE_THRESHOLD {
+        if diff.abs() < Consts::SMOOTH_CONVERGENCE_THRESHOLD {
             self.current_linear = self.target_linear;
         } else {
             self.current_linear += coeff * diff;
@@ -253,11 +256,11 @@ impl GainState {
 /// One-pole smoother coefficient, accounting for block-rate updates.
 #[expect(
     clippy::cast_precision_loss,
-    reason = "SMOOTH_BLOCK_SIZE is a small constant"
+    reason = "Consts::SMOOTH_BLOCK_SIZE is a small constant"
 )]
 fn compute_smooth_coeff(sample_rate: f32) -> f32 {
-    let tau = SMOOTH_TIME_MS / MS_PER_SEC;
-    let effective_rate = sample_rate / SMOOTH_BLOCK_SIZE as f32;
+    let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
+    let effective_rate = sample_rate / Consts::SMOOTH_BLOCK_SIZE as f32;
     1.0 - (-1.0 / (tau * effective_rate)).exp()
 }
 
@@ -310,7 +313,7 @@ impl IsolatorEq {
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
 
-        let crossover_freqs: Vec<f32> = if n >= MIN_CROSSOVER_BANDS {
+        let crossover_freqs: Vec<f32> = if n >= Consts::MIN_CROSSOVER_BANDS {
             (0..xover_count)
                 .map(|i| (bands[i].frequency * bands[i + 1].frequency).sqrt())
                 .collect()
@@ -382,16 +385,16 @@ impl IsolatorEq {
     pub fn is_smoothing(&self) -> bool {
         self.gains
             .iter()
-            .any(|g| (g.target_linear - g.current_linear).abs() > SMOOTH_CONVERGENCE_THRESHOLD)
+            .any(|g| (g.target_linear - g.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD)
     }
 
     /// Process a single sample through the crossover EQ.
     ///
-    /// Gain smoothing advances automatically every [`SMOOTH_BLOCK_SIZE`] calls.
+    /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
         self.block_counter += 1;
-        if self.block_counter >= SMOOTH_BLOCK_SIZE {
+        if self.block_counter >= Consts::SMOOTH_BLOCK_SIZE {
             self.block_counter = 0;
             for gain in &mut self.gains {
                 gain.smooth(self.smooth_coeff);
@@ -537,7 +540,7 @@ impl AudioEffect for EqEffect {
 
         for frame in samples.chunks_exact_mut(channels) {
             frame[0] = self.eq_l.process_sample(frame[0]);
-            if channels >= STEREO_CHANNELS {
+            if channels >= Consts::STEREO_CHANNELS {
                 frame[1] = self.eq_r.process_sample(frame[1]);
             }
         }
@@ -586,11 +589,11 @@ mod tests {
         match count {
             0 => assert!(bands.is_empty()),
             1 => {
-                let expected = (BAND_MIN_FREQ * BAND_MAX_FREQ).sqrt();
+                let expected = (Consts::BAND_MIN_FREQ * Consts::BAND_MAX_FREQ).sqrt();
                 assert!((bands[0].frequency - expected).abs() < 1.0);
             }
             10 => {
-                assert!((bands[0].frequency - BAND_MIN_FREQ).abs() < 1.0);
+                assert!((bands[0].frequency - Consts::BAND_MIN_FREQ).abs() < 1.0);
                 assert!((bands[9].frequency - 18000.0).abs() < 1.0);
                 for pair in bands.windows(2) {
                     assert!(pair[1].frequency > pair[0].frequency);

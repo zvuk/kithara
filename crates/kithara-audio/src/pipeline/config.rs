@@ -21,15 +21,6 @@ use crate::{
     worker::handle,
 };
 
-/// Default number of preload chunks.
-const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-
-/// Default PCM queue depth in decoded chunks.
-#[cfg(target_arch = "wasm32")]
-const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
-#[cfg(not(target_arch = "wasm32"))]
-const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
-
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
@@ -82,6 +73,15 @@ pub struct AudioConfig<T: StreamType> {
 }
 
 impl<T: StreamType> AudioConfig<T> {
+    /// Default number of preload chunks.
+    const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+    /// Default PCM queue depth in decoded chunks.
+    #[cfg(target_arch = "wasm32")]
+    const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
+    #[cfg(not(target_arch = "wasm32"))]
+    const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
+
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self {
@@ -89,11 +89,11 @@ impl<T: StreamType> AudioConfig<T> {
             hint: None,
             host_sample_rate: None,
             media_info: None,
-            pcm_buffer_chunks: DEFAULT_PCM_BUFFER_CHUNKS,
+            pcm_buffer_chunks: Self::DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             playback_rate: None,
             prefer_hardware: cfg!(any(feature = "apple", feature = "android")),
-            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
+            preload_chunks: Self::DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,
             bus: None,
