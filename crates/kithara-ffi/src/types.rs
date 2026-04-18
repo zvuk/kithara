@@ -29,24 +29,23 @@ pub enum FfiError {
 }
 
 pub type FfiResult<T> = Result<T, FfiError>;
-
-const ERROR_CODE_INTERNAL: i32 = 0;
-const ERROR_CODE_NOT_READY: i32 = 1;
-const ERROR_CODE_ITEM_FAILED: i32 = 2;
-const ERROR_CODE_SEEK_FAILED: i32 = 3;
-const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
-const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
-
 impl FfiError {
+    const ERROR_CODE_INTERNAL: i32 = 0;
+    const ERROR_CODE_NOT_READY: i32 = 1;
+    const ERROR_CODE_ITEM_FAILED: i32 = 2;
+    const ERROR_CODE_SEEK_FAILED: i32 = 3;
+    const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
+    const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
+
     #[must_use]
     pub fn observer_code(&self) -> i32 {
         match self {
-            Self::Internal { .. } => ERROR_CODE_INTERNAL,
-            Self::NotReady => ERROR_CODE_NOT_READY,
-            Self::ItemFailed { .. } => ERROR_CODE_ITEM_FAILED,
-            Self::SeekFailed { .. } => ERROR_CODE_SEEK_FAILED,
-            Self::EngineNotRunning => ERROR_CODE_ENGINE_NOT_RUNNING,
-            Self::InvalidArgument { .. } => ERROR_CODE_INVALID_ARGUMENT,
+            Self::Internal { .. } => Self::ERROR_CODE_INTERNAL,
+            Self::NotReady => Self::ERROR_CODE_NOT_READY,
+            Self::ItemFailed { .. } => Self::ERROR_CODE_ITEM_FAILED,
+            Self::SeekFailed { .. } => Self::ERROR_CODE_SEEK_FAILED,
+            Self::EngineNotRunning => Self::ERROR_CODE_ENGINE_NOT_RUNNING,
+            Self::InvalidArgument { .. } => Self::ERROR_CODE_INVALID_ARGUMENT,
         }
     }
 }
@@ -122,7 +121,7 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
-    /// Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
+    /// Number of EQ bands (log-spaced). Default: 10.
     pub eq_band_count: u32,
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
     /// no DRM is needed.
@@ -132,7 +131,7 @@ pub struct FfiPlayerConfig {
 }
 
 /// Default number of log-spaced EQ bands.
-const DEFAULT_EQ_BAND_COUNT: u32 = 10;
+pub const DEFAULT_EQ_BAND_COUNT: u32 = 10;
 
 impl Default for FfiPlayerConfig {
     fn default() -> Self {

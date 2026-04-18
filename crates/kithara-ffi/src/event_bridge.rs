@@ -23,20 +23,18 @@ use crate::{
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
 };
 
-/// Polling interval for time/duration updates (~10 Hz).
-const TIME_POLL_INTERVAL_MS: u64 = 100;
-
-/// Threshold for suppressing redundant time/duration updates (seconds).
-const TIME_UPDATE_THRESHOLD: f64 = 0.01;
-
-/// Forwards Queue/Player/Audio/Hls/File events to an observer on
-/// background tasks.
 pub(crate) struct EventBridge {
     cancel: CancellationToken,
     time_thread: Option<JoinHandle<()>>,
 }
 
 impl EventBridge {
+    /// Polling interval for time/duration updates (~10 Hz).
+    const TIME_POLL_INTERVAL_MS: u64 = 100;
+
+    /// Threshold for suppressing redundant time/duration updates (seconds).
+    const TIME_UPDATE_THRESHOLD: f64 = 0.01;
+
     /// Spawn background tasks that translate queue/player events into
     /// observer callbacks. Returns a bridge handle; dropping it cancels
     /// the tasks.
@@ -88,7 +86,7 @@ impl EventBridge {
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         spawn(move || {
-            let interval = Duration::from_millis(TIME_POLL_INTERVAL_MS);
+            let interval = Duration::from_millis(EventBridge::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
 
@@ -105,7 +103,7 @@ impl EventBridge {
                 match time {
                     Some(t)
                         if last_time
-                            .is_none_or(|prev| (prev - t).abs() > TIME_UPDATE_THRESHOLD) =>
+                            .is_none_or(|prev| (prev - t).abs() > EventBridge::TIME_UPDATE_THRESHOLD) =>
                     {
                         observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
                         last_time = Some(t);
@@ -119,7 +117,7 @@ impl EventBridge {
                 match duration {
                     Some(d)
                         if last_duration
-                            .is_none_or(|prev| (prev - d).abs() > TIME_UPDATE_THRESHOLD) =>
+                            .is_none_or(|prev| (prev - d).abs() > EventBridge::TIME_UPDATE_THRESHOLD) =>
                     {
                         observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
                         last_duration = Some(d);

@@ -9,23 +9,10 @@ use std::sync::Once;
 
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
-static INIT: Once = Once::new();
-
-const LOG_LEVEL_TRACE: u8 = 0;
-const LOG_LEVEL_DEBUG: u8 = 1;
-const LOG_LEVEL_INFO: u8 = 2;
-const LOG_LEVEL_WARN: u8 = 3;
-const LOG_LEVEL_ERROR: u8 = 4;
-
-/// Initialize Rust tracing for FFI consumers.
-///
-/// Writes formatted events to stderr. Idempotent — subsequent calls are
-/// no-ops.
-///
-/// `level` ordinal: 0=trace, 1=debug, 2=info, 3=warn, 4=error, anything
-/// else = off.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 pub fn init_logging(level: u8) {
+    static INIT: Once = Once::new();
+
     INIT.call_once(|| {
         let filter = level_filter(level);
         let _ = tracing_subscriber::registry()
@@ -41,6 +28,12 @@ pub fn init_logging(level: u8) {
 }
 
 fn level_filter(ordinal: u8) -> LevelFilter {
+    const LOG_LEVEL_TRACE: u8 = 0;
+    const LOG_LEVEL_DEBUG: u8 = 1;
+    const LOG_LEVEL_INFO: u8 = 2;
+    const LOG_LEVEL_WARN: u8 = 3;
+    const LOG_LEVEL_ERROR: u8 = 4;
+
     match ordinal {
         LOG_LEVEL_TRACE => LevelFilter::TRACE,
         LOG_LEVEL_DEBUG => LevelFilter::DEBUG,

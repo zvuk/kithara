@@ -12,8 +12,11 @@ use rustls_platform_verifier::android as rustls_android;
 use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
-static ANDROID_CONTEXT_READY: AtomicBool = AtomicBool::new(false);
-static ANDROID_CONTEXT_GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
+struct Consts;
+impl Consts {
+    static READY: AtomicBool = AtomicBool::new(false);
+    static GLOBAL: OnceLock<GlobalRef> = OnceLock::new();
+}
 
 #[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
 #[unsafe(no_mangle)]
@@ -23,7 +26,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     context: JObject<'_>,
     log_level: jint,
 ) {
-    if !ANDROID_CONTEXT_READY.load(Ordering::Acquire) {
+    if !AndroidContext::READY.load(Ordering::Acquire) {
         let filter = level_filter(log_level);
         if let Ok(layer) = tracing_android::layer("kithara") {
             let _ = tracing_subscriber::registry()
@@ -32,7 +35,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         }
         match init_android_context(&mut env, &context) {
             Ok(()) => {
-                ANDROID_CONTEXT_READY.store(true, Ordering::Release);
+                AndroidContext::READY.store(true, Ordering::Release);
             }
             Err(message) => {
                 error!(message = %message);
@@ -49,11 +52,11 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     }
 }
 
-const LOG_LEVEL_INFO: jint = 2;
-const LOG_LEVEL_WARN: jint = 3;
-const LOG_LEVEL_ERROR: jint = 4;
-
 fn level_filter(ordinal: jint) -> LevelFilter {
+    const LOG_LEVEL_INFO: jint = 2;
+    const LOG_LEVEL_WARN: jint = 3;
+    const LOG_LEVEL_ERROR: jint = 4;
+
     match ordinal {
         0 => LevelFilter::TRACE,
         1 => LevelFilter::DEBUG,
@@ -74,8 +77,8 @@ fn init_android_context(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<(
         .new_global_ref(context)
         .map_err(|err| format!("failed to create global context ref: {err}"))?;
 
-    let _ = ANDROID_CONTEXT_GLOBAL.set(context_global);
-    let Some(global) = ANDROID_CONTEXT_GLOBAL.get() else {
+    let _ = AndroidContext::GLOBAL.set(context_global);
+    let Some(global) = AndroidContext::GLOBAL.get() else {
         return Err("failed to store android context global ref".into());
     };
 
