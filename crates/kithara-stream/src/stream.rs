@@ -24,9 +24,6 @@ use crate::{
     source::{ReadOutcome, Source, VariantChangeError},
 };
 
-/// Timeout for seek `wait_range` calls before returning an error.
-const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Defines a stream type and how to create it.
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
@@ -164,23 +161,23 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-/// Short timeout keeps the audio worker responsive for round-robin
-/// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
-/// lasts ~46ms. A 10ms budget gives the worker time to serve other
-/// tracks and still refill the ringbuf before the audio callback drains it.
-const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
-
-/// Maximum `wait_range` retries before returning `Interrupted` to the caller.
-/// Each retry takes `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
-/// This prevents the hang detector (typically 1–10s) from firing when data
-/// is legitimately not yet available (e.g. encrypted HLS startup). Symphonia
-/// retries `Interrupted` automatically, resetting the per-call detector.
-const MAX_WAIT_SPINS: u32 = 50;
-
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        /// Short timeout keeps the audio worker responsive for round-robin
+        /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+        /// lasts ~46ms. A 10ms budget gives the worker time to serve other
+        /// tracks and still refill the ringbuf before the audio callback drains it.
+        const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
+
+        /// Maximum `wait_range` retries before returning `Interrupted` to the caller.
+        /// Each retry takes `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
+        /// This prevents the hang detector (typically 1–10s) from firing when data
+        /// is legitimately not yet available (e.g. encrypted HLS startup). Symphonia
+        /// retries `Interrupted` automatically, resetting the per-call detector.
+        const MAX_WAIT_SPINS: u32 = 50;
+
         if buf.is_empty() {
             return Ok(0);
         }
@@ -266,6 +263,9 @@ impl<T: StreamType> Read for Stream<T> {
 impl<T: StreamType> Seek for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        /// Timeout for seek `wait_range` calls before returning an error.
+        const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
         let timeline = self.source.timeline();
         let current = timeline.byte_position();
 
