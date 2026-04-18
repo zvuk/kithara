@@ -7,10 +7,6 @@ use std::time::Duration;
 #[cfg(not(feature = "disable-hang-detector"))]
 use web_time::Instant;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 10;
-#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
-const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
-
 /// Watchdog that detects loops stuck without progress.
 ///
 /// On native targets `tick()` panics after the deadline.
@@ -112,12 +108,14 @@ fn default_timeout_with_env(default_timeout: Duration) -> Duration {
 
 #[must_use]
 fn fallback_timeout() -> Duration {
+    const DEFAULT_TIMEOUT_SECS: u64 = 10;
     Duration::from_secs(DEFAULT_TIMEOUT_SECS)
 }
 
 #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 #[must_use]
 fn env_timeout() -> Option<Duration> {
+    const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
     static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
     *CACHED.get_or_init(|| {
         let value = env::var(ENV_TIMEOUT_SECS).ok()?;
