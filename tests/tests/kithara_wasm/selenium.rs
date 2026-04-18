@@ -16,10 +16,13 @@ use thirtyfour::{
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
-const CHECK_INTERVAL: Duration = Duration::from_millis(250);
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
-const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+struct Consts;
+impl Consts {
+    const CHECK_INTERVAL: Duration = Duration::from_millis(250);
+    const POLL_INTERVAL: Duration = Duration::from_millis(500);
+    const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
+    const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum BrowserKind {
@@ -95,14 +98,14 @@ impl SeleniumConfig {
             page_url_override: env::var("KITHARA_SELENIUM_PAGE_URL").ok(),
             startup_timeout: Duration::from_secs(env_u64(
                 "KITHARA_SELENIUM_STARTUP_TIMEOUT_SECS",
-                DEFAULT_STARTUP_TIMEOUT.as_secs(),
+                Consts::DEFAULT_STARTUP_TIMEOUT.as_secs(),
             )),
             switch_wait_seconds: env_u64("KITHARA_SELENIUM_SWITCH_WAIT_SECS", 12),
             test_server_port: env_u16("KITHARA_SELENIUM_TEST_SERVER_PORT", 3444),
             trunk_port: env_u16("KITHARA_SELENIUM_TRUNK_PORT", 9092),
             wait_timeout: Duration::from_secs(env_u64(
                 "KITHARA_SELENIUM_WAIT_TIMEOUT_SECS",
-                DEFAULT_WAIT_TIMEOUT.as_secs(),
+                Consts::DEFAULT_WAIT_TIMEOUT.as_secs(),
             )),
             webdriver_port,
             webdriver_url_override: env::var("KITHARA_SELENIUM_WEBDRIVER_URL").ok(),
@@ -359,7 +362,7 @@ impl WasmPlayerSelenium {
                 .wait_for(
                     "player bootstrap",
                     self.config.wait_timeout,
-                    CHECK_INTERVAL,
+                    Consts::CHECK_INTERVAL,
                     |snap| snap.playlist.len() >= 2 && snap.status.contains("Ready"),
                 )
                 .await;
@@ -510,7 +513,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track added to playlist",
             self.config.wait_timeout,
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |current| current.playlist.iter().any(|item| item.contains(url)),
         )
         .await
@@ -615,7 +618,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             &format!("track {label} selected"),
             self.config.wait_timeout,
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.active_index == Some(index),
         )
         .await?;
@@ -625,7 +628,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             &format!("track {label} duration known"),
             self.config.wait_timeout,
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.dur.unwrap_or(0.0) > 0.0,
         )
         .await?;
@@ -770,7 +773,7 @@ impl WasmPlayerSelenium {
             if (current - value).abs() <= 0.011 {
                 return Ok(());
             }
-            sleep(CHECK_INTERVAL).await;
+            sleep(Consts::CHECK_INTERVAL).await;
         }
 
         Err(format!("volume did not reach {value} in time"))
@@ -786,7 +789,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "position near start after seek",
             Duration::from_secs(10),
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.pos.unwrap_or(0.0) <= 2500.0,
         )
         .await?;
@@ -801,7 +804,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "stop state reflected",
             Duration::from_secs(10),
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.status.contains("Stopped") && snap.pos.unwrap_or(0.0) <= 2500.0,
         )
         .await?;
@@ -811,7 +814,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "play after stop starts from beginning",
             Duration::from_secs(10),
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.pos.unwrap_or(0.0) <= 4000.0,
         )
         .await?;
@@ -912,7 +915,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track selected",
             self.config.wait_timeout,
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.active_index == Some(hls_idx),
         )
         .await?;
@@ -922,7 +925,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track duration known",
             self.config.wait_timeout,
-            CHECK_INTERVAL,
+            Consts::CHECK_INTERVAL,
             |snap| snap.dur.unwrap_or(0.0) > 0.0,
         )
         .await?;
@@ -1045,7 +1048,7 @@ impl WasmPlayerSelenium {
 
         let mut seek_ok = false;
         while Instant::now() < deadline {
-            sleep(POLL_INTERVAL).await;
+            sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             if (low..=high).contains(&pos) {
                 seek_ok = true;
@@ -1058,7 +1061,7 @@ impl WasmPlayerSelenium {
         }
 
         let (playback_ok, _) = self
-            .check_playback_advancing(Duration::from_secs(3), POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(3), Consts::POLL_INTERVAL)
             .await?;
         Ok((true, playback_ok))
     }
@@ -1093,7 +1096,7 @@ impl WasmPlayerSelenium {
         let mut seek_ok = false;
         let mut position_samples = Vec::new();
         while Instant::now() < deadline {
-            sleep(POLL_INTERVAL).await;
+            sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             position_samples.push(pos);
             if (low..=high).contains(&pos) {
@@ -1111,7 +1114,7 @@ impl WasmPlayerSelenium {
         let mut positions = Vec::new();
         let steps = 16; // 8s / 500ms
         for _ in 0..steps {
-            sleep(POLL_INTERVAL).await;
+            sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             positions.push(pos);
         }
@@ -1150,7 +1153,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.mp3, "MP3").await?;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(3), POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(3), Consts::POLL_INTERVAL)
             .await?;
         if !started {
             return Err("playback did not start for MP3 seek scenario".to_string());
@@ -1209,7 +1212,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(5), POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(5), Consts::POLL_INTERVAL)
             .await?;
         if !started {
             return Err("hls playback did not start".to_string());
@@ -1241,7 +1244,7 @@ impl WasmPlayerSelenium {
         self.install_console_capture().await;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(8), POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(8), Consts::POLL_INTERVAL)
             .await?;
         if !started {
             let snap = self.snapshot().await;
@@ -1299,7 +1302,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
 
         for _ in 0..40 {
-            sleep(POLL_INTERVAL).await;
+            sleep(Consts::POLL_INTERVAL).await;
         }
 
         self.assert_motion(
@@ -1425,7 +1428,7 @@ async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
         if http_ok(url).await {
             return Ok(());
         }
-        sleep(CHECK_INTERVAL).await;
+        sleep(Consts::CHECK_INTERVAL).await;
     }
 
     Err(format!("timeout waiting for {url}"))
@@ -1451,7 +1454,7 @@ async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
         if page_ready_once(url).await {
             return Ok(());
         }
-        sleep(CHECK_INTERVAL).await;
+        sleep(Consts::CHECK_INTERVAL).await;
     }
 
     Err(format!("timeout waiting for wasm page {url}"))

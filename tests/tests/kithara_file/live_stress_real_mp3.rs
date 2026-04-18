@@ -21,15 +21,18 @@ use kithara_platform::{
 use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 
-const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
-const WARMUP_TIMEOUT_SECS: u64 = 2;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 8;
-const RANDOM_SEEK_OPS_MAX: usize = 256;
-const MIN_RANDOM_CHUNKS: usize = 384;
-const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-const FAST_SEEK_BURST: usize = 64;
-const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
-const REVISIT_SEEKS: usize = 64;
+struct Consts;
+impl Consts {
+    const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
+    const WARMUP_TIMEOUT_SECS: u64 = 2;
+    const RANDOM_PHASE_BUDGET_SECS: u64 = 8;
+    const RANDOM_SEEK_OPS_MAX: usize = 256;
+    const MIN_RANDOM_CHUNKS: usize = 384;
+    const CHUNKS_PER_RANDOM_SEEK: usize = 2;
+    const FAST_SEEK_BURST: usize = 64;
+    const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
+    const REVISIT_SEEKS: usize = 64;
+}
 
 #[derive(Default)]
 struct LiveStats {
@@ -170,11 +173,11 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     audio.preload();
 
     info!(ephemeral, "Phase 1: warmup");
-    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
     while Instant::now() < warmup_deadline {
         let _ = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
             "warmup",
         )
         .await;
@@ -183,18 +186,18 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
     let max_seek_secs = (duration_secs - 2.0).max(20.0);
     let mut rng = Xorshift64::new(0xA11C_5EED_0000_0101);
-    let mut seek_positions = Vec::with_capacity(RANDOM_SEEK_OPS_MAX);
-    for _ in 0..RANDOM_SEEK_OPS_MAX {
+    let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
+    for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
         seek_positions.push(rng.range_f64(1.0, max_seek_secs));
     }
 
     info!(
-        operations_max = RANDOM_SEEK_OPS_MAX,
-        phase_budget_secs = RANDOM_PHASE_BUDGET_SECS,
-        chunks_per_seek = CHUNKS_PER_RANDOM_SEEK,
+        operations_max = Consts::RANDOM_SEEK_OPS_MAX,
+        phase_budget_secs = Consts::RANDOM_PHASE_BUDGET_SECS,
+        chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
-    let random_deadline = Instant::now() + Duration::from_secs(RANDOM_PHASE_BUDGET_SECS);
+    let random_deadline = Instant::now() + Duration::from_secs(Consts::RANDOM_PHASE_BUDGET_SECS);
     let mut random_ops_done = 0usize;
     let mut chunks_read = 0usize;
     for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
@@ -207,11 +210,11 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         audio.preload();
         random_ops_done = random_ops_done.saturating_add(1);
 
-        for read_idx in 0..CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("random_seek_{idx}_chunk_{read_idx}");
             let Some(_chunk) = next_chunk_with_timeout(
                 &mut audio,
-                Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+                Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
                 &stage,
             )
             .await
@@ -222,15 +225,15 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         }
     }
     assert!(
-        chunks_read >= MIN_RANDOM_CHUNKS,
+        chunks_read >= Consts::MIN_RANDOM_CHUNKS,
         "stress read underflow: expected at least {} chunks, got {} (random_ops_done={})",
-        MIN_RANDOM_CHUNKS,
+        Consts::MIN_RANDOM_CHUNKS,
         chunks_read,
         random_ops_done
     );
 
-    info!(seeks = FAST_SEEK_BURST, "Phase 3: fast seek burst");
-    for _ in 0..FAST_SEEK_BURST {
+    info!(seeks = Consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
+    for _ in 0..Consts::FAST_SEEK_BURST {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
         audio
             .seek(Duration::from_secs_f64(pos_secs))
@@ -246,16 +249,16 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     audio.preload();
 
     info!(
-        sequential_chunks = SEQUENTIAL_CHUNKS_AFTER_BURST,
+        sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
         "Phase 4: sequential read after fast seeks"
     );
     let mut seq_epoch = None;
     let mut seq_end_frame = None;
-    for idx in 0..SEQUENTIAL_CHUNKS_AFTER_BURST {
+    for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
         let stage = format!("sequential_after_burst_{idx}");
         let chunk = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
         )
         .await
@@ -279,8 +282,8 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
     }
 
-    info!(seeks = REVISIT_SEEKS, "Phase 5: revisit same positions");
-    let revisit_limit = REVISIT_SEEKS.min(random_ops_done);
+    info!(seeks = Consts::REVISIT_SEEKS, "Phase 5: revisit same positions");
+    let revisit_limit = Consts::REVISIT_SEEKS.min(random_ops_done);
     assert!(
         revisit_limit > 0,
         "random phase completed without seek operations"
@@ -293,7 +296,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         let stage = format!("revisit_{idx}");
         let _ = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
         )
         .await;
