@@ -22,6 +22,10 @@ use crate::{
     track::{TrackEntry, TrackSource, Tracks},
 };
 
+/// Minimum position threshold used to suppress spurious 0.0 reports on
+/// pause/resume. Values above this are considered a valid non-zero position.
+const MIN_STABLE_POSITION_SECS: f64 = 0.5;
+
 /// Transition style for a track switch.
 ///
 /// Mirrors the Apple-idiomatic pattern of a namespace-style type with
@@ -521,7 +525,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner);
         // Engine briefly reports 0.0 on pause/resume; keep the last
         // sane value so slider bindings don't flash back to the start.
-        if t == 0.0 && slot.is_some_and(|prev| prev > 0.5) {
+        if t == 0.0 && slot.is_some_and(|prev| prev > MIN_STABLE_POSITION_SECS) {
             return;
         }
         *slot = Some(t);

@@ -83,7 +83,7 @@ impl Kithara {
         let eq_band_count = queue.eq_band_count();
 
         let tracks_snapshot = queue.tracks();
-        let current_track_index = tracks_snapshot.first().map(|_| 0_usize);
+        let current_track_index = tracks_snapshot.first().map(|_| 0usize);
         let track_name = tracks_snapshot
             .first()
             .map(|e| e.name.clone())

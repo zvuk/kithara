@@ -12,9 +12,9 @@ rule:
     - all:
         - kind: integer_literal
         - not:
-            regex: '^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$'
+            regex: "^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$"
         - not:
-            regex: '^0b[01]+$'
+            regex: "^0b[01]+$"
         - not:
             inside:
               kind: const_item

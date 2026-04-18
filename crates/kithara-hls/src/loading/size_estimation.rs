@@ -9,6 +9,8 @@ use kithara_stream::dl::FetchCmd;
 use re_mp4::{Mp4, StsdBoxContent};
 use tracing::debug;
 
+const BITS_PER_BYTE: f64 = 8.0;
+
 use crate::{
     loading::SegmentLoader,
     parsing::MediaPlaylist,
@@ -139,7 +141,7 @@ fn try_init_bitrate(
             clippy::cast_sign_loss,
             reason = "bitrate × duration is always non-negative and fits u64"
         )]
-        let media_len = (f64::from(avg_bitrate) / 8.0 * duration_secs) as u64;
+        let media_len = (f64::from(avg_bitrate) / BITS_PER_BYTE * duration_secs) as u64;
         let total_seg = if i == 0 {
             init_len + media_len
         } else {

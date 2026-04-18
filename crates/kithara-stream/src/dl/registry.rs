@@ -22,14 +22,22 @@ use super::{
 
 const SLOT_COUNT: usize = 4;
 
+#[repr(usize)]
+enum Slot {
+    HighHigh = 0,
+    HighLow = 1,
+    LowHigh = 2,
+    LowLow = 3,
+}
+
 /// Map (`peer_priority`, `cmd_priority`) → slot index.
 /// Processing order: 0 → 1 → 2 → 3.
 fn slot_index(peer_prio: Priority, cmd_prio: Priority) -> usize {
     match (peer_prio, cmd_prio) {
-        (Priority::High, Priority::High) => 0,
-        (Priority::High, Priority::Low) => 1,
-        (Priority::Low, Priority::High) => 2,
-        (Priority::Low, Priority::Low) => 3,
+        (Priority::High, Priority::High) => Slot::HighHigh as usize,
+        (Priority::High, Priority::Low) => Slot::HighLow as usize,
+        (Priority::Low, Priority::High) => Slot::LowHigh as usize,
+        (Priority::Low, Priority::Low) => Slot::LowLow as usize,
     }
 }
 
@@ -209,8 +217,8 @@ impl Registry {
         }
 
         let mut demand_cmds: Vec<InternalCmd> = Vec::new();
-        demand_cmds.extend(self.slots[2].drain(..));
-        demand_cmds.extend(self.slots[3].drain(..));
+        demand_cmds.extend(self.slots[Slot::LowHigh as usize].drain(..));
+        demand_cmds.extend(self.slots[Slot::LowLow as usize].drain(..));
         let demand_batch = BatchGroup::from_iter(demand_cmds.into_iter());
         if !demand_batch.is_empty() {
             demand_batch.process(inner).await;

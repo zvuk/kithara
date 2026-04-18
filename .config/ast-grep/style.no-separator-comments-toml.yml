@@ -8,4 +8,4 @@ files:
 rule:
   all:
     - kind: comment
-    - regex: '[=─-]{3,}'
+    - regex: "[=─-]{3,}"

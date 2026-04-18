@@ -328,9 +328,11 @@ impl<C: CodecType> Android<C> {
             ));
         }
 
+        const BYTES_PER_PCM16_SAMPLE: usize = 2;
+        const BYTES_PER_FLOAT_SAMPLE: usize = 4;
         let bytes_per_sample = match self.inner.pcm_encoding {
-            AndroidPcmEncoding::Pcm16 => 2,
-            AndroidPcmEncoding::Float => 4,
+            AndroidPcmEncoding::Pcm16 => BYTES_PER_PCM16_SAMPLE,
+            AndroidPcmEncoding::Float => BYTES_PER_FLOAT_SAMPLE,
         };
         if bytes_len % bytes_per_sample != 0 {
             return Err(AndroidBackendError::operation(

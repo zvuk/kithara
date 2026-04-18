@@ -109,7 +109,7 @@ impl OwnedCodec {
             )
         })?;
 
-        let mut size = 0_usize;
+        let mut size = 0usize;
         let data =
             NonNull::new(unsafe { ffi::AMediaCodec_getInputBuffer(self.raw(), index, &mut size) })
                 .ok_or_else(|| {
@@ -191,7 +191,7 @@ impl OwnedCodec {
                         format!("buffer index out of range: {index}"),
                     )
                 })?;
-                let mut size = 0_usize;
+                let mut size = 0usize;
                 let data = NonNull::new(unsafe {
                     ffi::AMediaCodec_getOutputBuffer(self.raw(), index, &mut size)
                 })

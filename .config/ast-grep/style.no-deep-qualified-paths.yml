@@ -16,7 +16,7 @@ rule:
         inside:
           kind: scoped_identifier
     - not:
-        regex: '^(self|super|crate|std|tokio)::'
+        regex: "^(self|super|crate|std|tokio)::"
     - not:
         inside:
           kind: use_declaration

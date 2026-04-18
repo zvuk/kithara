@@ -28,7 +28,22 @@ use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, Priority};
 
-const POLL_MS: u64 = 50;
+mod consts {
+    pub(super) const POLL_MS: u64 = 50;
+    pub(super) const REQUEST_TIMEOUT_SECS: u64 = 60;
+    pub(super) const CANCEL_GUARD_SECS: u64 = 2;
+    pub(super) const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
+    pub(super) const FLOOD_BATCH_SIZE: usize = 10;
+    pub(super) const FLOOD_DEADLINE_SECS: u64 = 20;
+    pub(super) const FLOOD_POLL_MS: u64 = 100;
+    pub(super) const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
+    pub(super) const SLOW_SERVER_DELAY_MS: u64 = 500;
+    pub(super) const SOFT_TIMEOUT_MS: u64 = 50;
+    pub(super) const EVENT_BUS_CAPACITY: usize = 64;
+    pub(super) const SLOW_DEADLINE_SECS: u64 = 5;
+    pub(super) const SLOW_POLL_TIMEOUT_MS: u64 = 200;
+}
+use consts::*;
 
 // Test helpers
 
@@ -116,7 +131,7 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions {
-        request_timeout: Duration::from_secs(60),
+        request_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
         ..NetOptions::default()
     };
     let dl = Downloader::new(DownloaderConfig::default().with_net(net));
@@ -136,13 +151,13 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     sleep(POLL_MS).await;
     handle.cancel().cancel();
 
-    let (elapsed, result) = tokio_time::timeout(Duration::from_secs(2), task)
+    let (elapsed, result) = tokio_time::timeout(Duration::from_secs(CANCEL_GUARD_SECS), task)
         .await
-        .expect("task should complete within 2s")
+        .expect("task should complete within CANCEL_GUARD_SECS")
         .expect("task should not panic");
 
     assert!(
-        elapsed < Duration::from_secs(2),
+        elapsed < Duration::from_secs(CANCEL_GUARD_SECS),
         "execute should return promptly after cancel, took {elapsed:?}"
     );
     assert!(result.is_err(), "expected Err after peer cancel");
@@ -163,7 +178,7 @@ async fn peer_handle_downloader_cancel_cascades() {
 
 /// Verify that the Downloader never exceeds `max_concurrent` in-flight
 /// HTTP connections, even when many commands are submitted at once.
-#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
 async fn max_concurrent_limits_inflight_connections() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_REQUESTS: usize = 1000;
@@ -236,7 +251,7 @@ async fn max_concurrent_limits_inflight_connections() {
 
 /// Simulate many concurrent Downloaders (like parallel test execution).
 /// Each submits a batch of HEAD requests. Global peak must stay bounded.
-#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
 async fn many_downloaders_global_peak_stays_bounded() {
     const NUM_DOWNLOADERS: usize = 20;
     const REQUESTS_PER_DL: usize = 30;
@@ -326,7 +341,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
 
 /// Verify that poll_next (streaming path) also respects max_concurrent.
 /// A Peer produces 1000 HEAD commands via poll_next. Peak must stay ≤ max_concurrent.
-#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
 async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
@@ -388,8 +403,8 @@ async fn poll_next_respects_max_concurrent() {
             if *rem == 0 {
                 return Poll::Ready(None);
             }
-            // Yield a batch of up to 10 at a time.
-            let batch_size = (*rem).min(10);
+            // Yield a batch of up to FLOOD_BATCH_SIZE at a time.
+            let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
             *rem -= batch_size;
             let cmds: Vec<FetchCmd> = (0..batch_size)
                 .map(|_| FetchCmd::head(self.url.clone()))
@@ -416,9 +431,9 @@ async fn poll_next_respects_max_concurrent() {
     // Wait for all streaming commands to complete.
     // 1000 cmds × 5ms / 5 concurrent = ~1s theoretical minimum.
     // Give plenty of headroom.
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(FLOOD_DEADLINE_SECS);
     loop {
-        tokio_time::sleep(Duration::from_millis(100)).await;
+        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
         if *peer.remaining.lock_sync() == 0 && concurrent.load(Ordering::SeqCst) == 0 {
             break;
         }
@@ -444,7 +459,7 @@ async fn poll_next_respects_max_concurrent() {
 /// Reproduce port exhaustion: many concurrent downloaders each doing
 /// ~100 HEAD requests (simulates prefetch_metadata × parallel tests).
 /// All requests must succeed — no "Can't assign requested address".
-#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
 async fn port_exhaustion_stress() {
     const NUM_DOWNLOADERS: usize = 200;
     const REQUESTS_PER_DL: usize = 114; // 3 variants × 37 segments + inits
@@ -520,14 +535,14 @@ async fn port_exhaustion_stress() {
 /// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
 /// on the peer's bus, and a subscriber on that bus (as
 /// `kithara_queue::Loader` would set up) receives it.
-#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     // Server delays longer than our configured soft_timeout, but less
     // than the hard timeout / test timeout.
     let app = Router::new().route(
         "/slow",
         get(|| async {
-            tokio_time::sleep(Duration::from_millis(500)).await;
+            tokio_time::sleep(Duration::from_millis(SLOW_SERVER_DELAY_MS)).await;
             "ok"
         }),
     );
@@ -540,14 +555,15 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     });
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    let config = DownloaderConfig::default().with_soft_timeout(Duration::from_millis(50));
+    let config =
+        DownloaderConfig::default().with_soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS));
     let dl = Downloader::new(config);
 
     // Simulate the bus topology Queue builds: a scoped child of a root
     // bus. The downloader emits on the peer's scoped handle; the
     // subscriber (Queue's slow_listener) holds a clone of the same
     // scope.
-    let root = EventBus::new(64);
+    let root = EventBus::new(EVENT_BUS_CAPACITY);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
 
@@ -555,11 +571,11 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let _ = handle.execute(FetchCmd::get(url)).await;
 
     // Drain until we see LoadSlow — the soft timer fires before the
-    // 500 ms server response completes.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // SLOW_SERVER_DELAY_MS server response completes.
+    let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
     let mut seen_slow = false;
     while Instant::now() < deadline {
-        match tokio_time::timeout(Duration::from_millis(200), rx.recv()).await {
+        match tokio_time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
             Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow))) => {
                 seen_slow = true;
                 break;
