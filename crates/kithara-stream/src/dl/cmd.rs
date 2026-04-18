@@ -73,6 +73,7 @@ pub struct FetchCmd {
     /// Optional per-request response validator.
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.
+    #[setters(skip)]
     pub validator: Option<fn(&Headers) -> NetResult<()>>,
 }
 
@@ -137,4 +138,22 @@ impl std::fmt::Debug for FetchCmd {
             .field("range", &self.range)
             .finish_non_exhaustive()
     }
+}
+
+/// Reject responses with `content-type: text/html`.
+///
+/// Protects against CDN soft-error pages that return `200 OK` with an HTML
+/// body. Pass as the validator argument to [`FetchCmd::with_validator`].
+///
+/// # Errors
+///
+/// Returns [`NetError::InvalidContentType`] when the response `content-type`
+/// header starts with `text/html`.
+pub fn reject_html_response(headers: &Headers) -> NetResult<()> {
+    if let Some(ct) = headers.get("content-type")
+        && ct.starts_with("text/html")
+    {
+        return Err(NetError::InvalidContentType(ct.to_string()));
+    }
+    Ok(())
 }

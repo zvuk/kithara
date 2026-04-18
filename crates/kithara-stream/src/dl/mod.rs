@@ -14,7 +14,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub use cmd::{FetchCmd, FetchMethod, OnCompleteFn, Priority, WriterFn};
+pub use cmd::{FetchCmd, FetchMethod, OnCompleteFn, Priority, WriterFn, reject_html_response};
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use peer::{Peer, PeerHandle};

@@ -4476,6 +4476,7 @@ dependencies = [
  "thunderdome",
  "tokio-stream",
  "tokio-util",
+ "tracing",
  "unimock",
  "url",
  "wasm-bindgen-futures",

@@ -11,9 +11,9 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
-use kithara_net::{Headers, NetResult};
+use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{FetchCmd, PeerHandle};
+use kithara_stream::dl::{FetchCmd, PeerHandle, reject_html_response};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -92,15 +92,6 @@ pub(crate) async fn fetch_atomic_body(
     Ok(bytes)
 }
 
-fn check_content_type(headers: &Headers) -> NetResult<()> {
-    if let Some(ct) = headers.get("content-type")
-        && ct.starts_with("text/html")
-    {
-        return Err(kithara_net::NetError::InvalidContentType(ct.to_string()));
-    }
-    Ok(())
-}
-
 /// Fetch a URL and collect the full body into a `Bytes` buffer.
 async fn download_atomic_bytes(
     downloader: &PeerHandle,
@@ -109,7 +100,7 @@ async fn download_atomic_bytes(
 ) -> HlsResult<Bytes> {
     let cmd = FetchCmd::get(url)
         .headers(headers)
-        .with_validator(check_content_type);
+        .with_validator(reject_html_response);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
 }

@@ -5,7 +5,7 @@ use std::{ops::Range, sync::Arc};
 use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::{Headers, NetResult, RangeSpec};
+use kithara_net::{Headers, RangeSpec};
 use kithara_platform::{
     Mutex,
     time::Duration,
@@ -15,7 +15,7 @@ use kithara_platform::{
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
-    dl::{FetchCmd, Peer, PeerHandle},
+    dl::{FetchCmd, Peer, PeerHandle, reject_html_response},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -25,15 +25,6 @@ use crate::{coord::FileCoord, error::SourceError};
 
 /// Backpressure pause when download is too far ahead of reader.
 const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
-
-fn check_content_type(headers: &Headers) -> NetResult<()> {
-    if let Some(ct) = headers.get("content-type")
-        && ct.starts_with("text/html")
-    {
-        return Err(kithara_net::NetError::InvalidContentType(ct.to_string()));
-    }
-    Ok(())
-}
 
 // FilePeer — Peer impl for file protocol
 
@@ -205,7 +196,7 @@ async fn run_full_download(
 
     let cmd = FetchCmd::get(url)
         .headers(headers)
-        .with_validator(check_content_type);
+        .with_validator(reject_html_response);
 
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
@@ -402,7 +393,7 @@ async fn run_range_download(inner: Arc<Mutex<FileInner>>, peer: PeerHandle, rang
     let cmd = FetchCmd::get(url)
         .range(Some(range_spec))
         .headers(headers)
-        .with_validator(check_content_type);
+        .with_validator(reject_html_response);
 
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
