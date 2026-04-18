@@ -2,13 +2,12 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+use ringbuf::traits::Observer;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
 };
-
-#[cfg(test)]
-use ringbuf::traits::Observer;
 
 /// A signal to wake up a blocked consumer.
 pub(crate) trait WakeSignal: Send + Sync + 'static {

@@ -4,11 +4,11 @@ pub mod audio {
     use std::sync::Arc;
 
     #[cfg(any(test, feature = "test-utils"))]
-    use crate::pipeline::fetch::Fetch;
-    #[cfg(any(test, feature = "test-utils"))]
     use kithara_decode::PcmChunk;
     use kithara_platform::tokio::sync::Notify;
 
+    #[cfg(any(test, feature = "test-utils"))]
+    use crate::pipeline::fetch::Fetch;
     pub use crate::{AudioConfig, audio::Audio};
 
     impl<S> Audio<S> {

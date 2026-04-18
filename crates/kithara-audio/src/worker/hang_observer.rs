@@ -1,7 +1,8 @@
 //! Watchdog observer for the audio worker.
 
-use crate::runtime::{SchedulerEvent, SchedulerObserver};
 use kithara_hang_detector::{HangDetector, default_timeout};
+
+use crate::runtime::{SchedulerEvent, SchedulerObserver};
 
 /// Observer that integrates the scheduler with `kithara_hang_detector`.
 pub(crate) struct HangWatchdogObserver {

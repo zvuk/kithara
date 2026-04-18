@@ -38,11 +38,11 @@ mod tests {
         time::Duration,
     };
 
-    use crate::runtime::WakeSignal;
     use kithara_platform::thread::{park_timeout, sleep, spawn};
     use kithara_test_utils::kithara;
 
     use super::ThreadWake;
+    use crate::runtime::WakeSignal;
 
     #[kithara::test]
     fn wake_unparks_registered_thread() {

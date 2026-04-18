@@ -9,7 +9,6 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use crate::runtime::{Scheduler, SchedulerHandle};
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
 
@@ -19,7 +18,10 @@ use super::{
     hang_observer::HangWatchdogObserver,
     types::{ServiceClass, TrackId, TrackIdGen},
 };
-use crate::pipeline::fetch::Fetch;
+use crate::{
+    pipeline::fetch::Fetch,
+    runtime::{Scheduler, SchedulerHandle},
+};
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
@@ -116,10 +118,10 @@ mod tests {
         time::Duration,
     };
 
-    use crate::runtime::connect;
     use kithara_decode::PcmChunk;
     use kithara_platform::{
-        thread::sleep as thread_sleep, time::Instant, time::timeout as platform_timeout,
+        thread::sleep as thread_sleep,
+        time::{Instant, timeout as platform_timeout},
         tokio::sync::Notify,
     };
     use kithara_stream::Timeline;
@@ -128,6 +130,7 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::track_fsm::{TrackStep, WaitingReason},
+        runtime::connect,
         worker::{AudioWorkerSource, thread_wake::ThreadWake, types::ServiceClass},
     };
 

@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::runtime::{Node, Outlet, TickResult};
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
 use tracing::trace;
@@ -12,7 +11,10 @@ use super::{
     handle::TrackRegistration,
     types::{ServiceClass, TrackId},
 };
-use crate::pipeline::{fetch::Fetch, track_fsm::TrackStep};
+use crate::{
+    pipeline::{fetch::Fetch, track_fsm::TrackStep},
+    runtime::{Node, Outlet, TickResult},
+};
 
 /// A node that decodes audio chunks.
 ///
@@ -177,8 +179,7 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::runtime::connect;
-    use crate::worker::MockAudioWorkerSource;
+    use crate::{runtime::connect, worker::MockAudioWorkerSource};
 
     #[kithara::test]
     fn decoder_node_eof_under_backpressure() {

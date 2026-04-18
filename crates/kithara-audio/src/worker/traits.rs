@@ -1,5 +1,14 @@
 //! Audio worker traits and effect utilities.
 
+// `unimock::unimock` macro expands a generated `MockAudioWorkerSource` impl
+// that matches over `()` returns with `_` patterns. The macro output isn't
+// editable, so suppress the lint at the module level when test-utils are
+// compiled in.
+#![cfg_attr(
+    any(test, feature = "test-utils"),
+    allow(clippy::ignored_unit_patterns)
+)]
+
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
 
