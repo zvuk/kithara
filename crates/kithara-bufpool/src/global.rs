@@ -19,15 +19,6 @@ pub type PcmPool = SharedPool<8, Vec<f32>>;
 /// zero-allocation buffer reuse.
 pub type PcmBuf = PooledOwned<8, Vec<f32>>;
 
-// Global byte pool (32 shards, 1024 max buffers, 64KB trim capacity)
-static GLOBAL_BYTE_POOL: OnceLock<BytePool> = OnceLock::new();
-
-// Global PCM pool (8 shards, 128 max buffers, 200K trim capacity)
-static GLOBAL_PCM_POOL: OnceLock<PcmPool> = OnceLock::new();
-
-/// Byte pool budget: 256 MB hard ceiling.
-const BYTE_POOL_BUDGET: usize = 256 * 1024 * 1024;
-
 /// Get global byte buffer pool for the entire workspace.
 ///
 /// Lazily initialized on first call. Use this instead of creating
@@ -36,6 +27,11 @@ const BYTE_POOL_BUDGET: usize = 256 * 1024 * 1024;
 /// Configured with a 256 MB byte budget (expected baseline ~16 MB).
 /// Same limits for all platforms (WASM and native).
 pub fn byte_pool() -> &'static BytePool {
+    static GLOBAL_BYTE_POOL: OnceLock<BytePool> = OnceLock::new();
+
+    /// Byte pool budget: 256 MB hard ceiling.
+    const BYTE_POOL_BUDGET: usize = 256 * 1024 * 1024;
+
     GLOBAL_BYTE_POOL.get_or_init(|| {
         BytePool::with_byte_budget(
             usize::MAX, // no buffer count limit — budget is the cap
@@ -49,12 +45,14 @@ pub fn byte_pool() -> &'static BytePool {
 ///
 /// Lazily initialized on first call. Use this instead of creating
 /// separate `PcmPool` instances.
-/// PCM pool max buffer count.
-const PCM_POOL_MAX_BUFFERS: usize = 128;
-
-/// PCM pool trim capacity.
-const PCM_POOL_TRIM_CAPACITY: usize = 200_000;
-
 pub fn pcm_pool() -> &'static PcmPool {
+    static GLOBAL_PCM_POOL: OnceLock<PcmPool> = OnceLock::new();
+
+    /// PCM pool max buffer count.
+    const PCM_POOL_MAX_BUFFERS: usize = 128;
+
+    /// PCM pool trim capacity.
+    const PCM_POOL_TRIM_CAPACITY: usize = 200_000;
+
     GLOBAL_PCM_POOL.get_or_init(|| PcmPool::new(PCM_POOL_MAX_BUFFERS, PCM_POOL_TRIM_CAPACITY))
 }

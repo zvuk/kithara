@@ -34,12 +34,6 @@ pub trait Reuse {
     }
 }
 
-/// Shrink multiplier: only trim when capacity exceeds trim * `TRIM_HYSTERESIS`.
-const TRIM_HYSTERESIS: usize = 2;
-
-/// Initial pre-allocation capacity per shard.
-const SHARD_INITIAL_CAPACITY: usize = 16;
-
 /// Reuse implementation for `Vec<T>`.
 ///
 /// Clears the vector and optionally shrinks capacity.
@@ -51,6 +45,9 @@ const SHARD_INITIAL_CAPACITY: usize = 16;
 ///   preventing realloc churn for buffers near the target size.
 impl<T> Reuse for Vec<T> {
     fn reuse(&mut self, trim: usize) -> bool {
+        /// Shrink multiplier: only trim when capacity exceeds trim * `TRIM_HYSTERESIS`.
+        const TRIM_HYSTERESIS: usize = 2;
+
         self.clear();
         if trim > 0 && self.capacity() > trim.saturating_mul(TRIM_HYSTERESIS) {
             self.shrink_to(trim);
@@ -78,6 +75,9 @@ where
     T: Reuse,
 {
     fn new(max_buffers: usize, trim_capacity: usize) -> Self {
+        /// Initial pre-allocation capacity per shard.
+        const SHARD_INITIAL_CAPACITY: usize = 16;
+
         Self {
             buffers: Vec::with_capacity(max_buffers.min(SHARD_INITIAL_CAPACITY)),
             max_buffers,
