@@ -8,12 +8,6 @@ use url::Url;
 
 use crate::error::{AssetsError, AssetsResult};
 
-/// Default HTTPS port.
-const DEFAULT_HTTPS_PORT: u16 = 443;
-
-/// Default HTTP port.
-const DEFAULT_HTTP_PORT: u16 = 80;
-
 /// Key type for addressing resources within an asset.
 ///
 /// A `ResourceKey` identifies a single resource (file) within an asset store.
@@ -117,6 +111,11 @@ pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
 ///
 /// Returns `AssetsError::MissingComponent` if the URL lacks a scheme or host.
 pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
+    /// Default HTTPS port.
+    const DEFAULT_HTTPS_PORT: u16 = 443;
+    /// Default HTTP port.
+    const DEFAULT_HTTP_PORT: u16 = 80;
+
     // Validate that URL has required components for asset identification
     if url.scheme().is_empty() {
         return Err(AssetsError::MissingComponent("scheme".to_string()));
