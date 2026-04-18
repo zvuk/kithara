@@ -7,7 +7,7 @@ use aes::Aes128;
 #[cfg(not(target_arch = "wasm32"))]
 use cbc::{
     Encryptor,
-    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+    cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 
 /// Generate init segment data for variant
@@ -40,9 +40,10 @@ pub fn aes128_ciphertext() -> Vec<u8> {
     let mut data = aes128_plaintext_segment();
     let plain_len = data.len();
     data.resize(plain_len + 16, 0);
-    let encryptor = Encryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
+    let key_arr: &[u8; 16] = (&key[..16]).try_into().expect("key len");
+    let encryptor = Encryptor::<Aes128>::new(key_arr.into(), (&iv).into());
     let cipher = encryptor
-        .encrypt_padded_mut::<Pkcs7>(&mut data, plain_len)
+        .encrypt_padded::<Pkcs7>(&mut data, plain_len)
         .expect("aes128 encrypt");
     cipher.to_vec()
 }

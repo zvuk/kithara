@@ -38,11 +38,11 @@ impl<R: ResourceExt> LruIndex<R> {
             return Ok(LruState::default());
         }
 
-        let file = match rkyv::check_archived_root::<LruIndexFile>(&buf[..n]) {
-            Ok(archived) => {
-                use rkyv::Deserialize;
-                archived.deserialize(&mut rkyv::Infallible).unwrap()
-            }
+        let file = match rkyv::access::<super::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(
+            &buf[..n],
+        ) {
+            Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
+                .expect("LRU archived → owned deserialize"),
             Err(e) => {
                 tracing::debug!("Failed to deserialize lru index: {}", e);
                 return Ok(LruState::default());
@@ -55,7 +55,7 @@ impl<R: ResourceExt> LruIndex<R> {
     /// Persist the provided state to storage atomically.
     pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = rkyv::to_bytes::<_, 4096>(&file).map_err(|e| {
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file).map_err(|e| {
             AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
         })?;
         self.res.write_all(&bytes)?;

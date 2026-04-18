@@ -170,28 +170,31 @@ impl AvailabilityIndex {
             return Ok(());
         }
 
-        let archived = match rkyv::check_archived_root::<AvailabilityFile>(&buf[..n]) {
-            Ok(archived) => archived,
-            Err(e) => {
-                tracing::debug!("Failed to validate availability index: {}", e);
-                return Ok(());
-            }
-        };
+        let archived =
+            match rkyv::access::<super::schema::ArchivedAvailabilityFile, rkyv::rancor::Error>(
+                &buf[..n],
+            ) {
+                Ok(archived) => archived,
+                Err(e) => {
+                    tracing::debug!("Failed to validate availability index: {}", e);
+                    return Ok(());
+                }
+            };
 
-        for (root, asset_record) in &archived.assets {
+        for (root, asset_record) in archived.assets.iter() {
             let root_str = root.as_str().to_string();
             let asset_map = Arc::new(DashMap::new());
 
-            for (path, res_record) in &asset_record.resources {
+            for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
                 for r in res_record.ranges.iter() {
-                    let start = r.0;
-                    let end = r.1;
+                    let start = r.0.to_native();
+                    let end = r.1.to_native();
                     avail.insert(start..end);
                 }
 
                 let final_len: Option<u64> = match res_record.final_len {
-                    rkyv::option::ArchivedOption::Some(ref l) => Some(*l),
+                    rkyv::option::ArchivedOption::Some(ref l) => Some(l.to_native()),
                     rkyv::option::ArchivedOption::None => None,
                 };
 
@@ -245,7 +248,7 @@ impl AvailabilityIndex {
             }
         }
 
-        let bytes = rkyv::to_bytes::<_, 4096>(&availability_file).map_err(|e| {
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&availability_file).map_err(|e| {
             AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
         })?;
         res.write_all(&bytes)?;

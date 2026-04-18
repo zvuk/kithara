@@ -2,6 +2,7 @@
 
 mod eviction_bytes_integration;
 mod eviction_integration;
+mod index_persistence;
 mod integration_storage_assets;
 mod pins_index_integration;
 mod processing_integration;

@@ -66,10 +66,13 @@ fn eviction_max_assets_skips_pinned_assets(
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
-                && let Ok(archived) = rkyv::check_archived_root::<PinsIndexFile>(&pins_bytes)
+                && let Ok(archived) = rkyv::access::<
+                    kithara_assets::index::schema::ArchivedPinsIndexFile,
+                    rkyv::rancor::Error,
+                >(&pins_bytes)
             {
-                use rkyv::Deserialize;
-                let pins_file: PinsIndexFile = archived.deserialize(&mut rkyv::Infallible).unwrap();
+                let pins_file: PinsIndexFile =
+                    rkyv::deserialize::<PinsIndexFile, rkyv::rancor::Error>(archived).unwrap();
                 let mut is_pinned = false;
                 for (k, v) in pins_file.pinned.iter() {
                     if *v && k.as_str() == format!("asset-{}", i) {

@@ -6,7 +6,7 @@ use aes::Aes128;
 use cbc::{
     Decryptor,
     cipher::{
-        BlockDecryptMut, KeyIvInit,
+        BlockModeDecrypt, KeyIvInit,
         block_padding::{NoPadding, Pkcs7},
     },
 };
@@ -73,7 +73,7 @@ pub fn aes128_cbc_process_chunk(
         // Last chunk: decrypt with PKCS7 unpadding
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
-            .decrypt_padded_mut::<Pkcs7>(&mut output[..input.len()])
+            .decrypt_padded::<Pkcs7>(&mut output[..input.len()])
             .map_err(|e| format!("PKCS7 unpad failed: {e}"))?;
         let written = plaintext.len();
         trace!(
@@ -87,7 +87,7 @@ pub fn aes128_cbc_process_chunk(
         // Intermediate chunk: decrypt without unpadding (block-by-block, same size)
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
-            .decrypt_padded_mut::<NoPadding>(&mut output[..input.len()])
+            .decrypt_padded::<NoPadding>(&mut output[..input.len()])
             .map_err(|e| format!("CBC decrypt failed: {e}"))?;
         let written = plaintext.len();
         trace!(
@@ -106,7 +106,7 @@ mod tests {
     use aes::Aes128;
     use cbc::{
         Encryptor,
-        cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+        cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
     };
     use kithara_test_utils::kithara;
 
@@ -119,8 +119,8 @@ mod tests {
         let mut buf = vec![0u8; padded_len];
         buf[..plaintext.len()].copy_from_slice(plaintext);
         let ct = encryptor
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-            .expect("encrypt_padded_mut failed");
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
+            .expect("encrypt_padded failed");
         ct.to_vec()
     }
 

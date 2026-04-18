@@ -42,7 +42,9 @@ impl<R: ResourceExt> PinsIndex<R> {
             return Ok(HashSet::new());
         }
 
-        let archived = match rkyv::check_archived_root::<PinsIndexFile>(&buf[..n]) {
+        let archived = match rkyv::access::<super::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(
+            &buf[..n],
+        ) {
             Ok(archived) => archived,
             Err(e) => {
                 tracing::debug!("Failed to validate pins index: {}", e);
@@ -51,7 +53,7 @@ impl<R: ResourceExt> PinsIndex<R> {
         };
 
         let mut pinned = HashSet::new();
-        for (k, v) in &archived.pinned {
+        for (k, v) in archived.pinned.iter() {
             if *v {
                 pinned.insert(k.as_str().to_string());
             }
@@ -70,7 +72,7 @@ impl<R: ResourceExt> PinsIndex<R> {
             pinned: map,
         };
 
-        let bytes = rkyv::to_bytes::<_, 4096>(&file).map_err(|e| {
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file).map_err(|e| {
             AssetsError::Storage(kithara_storage::StorageError::Failed(e.to_string()))
         })?;
         self.res.write_all(&bytes)?;
@@ -192,10 +194,14 @@ mod tests {
         let n = idx.res.read_into(&mut buf).unwrap();
         tracing::debug!("Bytes read: {}", n);
 
-        let archived = rkyv::check_archived_root::<PinsIndexFile>(&buf[..n]).unwrap();
+        let archived = rkyv::access::<
+            crate::index::schema::ArchivedPinsIndexFile,
+            rkyv::rancor::Error,
+        >(&buf[..n])
+        .unwrap();
 
         assert_eq!(archived.version, 1);
         assert_eq!(archived.pinned.len(), 1);
-        assert!(archived.pinned.get("asset").unwrap());
+        assert!(*archived.pinned.get("asset").unwrap());
     }
 }

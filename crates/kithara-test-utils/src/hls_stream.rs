@@ -9,7 +9,7 @@ use std::{
 use aes::Aes128;
 use cbc::{
     Encryptor,
-    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+    cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::MediaInfo;
@@ -516,8 +516,8 @@ fn encrypt_aes128_cbc(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
     let mut buf = vec![0u8; padded_len];
     buf[..data.len()].copy_from_slice(data);
     let ciphertext = encryptor
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, data.len())
-        .expect("encrypt_padded_mut");
+        .encrypt_padded::<Pkcs7>(&mut buf, data.len())
+        .expect("encrypt_padded");
     ciphertext.to_vec()
 }
 

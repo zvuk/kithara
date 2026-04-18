@@ -9,7 +9,7 @@ use std::{
 use aes::Aes128;
 use cbc::{
     Encryptor,
-    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+    cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
@@ -40,8 +40,8 @@ fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8
     let mut buf = vec![0u8; padded_len];
     buf[..plaintext.len()].copy_from_slice(plaintext);
     let ct = encryptor
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-        .expect("encrypt_padded_mut failed");
+        .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
+        .expect("encrypt_padded failed");
     ct.to_vec()
 }
 
