@@ -8,7 +8,7 @@ rule:
         - kind: const_item
         - kind: static_item
     - not: { has: { kind: visibility_modifier } }
-    - not: { inside: { any: [kind: impl_item, kind: trait_item, kind: function_item, kind: foreign_mod_item, kind: block] } }
+    - not: { inside: { any: [{kind: impl_item}, {kind: trait_item}, {kind: function_item}, {kind: foreign_mod_item}, {kind: block}], stopBy: end } }
     - any:
         - follows:
             all:
