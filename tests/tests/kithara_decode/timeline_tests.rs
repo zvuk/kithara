@@ -99,11 +99,6 @@ mod hls_timeline {
 
     use crate::common::test_defaults::SawWav;
 
-    const D: SawWav = SawWav::DEFAULT;
-    const SEGMENT_COUNT: usize = 10;
-    const TOTAL_BYTES: usize = SEGMENT_COUNT * D.segment_size; // 2 MB
-
-    /// Verify that HLS stream produces correct `PcmMeta` with segment tracking.
     #[kithara::test(
         tokio,
         timeout(Duration::from_secs(10)),
@@ -111,16 +106,25 @@ mod hls_timeline {
         tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
     )]
     async fn test_hls_timeline_segment_tracking() {
-        // Generate WAV data served as HLS segments
-        let wav_data =
-            create_wav_exact_bytes(signal::Sawtooth, D.sample_rate, D.channels, TOTAL_BYTES);
+        const SEGMENT_COUNT: usize = 10;
+        const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size; // 2 MB
 
-        let segment_duration =
-            D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0);
+        // Generate WAV data served as HLS segments
+        let wav_data = create_wav_exact_bytes(
+            signal::Sawtooth,
+            SawWav::DEFAULT.sample_rate,
+            SawWav::DEFAULT.channels,
+            TOTAL_BYTES,
+        );
+
+        let segment_duration = SawWav::DEFAULT.segment_size as f64
+            / (f64::from(SawWav::DEFAULT.sample_rate)
+                * f64::from(SawWav::DEFAULT.channels)
+                * 2.0);
 
         let server = HlsTestServer::new(HlsTestServerConfig {
             segments_per_variant: SEGMENT_COUNT,
-            segment_size: D.segment_size,
+            segment_size: SawWav::DEFAULT.segment_size,
             segment_duration_secs: segment_duration,
             custom_data: Some(Arc::new(wav_data)),
             ..Default::default()
@@ -162,8 +166,8 @@ mod hls_timeline {
             while let Ok(Some(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
-                assert_eq!(meta.spec.sample_rate, D.sample_rate);
-                assert_eq!(meta.spec.channels, D.channels);
+                assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);
+                assert_eq!(meta.spec.channels, SawWav::DEFAULT.channels);
 
                 assert_eq!(
                     meta.frame_offset, prev_frame_end,

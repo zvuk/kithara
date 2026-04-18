@@ -42,16 +42,19 @@ struct TestCtx {
     queue: Arc<Queue>,
 }
 
-static TEST_CTX: OnceCell<TestCtx> = OnceCell::const_new();
-static INIT_OFFLINE: Once = Once::new();
+mod test_statics {
+    use super::*;
+    pub(super) static TEST_CTX: OnceCell<TestCtx> = OnceCell::const_new();
+    pub(super) static INIT_OFFLINE: Once = Once::new();
+}
 
 async fn shared_test_ctx() -> &'static TestCtx {
-    TEST_CTX
+    test_statics::TEST_CTX
         .get_or_init(|| async {
             // Claim the session singleton with OfflineBackend *before*
             // any PlayerImpl / Queue construction. Once.call_once
             // guarantees exactly one initialization per process.
-            INIT_OFFLINE.call_once(kithara_play::internal::init_offline_backend);
+            test_statics::INIT_OFFLINE.call_once(kithara_play::internal::init_offline_backend);
 
             let net = NetOptions {
                 insecure: true,

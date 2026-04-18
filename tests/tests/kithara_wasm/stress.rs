@@ -26,22 +26,23 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
-const EVENT_BUS_CAPACITY: usize = 4096;
-
-/// Guard: init must only run once per page.
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
-static FIXTURE_URL: OnceLock<String> = OnceLock::new();
-static FIXTURE_JITTER_URL: OnceLock<String> = OnceLock::new();
+mod test_statics {
+    use super::*;
+    /// Guard: init must only run once per page.
+    pub(super) static INITIALIZED: AtomicBool = AtomicBool::new(false);
+    pub(super) static FIXTURE_URL: OnceLock<String> = OnceLock::new();
+    pub(super) static FIXTURE_JITTER_URL: OnceLock<String> = OnceLock::new();
+}
 
 fn fixture_url() -> Url {
-    let url_str = FIXTURE_URL
+    let url_str = test_statics::FIXTURE_URL
         .get()
         .expect("fixture URL must be initialized in init()");
     url_str.parse().unwrap()
 }
 
 fn fixture_jitter_url() -> Url {
-    let url_str = FIXTURE_JITTER_URL
+    let url_str = test_statics::FIXTURE_JITTER_URL
         .get()
         .expect("jitter fixture URL must be initialized in init()");
     url_str.parse().unwrap()
@@ -76,7 +77,7 @@ impl Xorshift64 {
 /// Idempotent — safe to call from every test. All tests share one page
 /// in `wasm_bindgen_test`, so init must only run once.
 async fn init() {
-    if INITIALIZED.swap(true, Ordering::SeqCst) {
+    if test_statics::INITIALIZED.swap(true, Ordering::SeqCst) {
         return;
     }
     console_error_panic_hook::set_once();
@@ -108,8 +109,8 @@ async fn init() {
         )
         .await
         .expect("create WASM jitter HLS fixture");
-    let _ = FIXTURE_URL.set(fixture.master_url().to_string());
-    let _ = FIXTURE_JITTER_URL.set(jitter_fixture.master_url().to_string());
+    let _ = test_statics::FIXTURE_URL.set(fixture.master_url().to_string());
+    let _ = test_statics::FIXTURE_JITTER_URL.set(jitter_fixture.master_url().to_string());
     info!("WASM test environment initialized");
 }
 
@@ -119,6 +120,7 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
 }
 
 async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
+    const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
 
     let hls_config = HlsConfig::new(url)
