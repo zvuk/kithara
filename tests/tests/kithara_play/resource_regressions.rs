@@ -36,8 +36,18 @@ use crate::continuity::{
     CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
 };
 
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
+struct Consts;
+impl Consts {
+    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../../assets/test.mp3");
+    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+    const HLS_SEGMENT_COUNT: usize = 3;
+    const HLS_SEGMENT_SIZE: usize = 200_000;
+    const HLS_TOTAL_BYTES: usize = Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE;
+    const HLS_SAMPLE_RATE: f64 = 44_100.0;
+    const HLS_CHANNELS: f64 = 2.0;
+    /// Expected duration of test.mp3 (ffprobe: 187.102041s).
+    const EXPECTED_DURATION_SECS: f64 = 187.0;
+}
 
 fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
     let builder = HlsFixtureBuilder::new()
@@ -56,11 +66,11 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
         other => panic!("unsupported packaged single-variant codec: {other:?}"),
     }
 }
-const HLS_SEGMENT_COUNT: usize = 3;
-const HLS_SEGMENT_SIZE: usize = 200_000;
-const HLS_TOTAL_BYTES: usize = HLS_SEGMENT_COUNT * HLS_SEGMENT_SIZE;
-const HLS_SAMPLE_RATE: f64 = 44_100.0;
-const HLS_CHANNELS: f64 = 2.0;
+const Consts::HLS_SEGMENT_COUNT: usize = 3;
+const Consts::HLS_SEGMENT_SIZE: usize = 200_000;
+const Consts::HLS_TOTAL_BYTES: usize = Consts::HLS_SEGMENT_COUNT * Consts::HLS_SEGMENT_SIZE;
+const Consts::HLS_SAMPLE_RATE: f64 = 44_100.0;
+const Consts::HLS_CHANNELS: f64 = 2.0;
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -71,7 +81,7 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
+            .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
             .body(Body::empty())
             .unwrap();
     }
@@ -96,18 +106,18 @@ fn serve_mp3_with_range(req: Request) -> Response {
                     value.parse::<usize>().ok()
                 }
             })
-            .unwrap_or(TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(TEST_MP3_BYTES.len().saturating_sub(1));
+            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
+            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
 
-        if start <= end && start < TEST_MP3_BYTES.len() {
-            let chunk = &TEST_MP3_BYTES[start..=end];
+        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
+            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "audio/mpeg")
                 .header(header::CONTENT_LENGTH, chunk.len().to_string())
                 .header(
                     header::CONTENT_RANGE,
-                    format!("bytes {}-{}/{}", start, end, TEST_MP3_BYTES.len()),
+                    format!("bytes {}-{}/{}", start, end, Consts::TEST_MP3_BYTES.len()),
                 )
                 .body(Body::from(Bytes::from_static(chunk)))
                 .unwrap();
@@ -117,8 +127,8 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::CONTENT_LENGTH, TEST_MP3_BYTES.len().to_string())
-        .body(Body::from(Bytes::from_static(TEST_MP3_BYTES)))
+        .header(header::CONTENT_LENGTH, Consts::TEST_MP3_BYTES.len().to_string())
+        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
         .unwrap()
 }
 
@@ -197,7 +207,7 @@ async fn warm_hls_worker(url: &url::Url, store: StoreOptions, worker: AudioWorke
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
         audio.preload();
@@ -254,7 +264,7 @@ async fn warm_hls_worker_without_seek(
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
         audio.preload();
@@ -287,17 +297,17 @@ async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
 }
 
 async fn open_audio_hls_server() -> HlsTestServer {
-    let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
+    let segment_duration = Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
         custom_data: Some(Arc::new(create_wav_exact_bytes(
             signal::Sawtooth,
             44_100u32,
             2u16,
-            HLS_TOTAL_BYTES,
+            Consts::HLS_TOTAL_BYTES,
         ))),
         segment_duration_secs: segment_duration,
-        segment_size: HLS_SEGMENT_SIZE,
-        segments_per_variant: HLS_SEGMENT_COUNT,
+        segment_size: Consts::HLS_SEGMENT_SIZE,
+        segments_per_variant: Consts::HLS_SEGMENT_COUNT,
         ..Default::default()
     })
     .await
@@ -326,7 +336,7 @@ async fn open_packaged_hls_audio(
 }
 
 async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
@@ -348,11 +358,11 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
 }
 
 async fn read_some(resource: &mut Resource, stage: &str) -> usize {
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
-        timeout(READ_TIMEOUT, resource.preload())
+        timeout(Consts::READ_TIMEOUT, resource.preload())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"));
         let read = resource.read(&mut buf);
@@ -789,7 +799,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
 
     let decode_audio = open_packaged_hls_audio(&url, store, codec).await;
     let mut resource = resource_from_reader(decode_audio);
-    timeout(READ_TIMEOUT, resource.preload())
+    timeout(Consts::READ_TIMEOUT, resource.preload())
         .await
         .expect("packaged HLS preload must complete");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
@@ -947,7 +957,7 @@ async fn stress_offline_crossfade_no_gaps() {
                 .await
                 .expect("HLS audio");
             let mut r = resource_from_reader(audio);
-            timeout(READ_TIMEOUT, r.preload())
+            timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload");
             r
@@ -1053,7 +1063,7 @@ async fn stress_offline_crossfade_no_gaps() {
 }
 
 /// Expected duration of test.mp3 (ffprobe: 187.102041s).
-const EXPECTED_DURATION_SECS: f64 = 187.0;
+const Consts::EXPECTED_DURATION_SECS: f64 = 187.0;
 
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
@@ -1083,15 +1093,15 @@ async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - EXPECTED_DURATION_SECS).abs() < 2.0,
-        "path={path}: expected ~{EXPECTED_DURATION_SECS}s, got {dur_secs:.1}s"
+        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        "path={path}: expected ~{}s", Consts::EXPECTED_DURATION_SECS, got {dur_secs:.1}s"
     );
 
     // Decode real PCM data — at least 2 seconds.
     let (samples, position) = {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
-        let deadline = Instant::now() + READ_TIMEOUT;
+        let deadline = Instant::now() + Consts::READ_TIMEOUT;
         loop {
             let n = resource.read(&mut buf);
             if n > 0 {
