@@ -244,7 +244,7 @@ hex = "0.4"
 # crypto/obfuscation
 crabtime = "1.1.4"
 obfstr = "0.4.4"
-rand = "0.10.0"
+rand = "0.10.1"
 
 # misc
 glob = "0.3"
