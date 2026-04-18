@@ -103,36 +103,9 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
 // wasm postbuild
 // ---------------------------------------------------------------------------
 
-// --- HTML transformations ---
-
-static RE_INTEGRITY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#" integrity="[^"]*""#).expect("valid regex"));
-static RE_CROSSORIGIN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#" crossorigin="[^"]*""#).expect("valid regex"));
-static RE_MODULEPRELOAD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"<link rel="modulepreload"[^>]*>"#).expect("valid regex"));
-static RE_PRELOAD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"<link rel="preload"[^>]*>"#).expect("valid regex"));
-
-fn strip_html_attrs(content: &str) -> String {
-    let s = RE_INTEGRITY.replace_all(content, "");
-    let s = RE_CROSSORIGIN.replace_all(&s, "");
-    let s = RE_MODULEPRELOAD.replace_all(&s, "");
-    RE_PRELOAD.replace_all(&s, "").into_owned()
-}
-
-fn rewrite_paths(content: &str) -> String {
-    content
-        .replace("from '/kithara-wasm.js'", "from './kithara-wasm.js'")
-        .replace(
-            "module_or_path: '/kithara-wasm_bg.wasm'",
-            "module_or_path: './kithara-wasm_bg.wasm'",
-        )
-}
-
-// --- JS transformations ---
-
-const TEXT_DECODER_POLYFILL: &str = "\
+struct WasmPatcher;
+impl WasmPatcher {
+    const TEXT_DECODER_POLYFILL: &'static str = "\
 if(typeof TextDecoder===\"undefined\"){\
 globalThis.TextDecoder=class{constructor(){}\
 decode(b){if(!b||!b.length)return\"\";let r=\"\";\
@@ -143,14 +116,7 @@ for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a}\
 encodeInto(s,d){const e=this.encode(s);d.set(e);\
 return{read:s.length,written:e.length}}}}\n";
 
-fn apply_text_decoder_polyfill(content: &str) -> String {
-    content.replace(
-        "let cachedTextDecoder",
-        &format!("{TEXT_DECODER_POLYFILL}let cachedTextDecoder"),
-    )
-}
-
-const BOOT_LOCK_FN: &str = "\
+    const BOOT_LOCK_FN: &'static str = "\
 function __wstLockedInit(s,mod,mem,m){\
 const bl=(m&&m.__wst_boot_lock_ptr)||0;\
 if(bl>0){\
@@ -161,83 +127,7 @@ finally{if(bl>0){\
 const li2=new Int32Array(mem.buffer),lx2=bl>>>2;\
 Atomics.store(li2,lx2,0);Atomics.notify(li2,lx2);}}}";
 
-fn apply_inline_patches(content: &str) -> String {
-    content
-        // 1. Disable cleanup handler (8-byte leak per thread).
-        .replace(
-            "__cleanup_handler(exitStatePtr);",
-            "/* cleanup disabled: 8-byte leak per thread */",
-        )
-        // 2. Fix double-decrement bug in Worker error handler.
-        .replace(
-            "throw err;",
-            "if (typeof close === \"function\") { close(); }",
-        )
-        // 3. Inject boot lock function.
-        .replace(
-            "let __wstExitStatePtr = 0;",
-            &format!("let __wstExitStatePtr = 0; {BOOT_LOCK_FN}"),
-        )
-        // 4. Replace initSync with locked version.
-        .replace(
-            "shim.initSync({ module, memory, thread_stack_size: 1048576 });",
-            "__wstLockedInit(shim, module, memory, meta);",
-        )
-        // 5. Pass boot lock pointer to Workers.
-        .replace(
-            "__wst_parent_managed: true",
-            "__wst_parent_managed: true, __wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)",
-        )
-}
-
-// --- Player class generation ---
-
-static RE_PLAYER_CLASS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^export class Player\b").expect("valid regex"));
-static RE_PLAYER_NEW: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^export function player_new\(").expect("valid regex"));
-static RE_PLAYER_FN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^export function (player_[a-z_]+)\(([^)]*)\)").expect("valid regex")
-});
-
-fn generate_player_class(js: &str) -> Option<String> {
-    if RE_PLAYER_CLASS.is_match(js) || !RE_PLAYER_NEW.is_match(js) {
-        return None;
-    }
-
-    let mut methods = Vec::new();
-    for cap in RE_PLAYER_FN.captures_iter(js) {
-        let fname = &cap[1];
-        let params = &cap[2];
-        let Some(method) = fname.strip_prefix("player_") else {
-            continue;
-        };
-        if method == "new" {
-            methods
-                .push("    constructor(readyPromise) { this._ready = readyPromise; }".to_owned());
-            methods.push(
-                "    static async create() \
-                 { const p = player_new(); const inst = new Player(p); await p; return inst; }"
-                    .to_owned(),
-            );
-        } else if params.is_empty() {
-            methods.push(format!("    {method}() {{ return {fname}(); }}"));
-        } else {
-            methods.push(format!(
-                "    {method}({params}) {{ return {fname}({params}); }}"
-            ));
-        }
-    }
-    methods.sort();
-    Some(format!(
-        "export class Player {{\n{}\n}}",
-        methods.join("\n")
-    ))
-}
-
-// --- checkRuntime JS ---
-
-const CHECK_RUNTIME_JS: &str = r#"
+    const CHECK_RUNTIME_JS: &'static str = r#"
 
 // --- Auto-generated by xtask wasm postbuild ---
 
@@ -280,6 +170,123 @@ export function checkRuntime() {
     };
 }
 "#;
+}
+
+mod wasm_patcher_regex {
+    use super::*;
+    pub(super) static RE_INTEGRITY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#" integrity="[^"]*""#).expect("valid regex"));
+    pub(super) static RE_CROSSORIGIN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#" crossorigin="[^"]*""#).expect("valid regex"));
+    pub(super) static RE_MODULEPRELOAD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"<link rel="modulepreload"[^>]*>"#).expect("valid regex"));
+    pub(super) static RE_PRELOAD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"<link rel="preload"[^>]*>"#).expect("valid regex"));
+    pub(super) static RE_PLAYER_CLASS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^export class Player\b").expect("valid regex"));
+    pub(super) static RE_PLAYER_NEW: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^export function player_new\(").expect("valid regex"));
+    pub(super) static RE_PLAYER_FN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?m)^export function (player_[a-z_]+)\(([^)]*)\)").expect("valid regex")
+    });
+}
+
+// --- HTML transformations ---
+
+fn strip_html_attrs(content: &str) -> String {
+    let s = wasm_patcher_regex::RE_INTEGRITY.replace_all(content, "");
+    let s = wasm_patcher_regex::RE_CROSSORIGIN.replace_all(&s, "");
+    let s = wasm_patcher_regex::RE_MODULEPRELOAD.replace_all(&s, "");
+    wasm_patcher_regex::RE_PRELOAD
+        .replace_all(&s, "")
+        .into_owned()
+}
+
+fn rewrite_paths(content: &str) -> String {
+    content
+        .replace("from '/kithara-wasm.js'", "from './kithara-wasm.js'")
+        .replace(
+            "module_or_path: '/kithara-wasm_bg.wasm'",
+            "module_or_path: './kithara-wasm_bg.wasm'",
+        )
+}
+
+// --- JS transformations ---
+
+fn apply_text_decoder_polyfill(content: &str) -> String {
+    content.replace(
+        "let cachedTextDecoder",
+        &format!("{}let cachedTextDecoder", WasmPatcher::TEXT_DECODER_POLYFILL),
+    )
+}
+
+fn apply_inline_patches(content: &str) -> String {
+    content
+        // 1. Disable cleanup handler (8-byte leak per thread).
+        .replace(
+            "__cleanup_handler(exitStatePtr);",
+            "/* cleanup disabled: 8-byte leak per thread */",
+        )
+        // 2. Fix double-decrement bug in Worker error handler.
+        .replace(
+            "throw err;",
+            "if (typeof close === \"function\") { close(); }",
+        )
+        // 3. Inject boot lock function.
+        .replace(
+            "let __wstExitStatePtr = 0;",
+            &format!("let __wstExitStatePtr = 0; {}", WasmPatcher::BOOT_LOCK_FN),
+        )
+        // 4. Replace initSync with locked version.
+        .replace(
+            "shim.initSync({ module, memory, thread_stack_size: 1048576 });",
+            "__wstLockedInit(shim, module, memory, meta);",
+        )
+        // 5. Pass boot lock pointer to Workers.
+        .replace(
+            "__wst_parent_managed: true",
+            "__wst_parent_managed: true, __wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)",
+        )
+}
+
+// --- Player class generation ---
+
+fn generate_player_class(js: &str) -> Option<String> {
+    if wasm_patcher_regex::RE_PLAYER_CLASS.is_match(js)
+        || !wasm_patcher_regex::RE_PLAYER_NEW.is_match(js)
+    {
+        return None;
+    }
+
+    let mut methods = Vec::new();
+    for cap in wasm_patcher_regex::RE_PLAYER_FN.captures_iter(js) {
+        let fname = &cap[1];
+        let params = &cap[2];
+        let Some(method) = fname.strip_prefix("player_") else {
+            continue;
+        };
+        if method == "new" {
+            methods
+                .push("    constructor(readyPromise) { this._ready = readyPromise; }".to_owned());
+            methods.push(
+                "    static async create() \
+                 { const p = player_new(); const inst = new Player(p); await p; return inst; }"
+                    .to_owned(),
+            );
+        } else if params.is_empty() {
+            methods.push(format!("    {method}() {{ return {fname}(); }}"));
+        } else {
+            methods.push(format!(
+                "    {method}({params}) {{ return {fname}({params}); }}"
+            ));
+        }
+    }
+    methods.sort();
+    Some(format!(
+        "export class Player {{\n{}\n}}",
+        methods.join("\n")
+    ))
+}
 
 // --- postbuild orchestrator ---
 
@@ -299,7 +306,7 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     if js.exists() {
         let content = fs::read_to_string(&js).context("read kithara-wasm.js")?;
         let content = apply_text_decoder_polyfill(&content);
-        let mut content = content + CHECK_RUNTIME_JS;
+        let mut content = content + WasmPatcher::CHECK_RUNTIME_JS;
         if let Some(class) = generate_player_class(&content) {
             content.push('\n');
             content.push_str(&class);

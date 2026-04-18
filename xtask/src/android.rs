@@ -24,12 +24,6 @@ pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
     }
 }
 
-const ANDROID_API_LEVEL: &str = "26";
-const RUST_TARGETS: &[(&str, &str)] = &[
-    ("aarch64-linux-android", "arm64-v8a"),
-    ("x86_64-linux-android", "x86_64"),
-];
-
 fn recreate_dir(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -39,6 +33,12 @@ fn recreate_dir(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
+    const ANDROID_API_LEVEL: &str = "26";
+    const RUST_TARGETS: &[(&str, &str)] = &[
+        ("aarch64-linux-android", "arm64-v8a"),
+        ("x86_64-linux-android", "x86_64"),
+    ];
+
     // 1. Check prerequisites.
     check_tool("cargo", &["ndk", "--help"], "cargo install cargo-ndk")?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;

@@ -10,41 +10,44 @@ use regex::Regex;
 
 use crate::util::walk_rs_files;
 
-/// Canonical types that must have exactly one definition across `crates/`.
-const CANONICAL_TYPES: &[(&str, &str)] = &[
-    ("enum", "AudioCodec"),
-    ("enum", "ContainerFormat"),
-    ("struct", "MediaInfo"),
-];
+struct ArchChecker;
+impl ArchChecker {
+    /// Canonical types that must have exactly one definition across `crates/`.
+    const CANONICAL_TYPES: &'static [(&'static str, &'static str)] = &[
+        ("enum", "AudioCodec"),
+        ("enum", "ContainerFormat"),
+        ("struct", "MediaInfo"),
+    ];
 
-/// Base crates that must NOT depend on higher-level crates.
-const BASE_CRATES: &[&str] = &["kithara-platform", "kithara-abr", "kithara-drm"];
+    /// Base crates that must NOT depend on higher-level crates.
+    const BASE_CRATES: &'static [&'static str] = &["kithara-platform", "kithara-abr", "kithara-drm"];
 
-/// Higher-level crates that base crates must not reach.
-const HIGH_CRATES: &[&str] = &[
-    "kithara-hls",
-    "kithara-file",
-    "kithara-audio",
-    "kithara-wasm",
-    "kithara-decode",
-];
+    /// Higher-level crates that base crates must not reach.
+    const HIGH_CRATES: &'static [&'static str] = &[
+        "kithara-hls",
+        "kithara-file",
+        "kithara-audio",
+        "kithara-wasm",
+        "kithara-decode",
+    ];
 
-/// Mid-level crates that must NOT depend on the facade crate.
-const MID_CRATES: &[&str] = &[
-    "kithara-storage",
-    "kithara-bufpool",
-    "kithara-assets",
-    "kithara-net",
-    "kithara-stream",
-    "kithara-decode",
-    "kithara-file",
-    "kithara-hls",
-    "kithara-audio",
-    "kithara-events",
-];
+    /// Mid-level crates that must NOT depend on the facade crate.
+    const MID_CRATES: &'static [&'static str] = &[
+        "kithara-storage",
+        "kithara-bufpool",
+        "kithara-assets",
+        "kithara-net",
+        "kithara-stream",
+        "kithara-decode",
+        "kithara-file",
+        "kithara-hls",
+        "kithara-audio",
+        "kithara-events",
+    ];
 
-/// The facade crate name.
-const FACADE_CRATE: &str = "kithara";
+    /// The facade crate name.
+    const FACADE_CRATE: &'static str = "kithara";
+}
 
 pub(crate) fn run() -> Result<()> {
     let metadata = MetadataCommand::new().exec()?;
@@ -71,7 +74,7 @@ fn check_canonical_types(workspace_root: &Path) -> Result<u32> {
     let rs_files = walk_rs_files(&crates_dir)?;
     let mut errors = 0u32;
 
-    for &(kind, name) in CANONICAL_TYPES {
+    for &(kind, name) in ArchChecker::CANONICAL_TYPES {
         let pattern = Regex::new(&format!(r"\bpub\s+{kind}\s+{name}\b"))?;
         let mut matches: Vec<(String, usize, String)> = Vec::new();
 
@@ -208,9 +211,9 @@ fn transitive_deps(pkg_name: &str, metadata: &cargo_metadata::Metadata) -> HashS
 /// Check 3: Base crates must not depend (directly or transitively) on high-level crates.
 fn check_dependency_direction(metadata: &cargo_metadata::Metadata) -> u32 {
     let mut errors = 0u32;
-    let high_set: HashSet<&str> = HIGH_CRATES.iter().copied().collect();
+    let high_set: HashSet<&str> = ArchChecker::HIGH_CRATES.iter().copied().collect();
 
-    for &base in BASE_CRATES {
+    for &base in ArchChecker::BASE_CRATES {
         let all_deps = transitive_deps(base, metadata);
         for dep_name in &all_deps {
             if high_set.contains(dep_name.as_str()) {
@@ -227,10 +230,13 @@ fn check_dependency_direction(metadata: &cargo_metadata::Metadata) -> u32 {
 fn check_facade_boundary(metadata: &cargo_metadata::Metadata) -> u32 {
     let mut errors = 0u32;
 
-    for &mid in MID_CRATES {
+    for &mid in ArchChecker::MID_CRATES {
         let all_deps = transitive_deps(mid, metadata);
-        if all_deps.contains(FACADE_CRATE) {
-            println!("ERROR: crate '{mid}' depends on facade crate '{FACADE_CRATE}'");
+        if all_deps.contains(ArchChecker::FACADE_CRATE) {
+            println!(
+                "ERROR: crate '{mid}' depends on facade crate '{facade}'",
+                facade = ArchChecker::FACADE_CRATE
+            );
             errors += 1;
         }
     }
@@ -277,9 +283,9 @@ mod tests {
     #[test]
     fn transitive_deps_platform_does_not_include_high_crates() {
         let metadata = MetadataCommand::new().exec().expect("cargo metadata");
-        let high_set: HashSet<&str> = HIGH_CRATES.iter().copied().collect();
+        let high_set: HashSet<&str> = ArchChecker::HIGH_CRATES.iter().copied().collect();
 
-        for &base in BASE_CRATES {
+        for &base in ArchChecker::BASE_CRATES {
             let deps = transitive_deps(base, &metadata);
             for dep in &deps {
                 assert!(
@@ -294,11 +300,11 @@ mod tests {
     fn transitive_deps_mid_crates_do_not_include_facade() {
         let metadata = MetadataCommand::new().exec().expect("cargo metadata");
 
-        for &mid in MID_CRATES {
+        for &mid in ArchChecker::MID_CRATES {
             let deps = transitive_deps(mid, &metadata);
             assert!(
-                !deps.contains(FACADE_CRATE),
-                "mid crate '{mid}' transitively depends on facade crate '{FACADE_CRATE}'"
+                !deps.contains(ArchChecker::FACADE_CRATE),
+                "mid crate '{mid}' transitively depends on facade crate '{ArchChecker::FACADE_CRATE}'"
             );
         }
     }
