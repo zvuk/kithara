@@ -14,9 +14,6 @@ use firewheel::{
     processor::FirewheelProcessor,
 };
 
-/// Number of stereo output channels.
-const STEREO_CHANNELS: usize = 2;
-
 /// Minimal audio backend that renders offline (no real device).
 pub struct OfflineBackend {
     processor: Option<FirewheelProcessor<Self>>,
@@ -31,17 +28,17 @@ pub struct OfflineConfig {
     pub block_frames: u32,
 }
 
-/// Default sample rate for offline rendering.
-const DEFAULT_OFFLINE_SAMPLE_RATE: u32 = 44100;
-
-/// Default audio block size in frames.
-const DEFAULT_OFFLINE_BLOCK_FRAMES: u32 = 512;
-
 impl Default for OfflineConfig {
     fn default() -> Self {
+        /// Default sample rate for offline rendering.
+        const DEFAULT_SAMPLE_RATE: u32 = 44100;
+
+        /// Default audio block size in frames.
+        const DEFAULT_BLOCK_FRAMES: u32 = 512;
+
         Self {
-            sample_rate: DEFAULT_OFFLINE_SAMPLE_RATE,
-            block_frames: DEFAULT_OFFLINE_BLOCK_FRAMES,
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            block_frames: DEFAULT_BLOCK_FRAMES,
         }
     }
 }
@@ -63,7 +60,7 @@ impl AudioBackend for OfflineBackend {
     fn start_stream(config: Self::Config) -> Result<(Self, StreamInfo), Self::StartStreamError> {
         let sr = NonZeroU32::new(config.sample_rate).expect("non-zero sample rate");
         let block = NonZeroU32::new(config.block_frames).expect("non-zero block frames");
-        let declick = NonZeroU32::new(DEFAULT_OFFLINE_BLOCK_FRAMES).expect("non-zero");
+        let declick = NonZeroU32::new(OfflineConfig::default().block_frames).expect("non-zero");
         let stream_info = StreamInfo {
             sample_rate: sr,
             sample_rate_recip: 1.0 / f64::from(config.sample_rate),
@@ -71,7 +68,7 @@ impl AudioBackend for OfflineBackend {
             max_block_frames: block,
             num_stream_in_channels: 0,
             #[expect(clippy::cast_possible_truncation)]
-            num_stream_out_channels: STEREO_CHANNELS as u32,
+            num_stream_out_channels: OfflineBackend::STEREO_CHANNELS as u32,
             input_to_output_latency_seconds: 0.0,
             declick_frames: declick,
             output_device_id: String::from("offline"),
@@ -99,12 +96,15 @@ impl AudioBackend for OfflineBackend {
 }
 
 impl OfflineBackend {
+    /// Number of stereo output channels.
+    const STEREO_CHANNELS: usize = 2;
+
     /// Render `frames` of audio. Calls `process_interleaved` on the
     /// firewheel processor, driving all audio nodes in the graph.
     ///
     /// Returns the rendered stereo output buffer (interleaved LRLR).
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
-        let channels = STEREO_CHANNELS;
+        let channels = Self::STEREO_CHANNELS;
         let total_samples = frames * channels;
         let input = vec![0.0f32; 0]; // no input channels
         let mut output = vec![0.0f32; total_samples];

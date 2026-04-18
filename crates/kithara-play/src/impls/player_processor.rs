@@ -36,18 +36,6 @@ use super::{
 };
 use crate::traits::dj::crossfade::CrossfadeCurve;
 
-/// Maximum number of concurrent tracks per player node.
-const MAX_TRACKS: usize = 4;
-
-/// Number of scratch buffers for stereo processing.
-const SCRATCH_BUF_COUNT: usize = 4;
-
-/// Minimum stereo channel count for output processing.
-const MIN_STEREO: usize = 2;
-
-/// Minimum position (seconds) before seeking is allowed on fade-in.
-const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
-
 /// Commands sent from the main thread to the processor.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -86,13 +74,25 @@ pub(crate) struct PlayerNodeProcessor {
     cmd_rx: HeapCons<PlayerCmd>,
     crossfade: CrossfadeSettings,
     sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; SCRATCH_BUF_COUNT],
+    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     tracks_transitions: VecDeque<TrackTransition>,
 }
 
 impl PlayerNodeProcessor {
+    /// Maximum number of concurrent tracks per player node.
+    const MAX_TRACKS: usize = 4;
+
+    /// Number of scratch buffers for stereo processing.
+    const SCRATCH_BUF_COUNT: usize = 4;
+
+    /// Minimum stereo channel count for output processing.
+    const MIN_STEREO: usize = 2;
+
+    /// Minimum position (seconds) before seeking is allowed on fade-in.
+    const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+
     /// Create a new processor with the given command receiver and shared state.
     pub(crate) fn new(
         cmd_rx: HeapCons<PlayerCmd>,
@@ -108,8 +108,8 @@ impl PlayerNodeProcessor {
             sample_rate,
             scratch_bufs,
             shared_state,
-            tracks: ArenaRegistry::with_capacity(MAX_TRACKS),
-            tracks_transitions: VecDeque::with_capacity(MAX_TRACKS),
+            tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
+            tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
     }
 
@@ -241,7 +241,7 @@ impl PlayerNodeProcessor {
                         // Seeking to 0 on a freshly loaded track triggers
                         // set_seek_epoch → clear() which wipes the segment index
                         // and races with in-flight ABR downloads (WASM HLS bug).
-                        if track.position() > FADE_IN_SEEK_THRESHOLD {
+                        if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
                         track.fade_in();
@@ -272,7 +272,7 @@ impl PlayerNodeProcessor {
     /// same state (e.g. all Playing), eviction order is non-deterministic
     /// because `HashMap` iteration order is undefined.
     fn evict_tracks_if_needed(&mut self) {
-        while self.tracks.len() >= MAX_TRACKS {
+        while self.tracks.len() >= Self::MAX_TRACKS {
             let eviction_candidate = self
                 .tracks
                 .iter_keys()
@@ -336,14 +336,14 @@ impl PlayerNodeProcessor {
 
     /// Clean up finished tracks.
     ///
-    /// Uses a stack-allocated array instead of `Vec` since `MAX_TRACKS` is 4,
+    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
     /// avoiding heap allocation on every `process()` call.
     fn cleanup_finished_tracks(&mut self) {
-        let mut finished_indices: [Option<Index>; MAX_TRACKS] = [None; MAX_TRACKS];
+        let mut finished_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
         let mut count = 0;
 
         for (idx, track) in self.tracks.iter() {
-            if track.state() == TrackState::Finished && count < MAX_TRACKS {
+            if track.state() == TrackState::Finished && count < Self::MAX_TRACKS {
                 finished_indices[count] = Some(idx);
                 count += 1;
             }
@@ -380,7 +380,7 @@ impl PlayerNodeProcessor {
     fn render_audio(&mut self, buffers: &mut ProcBuffers, frames: usize, is_playing: bool) -> bool {
         let mut playback_started = false;
 
-        if buffers.outputs.len() < MIN_STEREO {
+        if buffers.outputs.len() < Self::MIN_STEREO {
             return false;
         }
 
@@ -399,7 +399,7 @@ impl PlayerNodeProcessor {
         }
 
         // Split into read_bufs and mix_bufs
-        let (left, right) = self.scratch_bufs.split_at_mut(MIN_STEREO);
+        let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
         let (read_buf0, read_buf1) = left.split_at_mut(1);
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
@@ -435,17 +435,17 @@ impl PlayerNodeProcessor {
     }
 }
 
-/// Eviction priority: preloading tracks are evicted before active ones.
-const EVICT_PRELOADING: u8 = 2;
-/// Eviction priority: paused tracks are evicted after preloading.
-const EVICT_PAUSED: u8 = 3;
-/// Eviction priority: fading-in tracks are kept longer.
-const EVICT_FADING_IN: u8 = 4;
-/// Eviction priority: playing tracks are evicted last.
-const EVICT_PLAYING: u8 = 5;
-
 /// Returns eviction priority for a track state (lower = evicted first).
 fn eviction_priority(state: TrackState) -> u8 {
+    /// Eviction priority: preloading tracks are evicted before active ones.
+    const EVICT_PRELOADING: u8 = 2;
+    /// Eviction priority: paused tracks are evicted after preloading.
+    const EVICT_PAUSED: u8 = 3;
+    /// Eviction priority: fading-in tracks are kept longer.
+    const EVICT_FADING_IN: u8 = 4;
+    /// Eviction priority: playing tracks are evicted last.
+    const EVICT_PLAYING: u8 = 5;
+
     match state {
         TrackState::Finished => 0,
         TrackState::FadingOut => 1,

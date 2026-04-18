@@ -42,29 +42,6 @@ use crate::{
     types::{SessionDuckingMode, SlotId},
 };
 
-/// Default sample rate hint for the audio session.
-const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
-/// Capacity of the session command ring buffer.
-const SESSION_CMD_RINGBUF_CAPACITY: usize = 64;
-
-/// Fallback park timeout when no commands arrive (milliseconds).
-/// The engine thread parks and wakes instantly on command push via `unpark()`.
-/// This timeout is a safety net for spurious wakeups and periodic housekeeping.
-const ENGINE_PARK_TIMEOUT_MS: u64 = 50;
-
-/// Back-off sleep when the command ring buffer is full (milliseconds).
-const CMD_PUSH_BACKOFF_MS: u64 = 1;
-
-/// Gain applied during soft ducking.
-const DUCKING_GAIN_SOFT: f32 = 0.4;
-
-/// Gain applied during hard ducking.
-const DUCKING_GAIN_HARD: f32 = 0.2;
-
-/// Capacity of the player command ring buffer within a slot.
-const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
-
 pub(crate) type PlayerId = u64;
 
 /// Function pointer that starts a firewheel audio stream with the given
@@ -130,12 +107,18 @@ struct SessionState<B: AudioBackend> {
 }
 
 impl<B: AudioBackend> SessionState<B> {
+    /// Default sample rate hint for the audio session.
+    const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+
+    /// Capacity of the session command ring buffer.
+    const CMD_RINGBUF_CAPACITY: usize = 64;
+
     fn new(start_stream_fn: StartStreamFn<B>) -> Self {
         Self {
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
-            sample_rate_hint: DEFAULT_SAMPLE_RATE,
+            sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
@@ -220,6 +203,12 @@ pub(crate) struct SessionClient {
 }
 
 impl SessionClient {
+    /// Back-off sleep when the command ring buffer is full (milliseconds).
+    const CMD_PUSH_BACKOFF_MS: u64 = 1;
+
+    /// Capacity of the player command ring buffer within a slot.
+    const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
+
     #[cfg(not(target_arch = "wasm32"))]
     fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
         let mut pending = msg;
@@ -231,7 +220,7 @@ impl SessionClient {
                 }
                 Err(returned) => {
                     pending = returned;
-                    thread_sleep(Duration::from_millis(CMD_PUSH_BACKOFF_MS));
+                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
                 }
             }
         }
@@ -268,7 +257,7 @@ impl SessionClient {
                 Ok(run_cmd(state, cmd))
             })
         } else {
-            let guard = WORKER_CMD_TX.lock_sync();
+            let guard = WasmWorkerBridge::TX.lock_sync();
             let Some(ref tx) = *guard else {
                 return Err(PlayError::Internal("worker channel not initialised".into()));
             };
@@ -421,6 +410,11 @@ impl SessionClient {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn engine_thread<B: AudioBackend>(mut cmd_rx: HeapCons<CmdMsg>, start_stream_fn: StartStreamFn<B>) {
+    /// Fallback park timeout when no commands arrive (milliseconds).
+    /// The engine thread parks and wakes instantly on command push via `unpark()`.
+    /// This timeout is a safety net for spurious wakeups and periodic housekeeping.
+    const ENGINE_PARK_TIMEOUT_MS: u64 = 50;
+
     let mut state = SessionState::<B>::new(start_stream_fn);
     loop {
         let mut processed = false;
@@ -441,7 +435,7 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     thread_name: &'static str,
     start_stream_fn: StartStreamFn<B>,
 ) -> Arc<SessionClient> {
-    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
+    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SessionState::<B>::CMD_RINGBUF_CAPACITY).split();
     let handle = spawn_named(thread_name, move || {
         engine_thread::<B>(cmd_rx, start_stream_fn);
     });
@@ -452,15 +446,14 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     })
 }
 
-/// Singleton session client shared across the process. First caller
-/// wins — either `session_client()` (production, spawns cpal) or
-/// [`try_init_offline_session`] (tests, spawns offline).
-#[cfg(not(target_arch = "wasm32"))]
-static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
-
 pub(crate) fn session_client() -> Arc<SessionClient> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        /// Singleton session client shared across the process. First caller
+        /// wins — either `session_client()` (production, spawns cpal) or
+        /// [`try_init_offline_session`] (tests, spawns offline).
+        static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
+
         SESSION_CLIENT
             .get_or_init(|| {
                 spawn_session_client::<firewheel::cpal::CpalBackend>(
@@ -480,7 +473,7 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
             }
 
             // If the remote channel exists, we are on a Worker thread.
-            let is_local = WORKER_CMD_TX.lock_sync().is_none();
+            let is_local = wasm_worker_bridge::TX.lock_sync().is_none();
 
             if is_local {
                 #[cfg(any(test, feature = "test-utils"))]
@@ -537,17 +530,20 @@ thread_local! {
     static WASM_USE_OFFLINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Sender half of the Worker → main-thread session channel.
-///
-/// Stored in a global so that Workers can clone it from `session_client()`.
 #[cfg(target_arch = "wasm32")]
-static WORKER_CMD_TX: LazyLock<Mutex<Option<mpsc::Sender<CmdMsg>>>> =
-    LazyLock::new(|| Mutex::new(None));
+mod wasm_worker_bridge {
+    use super::*;
 
-/// Receiver half (polled on main thread in `tick_and_poll_remote`).
-#[cfg(target_arch = "wasm32")]
-static WORKER_CMD_RX: LazyLock<Mutex<Option<mpsc::Receiver<CmdMsg>>>> =
-    LazyLock::new(|| Mutex::new(None));
+    /// Sender half of the Worker → main-thread session channel.
+    ///
+    /// Stored in a global so that Workers can clone it from `session_client()`.
+    pub(super) static TX: LazyLock<Mutex<Option<mpsc::Sender<CmdMsg>>>> =
+        LazyLock::new(|| Mutex::new(None));
+
+    /// Receiver half (polled on main thread in `tick_and_poll_remote`).
+    pub(super) static RX: LazyLock<Mutex<Option<mpsc::Receiver<CmdMsg>>>> =
+        LazyLock::new(|| Mutex::new(None));
+}
 
 /// Initialise the Worker ↔ main-thread session channel.
 ///
@@ -555,8 +551,8 @@ static WORKER_CMD_RX: LazyLock<Mutex<Option<mpsc::Receiver<CmdMsg>>>> =
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn init_worker_channel() {
     let (tx, rx) = mpsc::channel();
-    *WORKER_CMD_TX.lock_sync() = Some(tx);
-    *WORKER_CMD_RX.lock_sync() = Some(rx);
+    *wasm_worker_bridge::TX.lock_sync() = Some(tx);
+    *wasm_worker_bridge::RX.lock_sync() = Some(rx);
 }
 
 /// Poll pending session commands from Workers and run graph tick.
@@ -564,6 +560,9 @@ pub(crate) fn init_worker_channel() {
 /// Called from the main thread's `requestAnimationFrame` loop.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn tick_and_poll_remote() {
+    /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
+    const OFFLINE_BLOCK_FRAMES: usize = 512;
+
     #[cfg(any(test, feature = "test-utils"))]
     if WASM_USE_OFFLINE.with(std::cell::Cell::get) {
         WASM_OFFLINE_SESSION_STATE.with(|state_cell| {
@@ -604,7 +603,8 @@ pub(crate) fn tick_and_poll_remote() {
         };
 
         // 1. Drain remote commands from Workers.
-        let rx_guard = WORKER_CMD_RX.lock_sync();
+        let rx_guard = wasm_worker_bridge::RX.lock_sync();
+
         if let Some(ref rx) = *rx_guard {
             while let Ok(msg) = rx.try_recv() {
                 let reply = run_cmd(state, msg.cmd);
@@ -706,6 +706,12 @@ pub(crate) fn warm_up_audio() {
 }
 
 fn ducking_gain(mode: SessionDuckingMode) -> f32 {
+    /// Gain applied during soft ducking.
+    const DUCKING_GAIN_SOFT: f32 = 0.4;
+
+    /// Gain applied during hard ducking.
+    const DUCKING_GAIN_HARD: f32 = 0.2;
+
     match mode {
         SessionDuckingMode::Off => 1.0,
         SessionDuckingMode::Soft => DUCKING_GAIN_SOFT,
@@ -836,20 +842,14 @@ fn start_stream_web_audio(
 
 // ─── offline backend (test-only) ─────────────────────────────────────
 
-/// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
-#[cfg(any(test, feature = "test-utils"))]
-const OFFLINE_BLOCK_FRAMES: usize = 512;
-
-/// Offline engine-thread park interval — ~one block at 44.1kHz so the
-/// firewheel graph is driven at close-to-realtime cadence.
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
-const OFFLINE_PARK_MS: u64 = 10;
-
 #[cfg(any(test, feature = "test-utils"))]
 fn start_stream_offline(
     ctx: &mut FirewheelCtx<super::offline_backend::OfflineBackend>,
     sample_rate: u32,
 ) -> Result<(), String> {
+    /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
+    const OFFLINE_BLOCK_FRAMES: usize = 512;
+
     let config = super::offline_backend::OfflineConfig {
         sample_rate,
         #[expect(clippy::cast_possible_truncation, reason = "block frames fits in u32")]
@@ -867,6 +867,13 @@ fn start_stream_offline(
 /// and `PlayerNode` stay idle and integration tests see `position=0`.
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
+    /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
+    const OFFLINE_BLOCK_FRAMES: usize = 512;
+
+    /// Offline engine-thread park interval — ~one block at 44.1kHz so the
+    /// firewheel graph is driven at close-to-realtime cadence.
+    const OFFLINE_PARK_MS: u64 = 10;
+
     use super::offline_backend::OfflineBackend;
     let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
     loop {
@@ -903,7 +910,7 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
     if SESSION_CLIENT.get().is_some() {
         return Ok(());
     }
-    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
+    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SessionState::<firewheel::cpal::CpalBackend>::CMD_RINGBUF_CAPACITY).split();
     let handle = spawn_named("kithara-engine-offline", move || {
         engine_thread_offline(cmd_rx);
     });
@@ -1147,7 +1154,7 @@ fn allocate_slot<B: AudioBackend>(
     let slot_id = SlotId::new(state.players[idx].next_slot_id);
     state.players[idx].next_slot_id += 1;
 
-    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(PLAYER_CMD_RINGBUF_CAPACITY).split();
+    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(SessionClient::PLAYER_CMD_RINGBUF_CAPACITY).split();
     let shared_state = Arc::new(SharedPlayerState::new());
     let shared_eq = state.players[idx].shared_eq.clone();
 

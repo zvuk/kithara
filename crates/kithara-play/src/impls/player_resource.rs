@@ -15,12 +15,6 @@ use crate::error::PlayError;
 #[rustfmt::skip]
 use crate::impls::resource::Resource;
 
-/// Number of stereo output channels.
-const STEREO_CHANNELS: usize = 2;
-
-/// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
-const BUFFER_DURATION_DIVISOR: usize = 5;
-
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
 /// Wraps a [`Resource`] and maintains per-channel scratch buffers
@@ -29,13 +23,19 @@ const BUFFER_DURATION_DIVISOR: usize = 5;
 /// potentially-blocking decoder on every callback.
 pub(crate) struct PlayerResource {
     resource: Resource,
-    channel_buffers: [PcmBuf; STEREO_CHANNELS],
+    channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     write_len: usize,
     write_pos: usize,
     src: Arc<str>,
 }
 
 impl PlayerResource {
+    /// Number of stereo output channels.
+    const STEREO_CHANNELS: usize = 2;
+
+    /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
+    const BUFFER_DURATION_DIVISOR: usize = 5;
+
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
     /// Allocates two channel scratch buffers from the given PCM pool,
@@ -44,7 +44,7 @@ impl PlayerResource {
         let spec = resource.spec();
         let channels = spec.channels as usize;
         let buffer_len =
-            (spec.sample_rate as usize / BUFFER_DURATION_DIVISOR) * channels.max(STEREO_CHANNELS);
+            (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR) * channels.max(Self::STEREO_CHANNELS);
 
         let channel_buffers = [
             pool.get_with(|b: &mut Vec<f32>| {
@@ -106,7 +106,7 @@ impl PlayerResource {
             let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
             let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; STEREO_CHANNELS] = [left, right];
+            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
             let n = self.resource.read_planar(&mut planar);
             if n == 0 {
@@ -124,7 +124,7 @@ impl PlayerResource {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
 
-            if output.len() >= STEREO_CHANNELS {
+            if output.len() >= Self::STEREO_CHANNELS {
                 output[0][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]
