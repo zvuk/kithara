@@ -8,25 +8,25 @@ pub struct UniqueBinaryCipher {
     seed: u64,
 }
 
-// Splitmix64 constants (Steele, Lea & Moler, 2014).
-const SPLITMIX_INCREMENT: u64 = 0x9e3779b97f4a7c15; // golden-ratio derived
-const SPLITMIX_MIX1: u64 = 0xbf58476d1ce4e5b9;
-const SPLITMIX_MIX2: u64 = 0x94d049bb133111eb;
-const SPLITMIX_SHIFT1: u32 = 30;
-const SPLITMIX_SHIFT2: u32 = 27;
-const SPLITMIX_SHIFT3: u32 = 31;
-
-// Xorshift64* constants (Marsaglia, 2003; Vigna star variant).
-const XORSHIFT_SHIFT_A: u32 = 12;
-const XORSHIFT_SHIFT_B: u32 = 25;
-const XORSHIFT_SHIFT_C: u32 = 27;
-const XORSHIFT_STAR_MUL: u64 = 0x2545f4914f6cdd1d;
-
-// Keystream extraction parameters.
-const KEYSTREAM_SHIFT: u32 = 56; // extract top byte
-const ROTATION_MASK: u8 = 7; // 3-bit rotation amount
-
 impl UniqueBinaryCipher {
+    // Splitmix64 constants (Steele, Lea & Moler, 2014).
+    const SPLITMIX_INCREMENT: u64 = 0x9e3779b97f4a7c15; // golden-ratio derived
+    const SPLITMIX_MIX1: u64 = 0xbf58476d1ce4e5b9;
+    const SPLITMIX_MIX2: u64 = 0x94d049bb133111eb;
+    const SPLITMIX_SHIFT1: u32 = 30;
+    const SPLITMIX_SHIFT2: u32 = 27;
+    const SPLITMIX_SHIFT3: u32 = 31;
+
+    // Xorshift64* constants (Marsaglia, 2003; Vigna star variant).
+    const XORSHIFT_SHIFT_A: u32 = 12;
+    const XORSHIFT_SHIFT_B: u32 = 25;
+    const XORSHIFT_SHIFT_C: u32 = 27;
+    const XORSHIFT_STAR_MUL: u64 = 0x2545f4914f6cdd1d;
+
+    // Keystream extraction parameters.
+    const KEYSTREAM_SHIFT: u32 = 56; // extract top byte
+    const ROTATION_MASK: u8 = 7; // 3-bit rotation amount
+
     /// Creates a new cipher instance from a given key string.
     #[must_use]
     pub fn new(key: &str) -> Self {
@@ -46,8 +46,8 @@ impl UniqueBinaryCipher {
 
         for (i, &b) in data.iter().enumerate() {
             state = Self::xorshift64_star(state ^ i as u64);
-            let keystream_byte = (state >> KEYSTREAM_SHIFT) as u8;
-            let rot = (state & u64::from(ROTATION_MASK)) as u8;
+            let keystream_byte = (state >> Self::KEYSTREAM_SHIFT) as u8;
+            let rot = (state & u64::from(Self::ROTATION_MASK)) as u8;
 
             let mixed = Self::ror8(b, rot);
             let plain_byte = mixed.wrapping_sub(keystream_byte);
@@ -59,7 +59,7 @@ impl UniqueBinaryCipher {
 
     #[inline]
     fn ror8(v: u8, r: u8) -> u8 {
-        v.rotate_right(u32::from(r) & u32::from(ROTATION_MASK))
+        v.rotate_right(u32::from(r) & u32::from(Self::ROTATION_MASK))
     }
 
     fn derive_seed_from_key(key_bytes: &[u8]) -> u64 {
@@ -72,18 +72,18 @@ impl UniqueBinaryCipher {
             h = h.wrapping_mul(FNV_PRIME);
         }
 
-        let mut z = h.wrapping_add(SPLITMIX_INCREMENT);
-        z = (z ^ (z >> SPLITMIX_SHIFT1)).wrapping_mul(SPLITMIX_MIX1);
-        z = (z ^ (z >> SPLITMIX_SHIFT2)).wrapping_mul(SPLITMIX_MIX2);
-        z ^ (z >> SPLITMIX_SHIFT3)
+        let mut z = h.wrapping_add(Self::SPLITMIX_INCREMENT);
+        z = (z ^ (z >> Self::SPLITMIX_SHIFT1)).wrapping_mul(Self::SPLITMIX_MIX1);
+        z = (z ^ (z >> Self::SPLITMIX_SHIFT2)).wrapping_mul(Self::SPLITMIX_MIX2);
+        z ^ (z >> Self::SPLITMIX_SHIFT3)
     }
 
     #[inline]
     fn xorshift64_star(mut x: u64) -> u64 {
-        x ^= x >> XORSHIFT_SHIFT_A;
-        x ^= x << XORSHIFT_SHIFT_B;
-        x ^= x >> XORSHIFT_SHIFT_C;
-        x.wrapping_mul(XORSHIFT_STAR_MUL)
+        x ^= x >> Self::XORSHIFT_SHIFT_A;
+        x ^= x << Self::XORSHIFT_SHIFT_B;
+        x ^= x >> Self::XORSHIFT_SHIFT_C;
+        x.wrapping_mul(Self::XORSHIFT_STAR_MUL)
     }
 }
 
@@ -99,11 +99,11 @@ mod tests {
 
         for (i, &b) in data.iter().enumerate() {
             state = UniqueBinaryCipher::xorshift64_star(state ^ i as u64);
-            let keystream_byte = (state >> KEYSTREAM_SHIFT) as u8;
-            let rot = (state & u64::from(ROTATION_MASK)) as u8;
+            let keystream_byte = (state >> Self::KEYSTREAM_SHIFT) as u8;
+            let rot = (state & u64::from(Self::ROTATION_MASK)) as u8;
 
             let mixed = b.wrapping_add(keystream_byte);
-            let cipher_byte = mixed.rotate_left(u32::from(rot) & u32::from(ROTATION_MASK));
+            let cipher_byte = mixed.rotate_left(u32::from(rot) & u32::from(Self::ROTATION_MASK));
             out.extend_from_slice(&[cipher_byte]);
             state ^= u64::from(cipher_byte);
         }

@@ -2,12 +2,6 @@
 
 //! Decryption context for `ProcessingAssets`.
 
-/// AES-128 key length in bytes.
-const KEY_LEN_128: usize = 16;
-
-/// AES initialization vector length in bytes.
-const IV_LEN: usize = 16;
-
 /// AES-128-CBC decryption context.
 ///
 /// Passed as the `Ctx` type parameter to `ProcessingAssets<A, DecryptContext>`.
@@ -17,15 +11,21 @@ const IV_LEN: usize = 16;
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct DecryptContext {
     /// AES-128 key (16 bytes).
-    pub key: [u8; KEY_LEN_128],
+    pub key: [u8; Self::KEY_LEN_128],
     /// Initialization vector (16 bytes).
-    pub iv: [u8; IV_LEN],
+    pub iv: [u8; Self::IV_LEN],
 }
 
 impl DecryptContext {
+    /// AES-128 key length in bytes.
+    const KEY_LEN_128: usize = 16;
+
+    /// AES initialization vector length in bytes.
+    const IV_LEN: usize = 16;
+
     /// Create a new decryption context.
     #[must_use]
-    pub fn new(key: [u8; KEY_LEN_128], iv: [u8; IV_LEN]) -> Self {
+    pub fn new(key: [u8; Self::KEY_LEN_128], iv: [u8; Self::IV_LEN]) -> Self {
         Self { key, iv }
     }
 }
