@@ -126,8 +126,12 @@ pub enum WaitingReason {
 /// How the seek should be applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SeekMode {
-    /// Direct decoder seek (no anchor).
-    Direct,
+    /// Direct decoder seek (no anchor). When `target_byte` is `Some`, the FSM
+    /// gates the readiness check on that byte range so `decoder.seek()` only
+    /// runs once the source can answer the read the decoder is about to
+    /// issue. `None` keeps the historical "check current read head" gate for
+    /// callers that can't estimate the target byte.
+    Direct { target_byte: Option<u64> },
     /// Anchor-based seek with segment alignment.
     Anchor(SourceSeekAnchor),
 }
@@ -282,7 +286,7 @@ mod tests {
                 reason: WaitingReason::Waiting,
             },
             TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Direct,
+                mode: SeekMode::Direct { target_byte: None },
                 request: SeekRequest {
                     attempt: 0,
                     seek: SeekContext {
@@ -346,7 +350,7 @@ mod tests {
         );
         assert_eq!(
             TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Direct,
+                mode: SeekMode::Direct { target_byte: None },
                 request: SeekRequest {
                     attempt: 0,
                     seek: SeekContext {

@@ -799,6 +799,36 @@ impl<T: StreamType> StreamAudioSource<T> {
         false
     }
 
+    /// Approximate the byte Symphonia will target for `position` before we
+    /// issue the seek. Used to gate `apply_seek_from_decoder` on the byte
+    /// range being downloaded — without this, `decoder.seek()` issues a
+    /// read past the source's buffered tail and errors out.
+    ///
+    /// Returns `None` when we can't form a ratio (duration unknown, stream
+    /// length unknown, or zero-length stream). Callers fall back to the
+    /// historical read-head readiness check in that case.
+    fn estimate_target_byte(&self, position: Duration) -> Option<u64> {
+        let duration = self.session.decoder.duration()?;
+        let stream_len = self.shared_stream.len()?;
+        let base_offset = self.session.base_offset;
+        if duration.is_zero() || stream_len <= base_offset {
+            return None;
+        }
+        let payload = stream_len - base_offset;
+        let pos_nanos = position.as_nanos();
+        let dur_nanos = duration.as_nanos();
+        // Clamp to payload length so a time past duration maps to EOF, not
+        // some wild offset. Readiness check will then surface as `Eof`.
+        let target_relative = u64::try_from(
+            pos_nanos
+                .saturating_mul(u128::from(payload))
+                .saturating_div(dur_nanos.max(1)),
+        )
+        .unwrap_or(u64::MAX)
+        .min(payload);
+        Some(base_offset.saturating_add(target_relative))
+    }
+
     fn update_decoder_len_for_seek(&self) {
         // Refresh the decoder's byte_len from the current total_bytes.
         // For base_offset > 0 (after ABR switch), subtract base_offset
@@ -1112,7 +1142,10 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
         match applying.mode {
             SeekMode::Anchor(anchor) => self.source_is_ready_for_boundary(anchor.byte_offset),
-            SeekMode::Direct => self.source_is_ready(),
+            SeekMode::Direct {
+                target_byte: Some(byte),
+            } => self.source_is_ready_for_boundary(byte),
+            SeekMode::Direct { target_byte: None } => self.source_is_ready(),
         }
     }
 
@@ -1120,7 +1153,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
                 SeekMode::Anchor(anchor) => self.source_phase_for_boundary(anchor.byte_offset),
-                SeekMode::Direct => self.shared_stream.phase(),
+                SeekMode::Direct {
+                    target_byte: Some(byte),
+                } => self.source_phase_for_boundary(byte),
+                SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
             WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
             _ => self.shared_stream.phase(),
@@ -1136,13 +1172,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             return;
         };
         let start = match context {
-            WaitContext::ApplySeek(applying) => {
-                if let SeekMode::Anchor(anchor) = applying.mode {
-                    anchor.byte_offset
-                } else {
-                    self.shared_stream.position()
-                }
-            }
+            WaitContext::ApplySeek(applying) => match applying.mode {
+                SeekMode::Anchor(anchor) => anchor.byte_offset,
+                SeekMode::Direct {
+                    target_byte: Some(byte),
+                } => byte,
+                SeekMode::Direct { target_byte: None } => self.shared_stream.position(),
+            },
             WaitContext::Recreation(recreate) => recreate.offset,
             _ => self.shared_stream.position(),
         };
@@ -1244,7 +1280,9 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         let mode = match anchor_result {
             Ok(Some(anchor)) => SeekMode::Anchor(anchor),
-            Ok(None) => SeekMode::Direct,
+            Ok(None) => SeekMode::Direct {
+                target_byte: self.estimate_target_byte(position),
+            },
             Err(err) => {
                 self.fail_seek(
                     request,
@@ -1354,7 +1392,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let request = applying.request;
         let applied = match applying.mode {
             SeekMode::Anchor(anchor) => self.apply_anchor_seek_with_fallback(request, anchor),
-            SeekMode::Direct => self.apply_seek_from_decoder(request),
+            SeekMode::Direct { .. } => self.apply_seek_from_decoder(request),
         };
         if applied {
             self.epoch.store(request.seek.epoch, Ordering::Release);
