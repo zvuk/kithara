@@ -299,6 +299,16 @@ pub struct IsolatorEq {
     sample_rate: f32,
     smooth_coeff: f32,
     block_counter: usize,
+    /// Recent-input ring buffer used to rehydrate filter state when exiting
+    /// a fast path (unity bypass or full silence). Size covers the LR-4 +
+    /// allpass cascade settle time for the lowest default crossover.
+    bypass_history: Vec<f32>,
+    /// Write position in [`Self::bypass_history`] (modulo its length).
+    bypass_history_pos: usize,
+    /// Whether the previous sample returned via a fast path and therefore
+    /// left the filter state frozen — drives a one-shot rehydration on the
+    /// next non-fast-path sample.
+    was_in_fastpath: bool,
 }
 
 impl IsolatorEq {
@@ -358,8 +368,16 @@ impl IsolatorEq {
             sample_rate: sr,
             smooth_coeff: compute_smooth_coeff(sr),
             block_counter: 0,
+            bypass_history: vec![0.0; Self::BYPASS_HISTORY_LEN],
+            bypass_history_pos: 0,
+            was_in_fastpath: false,
         }
     }
+
+    /// Size of the fast-path rehydration ring buffer. 128 samples covers
+    /// the LR-4 + allpass cascade settle time for the lowest default
+    /// crossover (~250 Hz at 44.1 kHz).
+    const BYPASS_HISTORY_LEN: usize = 128;
 
     /// Set the target gain for a band (dB, clamped to min/max).
     pub fn set_gain(&mut self, band: usize, gain_db: f32) {
@@ -388,6 +406,75 @@ impl IsolatorEq {
         })
     }
 
+    /// Whether every band sits at exactly unity gain with no smoothing in
+    /// flight — in that case `process_sample` can skip the LR-4 + allpass
+    /// chain entirely and return the input unchanged.
+    ///
+    /// Instruments traces show `process_sample` as ~3 % of total CPU during
+    /// HLS playback; gating the filter chain on non-neutral gain eliminates
+    /// that cost for the common case of a user who never touches the EQ.
+    #[must_use]
+    pub fn is_bypass_active(&self) -> bool {
+        !self.gains.is_empty()
+            && self.gains.iter().all(|g| {
+                (g.target_linear - 1.0).abs() < f32::EPSILON
+                    && (g.current_linear - 1.0).abs() < f32::EPSILON
+            })
+    }
+
+    /// Whether every band is at full kill (linear 0) with no smoothing in
+    /// flight — in that case `process_sample` can skip the LR-4 + allpass
+    /// chain entirely and return a literal zero.
+    ///
+    /// Mirrors [`Self::is_bypass_active`] for the opposite extreme: a user
+    /// who slammed every fader to [`MIN_GAIN_DB`] wants silence, not a
+    /// near-zero filtered signal.
+    #[must_use]
+    pub fn is_silence_active(&self) -> bool {
+        !self.gains.is_empty()
+            && self.gains.iter().all(|g| {
+                g.target_linear.abs() < f32::EPSILON && g.current_linear.abs() < f32::EPSILON
+            })
+    }
+
+    fn record_bypass_input(&mut self, input: f32) {
+        let len = self.bypass_history.len();
+        self.bypass_history[self.bypass_history_pos] = input;
+        self.bypass_history_pos = (self.bypass_history_pos + 1) % len;
+    }
+
+    /// Replay the ring-buffered recent input through the filter cascade so
+    /// the next real sample sees filter state consistent with the signal,
+    /// not the frozen state from before the fast path was entered.
+    ///
+    /// Writes into the exact same filter cascade as the main path but
+    /// discards the output — this is purely for filter-state hydration.
+    fn rehydrate_filter_state(&mut self) {
+        let n = self.gains.len();
+        if n < Consts::MIN_CROSSOVER_BANDS {
+            return;
+        }
+        let len = self.bypass_history.len();
+        let start = self.bypass_history_pos;
+        for offset in 0..len {
+            let idx = (start + offset) % len;
+            let s = self.bypass_history[idx];
+            let mut hp = s;
+            for i in 0..n - 1 {
+                self.lp_scratch[i] = self.lps[i].process(hp);
+                hp = self.hps[i].process(hp);
+            }
+            for i in 0..n - 1 {
+                let mut band = self.lp_scratch[i];
+                let ap_start = self.ap_offsets[i];
+                let ap_end = self.ap_offsets[i + 1];
+                for ap in &mut self.ap_filters[ap_start..ap_end] {
+                    band = ap.run(band);
+                }
+            }
+        }
+    }
+
     /// Process a single sample through the crossover EQ.
     ///
     /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.
@@ -399,6 +486,25 @@ impl IsolatorEq {
             for gain in &mut self.gains {
                 gain.smooth(self.smooth_coeff);
             }
+        }
+
+        // Fast paths skip the LR-4 + allpass chain when the result is
+        // trivially known. Filter state freezes while a fast path is active
+        // and is rehydrated from a ring buffer on exit, so resuming filter
+        // work doesn't jump from zero-state (see rehydrate_filter_state).
+        if self.is_silence_active() {
+            self.record_bypass_input(input);
+            self.was_in_fastpath = true;
+            return 0.0;
+        }
+        if self.is_bypass_active() {
+            self.record_bypass_input(input);
+            self.was_in_fastpath = true;
+            return input;
+        }
+        if self.was_in_fastpath {
+            self.was_in_fastpath = false;
+            self.rehydrate_filter_state();
         }
 
         let n = self.gains.len();
@@ -444,6 +550,9 @@ impl IsolatorEq {
         }
         self.rebuild_filters();
         self.block_counter = 0;
+        self.bypass_history.fill(0.0);
+        self.bypass_history_pos = 0;
+        self.was_in_fastpath = false;
     }
 
     /// Re-initialise for a new sample rate (e.g. after stream change).
@@ -1070,6 +1179,135 @@ mod tests {
     fn db_to_linear_boost_at_6db() {
         let gain = db_to_linear(6.0);
         assert!((gain - 2.0).abs() < 0.02, "+6dB should be ~2.0, got {gain}");
+    }
+
+    #[kithara::test]
+    fn eq_fresh_at_zero_db_is_bypass_active() {
+        let bands = generate_log_spaced_bands(3);
+        let eq = IsolatorEq::new(&bands, 44100);
+        assert!(
+            eq.is_bypass_active(),
+            "default 0 dB bands should activate bypass so the LR-4 chain \
+             never runs for users who never touch the EQ"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_bypass_deactivates_on_gain_change() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = IsolatorEq::new(&bands, 44100);
+        assert!(eq.is_bypass_active(), "precondition: fresh EQ is in bypass");
+
+        eq.set_gain(0, 3.0);
+
+        assert!(
+            !eq.is_bypass_active(),
+            "bypass must deactivate the instant any band targets a non-unity \
+             gain, so the next sample reaches the actual filter chain"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_bypass_reactivates_after_return_to_unity() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq_effect = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        eq_effect.set_gain(0, 6.0);
+        converge_smoother(&mut eq_effect, spec);
+        assert!(!eq_effect.eq_l.is_bypass_active());
+
+        eq_effect.set_gain(0, 0.0);
+        converge_smoother(&mut eq_effect, spec);
+        converge_smoother(&mut eq_effect, spec);
+
+        assert!(
+            eq_effect.eq_l.is_bypass_active(),
+            "after gains smooth back to unity, bypass must reactivate so the \
+             filter chain stops running"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_bypass_returns_input_unchanged() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = IsolatorEq::new(&bands, 44100);
+        assert!(eq.is_bypass_active(), "precondition: bypass is active");
+
+        let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999, 1e-6, -1e-6];
+        for &input in &inputs {
+            let output = eq.process_sample(input);
+            assert_eq!(
+                output, input,
+                "bypass must return input bit-for-bit, got {output} for {input}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn eq_all_min_gain_after_smoothing_is_silence_active() {
+        let bands = generate_log_spaced_bands(3);
+        let spec = PcmSpec {
+            channels: 1,
+            sample_rate: 44100,
+        };
+        let mut eq_effect = EqEffect::new(bands, spec.sample_rate, spec.channels);
+
+        for i in 0..3 {
+            eq_effect.set_gain(i, MIN_GAIN_DB);
+        }
+        converge_smoother(&mut eq_effect, spec);
+
+        assert!(
+            eq_effect.eq_l.is_silence_active(),
+            "all bands at MIN_GAIN_DB after smoother converges must activate \
+             the silence fast path so the filter chain is skipped entirely"
+        );
+    }
+
+    #[kithara::test]
+    fn eq_silence_returns_zero() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = IsolatorEq::new(&bands, 44100);
+        for i in 0..3 {
+            eq.gains[i].target_linear = 0.0;
+            eq.gains[i].current_linear = 0.0;
+            eq.gains[i].target_db = MIN_GAIN_DB;
+        }
+        assert!(eq.is_silence_active(), "precondition: silence is active");
+
+        let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999];
+        for &input in &inputs {
+            let output = eq.process_sample(input);
+            assert_eq!(
+                output, 0.0,
+                "silence must return literal 0.0 for any input, got {output} \
+                 for {input}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn eq_silence_deactivates_when_any_band_raised() {
+        let bands = generate_log_spaced_bands(3);
+        let mut eq = IsolatorEq::new(&bands, 44100);
+        for i in 0..3 {
+            eq.gains[i].target_linear = 0.0;
+            eq.gains[i].current_linear = 0.0;
+            eq.gains[i].target_db = MIN_GAIN_DB;
+        }
+        assert!(eq.is_silence_active(), "precondition: silence is active");
+
+        eq.set_gain(1, -3.0);
+
+        assert!(
+            !eq.is_silence_active(),
+            "raising any band above MIN_GAIN_DB must disable silence so the \
+             filter chain re-engages via smoother ramp-up"
+        );
     }
 
     fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
