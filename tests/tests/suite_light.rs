@@ -28,6 +28,7 @@ mod kithara_file {
     mod early_stream_close;
     #[cfg(not(target_arch = "wasm32"))]
     mod file_source;
+    mod html_error_cleanup;
 }
 
 mod kithara_hls {
