@@ -20,6 +20,7 @@ mod kithara_bufpool;
 mod kithara_decode {
     mod decoder_seek_tests;
     mod decoder_tests;
+    mod symphonia_seek_stale_duration;
     mod timeline_tests;
 }
 
