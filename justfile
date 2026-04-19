@@ -177,6 +177,16 @@ bench-run:
     cargo bench -p kithara-integration-tests --bench bufpool -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt; \
     cargo bench -p kithara-integration-tests --bench refactor_hotpaths -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
 
+# Lint + main suite + perf sanity + bench compile + fuzz compile.
+# Not part of `just test` (~5-10 min). Run on PR as optional CI job.
+test-with-perf:
+    just lint-fast
+    just test
+    cargo test -p kithara-integration-tests --features perf --profile test-release \
+      --test suite_perf --test memory_rss -- --test-threads=1
+    just bench-build
+    cargo +nightly fuzz build --fuzz-dir tests/fuzz --release
+
 bench-ci:
     just bench-build; \
     if [[ "${RUN_BENCHMARKS:-0}" != "1" ]]; then \
