@@ -630,6 +630,26 @@ fn build_fetch_cmd(
                 let Some(ref mut st) = *guard else {
                     return;
                 };
+                // Drop callbacks from a prior seek epoch: their FetchCmds
+                // were cancelled by `process_demand` bumping `epoch_cancel`,
+                // and `reset_for_seek_epoch` already cleared in_flight_
+                // segments and reset the cursor for the new epoch. Acting
+                // here would call `rewind_current_segment_index(seg_idx)`
+                // against the new epoch's cursor — and `rewind_fill_to`
+                // sets `self.next = floor.max(seg_idx)` unconditionally,
+                // which silently advances the cursor forward when
+                // `seg_idx > new_floor`, skipping segments the reader is
+                // now waiting for after the seek.
+                if seek_epoch != st.scheduler.coord.timeline().seek_epoch() {
+                    debug!(
+                        variant,
+                        seg_idx,
+                        captured_seek_epoch = seek_epoch,
+                        current_seek_epoch = st.scheduler.coord.timeline().seek_epoch(),
+                        "stale on_complete from prior seek epoch — dropping"
+                    );
+                    return;
+                }
                 st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if !is_already_committed {
                     debug!(variant, seg_idx, error = %e, "segment fetch failed, rewinding cursor");
@@ -686,7 +706,8 @@ mod tests {
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
-    use kithara_platform::time::Instant as PlatformInstant;
+    use kithara_net::NetError;
+    use kithara_platform::{Mutex as PlatformMutex, time::Instant as PlatformInstant};
     use kithara_storage::ResourceExt;
     use kithara_stream::{
         TransferCoordination,
@@ -697,7 +718,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        DemandResult, HlsPeer, HlsState, apply_variant_readiness, process_demand, resolve_variant,
+        DemandResult, HlsPeer, HlsState, apply_variant_readiness, build_fetch_cmd, process_demand,
+        resolve_variant,
     };
     use crate::{
         config::HlsConfig,
@@ -1481,6 +1503,152 @@ mod tests {
              live_stress_real_stream.rs:190 with \
              `stage='ephemeral_small_cache' (is_eof=false)`.",
             num_segs = Consts::NUM_SEGMENTS
+        );
+    }
+
+    /// RED test: stale `on_complete` callback from a cancelled prior-epoch
+    /// FetchCmd advances the **new** epoch's cursor forward.
+    ///
+    /// Scenario reproduced from the production "wait_range EOF after seek"
+    /// hang report:
+    ///
+    /// 1. Reader playing forward on variant 0; downloader emitted a
+    ///    `FetchCmd` for segment 22 in seek_epoch=0. The FetchCmd's
+    ///    `on_complete` closure captured `seek_epoch = 0`, `(variant=0,
+    ///    seg_idx=22)`, and an `Arc<Mutex<HlsState>>`.
+    /// 2. User seeks BACKWARD to ~segment 10. `process_demand` (peer.rs:281)
+    ///    fires `state.epoch_cancel.cancel()`, which cancels every
+    ///    in-flight FetchCmd in the old epoch — the Downloader's body
+    ///    stream wrapper (response.rs:144) yields `NetError::Cancelled` and
+    ///    `deliver()` (batch.rs:191-214) calls `on_complete(0,
+    ///    Some(&NetError::Cancelled))` for each cancelled fetch.
+    /// 3. Meanwhile, `next_valid_demand_request` ran
+    ///    `reset_for_seek_epoch(new_epoch=1, variant=0, segment_index=10)`
+    ///    (plan.rs:21 → state.rs:191), which did
+    ///    `reset_cursor(10)` → cursor floor=10, next=10. The active epoch
+    ///    is now 1.
+    /// 4. The stale `on_complete` for the old (variant=0, seg=22) fetch
+    ///    fires now, in the NEW epoch context. `peer.rs:626-641` does:
+    ///        - `in_flight_segments.remove((0, 22))` — no-op, set already
+    ///          cleared by `reset_for_seek_epoch:210`.
+    ///        - `rewind_current_segment_index(22)` →
+    ///          `cursor.rewind_fill_to(22)` (cursor.rs:62-67) →
+    ///          `result = floor.max(next) = max(10, 22) = 22` →
+    ///          `self.next = 22`.
+    ///    Cursor jumps from 10 to 22 in the NEW epoch. The downloader will
+    ///    not naturally fetch segments 10..21 on the next `poll_next`
+    ///    cycle (cursor is already past them). Reader at byte position
+    ///    inside segment 10 receives `wait_range: EOF` because
+    ///    `loaded_total = max_end_offset()` doesn't yet cover segment 10
+    ///    (no FetchCmd was emitted for it in the new epoch), and
+    ///    `known_total` may be missing too if the size_map is variant-
+    ///    specific.
+    ///
+    /// Invariant under test: a stale `on_complete` from a prior seek
+    /// epoch must not advance the new epoch's cursor forward.
+    /// Equivalently, `cursor.rewind_fill_to(N)` MUST clamp `N` so the
+    /// cursor never moves forward — it is a "rewind" operation, not a
+    /// "set".
+    #[kithara::test]
+    fn red_stale_on_complete_does_not_advance_new_epoch_cursor() {
+        // Bring the production state into Arc<Mutex<Option<...>>> just
+        // like `HlsPeer::state` so `build_fetch_cmd` can clone it into
+        // the on_complete closure.
+        let state_arc = Arc::new(PlatformMutex::new(Some(make_hls_state())));
+
+        // Old-epoch state: downloader has just emitted a FetchCmd for
+        // segment 22 (cursor floor=20 covered segs 20..22 in this epoch,
+        // build_batch advanced next to 23 after pushing the FetchCmd).
+        let captured_seek_epoch = {
+            let mut guard = state_arc.lock_sync();
+            let st = guard.as_mut().expect("state must be initialized");
+            st.scheduler.cursor.reopen_fill(20, 23);
+            st.scheduler.in_flight_segments.insert((0, 22));
+            st.scheduler.coord.timeline().seek_epoch()
+        };
+        assert_eq!(
+            captured_seek_epoch, 0,
+            "precondition: FetchCmd emitted in initial seek_epoch=0",
+        );
+
+        // Build the production FetchCmd via the actual `build_fetch_cmd`
+        // helper so the on_complete closure is the real one — not a
+        // hand-rolled copy that drifts from production logic.
+        let url = Url::parse("https://example.com/seg-0-22.m4s").expect("valid url");
+        let mut cmd = {
+            let guard = state_arc.lock_sync();
+            let st = guard.as_ref().expect("state must be initialized");
+            let res = st
+                .scheduler
+                .backend
+                .acquire_resource(&ResourceKey::from_url(&url))
+                .expect("acquire resource");
+            let prepared = crate::loading::segment_loader::PreparedMedia {
+                url: url.clone(),
+                duration: Some(Duration::from_secs(4)),
+                cached_len: None,
+                resource: Some(res),
+            };
+            build_fetch_cmd(st, &state_arc, 0, 22, captured_seek_epoch, prepared, false)
+        };
+        let on_complete = cmd
+            .on_complete
+            .take()
+            .expect("FetchCmd built by build_fetch_cmd must carry an on_complete");
+
+        // Simulate seek BACKWARD to segment 10. Bump the timeline epoch
+        // (this is what `Timeline::initiate_seek` does in production
+        // before `process_demand` runs) and reset cursor / in_flight as
+        // `reset_for_seek_epoch` would.
+        let cursor_after_seek = {
+            let mut guard = state_arc.lock_sync();
+            let st = guard.as_mut().expect("state must be initialized");
+            let new_epoch = st
+                .scheduler
+                .coord
+                .timeline()
+                .initiate_seek(Duration::from_secs(40));
+            assert!(
+                new_epoch > captured_seek_epoch,
+                "seek must produce a strictly newer epoch",
+            );
+            st.scheduler.active_seek_epoch = new_epoch;
+            st.scheduler.in_flight_segments.clear();
+            st.scheduler.reset_cursor(10);
+            st.scheduler.current_segment_index()
+        };
+        assert_eq!(
+            cursor_after_seek, 10,
+            "precondition: new-epoch cursor must be reset to seek target (seg 10)",
+        );
+
+        // Stale on_complete fires now. In production this is dispatched
+        // by the Downloader's batch task when the body stream observes
+        // its CancellationToken fire (epoch_cancel was cancelled by
+        // process_demand at the start of the new epoch). The error
+        // delivered is `NetError::Cancelled` (response.rs:147 + batch.rs
+        // delivery).
+        let cancelled = NetError::Cancelled;
+        on_complete(0, Some(&cancelled));
+
+        let cursor_after_stale_callback = {
+            let guard = state_arc.lock_sync();
+            let st = guard.as_ref().expect("state must be initialized");
+            st.scheduler.current_segment_index()
+        };
+
+        assert!(
+            cursor_after_stale_callback <= cursor_after_seek,
+            "stale on_complete from prior seek epoch advanced new-epoch cursor \
+             from {cursor_after_seek} forward to {cursor_after_stale_callback}; \
+             segments {cursor_after_seek}..{cursor_after_stale_callback} (which \
+             the reader is now waiting for after the seek) will not be emitted \
+             by poll_next because the cursor is already past them. The fix is \
+             either (a) `on_complete` must early-return when its captured \
+             seek_epoch differs from `coord.timeline().seek_epoch()`, OR \
+             (b) `DownloadCursor::rewind_fill_to` must clamp the target to \
+             `min(self.next, max(self.floor, target))` so a rewind cannot \
+             move the cursor forward.",
         );
     }
 }
