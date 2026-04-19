@@ -11,7 +11,7 @@ use iced::{
 use kithara::prelude::{Event, HlsEvent};
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::info;
+use tracing::trace;
 
 use super::{
     message::{Message, Tab},
@@ -162,8 +162,8 @@ fn start_event_logging(queue: &Queue) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(event) => info!("{event:?}"),
-                Err(RecvError::Lagged(n)) => info!("events lagged: {n}"),
+                Ok(event) => trace!("{event:?}"),
+                Err(RecvError::Lagged(n)) => trace!("events lagged: {n}"),
                 Err(RecvError::Closed) => break,
             }
         }
