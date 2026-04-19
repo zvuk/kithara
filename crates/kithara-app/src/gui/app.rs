@@ -15,6 +15,7 @@ use tracing::info;
 
 use super::{
     message::{Message, Tab},
+    subscription::subscription_config,
     theme,
 };
 use crate::theme::gui;
@@ -132,19 +133,25 @@ impl Kithara {
         theme::kithara_theme(&self.palette)
     }
 
-    /// 100 ms tick subscription for player state sync plus keyboard.
-    #[expect(clippy::unused_self, reason = "iced requires &self method signature")]
+    /// Time-tick subscription for player state sync plus keyboard. Tick
+    /// interval scales with playback state to save CPU while idle — see
+    /// [`subscription_config`] for rationale.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        const TICK_INTERVAL_MS: u64 = 100;
-        let tick = iced_time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick);
-        let keys = event::listen_with(|e, _status, _window| match e {
-            IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
-                key: Key::Named(Named::Delete | Named::Backspace),
-                ..
-            }) => Some(Message::DeleteTrack),
-            _ => None,
-        });
-        Subscription::batch([tick, keys])
+        let cfg = subscription_config(self.playing);
+        let mut subs = Vec::with_capacity(2);
+        subs.push(
+            iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
+        );
+        if cfg.keyboard {
+            subs.push(event::listen_with(|e, _status, _window| match e {
+                IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
+                    key: Key::Named(Named::Delete | Named::Backspace),
+                    ..
+                }) => Some(Message::DeleteTrack),
+                _ => None,
+            }));
+        }
+        Subscription::batch(subs)
     }
 }
 
