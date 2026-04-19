@@ -54,6 +54,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
+# rustls-platform-verifier 0.6.2 pins jni 0.21. Workspace jni is 0.22.
+# We bridge the two by importing 0.21 as `jni_rpv` solely for the
+# `init_with_env` call.
+jni_rpv = { package = "jni", version = "0.21.1" }
 ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
