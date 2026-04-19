@@ -14,12 +14,13 @@
 //! app lifecycle (see `pins.bin` / `lru.bin` which get eager writes on each
 //! mutation and therefore DO exist on disk).
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::num::NonZeroUsize;
 
 use kithara_assets::{AssetStoreBuilder, ResourceKey};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    time::{Duration, Instant},
+    tokio::time::sleep,
+};
 use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -29,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 async fn wait_for_availability_file(path: &std::path::Path, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while !path.exists() && Instant::now() < deadline {
-        kithara_platform::tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     path.exists()
 }
@@ -139,7 +140,7 @@ async fn disk_auto_checkpoint_disabled_by_default() {
     }
 
     // Give any (accidental) background flusher a chance to run.
-    kithara_platform::tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     let availability_path = dir.path().join("_index").join("availability.bin");
     assert!(

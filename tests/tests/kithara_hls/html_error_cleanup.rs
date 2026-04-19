@@ -35,7 +35,10 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    time::{Duration, Instant},
+    tokio::time::sleep,
+};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
@@ -166,7 +169,7 @@ async fn html_master_playlist_leaves_no_orphan_cache_files(temp_dir: TestTempDir
 
     // Give LeaseResource::Drop + cache cleanup a chance to run. In practice
     // Drop is synchronous, so this is conservatively generous.
-    kithara_platform::tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let leftover = collect_cache_files(temp_dir.path());
     assert!(
@@ -198,7 +201,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let start_hits = state.master_hits.load(Ordering::Relaxed);
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        kithara_platform::tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
     }
     let end_hits = state.master_hits.load(Ordering::Relaxed);
 
@@ -240,7 +243,7 @@ async fn html_media_playlist_after_successful_master_leaves_no_orphan_files(temp
     );
 
     // Wait long enough for any pending Drop + cache cleanup to land.
-    kithara_platform::tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Master playlist is allowed to remain cached (it succeeded) but the
     // failing media playlist must NOT leave an orphan pre-allocated mmap.

@@ -37,7 +37,10 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_platform::time::Instant;
+use kithara_platform::{
+    time::Instant,
+    tokio::time::{sleep, timeout},
+};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
@@ -118,7 +121,7 @@ async fn wait_for_download_terminal(bus: &EventBus, within: Duration) -> bool {
         if remaining.is_zero() {
             return false;
         }
-        let recv = kithara_platform::tokio::time::timeout(remaining, rx.recv());
+        let recv = timeout(remaining, rx.recv());
         match recv.await {
             Ok(Ok(Event::File(FileEvent::DownloadError { .. }))) => return true,
             Ok(Ok(Event::File(FileEvent::DownloadComplete { .. }))) => return true,
@@ -163,7 +166,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     );
 
     // Give the err-path a moment to perform any pending cleanup hops.
-    kithara_platform::tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // CRITICAL: assert while `stream` is still held. On main the pre-allocated
     // 64 KB mmap persists here because `FileInner.res` keeps the LeaseResource
@@ -207,7 +210,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let baseline = server_state.track_hits.load(Ordering::Relaxed);
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        kithara_platform::tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
     }
     let after = server_state.track_hits.load(Ordering::Relaxed);
 
