@@ -560,8 +560,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?err,
             epoch = request.seek.epoch,
             ?request.seek.target,
+            attempts = request.attempt.saturating_add(1),
             "{context}"
         );
+        self.emit_event(AudioEvent::SeekRejected {
+            epoch: request.seek.epoch,
+            target: request.seek.target,
+            attempts: request.attempt.saturating_add(1),
+        });
         self.timeline.clear_seek_pending(request.seek.epoch);
         self.state = TrackState::Failed(TrackFailure::Decode(err));
     }
@@ -604,6 +610,32 @@ impl<T: StreamType> StreamAudioSource<T> {
             "seek: about to call decoder.seek()"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
+            // Mirror `apply_time_anchor_seek`: decoder's cached duration/
+            // byte_len may be stale after partial reads or late-arriving
+            // Content-Length headers, making a valid target look
+            // "out-of-range". A fresh decoder re-scans the stream with the
+            // current byte_len and resolves the mismatch.
+            warn!(
+                ?err,
+                epoch,
+                ?position,
+                "seek: decoder.seek failed, recreating decoder and retrying"
+            );
+            let info = self
+                .shared_stream
+                .media_info()
+                .or_else(|| self.session.media_info.clone());
+            if let Some(info) = info {
+                let base_offset = self.session.base_offset;
+                self.start_recreating_decoder(
+                    RecreateCause::VariantSwitch,
+                    info,
+                    RecreateNext::Seek(request),
+                    base_offset,
+                    request.attempt,
+                );
+                return false;
+            }
             self.fail_seek(request, err, "seek: decoder.seek failed");
             return false;
         }
