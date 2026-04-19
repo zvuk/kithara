@@ -279,8 +279,20 @@ impl HlsScheduler {
     }
 
     pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
-        if self.abr.is_locked() && !self.coord.timeline().is_seek_pending() {
-            self.abr.unlock();
+        // Keep ABR locked for the entire pending-seek window. Without
+        // this, `decide()` can fire between `Timeline::initiate_seek`
+        // and the peer reaching `reset_for_seek_epoch` (where the
+        // existing lock call lives) and switch variants mid-seek — the
+        // anchor the source just resolved for the layout variant then
+        // points at segments the downloader no longer plans to fetch,
+        // and `source_is_ready_for_apply_seek` stays `Waiting` forever.
+        // The lock is refcounted, so pairing it with the unlock below
+        // keeps the count at 0/1 across the seek lifetime.
+        let seek_pending = self.coord.timeline().is_seek_pending();
+        match (self.abr.is_locked(), seek_pending) {
+            (false, true) => self.abr.lock(),
+            (true, false) => self.abr.unlock(),
+            _ => {}
         }
 
         let now = Instant::now();

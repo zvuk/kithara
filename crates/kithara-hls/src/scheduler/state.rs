@@ -196,7 +196,11 @@ impl HlsScheduler {
     ) {
         let previous_variant = self.layout_variant();
 
-        self.abr.lock();
+        // ABR lifecycle is owned by `make_abr_decision` — it acquires the
+        // lock the first time it observes `is_seek_pending()` and releases
+        // it the first time the pending flag clears. Reset no longer adds
+        // its own lock: doing so double-counts the refcount and leaks a
+        // permanent lock after seek completes.
 
         self.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);

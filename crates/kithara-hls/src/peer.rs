@@ -1651,4 +1651,98 @@ mod tests {
              move the cursor forward.",
         );
     }
+
+    /// Regression guard for the HLS seek hang: `AbrController` must hold
+    /// its lock across the entire pending-seek window, not only inside
+    /// `reset_for_seek_epoch`. The peer's reset runs long after the user
+    /// initiates a seek — in the meantime throughput samples keep firing
+    /// and `make_abr_decision` is free to switch variants. When it does,
+    /// the anchor resolved for the layout variant points at segments the
+    /// downloader no longer plans to fetch, `source_is_ready_for_apply_seek`
+    /// stays `Waiting` forever, and playback hangs post-seek.
+    #[kithara::test]
+    fn red_abr_must_stay_locked_while_seek_is_pending() {
+        let mut state = make_hls_state();
+
+        assert!(
+            !state.scheduler.abr.is_locked(),
+            "precondition: ABR starts unlocked on a fresh track"
+        );
+
+        // Step 1: user hits the seek slider. Timeline bumps the epoch
+        // and flips seek_pending. The peer hasn't polled yet.
+        let _new_epoch = state
+            .scheduler
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(30));
+        assert!(
+            state.scheduler.coord.timeline().is_seek_pending(),
+            "precondition: seek is pending after initiate_seek",
+        );
+
+        // Step 2: ABR tick fires concurrently with the seek — this is the
+        // path that actually commits a variant switch. Without a lock
+        // covering the pending-seek window, `decide()` may pick a new
+        // variant (UpSwitch / DownSwitch) and `apply()` writes it to the
+        // shared atomic the peer reads in `resolve_variant`.
+        let decision = state.scheduler.make_abr_decision();
+
+        assert!(
+            state.scheduler.abr.is_locked(),
+            "ABR must be locked for the duration of a pending seek; leaving \
+             it unlocked opens the mid-seek variant switch that makes the \
+             anchor byte_offset unreachable"
+        );
+        assert_eq!(
+            decision.reason,
+            AbrReason::Locked,
+            "make_abr_decision must short-circuit to Locked while the \
+             Timeline reports a pending seek, got {:?}",
+            decision.reason,
+        );
+    }
+
+    /// Companion to the pending-seek lock test: once the decoder has
+    /// applied the seek (`clear_seek_pending`), the next ABR tick must
+    /// release the lock so the controller can react to throughput again.
+    /// A stuck lock would pin the variant forever after any seek.
+    #[kithara::test]
+    fn abr_unlocks_when_seek_pending_clears() {
+        let mut state = make_hls_state();
+        let timeline = state.scheduler.coord.timeline();
+
+        // Drive the same first-tick path as the pending-seek test so ABR
+        // ends up locked.
+        let epoch = timeline.initiate_seek(Duration::from_secs(30));
+        let _ = state.scheduler.make_abr_decision();
+        assert!(
+            state.scheduler.abr.is_locked(),
+            "precondition: ABR is locked during the pending seek",
+        );
+
+        // Decoder finishes seeking → clear_seek_pending matches on epoch
+        // and lowers the flag. The very next ABR tick must see the flag
+        // cleared and release the lock.
+        timeline.clear_seek_pending(epoch);
+        assert!(
+            !timeline.is_seek_pending(),
+            "precondition: seek_pending cleared after clear_seek_pending",
+        );
+
+        let decision = state.scheduler.make_abr_decision();
+        assert!(
+            !state.scheduler.abr.is_locked(),
+            "ABR must unlock on the first tick after seek_pending clears — \
+             otherwise the first seek pins the variant for the rest of the \
+             session and ABR stops reacting to network conditions"
+        );
+        assert_ne!(
+            decision.reason,
+            AbrReason::Locked,
+            "decision reason must not be Locked once the lock has been \
+             released, got {:?}",
+            decision.reason,
+        );
+    }
 }
