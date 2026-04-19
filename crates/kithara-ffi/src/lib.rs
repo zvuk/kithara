@@ -12,6 +12,8 @@ uniffi::setup_scaffolding!();
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
+#[cfg(all(target_os = "android", feature = "test"))]
+pub(crate) mod android_test;
 pub mod cipher;
 pub mod config;
 pub(crate) mod event_bridge;

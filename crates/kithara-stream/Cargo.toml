@@ -21,6 +21,7 @@ kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 thunderdome = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }

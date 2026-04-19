@@ -25,6 +25,9 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 kithara-queue = { workspace = true }
+# Optional direct dep so the `test` feature can enable `internal` on
+# kithara-play (needed for `init_offline_backend` / offline module).
+kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "internal"] }
 bytes = { workspace = true }
 
 tokio-util = { workspace = true }
@@ -35,6 +38,11 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 uniffi = { workspace = true, optional = true, features = ["cli"] }
+tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread"] }
+# Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
+# `test` so the probe JNI can enumerate host/device configs without
+# touching the production firewheel backend types.
+cpal = { workspace = true, optional = true }
 
 [features]
 default = ["backend-uniffi"]
@@ -45,6 +53,11 @@ android = ["kithara/android"]
 # Currently: accepts TLS certs with invalid hostname / CA / expiry.
 # Not for production use.
 dev = []
+# Test-only conveniences enabled in debug android builds for diagnostics.
+# Exposes JNI entrypoints that render through the offline firewheel
+# backend and write WAV output, bypassing cpal/AAudio. Never ship in a
+# release AAR.
+test = ["kithara/test-utils", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 
 [dev-dependencies]
 futures = { workspace = true }
@@ -54,6 +67,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
+# rustls-platform-verifier 0.6.2 pins jni 0.21. Workspace jni is 0.22.
+# We bridge the two by importing 0.21 as `jni_rpv` solely for the
+# `init_with_env` call.
+jni_rpv = { package = "jni", version = "0.21.1" }
 ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }

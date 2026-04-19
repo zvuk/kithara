@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use kithara_events::{DownloaderEvent, EventBus};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{CancelGroup, time::Duration, tokio, tokio::task};
+use tracing::warn;
 
 use super::{
     cmd::{FetchCmd, FetchMethod},
@@ -134,6 +135,7 @@ async fn establish(
         url,
         range,
         headers,
+        validator,
         ..
     } = cmd;
 
@@ -148,6 +150,7 @@ async fn establish(
         });
     }
 
+    let fetch_url = url.clone();
     let fetch = async {
         match range {
             Some(range) => client.get_range(url, range, headers).await,
@@ -158,6 +161,13 @@ async fn establish(
         () = cancel.cancelled() => return Err(NetError::Cancelled),
         r = with_soft_timeout(fetch, soft_timeout, bus.as_ref()) => r?,
     };
+
+    if let Some(validate) = validator
+        && let Err(e) = validate(&byte_stream.headers)
+    {
+        warn!(url = %fetch_url, error = %e, "fetch rejected by response validator");
+        return Err(e);
+    }
 
     let resp_headers = byte_stream.headers.clone();
     let body = BodyStream::from_http(byte_stream, cancel.clone(), chunk_timeout);

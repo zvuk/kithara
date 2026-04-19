@@ -13,7 +13,7 @@ use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{FetchCmd, PeerHandle};
+use kithara_stream::dl::{FetchCmd, PeerHandle, reject_html_response};
 use tracing::{debug, trace};
 use url::Url;
 
@@ -98,7 +98,9 @@ async fn download_atomic_bytes(
     url: Url,
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
-    let cmd = FetchCmd::get(url).headers(headers);
+    let cmd = FetchCmd::get(url)
+        .headers(headers)
+        .with_validator(reject_html_response);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
 }

@@ -206,6 +206,7 @@ audioadapter-buffers = "3.0"
 smallvec = "1"
 
 # audio engine
+cpal = { version = "0.17", default-features = false }
 firewheel = { version = "0.10.0", default-features = false, features = ["std", "pool", "all_nodes", "musical_transport", "scheduled_events", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 bevy_platform = { version = "0.18", default-features = false, features = ["alloc", "std", "web"] }
@@ -260,7 +261,7 @@ tempfile = "3.27.0"
 uniffi = { version = "0.31.1" }
 jni = "0.22"
 ndk-context = "0.1.1"
-rustls-platform-verifier = "0.7.0"
+rustls-platform-verifier = "0.6.2"
 
 # async traits
 async-trait = "0.1.89"

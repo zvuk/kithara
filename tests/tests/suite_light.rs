@@ -37,6 +37,8 @@ mod kithara_hls {
     mod deferred_abr;
     mod driver_test;
     mod ephemeral;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod html_error_body;
     mod keys_integration;
     mod playlist_integration;
     mod red_leak_pattern;

@@ -22,6 +22,8 @@ pub enum NetError {
     Unimplemented,
     #[error("Cancelled")]
     Cancelled,
+    #[error("Invalid content-type: {0}")]
+    InvalidContentType(String),
 }
 
 impl NetError {
@@ -66,7 +68,10 @@ impl NetError {
                     || *status == Self::HTTP_TOO_MANY_REQUESTS
                     || *status == Self::HTTP_REQUEST_TIMEOUT
             }
-            Self::RetryExhausted { .. } | Self::Unimplemented | Self::Cancelled => false,
+            Self::RetryExhausted { .. }
+            | Self::Unimplemented
+            | Self::Cancelled
+            | Self::InvalidContentType(_) => false,
         }
     }
 }
@@ -119,6 +124,7 @@ mod tests {
     #[case::http_404(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None }, false)]
     #[case::unimplemented(NetError::Unimplemented, false)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
+    #[case::invalid_content_type(NetError::InvalidContentType("text/html".to_string()), false)]
     async fn test_is_retryable(#[case] error: NetError, #[case] expected_retryable: bool) {
         assert_eq!(error.is_retryable(), expected_retryable);
     }
