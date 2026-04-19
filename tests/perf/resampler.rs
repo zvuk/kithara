@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, atomic::AtomicU32};
 
-use hotpath::FunctionsGuardBuilder;
+use hotpath::HotpathGuardBuilder;
 use kithara::{
     audio::{AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality},
     bufpool::pcm_pool,
@@ -70,7 +70,7 @@ enum PerfScenario {
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
 #[ignore]
 fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
-    let _guard = FunctionsGuardBuilder::new(label).build();
+    let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::QualityComparison => {
             let input_spec = PcmSpec {

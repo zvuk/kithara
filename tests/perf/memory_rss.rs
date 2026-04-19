@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use hotpath::FunctionsGuardBuilder;
+use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -49,7 +49,7 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
-    let _guard = FunctionsGuardBuilder::new("rss_budget").build();
+    let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
 
     for run in 0..Consts::BUDGET_RUNS {
@@ -143,7 +143,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
-    let _guard = FunctionsGuardBuilder::new("rss_leak").build();
+    let _guard = HotpathGuardBuilder::new("rss_leak").build();
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
