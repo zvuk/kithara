@@ -40,6 +40,7 @@ mod kithara_hls {
     mod ephemeral;
     #[cfg(not(target_arch = "wasm32"))]
     mod html_error_body;
+    mod html_error_cleanup;
     mod keys_integration;
     mod playlist_integration;
     mod red_leak_pattern;
