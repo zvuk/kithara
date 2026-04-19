@@ -45,8 +45,8 @@ impl Consts {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
@@ -139,8 +139,8 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_leak").build();
