@@ -19,7 +19,7 @@ kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
 kithara-platform = { workspace = true }
-kithara-play = { workspace = true }
+kithara-play = { workspace = true, features = ["backend-cpal", "hls"] }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }
 hls_m3u8 = { workspace = true }
