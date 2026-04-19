@@ -277,14 +277,29 @@ pub(crate) struct ScopedAvailabilityObserver {
     asset_root: String,
     key: ResourceKey,
     index: AvailabilityIndex,
+    /// Optional signal shared with [`crate::disk_store::DiskAssetStore`]'s
+    /// auto-flush background task. `None` disables the commit-debounce
+    /// trigger (historical behaviour: callers drive `checkpoint()`
+    /// explicitly).
+    #[cfg(not(target_arch = "wasm32"))]
+    signal: Option<Arc<super::super::disk_store::CheckpointSignal>>,
 }
 
 impl ScopedAvailabilityObserver {
-    pub(crate) fn new(asset_root: String, key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
+    pub(crate) fn new(
+        asset_root: String,
+        key: ResourceKey,
+        index: AvailabilityIndex,
+        #[cfg(not(target_arch = "wasm32"))] signal: Option<
+            Arc<super::super::disk_store::CheckpointSignal>,
+        >,
+    ) -> Arc<Self> {
         Arc::new(Self {
             asset_root,
             key,
             index,
+            #[cfg(not(target_arch = "wasm32"))]
+            signal,
         })
     }
 }
@@ -297,6 +312,10 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_commit(&self, final_len: u64) {
         self.index
             .record_commit(&self.asset_root, &self.key, final_len);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref signal) = self.signal {
+            signal.on_commit();
+        }
     }
 }
 

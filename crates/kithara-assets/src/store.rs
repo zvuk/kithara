@@ -11,8 +11,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cache::CachedResource;
 
-/// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
-const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+/// Private module-level defaults, grouped per ast-grep style rule.
+struct Consts;
+impl Consts {
+    /// Default in-memory LRU cache capacity (init + 2-3 media segments).
+    const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+    /// Default commit-count debounce threshold for auto-checkpointing
+    /// `_index/availability.bin`. Sized so a handful of HLS segments
+    /// worth of work survive a restart without burning I/O on every
+    /// commit.
+    const DEFAULT_CHECKPOINT_EVERY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
@@ -44,6 +53,13 @@ pub struct StoreOptions {
     pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
+    /// Debounce threshold for auto-checkpointing `_index/availability.bin`.
+    ///
+    /// `Some(N)` — a background task flushes the aggregate every `N`
+    /// committed resources and on cancel-token shutdown. `None` — no
+    /// auto-flush; callers must drive [`AssetStore::checkpoint`]
+    /// explicitly. Default: [`Consts::DEFAULT_CHECKPOINT_EVERY`].
+    pub checkpoint_every: Option<NonZeroUsize>,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, the asset store uses `MemAssetStore` instead of
@@ -64,6 +80,7 @@ impl fmt::Debug for StoreOptions {
         f.debug_struct("StoreOptions")
             .field("cache_dir", &self.cache_dir)
             .field("cache_capacity", &self.cache_capacity)
+            .field("checkpoint_every", &self.checkpoint_every)
             .field("ephemeral", &self.ephemeral)
             .field("max_assets", &self.max_assets)
             .field("max_bytes", &self.max_bytes)
@@ -83,6 +100,7 @@ impl Default for StoreOptions {
             #[cfg(target_arch = "wasm32")]
             cache_dir: PathBuf::from("/kithara"),
             cache_capacity: None,
+            checkpoint_every: Some(Consts::DEFAULT_CHECKPOINT_EVERY),
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
@@ -97,6 +115,7 @@ impl StoreOptions {
         Self {
             cache_dir: cache_dir.into(),
             cache_capacity: None,
+            checkpoint_every: Some(Consts::DEFAULT_CHECKPOINT_EVERY),
             ephemeral: false,
             max_assets: None,
             max_bytes: None,
@@ -107,7 +126,8 @@ impl StoreOptions {
     /// Effective LRU cache capacity (explicit or default).
     #[must_use]
     pub fn effective_cache_capacity(&self) -> NonZeroUsize {
-        self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY)
+        self.cache_capacity
+            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY)
     }
 
     /// Convert to internal `EvictConfig`.
@@ -181,6 +201,7 @@ pub(crate) type MemStore<Ctx = ()> =
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancellationToken>,
+    checkpoint_every: Option<NonZeroUsize>,
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
     mem_resource_capacity: Option<usize>,
@@ -211,6 +232,7 @@ impl AssetStoreBuilder<()> {
         Self {
             cache_capacity: None,
             cancel: None,
+            checkpoint_every: None,
             ephemeral: false,
             evict_config: None,
             mem_resource_capacity: None,
@@ -296,6 +318,23 @@ where
         self
     }
 
+    /// Enable auto-checkpointing of `_index/availability.bin`.
+    ///
+    /// With `n = N`, the disk backend spawns a background task that
+    /// flushes the aggregate every `N` committed resources (debounced
+    /// through an internal [`tokio::sync::Notify`]) and performs a
+    /// final flush when the cancel token fires.
+    ///
+    /// Silently a no-op for the ephemeral backend and for builds not
+    /// attached to a tokio runtime — in both cases the caller remains
+    /// responsible for calling [`crate::AssetStore::checkpoint`]
+    /// directly if durable byte-availability is required.
+    #[must_use]
+    pub fn checkpoint_every(mut self, n: NonZeroUsize) -> Self {
+        self.checkpoint_every = Some(n);
+        self
+    }
+
     /// Set capacity of each in-memory resource for ephemeral backend.
     #[must_use]
     pub fn mem_resource_capacity(mut self, capacity: usize) -> Self {
@@ -375,7 +414,12 @@ where
             asset_root,
             cancel.clone(),
             availability,
+            self.checkpoint_every,
         ));
+        // Spawn the background flusher after Arc wrapping so the task can
+        // own a cheap clone of `Arc<DiskAssetStore>`. Silently no-ops when
+        // `checkpoint_every` is `None` or no tokio runtime is attached.
+        DiskAssetStore::spawn_auto_flush(Arc::clone(&disk));
         let base = Arc::clone(&disk);
         let evict = Arc::new(EvictAssets::new(
             disk,
@@ -388,7 +432,9 @@ where
             process_fn,
             pool.clone(),
         ));
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        let capacity = self
+            .cache_capacity
+            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
@@ -425,7 +471,9 @@ where
             cancel.clone(),
             pool.clone(),
         ));
-        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        let capacity = self
+            .cache_capacity
+            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         let processing = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
             process_fn,
@@ -458,6 +506,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
         AssetStoreBuilder {
             cache_capacity: self.cache_capacity,
             cancel: self.cancel,
+            checkpoint_every: self.checkpoint_every,
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
             mem_resource_capacity: self.mem_resource_capacity,

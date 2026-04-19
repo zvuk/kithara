@@ -74,6 +74,10 @@ impl MemAssetStore {
             self.asset_root.clone(),
             key.clone(),
             self.availability.clone(),
+            // No disk → no auto-flush. The parameter is gated on native
+            // targets only; on wasm the function signature doesn't include it.
+            #[cfg(not(target_arch = "wasm32"))]
+            None,
         )
     }
 

@@ -102,6 +102,9 @@ impl StreamType for Hls {
         if let Some(cap) = config.store.cache_capacity {
             builder = builder.cache_capacity(cap);
         }
+        if let Some(n) = config.store.checkpoint_every {
+            builder = builder.checkpoint_every(n);
+        }
         let backend: AssetStore<DecryptContext> = builder.build();
 
         let hls_peer = Arc::new(HlsPeer::new());

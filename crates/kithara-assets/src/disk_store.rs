@@ -4,10 +4,15 @@
 use std::{
     fs,
     io::{self, Error as IoError, ErrorKind},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
+use kithara_platform::tokio::{runtime::Handle, sync::Notify};
 use kithara_storage::{
     Atomic, AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
     ResourceStatus, StorageError, StorageResource,
@@ -25,6 +30,37 @@ use crate::{
 /// Initial mmap file size for index resources (4 KB).
 const INDEX_INITIAL_SIZE: u64 = 4096;
 
+/// Coordination primitive for auto-checkpointing `_index/availability.bin`.
+///
+/// Every [`ScopedAvailabilityObserver::on_commit`] call increments a shared
+/// counter and wakes [`DiskAssetStore::spawn_auto_flush`]'s background task
+/// every `threshold` commits. The task also flushes on cancel-token
+/// shutdown.
+#[derive(Debug)]
+pub(crate) struct CheckpointSignal {
+    pub(crate) commits: AtomicUsize,
+    pub(crate) threshold: NonZeroUsize,
+    pub(crate) notify: Notify,
+}
+
+impl CheckpointSignal {
+    fn new(threshold: NonZeroUsize) -> Self {
+        Self {
+            commits: AtomicUsize::new(0),
+            threshold,
+            notify: Notify::new(),
+        }
+    }
+
+    /// Called from the availability observer after every commit.
+    pub(crate) fn on_commit(&self) {
+        let prev = self.commits.fetch_add(1, Ordering::Relaxed);
+        if (prev + 1).is_multiple_of(self.threshold.get()) {
+            self.notify.notify_one();
+        }
+    }
+}
+
 /// Concrete on-disk [`Assets`] implementation for a single asset.
 ///
 /// Maps [`ResourceKey`] to disk paths under a root directory.
@@ -35,6 +71,12 @@ pub struct DiskAssetStore {
     asset_root: String,
     cancel: CancellationToken,
     availability: AvailabilityIndex,
+    /// When set, every commit observed by this store increments a shared
+    /// counter and — every `threshold` commits — wakes the background
+    /// flusher spawned by [`DiskAssetStore::spawn_auto_flush`]. `None`
+    /// preserves the explicit-checkpoint historical behaviour (callers
+    /// must invoke `AssetStore::checkpoint()` themselves).
+    checkpoint_signal: Option<Arc<CheckpointSignal>>,
 }
 
 impl DiskAssetStore {
@@ -49,7 +91,7 @@ impl DiskAssetStore {
         asset_root: S,
         cancel: CancellationToken,
     ) -> Self {
-        Self::with_availability(root_dir, asset_root, cancel, AvailabilityIndex::new())
+        Self::with_availability(root_dir, asset_root, cancel, AvailabilityIndex::new(), None)
     }
 
     /// Like [`DiskAssetStore::new`] but shares the given aggregate
@@ -64,17 +106,26 @@ impl DiskAssetStore {
     /// `PinsIndex::load`). Errors from the underlying resource read
     /// itself are swallowed here — a broken cache must not prevent
     /// store construction.
+    ///
+    /// When `checkpoint_every` is `Some`, a [`CheckpointSignal`] is
+    /// attached to the availability observer so commits can drive the
+    /// background flusher (see [`Self::spawn_auto_flush`]). `None`
+    /// disables auto-flush — callers must invoke
+    /// [`crate::AssetStore::checkpoint`] explicitly.
     pub(crate) fn with_availability<P: Into<PathBuf>, S: Into<String>>(
         root_dir: P,
         asset_root: S,
         cancel: CancellationToken,
         availability: AvailabilityIndex,
+        checkpoint_every: Option<NonZeroUsize>,
     ) -> Self {
+        let checkpoint_signal = checkpoint_every.map(|n| Arc::new(CheckpointSignal::new(n)));
         let store = Self {
             root_dir: root_dir.into(),
             asset_root: asset_root.into(),
             cancel,
             availability,
+            checkpoint_signal,
         };
         let _ = store.seed_availability_from_disk();
         store
@@ -153,11 +204,63 @@ impl DiskAssetStore {
         self.availability.persist_to(&atomic)
     }
 
+    /// Spawn the background flusher that persists `_index/availability.bin`
+    /// on two triggers:
+    ///
+    /// - every `checkpoint_every` commits observed by this store
+    ///   (coalesced through [`CheckpointSignal`]);
+    /// - when the owning cancel token fires (cooperative shutdown).
+    ///
+    /// No-op when `checkpoint_every` was not configured. Silently skipped
+    /// when no tokio runtime is attached to the current thread — the
+    /// aggregate then persists only via explicit
+    /// [`crate::AssetStore::checkpoint`] calls (historical behaviour).
+    pub(crate) fn spawn_auto_flush(store: Arc<Self>) {
+        let Some(signal) = store.checkpoint_signal.clone() else {
+            return;
+        };
+        let Ok(handle) = Handle::try_current() else {
+            tracing::debug!(
+                asset_root = %store.asset_root,
+                "DiskAssetStore::spawn_auto_flush: no tokio runtime; auto-checkpoint disabled",
+            );
+            return;
+        };
+
+        let cancel = store.cancel.clone();
+        handle.spawn(async move {
+            loop {
+                tokio::select! {
+                    () = signal.notify.notified() => {
+                        if let Err(e) = store.checkpoint() {
+                            tracing::warn!(
+                                asset_root = %store.asset_root,
+                                error = %e,
+                                "auto-checkpoint: flush failed",
+                            );
+                        }
+                    }
+                    () = cancel.cancelled() => {
+                        if let Err(e) = store.checkpoint() {
+                            tracing::warn!(
+                                asset_root = %store.asset_root,
+                                error = %e,
+                                "auto-checkpoint: shutdown flush failed",
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
         crate::index::ScopedAvailabilityObserver::new(
             self.asset_root.clone(),
             key.clone(),
             self.availability.clone(),
+            self.checkpoint_signal.clone(),
         )
     }
 
