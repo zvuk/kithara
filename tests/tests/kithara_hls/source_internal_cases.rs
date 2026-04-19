@@ -515,6 +515,16 @@ fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
+    // Layout variant (0) has target segment 2 committed, so
+    // resolve_seek_anchor prefers it over the ABR target. This keeps
+    // the test focused on its original intent — "seek landing
+    // resolves demand from the decoder-landed offset" — without
+    // tripping the fallback-to-ABR path (exercised by dedicated tests
+    // in source::tests).
+    {
+        let mut segments = shared.segments.lock_sync();
+        segments.commit_segment(0, 2, make_segment_data(100));
+    }
     shared.abr_variant_index.store(1, Ordering::Relaxed);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);

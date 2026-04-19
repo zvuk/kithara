@@ -15,23 +15,63 @@ impl HlsSource {
             return Err(HlsError::SegmentNotFound("empty playlist".to_string()));
         }
 
-        // Use current layout variant, NOT ABR target.
-        // ABR must not affect seek resolution — variant switch happens
-        // after seek completes, via format_change detection.
-        let mut variant = self.segments.lock_sync().layout_variant();
-        if variant >= variants {
-            variant = 0;
-        }
+        // Default policy: anchor resolves in `layout_variant` so an
+        // in-place seek doesn't uselessly recreate the decoder while
+        // the layout still has the data. However, when ABR has already
+        // diverted the peer to another variant and the layout never
+        // got the target segment committed (ABR up-switched before
+        // reaching it), using layout points at bytes that will never
+        // arrive. In that case fall back to `abr_variant_index` —
+        // that IS the variant the peer is actively fetching, so the
+        // anchor aligns with incoming data and `classify_seek` returns
+        // `Reset` to drive decoder recreation.
+        let layout_variant = {
+            let segs = self.segments.lock_sync();
+            let v = segs.layout_variant();
+            if v < variants { v } else { 0 }
+        };
 
-        let (segment_index, segment_start, segment_end) = self
+        let (layout_segment_index, layout_segment_start, layout_segment_end) = self
             .playlist_state
-            .find_seek_point_for_time(variant, position)
+            .find_seek_point_for_time(layout_variant, position)
             .ok_or_else(|| {
                 HlsError::SegmentNotFound(format!(
-                    "seek point not found: variant={variant} target_ms={}",
+                    "seek point not found: variant={layout_variant} target_ms={}",
                     position.as_millis()
                 ))
             })?;
+
+        let layout_has_target = self
+            .segments
+            .lock_sync()
+            .is_segment_loaded(layout_variant, layout_segment_index);
+
+        let (variant, segment_index, segment_start, segment_end) = if layout_has_target {
+            (
+                layout_variant,
+                layout_segment_index,
+                layout_segment_start,
+                layout_segment_end,
+            )
+        } else {
+            let abr_variant = self
+                .coord
+                .abr_variant_index
+                .load(std::sync::atomic::Ordering::Acquire);
+            let fallback = if abr_variant < variants && abr_variant != layout_variant {
+                self.playlist_state
+                    .find_seek_point_for_time(abr_variant, position)
+                    .map(|(idx, start, end)| (abr_variant, idx, start, end))
+            } else {
+                None
+            };
+            fallback.unwrap_or((
+                layout_variant,
+                layout_segment_index,
+                layout_segment_start,
+                layout_segment_end,
+            ))
+        };
 
         let byte_offset = self
             .byte_offset_for_segment(variant, segment_index)
