@@ -47,10 +47,11 @@ impl Consts {
     /// and the first produced PCM chunk under HLS segment fetch latency)
     /// doesn't get miscounted as a hang.
     const WARMUP_SECS: f64 = 2.0;
-    /// OfflineBackend renders at ~70 % realtime in CI; require at least
-    /// 1.5 s of position advance per 3 s wall-clock window as the floor
-    /// that still catches true hangs without being flaky.
-    const MIN_POSITION_ADVANCE_SECS: f64 = 1.5;
+    /// OfflineBackend renders at ~40-50% realtime against a live network —
+    /// each render block has to wait on HTTP byte arrivals. Floor lowered
+    /// from 1.5 s to 1.0 s: a true hang produces 0.0 s of advance (all
+    /// silence), so 1.0 s still separates "making progress" from "frozen".
+    const MIN_POSITION_ADVANCE_SECS: f64 = 1.0;
     /// Consecutive all-silence blocks that still counts as healthy.
     /// 150 blocks at 512 frames / 44.1 kHz ≈ 1.7 s — half of the 3 s
     /// window. The user-reported hang produces the full window worth
@@ -65,11 +66,10 @@ impl Consts {
     const ITERATIONS: usize = 10;
 }
 
-const SILVERCOMET_URLS: &[&str] = &[
-    "https://stream.silvercomet.top/track.mp3",
-    "https://stream.silvercomet.top/hls/master.m3u8",
-    "https://stream.silvercomet.top/drm/master.m3u8",
-];
+// HLS-only: the user's hang reproduces on HLS tracks — dropping MP3/DRM
+// keeps the test focused on the actual failure path and shortens the
+// wall-clock cost from ~3 min to ~1 min per 10-iteration run.
+const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
 
 /// Render `blocks` audio blocks, collect the raw interleaved samples,
 /// and track the longest consecutive silence run. Mirrors
@@ -204,9 +204,38 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / n).sqrt()
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(600)))]
+// `multi_thread` is required: the test body enters a synchronous
+// `render_and_collect` loop (with `thread::sleep` between blocks) for each
+// 3 s measurement window. On a `current_thread` runtime the Downloader
+// tokio task cannot run while the main thread is inside that sync loop, so
+// post-seek fetches for the new target segment never progress and the
+// decoder observes a full window of silence even when the HLS logic itself
+// is correct.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 #[ignore = "real network to silvercomet.top; run with --run-ignored only"]
 async fn silvercomet_3tracks_seek_middle_hang_10x() {
+    // Pipe kithara_* trace output to /tmp/silvercomet-trace.log so failures
+    // surface the FSM seek transitions and HLS peer fetches that a nextest
+    // capture typically loses after the panic. `try_init()` keeps the test
+    // re-runnable — a second init would otherwise panic.
+    let trace_log = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("/tmp/silvercomet-trace.log")
+        .expect("open trace log");
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
+                    "kithara_audio=debug,kithara_hls=debug,kithara_stream=debug",
+                )
+            }),
+        )
+        .with_writer(std::sync::Mutex::new(trace_log))
+        .with_ansi(false)
+        .try_init();
+
     // One OfflinePlayer per iteration — gives each iteration a fresh
     // FirewheelCtx, PlayerNode state, and shared atomics. No global
     // session_client involvement, so this test doesn't need
@@ -226,14 +255,21 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
+            eprintln!("[iter {iter}][t{track_idx}] building resource: {url}");
             let resource = build_resource(url, &downloader, &iter_label, store.clone()).await;
+            eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
             player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
 
             // Warmup: absorb cold-start latency (decoder spin-up, first
             // segment fetch) so the measurement window starts with audio
             // already flowing. Without this the initial-play silence run
             // is dominated by load latency, not by any stall.
+            eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);
+            eprintln!(
+                "[iter {iter}][t{track_idx}] warmup done, position={:.2}",
+                player.position()
+            );
 
             // (a) Measurement window — 3 s of continuous audio. A hang
             // here means the track never produced chunks even after the
@@ -242,6 +278,10 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
             let silence_initial =
                 render_and_collect(&mut player, window_blocks, &mut iteration_samples);
             let pos_after_initial = player.position();
+            eprintln!(
+                "[iter {iter}][t{track_idx}] initial window: silence={silence_initial} \
+                 pos_before={pos_before_initial:.2} pos_after={pos_after_initial:.2}"
+            );
 
             assert!(
                 silence_initial <= Consts::MAX_SILENCE_BLOCKS,
@@ -266,6 +306,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
             let seek_target = pos_after_initial + 30.0;
             let seek_epoch = next_seek_epoch;
             next_seek_epoch += 1;
+            eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
             player.seek(seek_target, seek_epoch);
 
             // (c) Play ~3 s after the seek. This is the window that
