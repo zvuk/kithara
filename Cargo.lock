@@ -4461,6 +4461,7 @@ name = "kithara-stream"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bitflags 2.11.0",
  "bytes",
  "delegate",
  "derive_setters",

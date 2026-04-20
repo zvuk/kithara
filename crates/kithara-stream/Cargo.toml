@@ -11,6 +11,7 @@ description = "Streaming orchestration (source -> bytes stream) with sync Read+S
 workspace = true
 
 [dependencies]
+bitflags = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 derive_setters = { workspace = true }
