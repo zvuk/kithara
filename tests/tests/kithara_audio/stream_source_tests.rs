@@ -22,7 +22,7 @@ use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
-    Stream, StreamError, StreamResult, StreamType, Timeline, TransferCoordination,
+    Stream, StreamError, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -51,28 +51,11 @@ struct TestSourceState {
 
 struct TestSource {
     state: Arc<Mutex<TestSourceState>>,
-    coord: TestCoord,
-}
-
-struct TestCoord {
     timeline: Timeline,
-}
-
-impl TestCoord {
-    fn new(timeline: Timeline) -> Self {
-        Self { timeline }
-    }
-}
-
-impl TransferCoordination for TestCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
 }
 
 impl TestSource {
     fn new(data: Vec<u8>, len: Option<u64>) -> Self {
-        let timeline = Timeline::new();
         Self {
             state: Arc::new(Mutex::new(TestSourceState {
                 data,
@@ -90,7 +73,7 @@ impl TestSource {
                 seek_anchor: None,
                 seek_anchor_sets_position: false,
             })),
-            coord: TestCoord::new(timeline),
+            timeline: Timeline::new(),
         }
     }
 
@@ -101,10 +84,9 @@ impl TestSource {
 
 impl Source for TestSource {
     type Error = io::Error;
-    type Coord = TestCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -113,12 +95,12 @@ impl Source for TestSource {
         timeout: Duration,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
-        if self.coord.timeline.is_flushing() {
+        if self.timeline.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
         }
 
         let len = self.state.lock_sync().len;
-        if self.coord.timeline.eof() && len.is_some_and(|total| total > 0 && range.start >= total) {
+        if self.timeline.eof() && len.is_some_and(|total| total > 0 && range.start >= total) {
             return Ok(WaitOutcome::Eof);
         }
 
@@ -201,19 +183,19 @@ impl Source for TestSource {
         let set_position = state.seek_anchor_sets_position;
         drop(state);
         if set_position && let Some(anchor) = anchor {
-            self.coord.timeline.set_byte_position(anchor.byte_offset);
+            self.timeline.set_byte_position(anchor.byte_offset);
         }
         Ok(anchor)
     }
 
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
         let mut state = self.state.lock_sync();
-        state.seek_landing = Some(self.coord.timeline.byte_position());
+        state.seek_landing = Some(self.timeline.byte_position());
         state.seek_landing_anchor = anchor;
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if self.coord.timeline.is_flushing() {
+        if self.timeline.is_flushing() {
             return SourcePhase::Seeking;
         }
         if self
@@ -249,7 +231,6 @@ struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
-    type Coord = TestCoord;
     type Source = TestSource;
     type Error = io::Error;
     type Events = ();

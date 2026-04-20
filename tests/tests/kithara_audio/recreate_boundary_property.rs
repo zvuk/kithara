@@ -30,7 +30,7 @@ use kithara_platform::{Mutex, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
-    Stream, StreamResult, StreamType, Timeline, TransferCoordination,
+    Stream, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -70,17 +70,7 @@ struct TestSourceState {
 
 struct TestSource {
     state: Arc<Mutex<TestSourceState>>,
-    coord: TestCoord,
-}
-
-struct TestCoord {
     timeline: Timeline,
-}
-
-impl TransferCoordination for TestCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
 }
 
 impl TestSource {
@@ -94,9 +84,7 @@ impl TestSource {
                 format_change_range: None,
                 seek_anchor: None,
             })),
-            coord: TestCoord {
-                timeline: Timeline::new(),
-            },
+            timeline: Timeline::new(),
         }
     }
 
@@ -107,10 +95,9 @@ impl TestSource {
 
 impl Source for TestSource {
     type Error = io::Error;
-    type Coord = TestCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -118,7 +105,7 @@ impl Source for TestSource {
         _range: Range<u64>,
         _timeout: Duration,
     ) -> StreamResult<WaitOutcome, Self::Error> {
-        if self.coord.timeline.is_flushing() {
+        if self.timeline.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
         }
         Ok(WaitOutcome::Ready)
@@ -162,7 +149,7 @@ impl Source for TestSource {
     fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        if self.coord.timeline.is_flushing() {
+        if self.timeline.is_flushing() {
             return SourcePhase::Seeking;
         }
         SourcePhase::Ready
@@ -180,7 +167,6 @@ struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
-    type Coord = TestCoord;
     type Source = TestSource;
     type Error = io::Error;
     type Events = ();

@@ -709,10 +709,7 @@ mod tests {
     use kithara_net::NetError;
     use kithara_platform::{Mutex as PlatformMutex, time::Instant as PlatformInstant};
     use kithara_storage::ResourceExt;
-    use kithara_stream::{
-        TransferCoordination,
-        dl::{Downloader, DownloaderConfig},
-    };
+    use kithara_stream::dl::{Downloader, DownloaderConfig};
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
     use url::Url;

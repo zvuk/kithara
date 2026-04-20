@@ -2,7 +2,6 @@
 
 pub use crate::{
     context::{NullStreamContext, StreamContext},
-    coordination::TransferCoordination,
     demand::DemandSlot,
     error::{StreamError, StreamResult},
     media::{AudioCodec, ContainerFormat, MediaInfo},

@@ -9,11 +9,10 @@ use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourcePhase, Stream, StreamResult,
-    StreamType,
+    StreamType, Timeline,
 };
 
 use crate::{
-    memory_source::MemoryCoord,
     signal_pcm::{SignalPcm, signal},
     wav::WavHeader,
 };
@@ -21,7 +20,7 @@ use crate::{
 /// WAV-backed `Source` adapter over [`SignalPcm`].
 pub struct SignalSource<S: signal::SignalFn> {
     pcm: SignalPcm<S>,
-    coord: MemoryCoord,
+    timeline: Timeline,
     header: WavHeader,
 }
 
@@ -34,7 +33,7 @@ impl<S: signal::SignalFn> SignalSource<S> {
     #[must_use]
     pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
-            coord: MemoryCoord::default(),
+            timeline: Timeline::new(),
             header: create_header_from_signal(&pcm),
             pcm,
         }
@@ -60,10 +59,9 @@ pub struct SignalSourceError;
 
 impl<S: signal::SignalFn> Source for SignalSource<S> {
     type Error = SignalSourceError;
-    type Coord = MemoryCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -136,7 +134,6 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
 impl<S: signal::SignalFn> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
-    type Coord = MemoryCoord;
     type Source = SignalSource<S>;
     type Error = io::Error;
 

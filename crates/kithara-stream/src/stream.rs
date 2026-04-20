@@ -20,7 +20,6 @@ use kithara_storage::WaitOutcome;
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
-    coordination::TransferCoordination,
     source::{ReadOutcome, Source, VariantChangeError},
 };
 
@@ -33,11 +32,9 @@ use crate::{
 pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
-    /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination;
 
     /// Source implementing `Source`.
-    type Source: Source<Coord = Self::Coord>;
+    type Source: Source;
 
     /// Error type for stream creation.
     type Error: StdError + Send + Sync + 'static;
@@ -329,20 +326,9 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    #[derive(Default)]
-    struct TestCoord {
-        timeline: Timeline,
-    }
-
-    impl TransferCoordination for TestCoord {
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
-        }
-    }
-
     struct ScriptSource {
         anchor: Option<SourceSeekAnchor>,
-        coord: TestCoord,
+        timeline: Timeline,
         data: Vec<u8>,
         reads: VecDeque<ReadOutcome>,
         waits: VecDeque<WaitOutcome>,
@@ -357,7 +343,7 @@ mod tests {
         ) -> Self {
             Self {
                 anchor: None,
-                coord: TestCoord { timeline },
+                timeline,
                 data,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
@@ -367,10 +353,9 @@ mod tests {
 
     impl Source for ScriptSource {
         type Error = io::Error;
-        type Coord = TestCoord;
 
-        fn coord(&self) -> &Self::Coord {
-            &self.coord
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
         }
 
         fn wait_range(
@@ -421,7 +406,6 @@ mod tests {
 
     impl StreamType for DummyType {
         type Config = ();
-        type Coord = TestCoord;
         type Error = io::Error;
         type Events = ();
         type Source = ScriptSource;
@@ -435,7 +419,6 @@ mod tests {
 
     impl StreamType for SeekDuringWaitType {
         type Config = ();
-        type Coord = TestCoord;
         type Error = io::Error;
         type Events = ();
         type Source = SeekDuringWaitSource;
@@ -446,16 +429,15 @@ mod tests {
     }
 
     struct SeekDuringWaitSource {
-        coord: TestCoord,
+        timeline: Timeline,
         read_calls: usize,
     }
 
     impl Source for SeekDuringWaitSource {
         type Error = io::Error;
-        type Coord = TestCoord;
 
-        fn coord(&self) -> &Self::Coord {
-            &self.coord
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
         }
 
         fn wait_range(
@@ -463,7 +445,7 @@ mod tests {
             _range: Range<u64>,
             _timeout: Duration,
         ) -> crate::StreamResult<WaitOutcome, Self::Error> {
-            let _ = self.coord.timeline.initiate_seek(Duration::from_millis(10));
+            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
 
@@ -524,9 +506,7 @@ mod tests {
     fn read_aborts_when_seek_epoch_changes_after_wait() {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
-            coord: TestCoord {
-                timeline: timeline.clone(),
-            },
+            timeline: timeline.clone(),
             read_calls: 0,
         };
         let mut stream = Stream::<SeekDuringWaitType> { source };

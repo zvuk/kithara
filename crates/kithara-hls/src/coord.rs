@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use kithara_platform::{Condvar, tokio::sync::Notify};
-use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
+use kithara_stream::{DemandSlot, Timeline};
 use tokio_util::sync::CancellationToken;
 
 use crate::ids::{SegmentIndex, VariantIndex};
@@ -80,12 +80,6 @@ impl HlsCoord {
 
     #[must_use]
     pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
-
-impl TransferCoordination for HlsCoord {
-    fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
 }

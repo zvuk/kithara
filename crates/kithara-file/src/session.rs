@@ -14,7 +14,7 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
-    AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError,
+    AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError, Timeline,
     dl::{FetchCmd, Peer, PeerHandle, reject_html_response},
 };
 use tokio_util::sync::CancellationToken;
@@ -493,10 +493,9 @@ async fn run_range_download(inner: Arc<Mutex<FileInner>>, peer: PeerHandle, rang
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
-    type Coord = Arc<FileCoord>;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.coord.timeline()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

@@ -14,7 +14,7 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{Timeline, coordination::TransferCoordination, error::StreamResult, media::MediaInfo};
+use crate::{Timeline, error::StreamResult, media::MediaInfo};
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -111,18 +111,20 @@ impl SourceSeekAnchor {
     unimock(
         api = SourceMock,
         type Error = std::io::Error;
-        type Coord = ();
     )
 )]
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
     /// Error type.
     type Error: StdError + Send + Sync + 'static;
-    /// Shared runtime coordination between source and downloader.
-    type Coord: TransferCoordination;
 
-    /// Shared runtime coordination for this source.
-    fn coord(&self) -> &Self::Coord;
+    /// Get shared playback timeline.
+    ///
+    /// Timeline is the single source of truth for playback state across all
+    /// stream types (segmented and non-segmented). Sources own their
+    /// Timeline and hand out cheap Arc clones to downstream consumers
+    /// (reader, audio FSM, Downloader peers).
+    fn timeline(&self) -> Timeline;
 
     /// Wait for data in range to be available.
     ///
@@ -251,14 +253,6 @@ pub trait Source: Send + 'static {
     /// sequentially and does not need explicit demand signals.
     fn demand_range(&self, _range: Range<u64>) {}
 
-    /// Get shared playback timeline.
-    ///
-    /// Timeline is the single source of truth for playback state across all
-    /// stream types (segmented and non-segmented).
-    fn timeline(&self) -> Timeline {
-        self.coord().timeline()
-    }
-
     /// Resolve `position` to a source-specific seek anchor.
     ///
     /// Segmented sources (HLS) should map time to a deterministic segment
@@ -294,18 +288,6 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default)]
-    struct TestCoord {
-        timeline: Timeline,
-    }
-
-    impl TransferCoordination for TestCoord {
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
-        }
-    }
-
-    // Dummy test to verify trait compiles
     #[kithara::test]
     fn test_source_trait_object_safety() {
         // Source is not object-safe due to associated types,
@@ -322,11 +304,13 @@ mod tests {
     fn phase_default_delegates_to_phase_at() {
         #[derive(Default)]
         struct ReadySource {
-            coord: TestCoord,
+            timeline: Timeline,
         }
         impl Source for ReadySource {
             type Error = std::io::Error;
-            type Coord = TestCoord;
+            fn timeline(&self) -> Timeline {
+                self.timeline.clone()
+            }
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,
@@ -346,10 +330,6 @@ mod tests {
             }
             fn len(&self) -> Option<u64> {
                 Some(100)
-            }
-
-            fn coord(&self) -> &Self::Coord {
-                &self.coord
             }
         }
         let source = ReadySource::default();

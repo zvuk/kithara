@@ -11,46 +11,26 @@ use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
 struct TimelineSource {
-    coord: TimelineCoord,
-    data: Vec<u8>,
-}
-
-struct TimelineCoord {
     timeline: Timeline,
-}
-
-impl TimelineCoord {
-    fn new(timeline: Timeline) -> Self {
-        Self { timeline }
-    }
-}
-
-impl TransferCoordination for TimelineCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
+    data: Vec<u8>,
 }
 
 impl TimelineSource {
     fn new(data: Vec<u8>, timeline: Timeline) -> Self {
-        Self {
-            coord: TimelineCoord::new(timeline),
-            data,
-        }
+        Self { timeline, data }
     }
 }
 
 impl Source for TimelineSource {
     type Error = io::Error;
-    type Coord = TimelineCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -93,7 +73,6 @@ struct TimelineStream;
 
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
-    type Coord = TimelineCoord;
     type Source = TimelineSource;
     type Error = io::Error;
     type Events = ();

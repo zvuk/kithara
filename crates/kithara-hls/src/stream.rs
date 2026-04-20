@@ -54,7 +54,6 @@ fn make_invalidation_callback(
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Coord = Arc<HlsCoord>;
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;

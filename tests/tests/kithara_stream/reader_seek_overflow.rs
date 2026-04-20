@@ -42,41 +42,23 @@ use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
 /// Minimal mock source with known length.
 struct MockSource {
-    coord: MockCoord,
+    timeline: Timeline,
     data: Vec<u8>,
     /// Reported length (may differ from actual data size).
     /// Simulates `expected_total_length` in HLS which is metadata-derived.
     reported_len: u64,
 }
 
-struct MockCoord {
-    timeline: Timeline,
-}
-
-impl MockCoord {
-    fn new() -> Self {
-        Self {
-            timeline: Timeline::new(),
-        }
-    }
-}
-
-impl TransferCoordination for MockCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
-
 impl MockSource {
     fn new(len: usize) -> Self {
         Self {
-            coord: MockCoord::new(),
+            timeline: Timeline::new(),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
         }
@@ -86,7 +68,7 @@ impl MockSource {
     /// Avoids allocating huge buffers when only testing seek bounds.
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
-            coord: MockCoord::new(),
+            timeline: Timeline::new(),
             data: Vec::new(),
             reported_len,
         }
@@ -95,10 +77,9 @@ impl MockSource {
 
 impl Source for MockSource {
     type Error = io::Error;
-    type Coord = MockCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -137,7 +118,6 @@ struct MockStream;
 
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
-    type Coord = MockCoord;
     type Source = MockSource;
     type Error = io::Error;
     type Events = ();

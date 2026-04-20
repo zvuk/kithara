@@ -9,10 +9,10 @@ use std::{
 };
 
 use kithara_platform::tokio as platform_tokio;
-use kithara_stream::{DemandSlot, Timeline, TransferCoordination};
+use kithara_stream::{DemandSlot, Timeline};
 use platform_tokio::sync::Notify;
 
-pub struct FileCoord {
+pub(crate) struct FileCoord {
     demand: DemandSlot<Range<u64>>,
     downloader_wake: Notify,
     reader_advanced: Notify,
@@ -92,11 +92,5 @@ impl FileCoord {
 impl Default for FileCoord {
     fn default() -> Self {
         Self::new(Timeline::new())
-    }
-}
-
-impl TransferCoordination for FileCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline()
     }
 }

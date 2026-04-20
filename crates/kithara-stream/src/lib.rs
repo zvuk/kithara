@@ -11,7 +11,6 @@
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod context;
-mod coordination;
 mod demand;
 pub mod dl;
 mod error;
@@ -28,7 +27,6 @@ pub mod internal;
 pub mod mock;
 
 pub use context::{NullStreamContext, StreamContext};
-pub use coordination::TransferCoordination;
 pub use demand::DemandSlot;
 pub use error::{StreamError, StreamResult};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};

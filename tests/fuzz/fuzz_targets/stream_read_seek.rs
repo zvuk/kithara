@@ -12,7 +12,7 @@ use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline, TransferCoordination,
+    StreamType, Timeline,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -98,29 +98,17 @@ impl<'a> Arbitrary<'a> for Input {
 
 #[derive(Default)]
 struct ScriptSource {
-    coord: ScriptCoord,
+    timeline: Timeline,
     data: Vec<u8>,
     reads: VecDeque<ReadOutcome>,
     waits: VecDeque<WaitOutcome>,
 }
 
-#[derive(Default)]
-struct ScriptCoord {
-    timeline: Timeline,
-}
-
-impl TransferCoordination for ScriptCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
-
 impl Source for ScriptSource {
     type Error = io::Error;
-    type Coord = ScriptCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -160,7 +148,6 @@ struct DummyType;
 
 impl StreamType for DummyType {
     type Config = ScriptSource;
-    type Coord = ScriptCoord;
     type Error = io::Error;
     type Events = ();
     type Source = ScriptSource;
@@ -187,10 +174,9 @@ fuzz_target!(|input: Input| {
     });
 
     let timeline = Timeline::new();
+    let _ = timeline.clone(); // preserve variable name for possible future assertions
     let source = ScriptSource {
-        coord: ScriptCoord {
-            timeline: timeline.clone(),
-        },
+        timeline,
         data: input.data,
         reads: reads.collect(),
         waits: waits.collect(),

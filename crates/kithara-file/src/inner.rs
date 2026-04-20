@@ -26,7 +26,6 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
-    type Coord = Arc<FileCoord>;
     type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;

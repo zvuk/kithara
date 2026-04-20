@@ -7,7 +7,6 @@ use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
-    TransferCoordination,
 };
 
 /// Error type for memory-backed sources.
@@ -21,7 +20,7 @@ pub struct MemorySourceError;
 /// Set `report_len` to `false` to simulate sources without known length
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
-    coord: MemoryCoord,
+    timeline: Timeline,
     data: Vec<u8>,
     report_len: bool,
 }
@@ -30,7 +29,7 @@ impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self {
-            coord: MemoryCoord::default(),
+            timeline: Timeline::new(),
             data,
             report_len: true,
         }
@@ -40,7 +39,7 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
-            coord: MemoryCoord::default(),
+            timeline: Timeline::new(),
             data,
             report_len: false,
         }
@@ -49,10 +48,9 @@ impl MemorySource {
 
 impl Source for MemorySource {
     type Error = MemorySourceError;
-    type Coord = MemoryCoord;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     fn wait_range(
@@ -101,23 +99,11 @@ pub type UnknownLenSource = MemorySource;
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
 
-#[derive(Default)]
-pub struct MemoryCoord {
-    timeline: Timeline,
-}
-
-impl TransferCoordination for MemoryCoord {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-}
-
 /// `StreamType` using `MemorySource` (known length).
 pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
-    type Coord = MemoryCoord;
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();
@@ -137,7 +123,6 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Coord = MemoryCoord;
     type Source = MemorySource;
     type Error = io::Error;
     type Events = ();

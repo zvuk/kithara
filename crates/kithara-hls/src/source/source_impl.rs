@@ -11,6 +11,7 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     MediaInfo, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
+    Timeline,
 };
 use tracing::{debug, trace};
 
@@ -18,11 +19,7 @@ use super::{
     core::HlsSource,
     types::{ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR, WAIT_RANGE_SLEEP_MS},
 };
-use crate::{
-    HlsError,
-    coord::{HlsCoord, SegmentRequest},
-    playlist::PlaylistAccess,
-};
+use crate::{HlsError, coord::SegmentRequest, playlist::PlaylistAccess};
 
 fn wait_range_hang_timeout(timeout: Duration) -> Duration {
     timeout.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
@@ -30,10 +27,9 @@ fn wait_range_hang_timeout(timeout: Duration) -> Duration {
 
 impl Source for HlsSource {
     type Error = HlsError;
-    type Coord = Arc<HlsCoord>;
 
-    fn coord(&self) -> &Self::Coord {
-        &self.coord
+    fn timeline(&self) -> Timeline {
+        self.coord.timeline()
     }
 
     #[kithara_hang_detector::hang_watchdog(timeout = wait_range_hang_timeout(timeout))]
