@@ -873,19 +873,28 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
     assert_eq!(created_offsets.as_slice(), &[500]);
 }
 
+/// Cross-variant seek must recreate the decoder even when the codec is
+/// unchanged: per-variant byte maps make byte spaces incompatible, so a
+/// seek aimed at the new variant's offset would land in stale bytes of
+/// the old decoder's stream and stall (silvercomet post-seek hang, fixed
+/// by `c4867d9f9`). The recreate uses `anchor.byte_offset` because no
+/// codec boundary is involved — the new variant is entered at the seek
+/// target, not at a format-change segment start.
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
+fn seek_anchor_recreates_decoder_when_variant_changes_with_same_codec() {
     let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
 
     let seek_spec = PcmSpec {
         channels: 1,
         sample_rate: 100,
     };
-    let (decoder, logs) =
+    let (decoder, _) =
         scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
-    let seek_log = logs.seek_log();
 
-    let (factory, offsets) = make_tracking_factory(vec![]);
+    let (recreated_decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let recreated_seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
     let mut source = new_stream_audio_source(
@@ -914,82 +923,22 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
         current_base_offset(&source),
-        0,
-        "variant change with same codec must not recreate decoder"
+        500,
+        "variant change must recreate decoder at the anchor byte offset"
     );
 
     let created_offsets = offsets.lock_sync();
-    assert!(
-        created_offsets.is_empty(),
-        "variant-only seek must not create a replacement decoder"
+    assert_eq!(
+        created_offsets.as_slice(),
+        &[500],
+        "factory must be called exactly once with the anchor byte offset"
     );
 
-    let recreated_seeks = seek_log.lock();
+    let recreated_seeks = recreated_seek_log.lock();
     assert_eq!(
         recreated_seeks.as_slice(),
         &[Duration::from_millis(8_250)],
-        "current decoder should seek to the exact target position"
-    );
-}
-
-#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_anchor_commits_actual_landed_offset_to_source() {
-    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
-
-    let seek_spec = PcmSpec {
-        channels: 1,
-        sample_rate: 100,
-    };
-    let landed_offset = 320;
-    let decoder = Box::new(MisalignedAnchorSeekDecoder::new(
-        new_offset_reader(shared.clone(), 0),
-        seek_spec,
-        landed_offset,
-    ));
-    let (factory, offsets) = make_tracking_factory(vec![]);
-
-    let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = new_stream_audio_source(
-        shared,
-        decoder,
-        factory,
-        Some(aac_variant_info(0)),
-        Arc::clone(&epoch),
-        vec![],
-    );
-
-    let anchor = SourceSeekAnchor::new(500, Duration::from_secs(8))
-        .with_segment_end(Duration::from_secs(12))
-        .with_segment_index(3)
-        .with_variant_index(1);
-    {
-        let mut s = state.lock_sync();
-        s.media_info = Some(aac_variant_info(1));
-        s.seek_anchor = Some(anchor);
-    }
-
-    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
-    apply_pending_seek(&mut source);
-
-    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
-    assert_eq!(track_state(&source), TrackPhaseTag::AwaitingResume);
-
-    let state = state.lock_sync();
-    assert_eq!(
-        state.seek_landing,
-        Some(landed_offset),
-        "audio seek path must commit the actual landed offset back to the source"
-    );
-    assert_eq!(
-        state.seek_landing_anchor,
-        Some(anchor),
-        "source reconciliation must receive the resolved anchor context"
-    );
-
-    let created_offsets = offsets.lock_sync();
-    assert!(
-        created_offsets.is_empty(),
-        "same-codec variant seek must still avoid decoder recreation"
+        "recreated decoder should seek to the exact target position"
     );
 }
 
@@ -1785,48 +1734,6 @@ impl InnerDecoder for EncodedDecoder {
     }
 }
 
-struct MisalignedAnchorSeekDecoder {
-    landed_offset: u64,
-    reader: OffsetReader<TestStream>,
-    seek_log: Arc<Mutex<Vec<Duration>>>,
-    spec: PcmSpec,
-}
-
-impl MisalignedAnchorSeekDecoder {
-    fn new(reader: OffsetReader<TestStream>, spec: PcmSpec, landed_offset: u64) -> Self {
-        Self {
-            landed_offset,
-            reader,
-            seek_log: Arc::new(Mutex::new(Vec::new())),
-            spec,
-        }
-    }
-}
-
-impl InnerDecoder for MisalignedAnchorSeekDecoder {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        Ok(Some(make_chunk(self.spec, 64)))
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
-    }
-
-    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
-        self.seek_log.lock_sync().push(pos);
-        self.reader
-            .seek(SeekFrom::Start(self.landed_offset))
-            .map_err(DecodeError::Io)?;
-        Ok(())
-    }
-
-    fn update_byte_len(&self, _len: u64) {}
-
-    fn duration(&self) -> Option<Duration> {
-        None
-    }
-}
-
 struct ProbeBeforeSeekDecoder {
     landed_offset: u64,
     probe_log: Arc<Mutex<Vec<u64>>>,
@@ -2168,77 +2075,5 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
     assert!(
         offsets.lock_sync().is_empty(),
         "panic conversion should not trigger decoder recreation by itself"
-    );
-}
-
-#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn stress_variant_only_seeks_do_not_recreate_decoder() {
-    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
-
-    let seek_spec = PcmSpec {
-        channels: 1,
-        sample_rate: 100,
-    };
-    let (decoder, logs) = scripted_inner_decoder_loose(
-        seek_spec,
-        vec![make_chunk(seek_spec, 64); 256],
-        vec![],
-        None,
-    );
-    let seek_log = logs.seek_log();
-    let (factory, offsets) = make_tracking_factory(vec![]);
-
-    let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = new_stream_audio_source(
-        shared,
-        decoder,
-        factory,
-        Some(aac_variant_info(0)),
-        Arc::clone(&epoch),
-        vec![],
-    );
-
-    {
-        let mut s = state.lock_sync();
-        s.media_info = Some(aac_variant_info(1));
-        s.seek_anchor = Some(
-            SourceSeekAnchor::new(500, Duration::from_secs(8))
-                .with_segment_end(Duration::from_secs(12))
-                .with_segment_index(3)
-                .with_variant_index(1),
-        );
-    }
-
-    const SEEK_ITERATIONS: usize = 200;
-    for _ in 0..SEEK_ITERATIONS {
-        let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
-        apply_pending_seek(&mut source);
-        assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
-        let _ = fetch_next(&mut source);
-    }
-
-    assert_eq!(
-        current_base_offset(&source),
-        0,
-        "variant-only seek stress must keep the original decoder base offset"
-    );
-
-    let created_offsets = offsets.lock_sync();
-    assert!(
-        created_offsets.is_empty(),
-        "variant-only seek stress must not recreate decoder"
-    );
-
-    let seeks = seek_log.lock();
-    assert_eq!(
-        seeks.len(),
-        SEEK_ITERATIONS,
-        "current decoder must process every stress seek"
-    );
-    assert!(
-        seeks
-            .iter()
-            .all(|&seek| seek == Duration::from_millis(8_250)),
-        "all stress seeks must use the exact target position"
     );
 }
