@@ -24,6 +24,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
 - Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
 - Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
+- No fallback chains (`try A, else B, else C`) to paper over state-resolution bugs. A fallback is a code smell: if the primary path has no correct answer, the underlying state contract is broken — fix the contract, not the symptom. Legitimate fallbacks (user-facing defaults, optional config, degraded-mode operation) must be explicitly justified in the owning crate `README.md` or the task packet. Tests that codify fallback behaviour protect symptoms and should be treated as evidence of a root-cause bug.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
