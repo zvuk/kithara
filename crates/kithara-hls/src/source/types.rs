@@ -13,6 +13,7 @@ pub(super) const WAIT_RANGE_SLEEP_MS: u64 = 2;
 pub(super) const WAIT_RANGE_HANG_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
 
 /// Seek classification: whether the committed byte layout is preserved or reset.
+#[derive(Debug)]
 pub(crate) enum SeekLayout {
     /// Same variant — keep `StreamIndex`, byte layout unchanged.
     Preserve,

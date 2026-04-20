@@ -1643,3 +1643,74 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
          variant's timeline, not mix it with the layout variant"
     );
 }
+
+/// Reproduces the silvercomet seek hang from
+/// `kithara_play::silvercomet_seek_hang`.
+///
+/// Scenario captured from a live trace:
+///   - 3 AAC variants, playback starts on variant 0
+///   - ABR up-switches to variant 2 (same codec) before the seek target
+///     segment is committed to the layout variant
+///   - `resolve_seek_anchor` correctly falls back to the ABR variant, so
+///     `anchor.variant = 2` and `anchor.byte_offset` is in variant 2's
+///     cumulative byte space
+///   - Reader is still reading bytes from variant 0 so
+///     `current_layout_variant()` returns 0
+///
+/// The bug: `classify_seek` sees `codec(0) == codec(2)` (both AAC) and
+/// returns `Preserve`, so `apply_seek_plan` leaves the layout pinned at
+/// variant 0. The decoder then seeks to an offset computed in variant 2's
+/// byte space, but `wait_range` looks up that offset in variant 0's layout
+/// where no segment covers it — `find_at_offset` returns `None` on every
+/// poll and the track hangs for the full post-seek window (259 blocks of
+/// silence in silvercomet).
+///
+/// Same-codec is not enough for `Preserve` across variants: byte-space is
+/// per-variant and non-convertible. Cross-variant seek must always be
+/// `Reset` so the layout is switched and the decoder is recreated on the
+/// correct byte stream.
+#[kithara::test]
+fn cross_variant_seek_same_codec_requires_reset() {
+    const NUM_VARIANTS: usize = 3;
+    const NUM_SEGS: usize = 8;
+    const V0_SEG_SIZE: u64 = 100;
+    const V2_SEG_SIZE: u64 = 300;
+    const READER_POS: u64 = V0_SEG_SIZE / 2;
+    const TARGET_SEG_INDEX: usize = 5;
+    const TARGET_OFFSET: u64 = V2_SEG_SIZE * TARGET_SEG_INDEX as u64;
+    let source = build_test_source_with_segments(NUM_VARIANTS, NUM_SEGS);
+    set_variant_size_map(source.playlist_state.as_ref(), 0, &[V0_SEG_SIZE; NUM_SEGS]);
+    set_variant_size_map(source.playlist_state.as_ref(), 1, &[V0_SEG_SIZE; NUM_SEGS]);
+    set_variant_size_map(source.playlist_state.as_ref(), 2, &[V2_SEG_SIZE; NUM_SEGS]);
+
+    // Reader sits inside variant 0's first segment → current layout = 0.
+    push_segment(&source.segments, 0, 0, 0, V0_SEG_SIZE);
+    source.coord.timeline().set_byte_position(READER_POS);
+    assert_eq!(
+        source.current_layout_variant(),
+        Some(0),
+        "precondition: reader is in variant 0's byte space"
+    );
+
+    // All three variants share the (None) codec — the production equivalent
+    // is three AAC variants, which is what silvercomet serves.
+    assert!(
+        source.can_cross_variant_without_reset(0, 2),
+        "precondition: variants 0 and 2 share a codec, so the old \
+         Preserve policy would kick in"
+    );
+
+    // Anchor points at variant 2 (fallback after ABR up-switch stranded
+    // the layout's target segment) and carries an offset in variant 2's
+    // byte space.
+    let anchor = make_anchor(2, TARGET_SEG_INDEX, TARGET_OFFSET);
+
+    let layout = source.classify_seek(&anchor);
+    assert!(
+        matches!(layout, SeekLayout::Reset),
+        "cross-variant seek must be Reset even when codecs match — \
+         byte spaces are per-variant, Preserve would leave layout=0 \
+         while the anchor offset lives in variant 2's space, hanging \
+         wait_range forever; got {layout:?}"
+    );
+}

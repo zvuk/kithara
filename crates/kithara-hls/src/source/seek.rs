@@ -92,16 +92,16 @@ impl HlsSource {
 
     /// Classify a seek as Preserve or Reset.
     ///
-    /// Since `resolve_seek_anchor` always uses `layout_variant` (not ABR target),
-    /// seeks are always within the current layout → always Preserve.
-    /// Variant switches happen via `format_change` detection, not during seek.
+    /// Preserve only when the anchor stays inside the current layout variant.
+    /// Cross-variant seek is always Reset — byte spaces are per-variant and
+    /// non-convertible, so a shared codec is not enough: Preserve would leave
+    /// the layout pinned at the old variant while `anchor.byte_offset` lives
+    /// in the new variant's space, stranding `wait_range` on a segment that
+    /// will never be fetched (post-ABR-switch seek hang).
     pub(super) fn classify_seek(&self, anchor: &SourceSeekAnchor) -> SeekLayout {
         let target_variant = anchor.variant_index.unwrap_or(0);
         match self.current_layout_variant() {
             Some(current) if current == target_variant => SeekLayout::Preserve,
-            Some(current) if self.can_cross_variant_without_reset(current, target_variant) => {
-                SeekLayout::Preserve
-            }
             _ => SeekLayout::Reset,
         }
     }
