@@ -1714,3 +1714,144 @@ fn cross_variant_seek_same_codec_requires_reset() {
          wait_range forever; got {layout:?}"
     );
 }
+
+/// Property: `resolve_seek_anchor` is a pure function of
+/// `(layout_variant, playlist_state, segments, position)` — the ABR
+/// variant atomic must not influence it in any branch.
+///
+/// This codifies invariant I1 of the 2026-04-20 plan: the anchor lives in
+/// the layout variant, full stop. The previous fallback that pivoted to
+/// `abr_variant_index` when the layout variant had no committed segment
+/// hid the split-state contract between layout and ABR and produced the
+/// silvercomet seek hang in one direction and the stress-test hang in the
+/// other.
+#[kithara::test]
+fn resolve_seek_anchor_is_invariant_under_abr_variant_index() {
+    const NUM_VARIANTS: usize = 3;
+    const NUM_SEGS: usize = 6;
+    const V0_SEG_SIZE: u64 = 100;
+    const V1_SEG_SIZE: u64 = 200;
+    const V2_SEG_SIZE: u64 = 300;
+    const SEEK_MS: u64 = 18_000;
+    const EXPECTED_SEGMENT: usize = 4;
+    const EXPECTED_BYTE_OFFSET: u64 = V0_SEG_SIZE * EXPECTED_SEGMENT as u64;
+    let source = build_test_source_with_segments(NUM_VARIANTS, NUM_SEGS);
+    set_variant_size_map(source.playlist_state.as_ref(), 0, &[V0_SEG_SIZE; NUM_SEGS]);
+    set_variant_size_map(source.playlist_state.as_ref(), 1, &[V1_SEG_SIZE; NUM_SEGS]);
+    set_variant_size_map(source.playlist_state.as_ref(), 2, &[V2_SEG_SIZE; NUM_SEGS]);
+
+    // Layout variant = 0, target segment 4 NOT committed — this is the
+    // exact window where the removed fallback used to pivot to ABR.
+    assert_eq!(source.segments.lock_sync().layout_variant(), 0);
+
+    let mut resolved = Vec::with_capacity(NUM_VARIANTS);
+    for abr_variant in 0..NUM_VARIANTS {
+        source
+            .coord
+            .abr_variant_index
+            .store(abr_variant, Ordering::Release);
+        let anchor = source
+            .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
+            .unwrap_or_else(|err| {
+                panic!("anchor must resolve for any ABR value (abr={abr_variant}): {err}")
+            });
+        resolved.push((abr_variant, anchor));
+    }
+
+    for (abr_variant, anchor) in &resolved {
+        assert_eq!(
+            anchor.variant_index,
+            Some(0),
+            "anchor.variant_index must stay on layout_variant=0 regardless \
+             of abr_variant_index ({abr_variant}); fallback to ABR is a \
+             code smell — the layout is the source of truth for seek \
+             resolution"
+        );
+        assert_eq!(
+            anchor.segment_index,
+            Some(EXPECTED_SEGMENT as u32),
+            "segment index must resolve in layout variant's timeline for \
+             every abr_variant_index={abr_variant}"
+        );
+        assert_eq!(
+            anchor.byte_offset, EXPECTED_BYTE_OFFSET,
+            "byte offset must live in layout variant 0's byte space for \
+             every abr_variant_index={abr_variant}; variants 1 and 2 use \
+             different segment sizes so any ABR-dependent anchor would \
+             show a different offset"
+        );
+    }
+}
+
+/// Property: ABR is locked for the entire pending-seek window so the
+/// `abr_variant_index` atomic is not mutated between `initiate_seek` and
+/// the matching `clear_seek_pending`.
+///
+/// Codifies invariant I2 of the 2026-04-20 plan. Under the lock, `decide`
+/// returns `Locked` and `apply` is not called, so `abr_variant_index`
+/// stays put. Once `clear_seek_pending` fires, the next scheduler tick
+/// releases the lock so ABR can resume switching variants.
+#[kithara::test]
+fn abr_lock_held_across_initiate_and_clear_seek_pending() {
+    const NUM_VARIANTS: usize = 2;
+    const NUM_SEGS: usize = 4;
+    const BUS_CAPACITY: usize = 16;
+    const SEEK_MS: u64 = 8_000;
+    const TICKS_DURING_SEEK: usize = 3;
+    let cancel = CancellationToken::new();
+    let variants: Vec<VariantState> = (0..NUM_VARIANTS)
+        .map(|index| make_variant_state_with_segments(index, NUM_SEGS))
+        .collect();
+    let playlist_state = Arc::new(PlaylistState::new(variants));
+    let parsed = parsed_variants(NUM_VARIANTS);
+    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let track = test_peer_handle(&cancel);
+    let config = HlsConfig {
+        cancel: Some(cancel),
+        ..HlsConfig::default()
+    };
+    let (mut downloader, source) = build_pair(
+        backend,
+        track,
+        &parsed,
+        &config,
+        playlist_state,
+        EventBus::new(BUS_CAPACITY),
+    );
+
+    let initial_variant = downloader.abr.get_current_variant_index();
+    let abr_atomic = Arc::clone(&source.coord.abr_variant_index);
+    let timeline = source.coord.timeline();
+
+    let epoch = timeline.initiate_seek(Duration::from_millis(SEEK_MS));
+
+    for tick in 0..TICKS_DURING_SEEK {
+        let decision = downloader.make_abr_decision();
+        assert!(
+            downloader.abr.is_locked(),
+            "ABR lock must be held on tick {tick} while seek is pending \
+             — without the lock, abr.decide() can switch variants between \
+             initiate_seek and clear_seek_pending, stranding the anchor \
+             the source just resolved"
+        );
+        assert_eq!(
+            abr_atomic.load(Ordering::Acquire),
+            initial_variant,
+            "abr_variant_index must not be mutated on tick {tick} during \
+             pending seek (lock guarantees decide() returns Locked and \
+             apply() is not called)"
+        );
+        assert!(
+            !decision.changed,
+            "decide() must return changed=false while locked on tick {tick}"
+        );
+    }
+
+    timeline.clear_seek_pending(epoch);
+    let _ = downloader.make_abr_decision();
+    assert!(
+        !downloader.abr.is_locked(),
+        "ABR lock must release on the first tick after clear_seek_pending \
+         so normal ABR switching can resume"
+    );
+}
