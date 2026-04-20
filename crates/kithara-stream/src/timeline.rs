@@ -309,6 +309,26 @@ impl Timeline {
             self.remove_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
         }
     }
+
+    /// Whether the audio FSM has claimed this Timeline as the currently
+    /// active decode target.
+    ///
+    /// Written by the audio pipeline (`StreamAudioSource`) on entry into
+    /// a decode-producing state and cleared on EOF / failure / unload.
+    /// Read by the Downloader peer implementations to decide whether a
+    /// track's fetches should be routed to the high-priority slot.
+    #[must_use]
+    pub fn is_playing(&self) -> bool {
+        self.contains_flag(TimelineFlags::PLAYING)
+    }
+
+    /// Toggle the `PLAYING` flag.
+    ///
+    /// Orthogonal to `FLUSHING` / `SEEK_PENDING` / `EOF`: toggling
+    /// `PLAYING` does not affect the seek or EOF state.
+    pub fn set_playing(&self, playing: bool) {
+        self.replace_flags(TimelineFlags::PLAYING, playing);
+    }
 }
 
 impl Default for Timeline {
@@ -607,5 +627,98 @@ mod tests {
             !tl.is_seek_pending(),
             "SEEK_PENDING must be fully cleared after last clear"
         );
+    }
+
+    // --- PLAYING flag tests (Task 4) ---
+
+    #[kithara::test]
+    fn playing_defaults_to_false() {
+        let tl = Timeline::new();
+        assert!(!tl.is_playing());
+    }
+
+    #[kithara::test]
+    fn set_playing_true_is_visible_across_clones() {
+        let tl = Timeline::new();
+        let clone = tl.clone();
+        tl.set_playing(true);
+        assert!(clone.is_playing());
+        clone.set_playing(false);
+        assert!(!tl.is_playing());
+    }
+
+    #[kithara::test]
+    fn set_playing_idempotent() {
+        let tl = Timeline::new();
+        tl.set_playing(true);
+        tl.set_playing(true);
+        assert!(tl.is_playing());
+        tl.set_playing(false);
+        tl.set_playing(false);
+        assert!(!tl.is_playing());
+    }
+
+    #[kithara::test]
+    fn playing_is_orthogonal_to_other_flags() {
+        // Test all 8 combinations of {flushing, seek_pending, eof} paired
+        // with PLAYING=0 and PLAYING=1. Assert PLAYING mirror the writer
+        // and the other flags are untouched by set_playing.
+        for mask in 0u8..8 {
+            for &initial_playing in &[false, true] {
+                let tl = Timeline::new();
+                let want_flushing = mask & 1 != 0;
+                let want_seek_pending = mask & 2 != 0;
+                let want_eof = mask & 4 != 0;
+
+                if want_flushing || want_seek_pending {
+                    let _ = tl.initiate_seek(Duration::from_secs(1));
+                    if !want_flushing {
+                        tl.complete_seek(tl.seek_epoch());
+                    }
+                    if !want_seek_pending {
+                        tl.clear_seek_pending(tl.seek_epoch());
+                    }
+                }
+                tl.set_eof(want_eof);
+                tl.set_playing(initial_playing);
+
+                assert_eq!(tl.is_playing(), initial_playing);
+                assert_eq!(
+                    tl.is_flushing(),
+                    want_flushing,
+                    "mask {mask:#05b} play={initial_playing} flushing"
+                );
+                assert_eq!(
+                    tl.is_seek_pending(),
+                    want_seek_pending,
+                    "mask {mask:#05b} play={initial_playing} seek_pending"
+                );
+                assert_eq!(
+                    tl.eof(),
+                    want_eof,
+                    "mask {mask:#05b} play={initial_playing} eof"
+                );
+
+                // Now toggle PLAYING and assert the other three flags
+                // remain exactly as set.
+                tl.set_playing(!initial_playing);
+                assert_eq!(tl.is_playing(), !initial_playing);
+                assert_eq!(tl.is_flushing(), want_flushing);
+                assert_eq!(tl.is_seek_pending(), want_seek_pending);
+                assert_eq!(tl.eof(), want_eof);
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn initiate_seek_does_not_touch_playing() {
+        let tl = Timeline::new();
+        tl.set_playing(true);
+        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        assert!(tl.is_playing(), "PLAYING must not be affected by seek");
+        tl.complete_seek(epoch);
+        assert!(tl.is_playing(), "PLAYING must survive complete_seek");
+        tl.clear_seek_pending(epoch);
+        assert!(tl.is_playing(), "PLAYING must survive clear_seek_pending");
     }
 }
