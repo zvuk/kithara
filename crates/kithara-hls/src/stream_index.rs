@@ -141,6 +141,19 @@ impl VariantSegments {
         self.iter().next_back()
     }
 
+    /// Highest segment index ever stored in this variant, regardless of
+    /// current availability.
+    ///
+    /// Unlike [`last`], this includes segments whose `available` flag
+    /// was flipped off by LRU eviction — the metadata still lives in
+    /// the map. Callers use this to distinguish "peer fetched past
+    /// this segment and the data was later evicted" from "peer never
+    /// fetched this segment at all" (the stranded-layout case).
+    #[must_use]
+    pub fn max_stored_index(&self) -> Option<SegmentIndex> {
+        self.segments.last_key_value().map(|(&k, _)| k)
+    }
+
     /// Iterate committed segments in order.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (SegmentIndex, &SegmentData)> {
         self.segments
