@@ -1574,75 +1574,14 @@ fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
     );
 }
 
-/// Regression guard for the ABR-stranded-layout seek hang.
-///
-/// Production scenario captured on silvercomet:
-///   - Playback starts on variant 0, peer fetches segments 0..N0
-///   - ABR decides to up-switch to variant 1; peer pivots to variant 1
-///     segments and stops fetching variant 0
-///   - Decoder is still mid-playback on variant 0 (format_change hasn't
-///     fired yet — variant 0 data isn't exhausted)
-///   - User seeks to a time past N0
-///
-/// With the old policy (anchor = layout_variant ignoring ABR), the
-/// anchor resolves to variant 0 at a segment the downloader stopped
-/// fetching. `source_is_ready_for_apply_seek` stays `Waiting` because
-/// that byte range never arrives, and the track hangs silently.
-///
-/// The fix: when the layout variant has no committed segment at the
-/// seek target, fall through to the variant ABR currently prefers —
-/// which is exactly the variant the peer is actively downloading, so
-/// the bytes the anchor points at will actually arrive.
-#[kithara::test]
-fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
-    const NUM_VARIANTS: usize = 2;
-    const NUM_SEGS: usize = 6;
-    const SEG_SIZE: u64 = 100;
-    // Segments are 4 s each; 18 s lands squarely inside segment 4.
-    const SEEK_MS: u64 = 18_000;
-    let source = build_test_source_with_segments(NUM_VARIANTS, NUM_SEGS);
-    set_variant_size_map(source.playlist_state.as_ref(), 0, &[SEG_SIZE; NUM_SEGS]);
-    set_variant_size_map(source.playlist_state.as_ref(), 1, &[SEG_SIZE; NUM_SEGS]);
-
-    // Layout (variant 0) only captured the pre-switch prefix — segments
-    // 0 and 1. Segment 4 (the seek target) is NOT present here.
-    push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
-    push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
-
-    // ABR has since picked variant 1 and the peer is fetching it — even
-    // if variant 1 has no committed segments yet, its forward fetch is
-    // what will actually arrive at the anchor offset.
-    source.coord.abr_variant_index.store(1, Ordering::Release);
-    assert_eq!(
-        source.segments.lock_sync().layout_variant(),
-        0,
-        "precondition: layout variant is still 0 (no recreation fired yet)"
-    );
-
-    let anchor = source
-        .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
-        .expect("anchor resolution must succeed when any variant can cover the target");
-
-    assert_eq!(
-        anchor.variant_index,
-        Some(1),
-        "anchor must point at the ABR-preferred variant (the one the \
-         peer is actively downloading); falling back to the stranded \
-         layout variant keeps the track waiting on bytes that will \
-         never arrive"
-    );
-
-    // Regression guard on the segment index too — if the fallback
-    // resolved the time-to-segment lookup against the wrong variant,
-    // it would land on a different segment than what the peer is
-    // fetching.
-    assert_eq!(
-        anchor.segment_index,
-        Some(4),
-        "fallback anchor must resolve the segment index on the ABR \
-         variant's timeline, not mix it with the layout variant"
-    );
-}
+// The ABR fallback that used to sit inside `resolve_seek_anchor` has
+// been removed (plan 2026-04-20-hls-seek-anchor-decoupled-from-abr,
+// Task 2). The positive contract — "anchor lives in layout_variant for
+// every abr_variant_index value" — is codified by
+// `resolve_seek_anchor_is_invariant_under_abr_variant_index`. The
+// silvercomet stranded-layout hang is fixed structurally in Task 3 by
+// `make_abr_decision` committing the layout switch proactively, not by
+// a reader-side tiebreak.
 
 /// Reproduces the silvercomet seek hang from
 /// `kithara_play::silvercomet_seek_hang`.

@@ -10,28 +10,27 @@ impl HlsSource {
         &self,
         position: Duration,
     ) -> Result<SourceSeekAnchor, HlsError> {
+        // Anchor resolution is a pure function of (layout_variant,
+        // playlist_state, position). It never reads `abr_variant_index` —
+        // ABR is a *download* hint, not a *reader* hint. The previous
+        // fallback that pivoted to ABR when the layout variant had no
+        // committed target segment masked a split-state contract: if the
+        // reader's layout and the peer's ABR target disagree, the fix
+        // belongs in `make_abr_decision` (commit the layout alongside the
+        // switch) — not in a reader-side tiebreak. See
+        // `resolve_seek_anchor_is_invariant_under_abr_variant_index`.
         let variants = self.playlist_state.num_variants();
         if variants == 0 {
             return Err(HlsError::SegmentNotFound("empty playlist".to_string()));
         }
 
-        // Default policy: anchor resolves in `layout_variant` so an
-        // in-place seek doesn't uselessly recreate the decoder while
-        // the layout still has the data. However, when ABR has already
-        // diverted the peer to another variant and the layout never
-        // got the target segment committed (ABR up-switched before
-        // reaching it), using layout points at bytes that will never
-        // arrive. In that case fall back to `abr_variant_index` —
-        // that IS the variant the peer is actively fetching, so the
-        // anchor aligns with incoming data and `classify_seek` returns
-        // `Reset` to drive decoder recreation.
         let layout_variant = {
             let segs = self.segments.lock_sync();
             let v = segs.layout_variant();
             if v < variants { v } else { 0 }
         };
 
-        let (layout_segment_index, layout_segment_start, layout_segment_end) = self
+        let (segment_index, segment_start, segment_end) = self
             .playlist_state
             .find_seek_point_for_time(layout_variant, position)
             .ok_or_else(|| {
@@ -41,44 +40,11 @@ impl HlsSource {
                 ))
             })?;
 
-        let layout_has_target = self
-            .segments
-            .lock_sync()
-            .is_segment_loaded(layout_variant, layout_segment_index);
-
-        let (variant, segment_index, segment_start, segment_end) = if layout_has_target {
-            (
-                layout_variant,
-                layout_segment_index,
-                layout_segment_start,
-                layout_segment_end,
-            )
-        } else {
-            let abr_variant = self
-                .coord
-                .abr_variant_index
-                .load(std::sync::atomic::Ordering::Acquire);
-            let fallback = if abr_variant < variants && abr_variant != layout_variant {
-                self.playlist_state
-                    .find_seek_point_for_time(abr_variant, position)
-                    .map(|(idx, start, end)| (abr_variant, idx, start, end))
-            } else {
-                None
-            };
-            fallback.unwrap_or((
-                layout_variant,
-                layout_segment_index,
-                layout_segment_start,
-                layout_segment_end,
-            ))
-        };
-
         let byte_offset = self
-            .byte_offset_for_segment(variant, segment_index)
+            .byte_offset_for_segment(layout_variant, segment_index)
             .ok_or_else(|| {
                 HlsError::SegmentNotFound(format!(
-                    "seek offset not found: variant={variant} segment={}",
-                    segment_index
+                    "seek offset not found: variant={layout_variant} segment={segment_index}"
                 ))
             })?;
 
@@ -87,7 +53,7 @@ impl HlsSource {
         Ok(SourceSeekAnchor::new(byte_offset, segment_start)
             .with_segment_end(segment_end)
             .with_segment_index(segment_index)
-            .with_variant_index(variant))
+            .with_variant_index(layout_variant))
     }
 
     /// Classify a seek as Preserve or Reset.
