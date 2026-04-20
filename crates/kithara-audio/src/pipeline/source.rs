@@ -730,24 +730,39 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor: SourceSeekAnchor,
     ) -> bool {
         let current_codec = self.session.media_info.as_ref().and_then(|info| info.codec);
-        let target_info = self.shared_stream.media_info();
-        let target_codec = target_info.as_ref().and_then(|info| info.codec);
-        let current_variant = self
+        let stream_info = self.shared_stream.media_info();
+        let target_codec = stream_info.as_ref().and_then(|info| info.codec);
+        // `MediaInfo.variant_index` is `u32`; `SourceSeekAnchor.variant_index`
+        // is `usize`. Normalise both to `usize` for comparison.
+        let current_variant: Option<usize> = self
             .session
             .media_info
             .as_ref()
-            .and_then(|info| info.variant_index);
-        let target_variant = target_info.as_ref().and_then(|info| info.variant_index);
+            .and_then(|info| info.variant_index)
+            .map(|v| v as usize);
+        // `anchor.variant_index` is authoritative for the post-seek variant:
+        // the HLS source resolves the anchor against the variant whose bytes
+        // will actually arrive, which may differ from `shared_stream.media_info()`
+        // (the latter reflects what the decoder currently sees, not what the
+        // seek is steering toward). Falling back to `stream_info` keeps the
+        // old behaviour when no variant info is attached to the anchor.
+        let target_variant: Option<usize> = anchor.variant_index.or_else(|| {
+            stream_info
+                .as_ref()
+                .and_then(|info| info.variant_index)
+                .map(|v| v as usize)
+        });
 
-        // Decoder must be recreated only when codec changed.
-        // With per-variant byte maps, same-codec variant changes don't need
-        // recreation — each variant has its own independent byte space, so
-        // decoder seek tables remain valid within the current layout.
         let codec_changed =
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
-        let needs_recreation = codec_changed;
+        // Variant switch requires decoder recreation: per-variant byte maps
+        // mean each variant has its own independent byte space, so the old
+        // decoder's seek tables are not valid for the new variant (a seek
+        // aimed at the new variant's offset lands in stale bytes and the
+        // decoder stalls — silvercomet post-seek hang).
+        let needs_recreation = codec_changed || variant_changed;
         let recreate_offset = if variant_changed && !codec_changed {
             anchor.byte_offset
         } else {
@@ -760,6 +775,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?target_codec,
             ?current_variant,
             ?target_variant,
+            anchor_variant = ?anchor.variant_index,
             codec_changed,
             variant_changed,
             needs_recreation,
@@ -771,13 +787,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             return true;
         }
 
-        let target_info = target_info.or_else(|| {
+        #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
+        let target_variant_u32 = target_variant.map(|v| v as u32);
+        let target_info = stream_info.or_else(|| {
             self.session.media_info.clone().map(|mut info| {
-                info.variant_index = target_variant;
+                info.variant_index = target_variant_u32;
                 info
             })
         });
-        let Some(target_info) = target_info else {
+        let Some(mut target_info) = target_info else {
             self.fail_seek(
                 request,
                 DecodeError::InvalidData(
@@ -788,6 +806,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
             return false;
         };
+        // Make sure the recreated decoder's `media_info.variant_index` matches
+        // the anchor — otherwise the next alignment check would again see
+        // `variant_changed=false` against the stale stream info and skip
+        // recreation despite the layout having moved on.
+        if let Some(v) = target_variant_u32 {
+            target_info.variant_index = Some(v);
+        }
 
         self.start_recreating_decoder(
             RecreateCause::VariantSwitch,
