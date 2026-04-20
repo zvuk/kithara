@@ -3,10 +3,31 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
+
+use bitflags::bitflags;
+
+bitflags! {
+    /// Boolean playback-state flags stored in a single `AtomicU8` on [`Timeline`].
+    ///
+    /// Consolidated into one atomic so readers (HLS peer priority, reader
+    /// wait loops, audio FSM) observe a coherent snapshot with a single
+    /// load and writers compose flag updates with `fetch_or` / `fetch_and`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TimelineFlags: u8 {
+        /// Reserved for the audio FSM playback-activity writer (Task 4+).
+        const PLAYING      = 1 << 0;
+        /// Pipeline is being flushed (seek in progress); gates `wait_range` I/O.
+        const FLUSHING     = 1 << 1;
+        /// Seek initiated but the decoder has not yet repositioned.
+        const SEEK_PENDING = 1 << 2;
+        /// End of stream reached.
+        const EOF          = 1 << 3;
+    }
+}
 
 /// Shared playback timeline used across stream layers.
 ///
@@ -16,7 +37,6 @@ pub struct Timeline {
     byte_position: Arc<AtomicU64>,
     committed_position_ns: Arc<AtomicU64>,
     download_position: Arc<AtomicU64>,
-    eof: Arc<AtomicBool>,
     pending_seek_epoch: Arc<AtomicU64>,
     total_duration_ns: Arc<AtomicU64>,
 
@@ -28,14 +48,10 @@ pub struct Timeline {
 
     // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
     seek_epoch: Arc<AtomicU64>,
-    flushing: Arc<AtomicBool>,
     seek_target_ns: Arc<AtomicU64>,
 
-    /// Seek not yet applied by decoder. Set by `initiate_seek()`, cleared by
-    /// `clear_seek_pending()` after the decoder successfully repositions.
-    /// Separate from `flushing`: flushing gates I/O (`wait_range`), while
-    /// `seek_pending` gates worker retry and consumer output.
-    seek_pending: Arc<AtomicBool>,
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
+    flags: Arc<AtomicU8>,
 }
 
 impl Timeline {
@@ -49,15 +65,42 @@ impl Timeline {
             byte_position: Arc::new(AtomicU64::new(0)),
             committed_position_ns: Arc::new(AtomicU64::new(0)),
             download_position: Arc::new(AtomicU64::new(0)),
-            eof: Arc::new(AtomicBool::new(false)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
             segment_position: Arc::new(AtomicU64::new(0)),
             seek_epoch: Arc::new(AtomicU64::new(0)),
-            flushing: Arc::new(AtomicBool::new(false)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
-            seek_pending: Arc::new(AtomicBool::new(false)),
+            flags: Arc::new(AtomicU8::new(TimelineFlags::empty().bits())),
         }
+    }
+
+    #[inline]
+    fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {
+        TimelineFlags::from_bits_truncate(self.flags.load(order))
+    }
+
+    #[inline]
+    fn insert_flags_with(&self, flags: TimelineFlags, order: Ordering) {
+        self.flags.fetch_or(flags.bits(), order);
+    }
+
+    #[inline]
+    fn remove_flags_with(&self, flags: TimelineFlags, order: Ordering) {
+        self.flags.fetch_and(!flags.bits(), order);
+    }
+
+    #[inline]
+    fn replace_flags(&self, flags: TimelineFlags, on: bool) {
+        if on {
+            self.insert_flags_with(flags, Ordering::Release);
+        } else {
+            self.remove_flags_with(flags, Ordering::Release);
+        }
+    }
+
+    #[inline]
+    fn contains_flag(&self, flag: TimelineFlags) -> bool {
+        self.flags_snapshot_with(Ordering::Acquire).contains(flag)
     }
 
     #[must_use]
@@ -98,12 +141,12 @@ impl Timeline {
     }
 
     pub fn set_eof(&self, eof: bool) {
-        self.eof.store(eof, Ordering::Release);
+        self.replace_flags(TimelineFlags::EOF, eof);
     }
 
     #[must_use]
     pub fn eof(&self) -> bool {
-        self.eof.load(Ordering::Acquire)
+        self.contains_flag(TimelineFlags::EOF)
     }
 
     pub fn set_total_duration(&self, duration: Option<Duration>) {
@@ -192,9 +235,10 @@ impl Timeline {
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
         self.set_committed_position(target);
-        self.seek_pending.store(true, Ordering::Release);
-        // flushing must be set LAST so readers see target before flushing flag
-        self.flushing.store(true, Ordering::Release);
+        self.insert_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
+        // FLUSHING must be observed AFTER the seek target is published so
+        // readers that see FLUSHING=true also see the updated target.
+        self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
         epoch
     }
 
@@ -214,19 +258,19 @@ impl Timeline {
         // A concurrent initiate_seek() may have already written a new target;
         // clearing it would lose that target. Stale targets are harmless
         // because apply_pending_seek() always gates on seek_epoch.
-        self.flushing.store(false, Ordering::SeqCst);
+        self.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
         // Double-check: if a newer seek arrived while we were clearing,
-        // its initiate_seek may have already set flushing=true which we
-        // just overwrote. Re-set flushing to avoid losing the seek.
+        // its initiate_seek may have already set FLUSHING=true which we
+        // just cleared. Re-set FLUSHING to avoid losing the seek.
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
-            self.flushing.store(true, Ordering::SeqCst);
+            self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
         }
     }
 
     /// Check if the pipeline is being flushed (seek pending).
     #[must_use]
     pub fn is_flushing(&self) -> bool {
-        self.flushing.load(Ordering::Acquire)
+        self.contains_flag(TimelineFlags::FLUSHING)
     }
 
     /// Read the pending seek target position.
@@ -253,7 +297,7 @@ impl Timeline {
     /// loop to trigger seek retry.
     #[must_use]
     pub fn is_seek_pending(&self) -> bool {
-        self.seek_pending.load(Ordering::Acquire)
+        self.contains_flag(TimelineFlags::SEEK_PENDING)
     }
 
     /// Clear seek-pending flag after the decoder successfully applied the seek.
@@ -262,7 +306,7 @@ impl Timeline {
     /// stale completion from clearing a newer seek.
     pub fn clear_seek_pending(&self, epoch: u64) {
         if self.seek_epoch.load(Ordering::Acquire) == epoch {
-            self.seek_pending.store(false, Ordering::Release);
+            self.remove_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
         }
     }
 }
@@ -278,6 +322,11 @@ mod tests {
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
+
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 
@@ -414,5 +463,149 @@ mod tests {
         let clone = tl.clone();
         let _epoch = tl.initiate_seek(Duration::from_secs(5));
         assert!(clone.is_seek_pending());
+    }
+
+    // --- bitflags migration tests ---
+
+    #[kithara::test]
+    fn set_eof_toggles_flag_without_affecting_others() {
+        let tl = Timeline::new();
+        assert!(!tl.eof());
+        tl.set_eof(true);
+        assert!(tl.eof());
+        assert!(!tl.is_flushing());
+        assert!(!tl.is_seek_pending());
+        tl.set_eof(false);
+        assert!(!tl.eof());
+    }
+
+    #[kithara::test]
+    fn flag_triple_matrix_matches_bitflags_snapshot() {
+        // Drive all 2^3 combinations of {flushing, seek_pending, eof} via
+        // the public API and confirm flags_snapshot_with() reports them.
+        for mask in 0u8..8 {
+            let tl = Timeline::new();
+            let want_flushing = mask & 1 != 0;
+            let want_seek_pending = mask & 2 != 0;
+            let want_eof = mask & 4 != 0;
+
+            if want_flushing || want_seek_pending {
+                let _ = tl.initiate_seek(Duration::from_secs(1));
+                if !want_flushing {
+                    tl.complete_seek(tl.seek_epoch());
+                }
+                if !want_seek_pending {
+                    tl.clear_seek_pending(tl.seek_epoch());
+                }
+            }
+            tl.set_eof(want_eof);
+
+            assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#05b} flushing");
+            assert_eq!(
+                tl.is_seek_pending(),
+                want_seek_pending,
+                "mask {mask:#05b} seek_pending"
+            );
+            assert_eq!(tl.eof(), want_eof, "mask {mask:#05b} eof");
+
+            let snapshot = tl.flags_snapshot_with(Ordering::Acquire);
+            assert_eq!(
+                snapshot.contains(TimelineFlags::FLUSHING),
+                want_flushing,
+                "mask {mask:#05b} snapshot flushing"
+            );
+            assert_eq!(
+                snapshot.contains(TimelineFlags::SEEK_PENDING),
+                want_seek_pending,
+                "mask {mask:#05b} snapshot seek_pending"
+            );
+            assert_eq!(
+                snapshot.contains(TimelineFlags::EOF),
+                want_eof,
+                "mask {mask:#05b} snapshot eof"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn complete_seek_double_check_re_raises_flushing_when_newer_seek_interleaves() {
+        // Simulate the race: complete_seek runs for epoch1; between
+        // clearing FLUSHING and the double-check, a newer initiate_seek
+        // fires and bumps the epoch. The double-check must observe the
+        // epoch mismatch and re-set FLUSHING.
+        let tl = Timeline::new();
+        let epoch1 = tl.initiate_seek(Duration::from_secs(1));
+
+        // Simulate the interleave by hand: clear FLUSHING as
+        // complete_seek's first store would, then bump the epoch via
+        // initiate_seek before re-entering complete_seek.
+        tl.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
+        let _epoch2 = tl.initiate_seek(Duration::from_secs(2));
+        tl.complete_seek(epoch1);
+
+        assert!(
+            tl.is_flushing(),
+            "FLUSHING must be re-raised when a newer seek interleaves mid-complete"
+        );
+    }
+
+    #[kithara::test]
+    fn concurrent_flag_toggles_preserve_independent_semantics() {
+        // Four threads toggle disjoint flags in a tight loop. Asserts no
+        // thread's operation clobbers another flag — the OR/AND-based
+        // primitives compose correctly.
+        const ITER: usize = 50_000;
+
+        let tl = Timeline::new();
+        let barrier = Arc::new(Barrier::new(3));
+
+        // Thread A: flips EOF on/off.
+        let tl_a = tl.clone();
+        let barrier_a = Arc::clone(&barrier);
+        let a = thread::spawn(move || {
+            barrier_a.wait();
+            for i in 0..ITER {
+                tl_a.set_eof(i % 2 == 0);
+            }
+        });
+
+        // Thread B: repeatedly sets/clears SEEK_PENDING via public API.
+        let tl_b = tl.clone();
+        let barrier_b = Arc::clone(&barrier);
+        let b = thread::spawn(move || {
+            barrier_b.wait();
+            for _ in 0..ITER {
+                let epoch = tl_b.initiate_seek(Duration::from_millis(1));
+                tl_b.clear_seek_pending(epoch);
+                tl_b.complete_seek(epoch);
+            }
+        });
+
+        // Thread C: observes snapshots without crashing.
+        let tl_c = tl.clone();
+        let barrier_c = Arc::clone(&barrier);
+        let c = thread::spawn(move || {
+            barrier_c.wait();
+            let mut observed = 0u64;
+            for _ in 0..ITER {
+                let snap = tl_c.flags_snapshot_with(Ordering::Acquire);
+                observed ^= u64::from(snap.bits());
+            }
+            observed
+        });
+
+        a.join().expect("thread A");
+        b.join().expect("thread B");
+        let _ = c.join().expect("thread C");
+
+        // Final invariant: after all writers finish, EOF reflects the
+        // last A iteration (ITER-1 ⇒ odd ⇒ false); FLUSHING/SEEK_PENDING
+        // fully cleared by B's last complete_seek + clear_seek_pending.
+        assert!(!tl.eof(), "EOF must match the last deterministic write");
+        assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
+        assert!(
+            !tl.is_seek_pending(),
+            "SEEK_PENDING must be fully cleared after last clear"
+        );
     }
 }
