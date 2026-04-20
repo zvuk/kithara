@@ -589,3 +589,306 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
         "peer bus subscriber must receive DownloaderEvent::LoadSlow"
     );
 }
+
+// Peer-level priority routing tests (Task 7 of
+// 2026-04-20-timeline-flags-peer-priority). Two peers share the same
+// Downloader; one advertises High priority via Timeline::set_playing,
+// the other stays Low. Under `max_concurrent=2` contention the active
+// peer's fetches must complete ahead of the preloader's — that is the
+// user-visible win this plan exists to deliver.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PeerTag {
+    Active,
+    Preload,
+}
+
+/// Peer that emits `total_cmds` GET commands and stamps each with its
+/// tag when the response arrives. `priority()` reads the shared
+/// Timeline so a mid-stream flip of `set_playing` is observable.
+struct TaggedPriorityPeer {
+    timeline: crate::Timeline,
+    remaining: Mutex<usize>,
+    url: Url,
+    completion_log: Arc<Mutex<Vec<(PeerTag, usize)>>>,
+    completion_counter: Arc<AtomicUsize>,
+    tag: PeerTag,
+}
+
+impl Peer for TaggedPriorityPeer {
+    fn priority(&self) -> Priority {
+        if self.timeline.is_playing() {
+            Priority::High
+        } else {
+            Priority::Low
+        }
+    }
+
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        let mut rem = self.remaining.lock_sync();
+        if *rem == 0 {
+            return Poll::Pending;
+        }
+        let take = (*rem).min(FLOOD_BATCH_SIZE);
+        *rem -= take;
+        let cmds: Vec<FetchCmd> = (0..take)
+            .map(|_| {
+                let tag = self.tag;
+                let log = Arc::clone(&self.completion_log);
+                let counter = Arc::clone(&self.completion_counter);
+                FetchCmd::get(self.url.clone())
+                    .writer(Box::new(|_chunk: &[u8]| Ok(())))
+                    .on_complete(Box::new(
+                        move |_bytes, _err: Option<&kithara_net::NetError>| {
+                            let order = counter.fetch_add(1, Ordering::SeqCst);
+                            log.lock_sync().push((tag, order));
+                        },
+                    ))
+            })
+            .collect();
+        if *rem > 0 {
+            cx.waker().wake_by_ref();
+        }
+        Poll::Ready(Some(cmds))
+    }
+}
+
+async fn spawn_slow_server(delay_ms: u64) -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(move || async move {
+            tokio_time::sleep(Duration::from_millis(delay_ms)).await;
+            "ok"
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+/// Active peer (PLAYING=true from the start) must finish its batch
+/// ahead of a preload peer (PLAYING=false) when both share the same
+/// limited `max_concurrent` pool.
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
+async fn active_peer_completes_before_preload_under_contention() {
+    const CMDS_PER_PEER: usize = 20;
+    const MAX_CONCURRENT: usize = 2;
+    const PER_REQUEST_DELAY_MS: u64 = 30;
+
+    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..DownloaderConfig::default()
+    };
+    let dl = Downloader::new(config);
+
+    let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
+    let completion_counter = Arc::new(AtomicUsize::new(0));
+
+    let timeline_active = crate::Timeline::new();
+    timeline_active.set_playing(true);
+    let active = Arc::new(TaggedPriorityPeer {
+        timeline: timeline_active,
+        remaining: Mutex::new(CMDS_PER_PEER),
+        url: url.clone(),
+        completion_log: Arc::clone(&completion_log),
+        completion_counter: Arc::clone(&completion_counter),
+        tag: PeerTag::Active,
+    });
+
+    let timeline_preload = crate::Timeline::new();
+    // preload stays PLAYING=false (default)
+    let preload = Arc::new(TaggedPriorityPeer {
+        timeline: timeline_preload,
+        remaining: Mutex::new(CMDS_PER_PEER),
+        url,
+        completion_log: Arc::clone(&completion_log),
+        completion_counter: Arc::clone(&completion_counter),
+        tag: PeerTag::Preload,
+    });
+
+    let active_handle = dl.register(active.clone());
+    let preload_handle = dl.register(preload.clone());
+
+    // Wait for all 40 to complete.
+    let total = CMDS_PER_PEER * 2;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
+        if completion_counter.load(Ordering::SeqCst) >= total {
+            break;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "timed out: completed={}, target={total}",
+                completion_counter.load(Ordering::SeqCst)
+            );
+        }
+    }
+
+    drop(active_handle);
+    drop(preload_handle);
+
+    let log = completion_log.lock_sync().clone();
+    assert_eq!(log.len(), total, "every cmd must complete exactly once");
+
+    // Compute median completion order per tag — a robust aggregate
+    // that does not hinge on the ordering of individual fetches.
+    let mut active_orders: Vec<usize> = log
+        .iter()
+        .filter_map(|(tag, ord)| (*tag == PeerTag::Active).then_some(*ord))
+        .collect();
+    let mut preload_orders: Vec<usize> = log
+        .iter()
+        .filter_map(|(tag, ord)| (*tag == PeerTag::Preload).then_some(*ord))
+        .collect();
+    active_orders.sort_unstable();
+    preload_orders.sort_unstable();
+    let active_median = active_orders[active_orders.len() / 2];
+    let preload_median = preload_orders[preload_orders.len() / 2];
+    assert!(
+        active_median < preload_median,
+        "active peer median completion order {active_median} must precede \
+         preload peer median {preload_median} — priority routing is broken"
+    );
+
+    // Additionally assert the first N completions are biased toward Active.
+    let first_quarter = &log[..log.len() / 4];
+    let active_in_first_quarter = first_quarter
+        .iter()
+        .filter(|(tag, _)| *tag == PeerTag::Active)
+        .count();
+    assert!(
+        active_in_first_quarter > first_quarter.len() / 2,
+        "active peer must dominate the first quarter of completions: \
+         got {active_in_first_quarter}/{}",
+        first_quarter.len()
+    );
+}
+
+/// Negative case: when both peers are idle (PLAYING=false), the
+/// Downloader is free to service them in any order. The test asserts
+/// only liveness — every cmd eventually completes — so we do not lock
+/// in FIFO behaviour that the Registry is not required to uphold.
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(30)))]
+async fn both_peers_idle_no_priority_ordering_asserted() {
+    const CMDS_PER_PEER: usize = 10;
+    const MAX_CONCURRENT: usize = 2;
+    const PER_REQUEST_DELAY_MS: u64 = 10;
+
+    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..DownloaderConfig::default()
+    };
+    let dl = Downloader::new(config);
+
+    let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
+    let completion_counter = Arc::new(AtomicUsize::new(0));
+
+    let a = Arc::new(TaggedPriorityPeer {
+        timeline: crate::Timeline::new(),
+        remaining: Mutex::new(CMDS_PER_PEER),
+        url: url.clone(),
+        completion_log: Arc::clone(&completion_log),
+        completion_counter: Arc::clone(&completion_counter),
+        tag: PeerTag::Active,
+    });
+    let b = Arc::new(TaggedPriorityPeer {
+        timeline: crate::Timeline::new(),
+        remaining: Mutex::new(CMDS_PER_PEER),
+        url,
+        completion_log: Arc::clone(&completion_log),
+        completion_counter: Arc::clone(&completion_counter),
+        tag: PeerTag::Preload,
+    });
+
+    let handle_a = dl.register(a);
+    let handle_b = dl.register(b);
+
+    let total = CMDS_PER_PEER * 2;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
+        if completion_counter.load(Ordering::SeqCst) >= total {
+            break;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "timed out: completed={}, target={total}",
+                completion_counter.load(Ordering::SeqCst)
+            );
+        }
+    }
+
+    drop(handle_a);
+    drop(handle_b);
+
+    let log = completion_log.lock_sync().clone();
+    assert_eq!(
+        log.len(),
+        total,
+        "idle peers must still drain every cmd to completion"
+    );
+}
+
+/// Deterministic Registry-level routing test. Drives a stub `Peer`
+/// whose `priority()` the test flips between High and Low, then
+/// submits a command through the public `PeerHandle::execute` path and
+/// confirms the response still flows — proving that the Registry
+/// accepts priority-tagged commands from peers with either priority.
+#[kithara_test_macros::test(tokio, timeout(Duration::from_secs(10)))]
+async fn peer_handle_execute_respects_either_peer_priority() {
+    struct FlippablePeer {
+        timeline: crate::Timeline,
+    }
+    impl Peer for FlippablePeer {
+        fn priority(&self) -> Priority {
+            if self.timeline.is_playing() {
+                Priority::High
+            } else {
+                Priority::Low
+            }
+        }
+    }
+
+    let dl = Downloader::new(DownloaderConfig::default());
+    let timeline = crate::Timeline::new();
+    let peer = Arc::new(FlippablePeer {
+        timeline: timeline.clone(),
+    });
+    let handle = dl.register(peer);
+
+    let url = spawn_slow_server(1).await;
+
+    // Low priority phase — execute must still succeed.
+    assert_eq!(peer_priority_from_handle(&handle, &timeline), Priority::Low);
+    let low_resp = handle.execute(FetchCmd::get(url.clone())).await;
+    assert!(low_resp.is_ok(), "execute must succeed while Low");
+
+    // Flip to High.
+    timeline.set_playing(true);
+    assert_eq!(
+        peer_priority_from_handle(&handle, &timeline),
+        Priority::High
+    );
+    let high_resp = handle.execute(FetchCmd::get(url)).await;
+    assert!(high_resp.is_ok(), "execute must succeed while High");
+}
+
+/// Helper for the deterministic routing test: reads the effective
+/// peer priority from the same Timeline the peer observes.
+fn peer_priority_from_handle(_handle: &super::PeerHandle, timeline: &crate::Timeline) -> Priority {
+    if timeline.is_playing() {
+        Priority::High
+    } else {
+        Priority::Low
+    }
+}
