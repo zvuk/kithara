@@ -14,7 +14,7 @@ use kithara::{
     audio::{Audio, AudioConfig, PcmReader},
     decode::PcmChunk,
     events::{Event, HlsEvent},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -217,10 +217,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
@@ -278,7 +275,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -288,10 +285,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -429,7 +423,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -439,10 +433,7 @@ async fn live_real_stream_fixed_seek_window_regression(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -552,7 +543,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -562,10 +553,7 @@ async fn live_real_stream_random_seek_prefix_regression(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -682,10 +670,7 @@ async fn live_real_stream_seek_resume_native(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -757,7 +742,7 @@ async fn live_stress_real_stream_seek_read_cache(
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -777,10 +762,7 @@ async fn live_stress_real_stream_seek_read_cache(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -1074,10 +1056,7 @@ async fn live_ephemeral_small_cache_playback(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -1148,10 +1127,7 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)

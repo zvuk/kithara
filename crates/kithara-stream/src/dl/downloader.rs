@@ -3,7 +3,8 @@
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use futures::task::AtomicWaker;
-use kithara_events::EventBus;
+use kithara_abr::{Abr, AbrController};
+use kithara_events::{AbrPeerId, EventBus};
 use kithara_net::HttpClient;
 use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -46,6 +47,10 @@ pub(super) struct RegisteredPeerEntry {
     /// by the Registry when dispatching fetches so that
     /// `DownloaderEvent::LoadSlow` lands on the owning track's bus.
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
+    /// ABR peer identifier assigned at registration. The Registry stamps
+    /// every proactively-scheduled `InternalCmd` with this id so the
+    /// Downloader can credit bandwidth samples to the right peer.
+    pub(super) peer_id: AbrPeerId,
 }
 
 /// Shared inner state for the downloader.
@@ -70,18 +75,24 @@ pub(super) struct DownloaderInner {
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
+    /// Shared ABR controller. One per Downloader — peers register through
+    /// `register()` and fetch-completion hooks call
+    /// `controller.record_bandwidth(...)` automatically.
+    pub(super) abr: Arc<AbrController>,
 }
 
 impl Downloader {
     /// Create a new downloader from configuration.
     ///
-    /// Constructs the internal `HttpClient` from the supplied network options.
+    /// Constructs the internal `HttpClient` from the supplied network options
+    /// and the shared [`AbrController`] from `config.abr_settings`.
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let chunk_timeout = config.net.request_timeout;
         let soft_timeout = config.soft_timeout;
         let runtime = config.runtime;
+        let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 client: HttpClient::new(config.net),
@@ -95,28 +106,42 @@ impl Downloader {
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
+                abr,
             }),
         }
     }
 
+    /// Shared ABR controller for this downloader.
+    #[must_use]
+    pub fn abr_controller(&self) -> &Arc<AbrController> {
+        &self.inner.abr
+    }
+
     /// Register a peer and return its [`PeerHandle`].
     ///
-    /// Creates a per-peer cancel token (child of the downloader cancel)
-    /// and a bounded command channel. The download loop is lazily spawned
-    /// on first call.
+    /// Double-registers the peer: fetch channel through the download loop
+    /// and ABR state through the shared controller. The returned handle's
+    /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
         self.ensure_spawned();
         let cancel = self.inner.cancel.child_token();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
+
+        // `Peer: Abr` enables the upcast (stable trait-upcasting, Rust 1.86+).
+        let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
+        let abr_handle = self.inner.abr.register(&abr_peer);
+        let peer_id = abr_handle.peer_id();
+
         let entry = RegisteredPeerEntry {
             peer,
             cmd_rx,
             cancel: cancel.clone(),
             bus: Arc::clone(&bus),
+            peer_id,
         };
         let _ = self.inner.register_tx.send(entry);
-        PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus)
+        PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus, abr_handle)
     }
 
     /// Ensure the download loop is running (lazy spawn on first register

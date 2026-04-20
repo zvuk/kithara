@@ -6,15 +6,14 @@ use std::{
     },
 };
 
-use kithara_abr::AbrController;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_hls::internal::{
-    AbrMode, AbrOptions, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData,
-    SegmentLoader, SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap,
-    VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
-    make_test_segment_loader, make_test_source as make_internal_test_source,
+    AbrMode, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData, SegmentLoader,
+    SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap, VariantState,
+    VariantStream, build_source, commit_dummy_resource_from_data, make_test_segment_loader,
+    make_test_source as make_internal_test_source,
     make_test_source_with_backend as make_internal_test_source_with_backend,
     set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
 };
@@ -1167,10 +1166,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig::default()
-        .with_abr(AbrController::new(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        }))
+        .with_initial_abr_mode(AbrMode::Manual(1))
         .with_cancel(cancel);
     let source = build_source(
         backend,

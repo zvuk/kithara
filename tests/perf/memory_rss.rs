@@ -18,7 +18,7 @@ use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
@@ -62,10 +62,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
 
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Auto(Some(0)),
-                ..Default::default()
-            });
+            .with_initial_abr_mode(AbrMode::Auto(Some(0)));
         let config = AudioConfig::<Hls>::new(hls_config);
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
@@ -149,10 +146,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

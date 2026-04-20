@@ -7,9 +7,10 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use kithara_events::HlsEvent;
+use kithara_abr::{Abr, AbrState};
+use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, EventBus, HlsEvent};
 use kithara_net::NetError;
-use kithara_platform::{Mutex, time::Instant, tokio};
+use kithara_platform::{Mutex, RwLock, time::Instant, tokio};
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
@@ -44,16 +45,33 @@ pub(crate) struct HlsPeer {
     /// Same Arc-clone as the one held by `HlsCoord` — reads from the
     /// audio FSM are published here and observed by `priority()`.
     timeline: Timeline,
+    /// Per-peer ABR state owned by this peer, shared with the controller.
+    abr_state: Arc<AbrState>,
+    /// Track-scoped bus cell. Written by `PeerHandle::with_bus` via the
+    /// `Abr::with_bus` trait method; read by the controller on publish.
+    bus: Arc<RwLock<Option<EventBus>>>,
 }
 
 impl HlsPeer {
-    pub(crate) fn new(timeline: Timeline) -> Self {
+    pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
         Self {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_cancel: CancellationToken::new(),
             timeline,
+            abr_state: Arc::new(AbrState::new(Vec::new(), initial_mode)),
+            bus: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Fill in the variant list after the master playlist is parsed.
+    pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
+        self.abr_state.set_variants(variants);
+    }
+
+    /// Shared ABR state for the scheduler's lock/unlock and seek routing.
+    pub(crate) fn abr_state(&self) -> &Arc<AbrState> {
+        &self.abr_state
     }
 
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
@@ -129,6 +147,31 @@ impl Drop for HlsPeer {
         // even when there is no pending `reader_advanced` notification
         // to trigger its select loop.
         self.wake_cancel.cancel();
+    }
+}
+
+impl Abr for HlsPeer {
+    fn variants(&self) -> Vec<AbrVariant> {
+        self.abr_state.variants_snapshot()
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.abr_state))
+    }
+
+    fn progress(&self) -> Option<AbrProgressSnapshot> {
+        // v1: no buffer signal — the controller falls back to time- and
+        // bandwidth-only gates. Commit 3 wires actual reader/download
+        // positions from the scheduler.
+        None
+    }
+
+    fn bus(&self) -> Option<EventBus> {
+        self.bus.lock_sync_read().clone()
+    }
+
+    fn with_bus(&self, bus: Option<EventBus>) {
+        *self.bus.lock_sync_write() = bus;
     }
 }
 
@@ -375,9 +418,9 @@ fn resolve_variant(
     sched: &mut HlsScheduler,
     demand_variant_override: Option<usize>,
 ) -> (usize, usize) {
-    let old_variant = sched.abr.get_current_variant_index();
-    let decision = sched.make_abr_decision();
-    let mut variant = sched.abr.get_current_variant_index();
+    let old_variant = sched.abr_state.current_variant_index();
+    let _decision = sched.make_abr_decision();
+    let mut variant = sched.abr_state.current_variant_index();
 
     // Demand variant override.
     if let Some(dv) = demand_variant_override
@@ -404,8 +447,8 @@ fn resolve_variant(
         variant = sched.download_variant;
     }
 
-    sched.publish_variant_applied(old_variant, variant, &decision);
-
+    // VariantApplied is now emitted by the shared `AbrController` as
+    // `AbrEvent::VariantApplied` — no HLS-level publish.
     (old_variant, variant)
 }
 
@@ -716,7 +759,7 @@ mod tests {
     use std::{sync::Arc, task::Context, time::Duration};
 
     use futures::task::noop_waker;
-    use kithara_abr::{AbrDecision, AbrReason};
+    use kithara_abr::{AbrDecision, AbrMode, AbrReason, AbrState};
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
@@ -804,7 +847,7 @@ mod tests {
         let downloader =
             Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
         let timeline = Timeline::new();
-        let peer = Arc::new(HlsPeer::new(timeline.clone()));
+        let peer = Arc::new(HlsPeer::new(timeline.clone(), AbrMode::default()));
         let handle = downloader.register(peer);
         let cache = PlaylistCache::new(backend.clone(), handle.clone());
         let loader = Arc::new(crate::loading::SegmentLoader::new(
@@ -817,11 +860,13 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
+        let abr_state = Arc::new(AbrState::new(Vec::new(), AbrMode::default()));
         let (scheduler, _source) = build_pair(
             backend,
             handle,
             &parsed,
             &config,
+            abr_state,
             playlist_state,
             EventBus::new(16),
             timeline,
@@ -1112,7 +1157,7 @@ mod tests {
             .reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
-        state.scheduler.abr.apply(
+        state.scheduler.abr_state.apply(
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::DownSwitch,
@@ -1127,7 +1172,7 @@ mod tests {
             "precondition: cursor at tail"
         );
         assert_eq!(
-            state.scheduler.abr.get_current_variant_index(),
+            state.scheduler.abr_state.current_variant_index(),
             1,
             "precondition: ABR wants variant 1"
         );
@@ -1446,7 +1491,7 @@ mod tests {
         // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
         // After throughput measurement it decides to up-switch to
         // variant 1. `abr.get_current_variant_index()` now returns 1.
-        state.scheduler.abr.apply(
+        state.scheduler.abr_state.apply(
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::UpSwitch,
@@ -1681,7 +1726,7 @@ mod tests {
         let mut state = make_hls_state();
 
         assert!(
-            !state.scheduler.abr.is_locked(),
+            !state.scheduler.abr_state.is_locked(),
             "precondition: ABR starts unlocked on a fresh track"
         );
 
@@ -1705,7 +1750,7 @@ mod tests {
         let decision = state.scheduler.make_abr_decision();
 
         assert!(
-            state.scheduler.abr.is_locked(),
+            state.scheduler.abr_state.is_locked(),
             "ABR must be locked for the duration of a pending seek; leaving \
              it unlocked opens the mid-seek variant switch that makes the \
              anchor byte_offset unreachable"
@@ -1733,7 +1778,7 @@ mod tests {
         let epoch = timeline.initiate_seek(Duration::from_secs(30));
         let _ = state.scheduler.make_abr_decision();
         assert!(
-            state.scheduler.abr.is_locked(),
+            state.scheduler.abr_state.is_locked(),
             "precondition: ABR is locked during the pending seek",
         );
 
@@ -1748,7 +1793,7 @@ mod tests {
 
         let decision = state.scheduler.make_abr_decision();
         assert!(
-            !state.scheduler.abr.is_locked(),
+            !state.scheduler.abr_state.is_locked(),
             "ABR must unlock on the first tick after seek_pending clears — \
              otherwise the first seek pins the variant for the rest of the \
              session and ABR stops reacting to network conditions"
@@ -1767,7 +1812,7 @@ mod tests {
     #[kithara::test]
     fn priority_defaults_to_low_before_activation() {
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline);
+        let peer = HlsPeer::new(timeline, AbrMode::default());
         assert_eq!(
             peer.priority(),
             crate::peer::Priority::Low,
@@ -1778,7 +1823,7 @@ mod tests {
     #[kithara::test]
     fn priority_tracks_set_playing_without_activation() {
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         assert_eq!(peer.priority(), crate::peer::Priority::Low);
 
         timeline.set_playing(true);
@@ -1803,7 +1848,7 @@ mod tests {
         // `state` is a PlatformMutex, lock_sync would block forever if
         // priority() tried to acquire it.
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         let _guard = peer.state.lock_sync();
         timeline.set_playing(true);
         assert_eq!(
@@ -1820,7 +1865,7 @@ mod tests {
         // verify this indirectly: flip set_playing on the peer's
         // timeline and observe is_playing on a re-cloned handle.
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         let other_handle = timeline.clone();
         other_handle.set_playing(true);
         assert!(other_handle.is_playing());

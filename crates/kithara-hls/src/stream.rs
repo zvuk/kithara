@@ -8,8 +8,8 @@ use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::{Mutex, time::Instant};
+use kithara_events::EventBus;
+use kithara_platform::Mutex;
 use kithara_stream::{
     StreamContext, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
@@ -107,7 +107,7 @@ impl StreamType for Hls {
         let backend: AssetStore<DecryptContext> = builder.build();
 
         let timeline = Timeline::new();
-        let hls_peer = Arc::new(HlsPeer::new(timeline.clone()));
+        let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
@@ -149,14 +149,21 @@ impl StreamType for Hls {
             &media_playlists,
         ));
 
-        let initial_variant = config.abr.as_ref().map_or(0, |abr| {
-            let now = Instant::now();
-            let decision = abr.decide(now);
-            if decision.changed {
-                abr.apply(&decision, now);
-            }
-            abr.get_current_variant_index()
-        });
+        // Build the variant list and hand it to the peer's ABR state.
+        let abr_variants: Vec<kithara_events::AbrVariant> = master
+            .variants
+            .iter()
+            .map(|v| kithara_events::AbrVariant {
+                variant_index: v.id.0,
+                bandwidth_bps: v.bandwidth.unwrap_or(0),
+                duration: kithara_events::VariantDuration::Unknown,
+            })
+            .collect();
+        hls_peer.set_abr_variants(abr_variants);
+        let initial_variant = hls_peer
+            .abr_state()
+            .current_variant_index()
+            .min(master.variants.len().saturating_sub(1));
 
         prefetch_init_and_keys(&loader, &key_manager, &media_playlists).await;
 
@@ -169,17 +176,17 @@ impl StreamType for Hls {
         )
         .await;
 
-        let variant_info = variant_info_from_master(&master);
-        bus.publish(HlsEvent::VariantsDiscovered {
-            variants: variant_info,
-            initial_variant,
-        });
+        // `VariantsRegistered` is now emitted by the shared `AbrController`
+        // as `AbrEvent::VariantsRegistered` once the bus is attached.
+        let _ = initial_variant;
+        let _ = variant_info_from_master;
 
         let (hls_downloader, mut source) = build_pair(
             backend,
             peer_handle.clone(),
             &master.variants,
             &config,
+            Arc::clone(hls_peer.abr_state()),
             Arc::clone(&playlist_state),
             bus,
             timeline,

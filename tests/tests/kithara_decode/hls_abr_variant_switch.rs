@@ -20,7 +20,7 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     events::{Event, EventBus, HlsEvent},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
@@ -79,13 +79,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.5,
-            min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
-            mode: AbrMode::Auto(Some(0)),       // Start with variant 0
-            throughput_safety_factor: 1.2,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     info!("Opening HLS stream with ABR enabled");
 
@@ -212,10 +206,7 @@ async fn test_basic_multi_segment_reading(
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0), // Fixed variant - no ABR
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await?;
 
@@ -287,13 +278,7 @@ async fn test_abr_variant_switch_with_seek_backward(
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.5,
-            min_buffer_for_up_switch_secs: 1.0,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.2,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     println!("\nCreating HLS stream with ABR");
     let mut stream = Stream::<Hls>::new(config).await?;

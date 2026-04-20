@@ -9,7 +9,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     file::{File, FileConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -227,10 +227,7 @@ async fn mixed_two_file_two_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Manual(0),
-                ..AbrOptions::default()
-            });
+            .with_initial_abr_mode(AbrMode::Manual(0));
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -331,10 +328,7 @@ async fn mixed_four_file_four_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Manual(0),
-                ..AbrOptions::default()
-            });
+            .with_initial_abr_mode(AbrMode::Manual(0));
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

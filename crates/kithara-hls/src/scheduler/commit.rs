@@ -15,8 +15,8 @@ impl HlsScheduler {
         init_url: Option<url::Url>,
         duration: std::time::Duration,
     ) {
-        self.record_throughput(media.len, duration, media.duration);
-
+        // Bandwidth recording now happens automatically in the
+        // Downloader after each fetch completes — no HLS-level hook.
         self.bus.publish(HlsEvent::SegmentComplete {
             variant,
             segment_index: seg_idx,

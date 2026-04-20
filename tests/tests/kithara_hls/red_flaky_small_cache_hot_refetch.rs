@@ -47,7 +47,7 @@ use std::{num::NonZeroUsize, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::time::{Instant, sleep};
@@ -89,10 +89,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await

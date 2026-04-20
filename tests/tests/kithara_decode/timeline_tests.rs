@@ -90,7 +90,7 @@ mod hls_timeline {
     use kithara::{
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
-        hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+        hls::{AbrMode, Hls, HlsConfig},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -136,10 +136,7 @@ mod hls_timeline {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
             .with_cancel(cancel)
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Manual(0),
-                ..AbrOptions::default()
-            });
+            .with_initial_abr_mode(AbrMode::Manual(0));
 
         // Create an HLS stream and build StreamContext before moving stream to decoder
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();

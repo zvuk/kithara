@@ -3,6 +3,7 @@
 use std::{ops::Range, sync::Arc};
 
 use futures::StreamExt;
+use kithara_abr::Abr;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, RangeSpec};
@@ -39,6 +40,10 @@ impl FilePeer {
     pub(crate) fn new(timeline: Timeline) -> Self {
         Self { timeline }
     }
+}
+
+impl Abr for FilePeer {
+    // File streams have no variants and no buffer signal — all defaults.
 }
 
 impl Peer for FilePeer {

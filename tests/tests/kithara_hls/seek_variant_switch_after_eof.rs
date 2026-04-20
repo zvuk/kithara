@@ -21,7 +21,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     internal::source_variant_index_handle,
     stream::Stream,
 };
@@ -59,10 +59,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

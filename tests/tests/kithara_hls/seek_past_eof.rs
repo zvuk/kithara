@@ -16,7 +16,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -75,10 +75,7 @@ async fn seek_beyond_head_total_within_actual_total(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

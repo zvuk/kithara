@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
@@ -50,6 +50,7 @@ fn make_test_loader(
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     let handle = downloader.register(Arc::new(crate::peer::HlsPeer::new(
         kithara_stream::Timeline::new(),
+        AbrMode::default(),
     )));
     let cache = PlaylistCache::new(backend.clone(), handle.clone());
     let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));
@@ -140,12 +141,28 @@ pub fn build_source(
         .clone()
         .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
     let timeline = kithara_stream::Timeline::new();
-    let handle = downloader.register(Arc::new(crate::peer::HlsPeer::new(timeline.clone())));
+    let hls_peer = Arc::new(crate::peer::HlsPeer::new(
+        timeline.clone(),
+        config.initial_abr_mode,
+    ));
+    // Seed the variant list so the scheduler's initial_variant pickup
+    // matches the caller's `initial_abr_mode`.
+    let abr_variants: Vec<kithara_events::AbrVariant> = variants
+        .iter()
+        .map(|v| kithara_events::AbrVariant {
+            variant_index: v.id.0,
+            bandwidth_bps: v.bandwidth.unwrap_or(0),
+            duration: kithara_events::VariantDuration::Unknown,
+        })
+        .collect();
+    hls_peer.set_abr_variants(abr_variants);
+    let handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn kithara_stream::dl::Peer>);
     let (_downloader, source) = build_pair(
         backend,
         handle,
         variants,
         config,
+        Arc::clone(hls_peer.abr_state()),
         playlist_state,
         bus,
         timeline,

@@ -17,7 +17,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
     decode::{PcmChunk, PcmMeta},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -198,14 +198,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(120),
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

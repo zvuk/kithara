@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_platform::thread::active_named_thread_count;
 use kithara_stream::Stream;
 use kithara_test_utils::{TestServerHelper, TestTempDir, kithara, temp_dir};
@@ -100,10 +100,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(server.asset("hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -152,10 +149,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(server.asset("hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let config: AudioConfig<Hls> = AudioConfig::new(hls_config).with_worker(shared_worker.clone());
     let a1 = Audio::<Stream<Hls>>::new(config).await;
 
@@ -163,10 +157,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config2 = HlsConfig::new(server.asset("hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(1));
     let config: AudioConfig<Hls> = AudioConfig::new(hls_config2).with_worker(shared_worker.clone());
     let a2 = Audio::<Stream<Hls>>::new(config).await;
 
@@ -174,10 +165,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let drm_config = HlsConfig::new(server.asset("drm/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let config: AudioConfig<Hls> = AudioConfig::new(drm_config).with_worker(shared_worker.clone());
     let a3 = Audio::<Stream<Hls>>::new(config).await;
 

@@ -87,6 +87,7 @@ pub fn create_test_downloader() -> Downloader {
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
 fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
+    impl kithara::abr::Abr for TestPeer {}
     impl Peer for TestPeer {}
     let cancel = CancellationToken::new();
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));

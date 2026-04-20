@@ -1,10 +1,16 @@
 //! Batch execution: epoch-aware grouping and fetch spawning.
 
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
-use kithara_events::{DownloaderEvent, EventBus};
+use kithara_abr::AbrController;
+use kithara_events::{AbrPeerId, BandwidthSource, DownloaderEvent, EventBus};
 use kithara_net::{HttpClient, NetError};
-use kithara_platform::{CancelGroup, time::Duration, tokio, tokio::task};
+use kithara_platform::{
+    CancelGroup,
+    time::{Duration, Instant},
+    tokio,
+    tokio::task,
+};
 use tracing::warn;
 
 use super::{
@@ -79,6 +85,9 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd) {
     let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
+    let abr = Arc::clone(&inner.abr);
+    let peer_id = internal.peer_id;
+    let started = Instant::now();
     let mut cmd = internal.cmd;
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
@@ -96,7 +105,16 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd) {
             cmd,
         )
         .await;
-        deliver(internal.response, result, writer, on_complete_cb).await;
+        deliver(
+            internal.response,
+            result,
+            writer,
+            on_complete_cb,
+            abr,
+            peer_id,
+            started,
+        )
+        .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
         fetch_waker.wake();
     });
@@ -183,6 +201,9 @@ async fn deliver(
     result: Result<FetchResponse, NetError>,
     mut writer: Option<super::cmd::WriterFn>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
+    abr: Arc<AbrController>,
+    peer_id: AbrPeerId,
+    started: Instant,
 ) {
     match target {
         ResponseTarget::Channel(tx) => {
@@ -194,6 +215,14 @@ async fn deliver(
                     let write_result = resp.body.write_all(|chunk| w(chunk)).await;
                     match write_result {
                         Ok(total) => {
+                            if total > 0 {
+                                abr.record_bandwidth(
+                                    peer_id,
+                                    total,
+                                    started.elapsed(),
+                                    BandwidthSource::Network,
+                                );
+                            }
                             if let Some(cb) = on_complete_cb {
                                 cb(total, None);
                             }

@@ -7,7 +7,7 @@ use std::io::Read;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::TestServer;
@@ -38,10 +38,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        })
+        .with_initial_abr_mode(AbrMode::Manual(1))
         .with_events(bus);
 
     info!("Opening HLS stream...");

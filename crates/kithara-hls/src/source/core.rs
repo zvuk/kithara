@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use kithara_abr::{AbrController, AbrOptions, Variant};
+use kithara_abr::AbrState;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -310,35 +310,19 @@ impl HlsSource {
 /// handed to [`HlsPeer::new`]. Passing it in — instead of minting a new
 /// one inside — guarantees the peer's `priority()` reads the same
 /// `PLAYING` flag the audio FSM writes through the coord.
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
     _track: kithara_stream::dl::PeerHandle,
-    variants: &[crate::parsing::VariantStream],
+    _variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
+    abr_state: Arc<AbrState>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
     timeline: Timeline,
 ) -> (HlsScheduler, HlsSource) {
-    let abr_variants: Vec<Variant> = variants
-        .iter()
-        .map(|v| Variant {
-            variant_index: v.id.0,
-            bandwidth_bps: v.bandwidth.unwrap_or(0),
-        })
-        .collect();
-
     let cancel = config.cancel.clone().unwrap_or_default();
-    let abr = match config.abr.clone() {
-        Some(ctrl) => {
-            ctrl.set_variants(abr_variants);
-            ctrl
-        }
-        None => AbrController::new(AbrOptions {
-            variants: abr_variants,
-            ..AbrOptions::default()
-        }),
-    };
-    let abr_variant_index = abr.variant_index_handle();
+    let abr_variant_index = abr_state.variant_index_handle();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
     let num_variants = playlist_state.num_variants();
@@ -367,7 +351,7 @@ pub(crate) fn build_pair(
         cursor: DownloadCursor::fill(0),
         force_init_for_seek: false,
         sent_init_for_variant: HashSet::new(),
-        abr,
+        abr_state: Arc::clone(&abr_state),
         coord: Arc::clone(&coord),
         segments: Arc::clone(&segments),
         bus: bus.clone(),

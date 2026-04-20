@@ -11,7 +11,7 @@ use std::sync::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{
@@ -40,7 +40,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    abr_fast: AbrOptions,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -49,10 +49,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     // Create audio pipeline with ABR auto (start from cheapest variant)
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -179,16 +176,13 @@ async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    abr_fast: AbrOptions,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

@@ -43,6 +43,7 @@ fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     dl.register(Arc::new(crate::peer::HlsPeer::new(
         kithara_stream::Timeline::new(),
+        kithara_abr::AbrMode::Auto(None),
     )))
 }
 
@@ -155,6 +156,10 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -198,6 +203,10 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -750,6 +759,10 @@ fn demand_range_queues_request_for_unloaded_offset() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -802,6 +815,10 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1026,6 +1043,10 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1113,6 +1134,10 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1534,6 +1559,10 @@ fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
         playlist_state,
         bus,
         kithara_stream::Timeline::new(),

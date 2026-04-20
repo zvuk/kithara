@@ -11,7 +11,7 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
+use kithara_abr::AbrMode;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_events::EventBus;
@@ -43,9 +43,10 @@ const MIN_PLAYBACK_RATE: f32 = 0.01;
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
-    /// Shared ABR controller. When `None`, a default one is created.
-    #[derivative(Debug = "ignore")]
-    pub abr: Option<AbrController<ThroughputEstimator>>,
+    /// Default ABR mode seeded onto new HLS resources. Per-sample
+    /// decisions run inside the shared `AbrController` owned by the
+    /// `Downloader`; this field only picks the initial variant.
+    pub initial_abr_mode: AbrMode,
     /// Root event bus for this player.
     ///
     /// When set, all player/engine/resource events are published here.
@@ -105,7 +106,7 @@ pub struct PlayerImpl {
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
-    pub fn new(mut config: PlayerConfig) -> Self {
+    pub fn new(config: PlayerConfig) -> Self {
         let resolved_pool = config
             .pcm_pool
             .clone()
@@ -120,9 +121,6 @@ impl PlayerImpl {
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
-        if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrOptions::default()));
-        }
 
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
@@ -176,8 +174,8 @@ impl PlayerImpl {
         config.worker = Some(self.engine.worker().clone());
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
         #[cfg(feature = "hls")]
-        if config.abr.is_none() {
-            config.abr.clone_from(&self.config.abr);
+        {
+            config.initial_abr_mode = self.config.initial_abr_mode;
         }
         if config.bus.is_none() {
             config.bus = Some(self.bus.scoped());
@@ -565,17 +563,17 @@ impl PlayerImpl {
         Ok(())
     }
 
-    /// Get the shared ABR controller (if configured).
+    /// Default initial ABR mode used when preparing new HLS resources.
     #[must_use]
-    pub fn abr(&self) -> Option<&AbrController<ThroughputEstimator>> {
-        self.config.abr.as_ref()
+    pub fn initial_abr_mode(&self) -> AbrMode {
+        self.config.initial_abr_mode
     }
 
-    /// Change ABR mode at runtime. Takes effect on next `decide()`.
-    pub fn set_abr_mode(&self, mode: AbrMode) {
-        if let Some(ref ctrl) = self.config.abr {
-            ctrl.set_mode(mode);
-        }
+    /// Change the default initial ABR mode for resources configured
+    /// after this call. Existing tracks' modes are untouched — use
+    /// `PeerHandle::abr().set_mode(...)` to override a live track.
+    pub fn set_initial_abr_mode(&mut self, mode: AbrMode) {
+        self.config.initial_abr_mode = mode;
     }
 
     /// Select and load a queue item by index, using the configured
@@ -894,7 +892,7 @@ mod tests {
     #[kithara::test]
     fn player_config_custom() {
         let config = PlayerConfig {
-            abr: None,
+            initial_abr_mode: AbrMode::default(),
             bus: None,
             crossfade_duration: 2.0,
             default_rate: 0.5,

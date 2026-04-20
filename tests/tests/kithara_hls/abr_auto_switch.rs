@@ -17,7 +17,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     events::EventBus,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -76,7 +76,10 @@ fn create_pcm_segments() -> Vec<u8> {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOptions) {
+async fn abr_auto_switch_during_playback(
+    temp_dir: TestTempDir,
+    _abr_fast: kithara_abr::AbrSettings,
+) {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
@@ -135,10 +138,7 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_events(bus.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)), // start on V0
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)

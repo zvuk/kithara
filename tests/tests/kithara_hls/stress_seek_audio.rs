@@ -16,7 +16,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -117,10 +117,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

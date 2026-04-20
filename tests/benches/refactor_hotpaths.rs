@@ -26,7 +26,7 @@ use kithara::{
     bufpool::pcm_pool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     net::NetOptions,
     stream::{
         Stream,
@@ -337,13 +337,9 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);
-                    let abr = AbrOptions {
-                        mode: AbrMode::Auto(Some(1)),
-                        ..AbrOptions::default()
-                    };
                     let config = HlsConfig::new(url)
                         .with_store(store)
-                        .with_abr_options(abr)
+                        .with_initial_abr_mode(AbrMode::Auto(Some(1)))
                         .with_downloader(downloader)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);

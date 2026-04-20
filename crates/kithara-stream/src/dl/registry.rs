@@ -7,7 +7,7 @@ use std::{
     task::Poll,
 };
 
-use kithara_events::EventBus;
+use kithara_events::{AbrPeerId, EventBus};
 use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;
@@ -51,6 +51,10 @@ struct PeerEntry {
     /// every proactive poll so `PeerHandle::with_bus` takes effect
     /// immediately.
     bus: Arc<RwLock<Option<EventBus>>>,
+    /// ABR peer id stamped on every proactively-scheduled `InternalCmd`
+    /// so the Downloader can credit bandwidth samples when the fetch
+    /// completes.
+    peer_id: AbrPeerId,
 }
 
 /// Peer registry: owns peers, routes commands to priority slots,
@@ -87,6 +91,7 @@ impl Registry {
             peer_cancel: entry.cancel,
             peer_done: false,
             bus: entry.bus,
+            peer_id: entry.peer_id,
         });
         self.urgent_notify.notify_one();
         idx
@@ -140,6 +145,7 @@ impl Registry {
                             response: ResponseTarget::Streaming,
                             peer: Some(idx),
                             bus: bus.clone(),
+                            peer_id: entry.peer_id,
                         };
                         self.slots[slot].push_back(internal);
                         if slot <= 1 {

@@ -13,7 +13,7 @@ use std::{io::Read, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
@@ -43,10 +43,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0), // Stay on variant 0
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     // Open HLS stream
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

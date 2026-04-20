@@ -1,14 +1,9 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::sync::atomic::Ordering;
 
-use kithara_abr::{AbrDecision, ThroughputSample, ThroughputSampleSource};
-use kithara_events::HlsEvent;
-use kithara_platform::time::Instant;
+use kithara_events::{AbrDecision, HlsEvent};
 use tracing::debug;
 
-use super::{
-    helpers::{first_missing_segment, is_cross_codec_switch},
-    state::HlsScheduler,
-};
+use super::{helpers::first_missing_segment, state::HlsScheduler};
 use crate::{HlsError, coord::SegmentRequest};
 
 impl HlsScheduler {
@@ -152,7 +147,7 @@ impl HlsScheduler {
     }
 
     fn rewind_reference_variant(&self, fallback_variant: usize) -> usize {
-        let current_variant = self.abr.get_current_variant_index();
+        let current_variant = self.abr_state.current_variant_index();
         if current_variant < self.playlist_state.num_variants() {
             current_variant
         } else {
@@ -191,28 +186,6 @@ impl HlsScheduler {
         self.rewind_current_segment_index(segment_index);
         self.coord.condvar.notify_all();
         true
-    }
-
-    pub(crate) fn publish_variant_applied(
-        &self,
-        old_variant: usize,
-        variant: usize,
-        decision: &AbrDecision,
-    ) {
-        if !decision.changed {
-            return;
-        }
-        debug!(
-            from = old_variant,
-            to = variant,
-            reason = ?decision.reason,
-            "publishing VariantApplied event"
-        );
-        self.bus.publish(HlsEvent::VariantApplied {
-            from_variant: old_variant,
-            to_variant: variant,
-            reason: decision.reason,
-        });
     }
 
     pub(crate) fn should_skip_planned_segment(
@@ -274,81 +247,31 @@ impl HlsScheduler {
             return false;
         }
 
-        let current = self.abr.get_current_variant_index();
+        let current = self.abr_state.current_variant_index();
         variant != current
     }
 
+    /// Apply the seek-no-switch invariant: lock the ABR state while a
+    /// seek is pending, unlock when it clears. Returns the current
+    /// variant — the Controller owns all decide/apply logic.
     pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
-        // Keep ABR locked for the entire pending-seek window. Without
-        // this, `decide()` can fire between `Timeline::initiate_seek`
-        // and the peer reaching `reset_for_seek_epoch` (where the
-        // existing lock call lives) and switch variants mid-seek — the
-        // anchor the source just resolved for the layout variant then
-        // points at segments the downloader no longer plans to fetch,
-        // and `source_is_ready_for_apply_seek` stays `Waiting` forever.
-        // The lock is refcounted, so pairing it with the unlock below
-        // keeps the count at 0/1 across the seek lifetime.
         let seek_pending = self.coord.timeline().is_seek_pending();
-        match (self.abr.is_locked(), seek_pending) {
-            (false, true) => self.abr.lock(),
-            (true, false) => self.abr.unlock(),
+        match (self.abr_state.is_locked(), seek_pending) {
+            (false, true) => self.abr_state.lock(),
+            (true, false) => self.abr_state.unlock(),
             _ => {}
         }
 
-        let now = Instant::now();
-        let current_variant = self.abr.get_current_variant_index();
-        let decision = self.abr.decide(now);
-
-        if decision.changed {
-            let cross_codec = is_cross_codec_switch(
-                &self.playlist_state,
-                current_variant,
-                decision.target_variant_index,
-            );
-            debug!(
-                from = current_variant,
-                to = decision.target_variant_index,
-                cross_codec,
-                reason = ?decision.reason,
-                "ABR variant switch"
-            );
-            self.abr.apply(&decision, now);
-        }
-
-        decision
-    }
-
-    pub(super) fn record_throughput(
-        &mut self,
-        bytes: u64,
-        duration: Duration,
-        content_duration: Option<Duration>,
-    ) {
-        let min_ms = self.abr.min_throughput_record_ms();
-        if duration.as_millis() < min_ms {
-            return;
-        }
-
-        let sample = ThroughputSample {
-            bytes,
-            duration,
-            at: Instant::now(),
-            source: ThroughputSampleSource::Network,
-            content_duration,
-        };
-
-        self.abr.push_sample(sample);
-
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "throughput estimation tolerates f64 precision"
-        )]
-        let bytes_per_second = if duration.as_secs_f64() > 0.0 {
-            bytes as f64 / duration.as_secs_f64()
+        let current_variant = self.abr_state.current_variant_index();
+        let reason = if self.abr_state.is_locked() {
+            kithara_events::AbrReason::Locked
         } else {
-            0.0
+            kithara_events::AbrReason::AlreadyOptimal
         };
-        self.bus
-            .publish(HlsEvent::ThroughputSample { bytes_per_second });
+        AbrDecision {
+            target_variant_index: current_variant,
+            reason,
+            changed: false,
+        }
     }
 }

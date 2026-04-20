@@ -58,7 +58,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::TestServer;
@@ -88,10 +88,7 @@ async fn build_small_cache_stream(
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     Stream::<Hls>::new(config)
         .await
         .expect("HLS stream creation")

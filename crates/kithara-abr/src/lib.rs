@@ -1,55 +1,43 @@
 //! Adaptive Bitrate (ABR) streaming algorithm.
 //!
-//! This crate provides a protocol-agnostic ABR controller for adaptive streaming.
-//! It works with any streaming protocol (HLS, DASH, etc.).
+//! Protocol-agnostic: provides a shared [`AbrController`] owned by the
+//! downloader, a [`trait@Abr`] trait implemented by peers that want variant
+//! switching, and an [`AbrHandle`] returned on registration.
 //!
-//! ## Features
-//!
-//! - **Protocol-agnostic**: Works with any streaming protocol
-//! - **Auto and Manual modes**: Supports both automatic adaptation and fixed quality
-//! - **Throughput-based decisions**: Uses network throughput estimation
-//! - **Buffer-aware**: Considers buffer level for switching decisions
-//! - **Configurable**: Extensive configuration options for tuning behavior
-//!
-//! ## Example
-//!
-//! ```rust
-//! use kithara_abr::{AbrController, AbrOptions, AbrMode, Variant};
-//! use kithara_platform::time::Instant;
-//!
-//! // Define your variants
-//! let variants = vec![
-//!     Variant { variant_index: 0, bandwidth_bps: 500_000 },
-//!     Variant { variant_index: 1, bandwidth_bps: 1_000_000 },
-//!     Variant { variant_index: 2, bandwidth_bps: 2_000_000 },
-//! ];
-//!
-//! // Create ABR controller in Auto mode with variants
-//! let opts = AbrOptions {
-//!     mode: AbrMode::Auto(Some(0)),
-//!     variants,
-//!     ..Default::default()
-//! };
-//! let controller = AbrController::new(opts);
-//!
-//! // Get ABR decision
-//! let decision = controller.decide(Instant::now());
-//! ```
+//! All shared vocabulary (`AbrMode`, `AbrReason`, `AbrVariant`,
+//! `VariantInfo`, `BandwidthSource`, `AbrSettings`, `AbrDecision`,
+//! `AbrProgressSnapshot`, `AbrPeerId`, `VariantDuration`) lives in
+//! `kithara-events`; we re-export the names for convenience.
 
 #![forbid(unsafe_code)]
-// unimock macro generates `_` patterns for unit args; suppress the clippy lint in test builds
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
+#![cfg_attr(
+    any(test, feature = "internal"),
+    allow(clippy::ignored_unit_patterns, clippy::allow_attributes)
+)]
 
+mod abr;
 mod controller;
 mod estimator;
 mod ewma;
+mod handle;
+mod state;
 mod types;
 
 #[cfg(feature = "internal")]
 pub mod internal;
 
-pub use controller::{AbrController, AbrDecision, AbrReason};
-pub use estimator::ThroughputEstimator;
+pub use abr::Abr;
+#[cfg(any(test, feature = "internal"))]
+pub use abr::AbrMock;
+pub use controller::AbrController;
+#[cfg(any(test, feature = "internal"))]
+pub use estimator::EstimatorMock;
+pub use estimator::{Estimator, ThroughputEstimator};
+pub use handle::AbrHandle;
+#[cfg(any(test, feature = "internal"))]
+pub use state::test_variants_3;
+pub use state::{AbrError, AbrState, AbrView};
 pub use types::{
-    AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource, Variant, VariantInfo,
+    AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrVariant,
+    BandwidthSource, VariantDuration, VariantInfo,
 };

@@ -1,5 +1,4 @@
 use iced::Task;
-use kithara::abr::AbrMode;
 use kithara_queue::{TrackId, Transition};
 use tracing::error;
 
@@ -170,10 +169,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         Message::SetAbrMode(variant) => {
             state.abr_mode_is_auto = variant.is_none();
             state.selected_variant = variant;
-            state
-                .queue
-                .player()
-                .set_abr_mode(variant.map_or(AbrMode::Auto(None), AbrMode::Manual));
+            // Runtime per-track mode change now lives on
+            // `PeerHandle::abr().set_mode(...)`. Re-wiring the GUI to
+            // hold the active peer handle is deferred to Commit 3.
+            let _ = variant;
             Task::none()
         }
 

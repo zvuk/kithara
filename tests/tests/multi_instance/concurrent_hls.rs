@@ -9,7 +9,7 @@ use std::{path::Path, sync::Arc};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -131,10 +131,7 @@ async fn create_hls_audio(server: &HlsTestServer, cache_dir: &Path) -> Audio<Str
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
@@ -153,10 +150,7 @@ async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 

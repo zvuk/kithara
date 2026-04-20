@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara::{
-    abr::{AbrController, AbrMode, AbrOptions},
+    abr::AbrMode,
     audio::generate_log_spaced_bands,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::NetOptions,
@@ -309,12 +309,11 @@ impl AudioPlayer {
         self.queue.set_default_rate(rate);
     }
 
-    pub fn set_abr_mode(&self, mode: FfiAbrMode) {
-        let abr_mode = match mode {
-            FfiAbrMode::Auto => AbrMode::Auto(None),
-            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
-        };
-        self.queue.player().set_abr_mode(abr_mode);
+    pub fn set_abr_mode(&self, _mode: FfiAbrMode) {
+        // Runtime per-track mode change now lives on
+        // `PeerHandle::abr().set_mode(...)`. Wiring it from the FFI
+        // layer requires plumbing the currently-playing peer handle up
+        // — deferred to Commit 3 of the ABR refactor.
     }
 
     pub fn rate(&self) -> f32 {
@@ -443,10 +442,7 @@ impl AudioPlayer {
                 FfiAbrMode::Auto => AbrMode::Auto(None),
                 FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
             };
-            config.abr = Some(AbrController::new(AbrOptions {
-                mode: abr_mode,
-                ..AbrOptions::default()
-            }));
+            config = config.with_initial_abr_mode(abr_mode);
         }
 
         Ok(TrackSource::Config(Box::new(config)))

@@ -6,7 +6,8 @@ use std::{
 };
 
 use futures::future::join_all;
-use kithara_events::EventBus;
+use kithara_abr::{Abr, AbrHandle};
+use kithara_events::{AbrPeerId, EventBus};
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, RwLock,
@@ -31,7 +32,7 @@ use super::{
 /// Complex peers (HLS) override `poll_next` to let the Downloader
 /// drive media segment downloads via per-command `writer`/`on_complete`
 /// closures in [`FetchCmd`].
-pub trait Peer: Send + Sync + 'static {
+pub trait Peer: Abr {
     /// Peer-level priority. `High` = active playback track.
     fn priority(&self) -> Priority {
         Priority::Low
@@ -70,6 +71,8 @@ pub(super) struct InternalCmd {
     /// Bus of the peer that issued this command. Downloader publishes
     /// per-fetch `DownloaderEvent`s here (currently `LoadSlow`).
     pub(super) bus: Option<EventBus>,
+    /// ABR peer identifier for bandwidth accounting after fetch completes.
+    pub(super) peer_id: AbrPeerId,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
@@ -84,6 +87,10 @@ struct PeerInner {
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
+    /// ABR side of the double registration. Keeps the peer registered
+    /// with the shared `AbrController` until the last `PeerHandle` drops
+    /// (the handle's `Drop` calls `controller.unregister`).
+    abr: AbrHandle,
 }
 
 impl Drop for PeerInner {
@@ -115,6 +122,7 @@ impl PeerHandle {
         cancel: CancellationToken,
         cmd_tx: mpsc::Sender<InternalCmd>,
         bus: Arc<RwLock<Option<EventBus>>>,
+        abr: AbrHandle,
     ) -> Self {
         Self {
             inner: Arc::new(PeerInner {
@@ -122,8 +130,21 @@ impl PeerHandle {
                 cancel,
                 cmd_tx,
                 bus,
+                abr,
             }),
         }
+    }
+
+    /// ABR-side handle attached at registration.
+    #[must_use]
+    pub fn abr(&self) -> &AbrHandle {
+        &self.inner.abr
+    }
+
+    /// ABR peer identifier for this handle.
+    #[must_use]
+    pub fn peer_id(&self) -> AbrPeerId {
+        self.inner.abr.peer_id()
     }
 
     /// Peer-level cancellation token.
@@ -137,12 +158,18 @@ impl PeerHandle {
     }
 
     /// Attach an event bus so the Downloader can publish per-peer
-    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s (currently
-    /// `LoadSlow`) to it. Returns `self` so the call chains naturally
-    /// after [`Downloader::register`](super::Downloader::register).
+    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s and the ABR
+    /// controller can publish [`AbrEvent`](kithara_events::AbrEvent)s to
+    /// it. Returns `self` so the call chains naturally after
+    /// [`Downloader::register`](super::Downloader::register).
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus);
+        *self.inner.bus.lock_sync_write() = Some(bus.clone());
+        // AbrHandle::with_bus consumes the handle, but AbrHandle is
+        // Clone-able and backed by Arc — we clone to keep the peer-bound
+        // handle in place while the trait call chains through to the
+        // peer's shared bus cell.
+        let _ = self.inner.abr.clone().with_bus(bus);
         self
     }
 
@@ -170,6 +197,7 @@ impl PeerHandle {
             response: ResponseTarget::Channel(resp_tx),
             peer: None,
             bus: self.bus(),
+            peer_id: self.inner.abr.peer_id(),
         };
         self.inner
             .cmd_tx
@@ -191,6 +219,7 @@ impl PeerHandle {
         let mut receivers: Vec<Option<oneshot::Receiver<Result<FetchResponse, NetError>>>> =
             Vec::with_capacity(cmds.len());
         let bus = self.bus();
+        let peer_id = self.inner.abr.peer_id();
 
         for cmd in cmds {
             let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
@@ -202,6 +231,7 @@ impl PeerHandle {
                 response: ResponseTarget::Channel(resp_tx),
                 peer: None,
                 bus: bus.clone(),
+                peer_id,
             };
             if self.inner.cmd_tx.send(internal).await.is_err() {
                 receivers.push(None);
