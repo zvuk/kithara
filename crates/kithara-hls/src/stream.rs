@@ -106,7 +106,8 @@ impl StreamType for Hls {
         }
         let backend: AssetStore<DecryptContext> = builder.build();
 
-        let hls_peer = Arc::new(HlsPeer::new());
+        let timeline = Timeline::new();
+        let hls_peer = Arc::new(HlsPeer::new(timeline.clone()));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
@@ -181,6 +182,7 @@ impl StreamType for Hls {
             &config,
             Arc::clone(&playlist_state),
             bus,
+            timeline,
         );
         *invalidation_target
             .lock()

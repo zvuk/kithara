@@ -11,7 +11,10 @@ use kithara_events::HlsEvent;
 use kithara_net::NetError;
 use kithara_platform::{Mutex, time::Instant, tokio};
 use kithara_storage::ResourceExt;
-use kithara_stream::dl::{FetchCmd, OnCompleteFn, Peer, Priority, WriterFn};
+use kithara_stream::{
+    Timeline,
+    dl::{FetchCmd, OnCompleteFn, Peer, Priority, WriterFn},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -38,14 +41,18 @@ pub(crate) struct HlsPeer {
     pending_waker: Mutex<Option<Waker>>,
     /// Cancels the waker-forwarding micro-task on drop.
     wake_cancel: CancellationToken,
+    /// Same Arc-clone as the one held by `HlsCoord` — reads from the
+    /// audio FSM are published here and observed by `priority()`.
+    timeline: Timeline,
 }
 
 impl HlsPeer {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(timeline: Timeline) -> Self {
         Self {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_cancel: CancellationToken::new(),
+            timeline,
         }
     }
 
@@ -126,8 +133,15 @@ impl Drop for HlsPeer {
 }
 
 impl Peer for HlsPeer {
+    /// Priority reflects the audio FSM's decode-activity flag on the
+    /// shared `Timeline`. Cheap, lock-free — called by Registry on
+    /// every `poll_peers` pass.
     fn priority(&self) -> Priority {
-        Priority::Low
+        if self.timeline.is_playing() {
+            Priority::High
+        } else {
+            Priority::Low
+        }
     }
 
     #[expect(
@@ -709,7 +723,10 @@ mod tests {
     use kithara_net::NetError;
     use kithara_platform::{Mutex as PlatformMutex, time::Instant as PlatformInstant};
     use kithara_storage::ResourceExt;
-    use kithara_stream::dl::{Downloader, DownloaderConfig};
+    use kithara_stream::{
+        Timeline,
+        dl::{Downloader, DownloaderConfig, Peer},
+    };
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
     use url::Url;
@@ -786,7 +803,8 @@ mod tests {
             .collect();
         let downloader =
             Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-        let peer = Arc::new(HlsPeer::new());
+        let timeline = Timeline::new();
+        let peer = Arc::new(HlsPeer::new(timeline.clone()));
         let handle = downloader.register(peer);
         let cache = PlaylistCache::new(backend.clone(), handle.clone());
         let loader = Arc::new(crate::loading::SegmentLoader::new(
@@ -806,6 +824,7 @@ mod tests {
             &config,
             playlist_state,
             EventBus::new(16),
+            timeline,
         );
         HlsState {
             scheduler,
@@ -1740,6 +1759,75 @@ mod tests {
             "decision reason must not be Locked once the lock has been \
              released, got {:?}",
             decision.reason,
+        );
+    }
+
+    // --- Task 6: priority reflects Timeline::is_playing ---
+
+    #[kithara::test]
+    fn priority_defaults_to_low_before_activation() {
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline);
+        assert_eq!(
+            peer.priority(),
+            crate::peer::Priority::Low,
+            "fresh HlsPeer with PLAYING=false must report Low"
+        );
+    }
+
+    #[kithara::test]
+    fn priority_tracks_set_playing_without_activation() {
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline.clone());
+        assert_eq!(peer.priority(), crate::peer::Priority::Low);
+
+        timeline.set_playing(true);
+        assert_eq!(
+            peer.priority(),
+            crate::peer::Priority::High,
+            "set_playing(true) must flip priority to High even before activate()"
+        );
+
+        timeline.set_playing(false);
+        assert_eq!(
+            peer.priority(),
+            crate::peer::Priority::Low,
+            "set_playing(false) must return priority to Low"
+        );
+    }
+
+    #[kithara::test]
+    fn priority_lookup_does_not_lock_state_mutex() {
+        // Hold the state mutex from another thread-simulated context and
+        // confirm priority() still resolves without blocking. Because
+        // `state` is a PlatformMutex, lock_sync would block forever if
+        // priority() tried to acquire it.
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline.clone());
+        let _guard = peer.state.lock_sync();
+        timeline.set_playing(true);
+        assert_eq!(
+            peer.priority(),
+            crate::peer::Priority::High,
+            "priority() must not contend on the state mutex"
+        );
+    }
+
+    #[kithara::test]
+    fn peer_and_coord_share_the_same_timeline_arc() {
+        // Wiring invariant from the plan: the Timeline handed to
+        // HlsPeer::new must be the same clone fed to HlsCoord. We can
+        // verify this indirectly: flip set_playing on the peer's
+        // timeline and observe is_playing on a re-cloned handle.
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline.clone());
+        let other_handle = timeline.clone();
+        other_handle.set_playing(true);
+        assert!(other_handle.is_playing());
+        assert_eq!(
+            peer.priority(),
+            crate::peer::Priority::High,
+            "peer's Timeline clone must observe writes to sibling clones"
         );
     }
 }

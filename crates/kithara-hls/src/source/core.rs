@@ -305,6 +305,11 @@ impl HlsSource {
 }
 
 /// Build an `HlsScheduler` + `HlsSource` pair from config.
+///
+/// `timeline` is the shared [`Timeline`] that the caller has already
+/// handed to [`HlsPeer::new`]. Passing it in — instead of minting a new
+/// one inside — guarantees the peer's `priority()` reads the same
+/// `PLAYING` flag the audio FSM writes through the coord.
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
     _track: kithara_stream::dl::PeerHandle,
@@ -312,6 +317,7 @@ pub(crate) fn build_pair(
     config: &crate::config::HlsConfig,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
+    timeline: Timeline,
 ) -> (HlsScheduler, HlsSource) {
     let abr_variants: Vec<Variant> = variants
         .iter()
@@ -333,7 +339,6 @@ pub(crate) fn build_pair(
         }),
     };
     let abr_variant_index = abr.variant_index_handle();
-    let timeline = Timeline::new();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
     let num_variants = playlist_state.num_variants();

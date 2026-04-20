@@ -41,7 +41,9 @@ use crate::{
 
 fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
-    dl.register(Arc::new(crate::peer::HlsPeer::new()))
+    dl.register(Arc::new(crate::peer::HlsPeer::new(
+        kithara_stream::Timeline::new(),
+    )))
 }
 
 type LoaderPair = (
@@ -155,6 +157,7 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
     source
 }
@@ -197,6 +200,7 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
     source
 }
@@ -748,6 +752,7 @@ fn demand_range_queues_request_for_unloaded_offset() {
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
 
     source.demand_range(DEMAND_OFFSET..DEMAND_OFFSET + 1);
@@ -799,6 +804,7 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
 
     let offsets: Vec<u64> = (0..NUM_SEGS as u64).map(|i| i * SEG_SIZE).collect();
@@ -1022,6 +1028,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
 
     source.segments.lock_sync().commit_segment(
@@ -1108,6 +1115,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
 
     let mut segments = Vec::new();
@@ -1528,6 +1536,7 @@ fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
         &config,
         playlist_state,
         bus,
+        kithara_stream::Timeline::new(),
     );
 
     // Drive POLL_CYCLES populate→apply cycles, mirroring what poll_next
@@ -1756,6 +1765,7 @@ fn abr_lock_held_across_initiate_and_clear_seek_pending() {
         &config,
         playlist_state,
         EventBus::new(BUS_CAPACITY),
+        kithara_stream::Timeline::new(),
     );
 
     let initial_variant = downloader.abr.get_current_variant_index();

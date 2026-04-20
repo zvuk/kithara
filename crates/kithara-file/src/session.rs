@@ -15,7 +15,7 @@ use kithara_platform::{
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError, Timeline,
-    dl::{FetchCmd, Peer, PeerHandle, reject_html_response},
+    dl::{FetchCmd, Peer, PeerHandle, Priority, reject_html_response},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -28,9 +28,31 @@ const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
 
 // FilePeer — Peer impl for file protocol
 
-pub(crate) struct FilePeer;
+pub(crate) struct FilePeer {
+    /// Same Arc-clone as the one held by `FileCoord` — reads from the
+    /// audio FSM's PLAYING flag route this track's fetches to the
+    /// High-priority slot while the listener is actively consuming it.
+    timeline: Timeline,
+}
 
-impl Peer for FilePeer {}
+impl FilePeer {
+    pub(crate) fn new(timeline: Timeline) -> Self {
+        Self { timeline }
+    }
+}
+
+impl Peer for FilePeer {
+    /// Priority reflects the audio FSM's decode-activity flag on the
+    /// shared `Timeline`. Cheap, lock-free — called by Registry on
+    /// every `poll_peers` pass.
+    fn priority(&self) -> Priority {
+        if self.timeline.is_playing() {
+            Priority::High
+        } else {
+            Priority::Low
+        }
+    }
+}
 
 // FileStreamState — creation helper (unchanged API)
 
