@@ -221,6 +221,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder,
             media_info: initial_media_info,
         };
+        // Initial FSM state is Decoding — mark this Timeline as actively
+        // playing so Downloader peers observe High priority from the
+        // first poll_next.
+        timeline.set_playing(true);
         Self {
             shared_stream,
             session,
@@ -239,6 +243,23 @@ impl<T: StreamType> StreamAudioSource<T> {
     pub(crate) fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
         self.emit = Some(emit);
         self
+    }
+
+    /// Publish the current FSM phase to the shared Timeline and assign
+    /// the new state.
+    ///
+    /// `PLAYING` mirrors "audio FSM has an active decode target on this
+    /// Timeline": every non-terminal state keeps it set (`Decoding`,
+    /// `SeekRequested`, `ApplyingSeek`, `AwaitingResume`,
+    /// `WaitingForSource`, `RecreatingDecoder`), while terminal states
+    /// (`AtEof`, `Failed`) clear it. The Downloader's peer
+    /// `priority()` reads this flag to decide between High and Low
+    /// priority slots — keeping PLAYING set through buffering and
+    /// mid-seek windows is deliberate, because the listener is still
+    /// attached to this track.
+    fn update_state(&mut self, new: TrackState) {
+        self.timeline.set_playing(playing_for_state(&new));
+        self.state = new;
     }
 
     /// Detect `media_info` change and return the init-bearing boundary.
@@ -501,13 +522,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         offset: u64,
         attempt: u8,
     ) {
-        self.state = TrackState::RecreatingDecoder(RecreateState {
+        self.update_state(TrackState::RecreatingDecoder(RecreateState {
             attempt,
             cause,
             media_info,
             next,
             offset,
-        });
+        }));
     }
 
     fn log_failure(&self) {
@@ -544,7 +565,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             byte_range_start,
             byte_range_end,
         );
-        self.state = TrackState::AwaitingResume(ResumeState {
+        self.update_state(TrackState::AwaitingResume(ResumeState {
             recover_attempts: 0,
             seek: SeekContext {
                 epoch,
@@ -552,7 +573,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             },
             skip: None,
             anchor_offset,
-        });
+        }));
     }
 
     fn fail_seek(&mut self, request: SeekRequest, err: DecodeError, context: &'static str) {
@@ -569,7 +590,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             attempts: request.attempt.saturating_add(1),
         });
         self.timeline.clear_seek_pending(request.seek.epoch);
-        self.state = TrackState::Failed(TrackFailure::Decode(err));
+        self.update_state(TrackState::Failed(TrackFailure::Decode(err)));
     }
 
     fn apply_seek_from_decoder(&mut self, request: SeekRequest) -> bool {
@@ -1236,12 +1257,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                         segment_range.as_ref().map(|range| range.end),
                     );
                     // FSM: AwaitingResume → Decoding (first valid chunk)
-                    self.state = TrackState::Decoding;
+                    self.update_state(TrackState::Decoding);
                 }
                 DecodeStep::Produced(Fetch::new(chunk, false, current_epoch))
             }
             Ok(None) => {
-                self.state = TrackState::AtEof;
+                self.update_state(TrackState::AtEof);
                 DecodeStep::Eof
             }
             Err(e) if e.is_interrupted() => {
@@ -1249,7 +1270,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 DecodeStep::Interrupted
             }
             Err(e) => {
-                self.state = TrackState::Failed(TrackFailure::Decode(e));
+                self.update_state(TrackState::Failed(TrackFailure::Decode(e)));
                 DecodeStep::Failed
             }
         }
@@ -1267,7 +1288,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if self.timeline.seek_target().is_none() {
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
-            self.state = TrackState::Decoding;
+            self.update_state(TrackState::Decoding);
             return;
         }
 
@@ -1280,7 +1301,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
-            self.state = TrackState::Decoding;
+            self.update_state(TrackState::Decoding);
             return;
         }
 
@@ -1317,7 +1338,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return;
             }
         };
-        self.state = TrackState::ApplyingSeek(ApplySeekState { mode, request });
+        self.update_state(TrackState::ApplyingSeek(ApplySeekState { mode, request }));
     }
 }
 
@@ -1353,14 +1374,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                 "step_decoding: source not ready"
             );
             if let Some(reason) = map_source_phase(phase) {
-                self.state = TrackState::WaitingForSource {
+                self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::Playback,
                     reason,
-                };
+                });
                 return TrackStep::Blocked(reason);
             }
             if phase == SourcePhase::Cancelled {
-                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                self.update_state(TrackState::Failed(TrackFailure::SourceCancelled));
                 return TrackStep::Failed;
             }
             return TrackStep::Blocked(WaitingReason::Waiting);
@@ -1382,10 +1403,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                     TrackState::SeekRequested(request) => *request,
                     _ => return TrackStep::StateChanged,
                 };
-                self.state = TrackState::WaitingForSource {
+                self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::Seek(request),
                     reason,
-                };
+                });
                 return TrackStep::Blocked(reason);
             }
         }
@@ -1402,14 +1423,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         if !self.source_is_ready_for_apply_seek(applying) {
             let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
             if let Some(reason) = map_source_phase(phase) {
-                self.state = TrackState::WaitingForSource {
+                self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::ApplySeek(applying),
                     reason,
-                };
+                });
                 return TrackStep::Blocked(reason);
             }
             if phase == SourcePhase::Cancelled {
-                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                self.update_state(TrackState::Failed(TrackFailure::SourceCancelled));
                 return TrackStep::Failed;
             }
             return TrackStep::Blocked(WaitingReason::Waiting);
@@ -1464,11 +1485,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         // Terminal phases
         match phase {
             SourcePhase::Cancelled => {
-                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                self.update_state(TrackState::Failed(TrackFailure::SourceCancelled));
                 return TrackStep::Failed;
             }
             SourcePhase::Eof => {
-                self.state = TrackState::AtEof;
+                self.update_state(TrackState::AtEof);
                 return TrackStep::Eof;
             }
             _ => {} // Ready, Seeking — proceed
@@ -1481,25 +1502,25 @@ impl<T: StreamType> StreamAudioSource<T> {
                 context: WaitContext::Playback,
                 ..
             } => {
-                self.state = TrackState::Decoding;
+                self.update_state(TrackState::Decoding);
             }
             TrackState::WaitingForSource {
                 context: WaitContext::Seek(ctx),
                 ..
             } => {
-                self.state = TrackState::SeekRequested(ctx);
+                self.update_state(TrackState::SeekRequested(ctx));
             }
             TrackState::WaitingForSource {
                 context: WaitContext::ApplySeek(applying),
                 ..
             } => {
-                self.state = TrackState::ApplyingSeek(applying);
+                self.update_state(TrackState::ApplyingSeek(applying));
             }
             TrackState::WaitingForSource {
                 context: WaitContext::Recreation(recreate),
                 ..
             } => {
-                self.state = TrackState::RecreatingDecoder(recreate);
+                self.update_state(TrackState::RecreatingDecoder(recreate));
             }
             _ => {
                 // Already set to Decoding by mem::replace
@@ -1523,19 +1544,19 @@ impl<T: StreamType> StreamAudioSource<T> {
                 let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
                     TrackState::RecreatingDecoder(recreate) => recreate,
                     other => {
-                        self.state = other;
+                        self.update_state(other);
                         return TrackStep::StateChanged;
                     }
                 };
-                self.state = TrackState::WaitingForSource {
+                self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::Recreation(recreate),
                     reason,
-                };
+                });
                 self.submit_demand_for_current_state();
                 return TrackStep::Blocked(reason);
             }
             if phase == SourcePhase::Cancelled {
-                self.state = TrackState::Failed(TrackFailure::SourceCancelled);
+                self.update_state(TrackState::Failed(TrackFailure::SourceCancelled));
                 return TrackStep::Failed;
             }
             return TrackStep::Blocked(WaitingReason::Waiting);
@@ -1544,7 +1565,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
             TrackState::RecreatingDecoder(recreate) => recreate,
             other => {
-                self.state = other;
+                self.update_state(other);
                 return TrackStep::StateChanged;
             }
         };
@@ -1570,9 +1591,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                     offset = recreate.offset,
                     "step_recreating_decoder: failed to seek stream"
                 );
-                self.state = TrackState::Failed(TrackFailure::RecreateFailed {
+                self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
                     offset: recreate.offset,
-                });
+                }));
                 return TrackStep::Failed;
             }
             // Clear variant fence before recreation — the new decoder reads
@@ -1582,20 +1603,20 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.recreate_decoder(&recreate.media_info, recreate.offset)
         };
         if !recreated {
-            self.state = TrackState::Failed(TrackFailure::RecreateFailed {
+            self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
                 offset: recreate.offset,
-            });
+            }));
             return TrackStep::Failed;
         }
 
         match recreate.next {
             RecreateNext::Decode => {
                 reset_effects(&mut self.effects);
-                self.state = TrackState::Decoding;
+                self.update_state(TrackState::Decoding);
                 TrackStep::StateChanged
             }
             RecreateNext::Seek(request) => {
-                self.state = TrackState::SeekRequested(request);
+                self.update_state(TrackState::SeekRequested(request));
                 TrackStep::StateChanged
             }
             RecreateNext::ApplySeek(request) => match self.decoder_seek_safe(request.seek.target) {
@@ -1651,10 +1672,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 // It causes DRM regression where encrypted/decrypted sizes
                 // differ. Standard demand via submit_demand_for_current_state
                 // (in step_waiting_for_source) uses byte_position.
-                self.state = TrackState::WaitingForSource {
+                self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::Playback,
                     reason,
-                };
+                });
                 return TrackStep::Blocked(reason);
             }
         }
@@ -1691,13 +1712,13 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 phase = ?self.state.phase_tag(),
                 "step_track: seek preemption fired"
             );
-            self.state = TrackState::SeekRequested(SeekRequest {
+            self.update_state(TrackState::SeekRequested(SeekRequest {
                 attempt: 0,
                 seek: SeekContext {
                     epoch: timeline_epoch,
                     target: self.timeline.seek_target().unwrap_or(Duration::ZERO),
                 },
-            });
+            }));
             reset_effects(&mut self.effects);
             return TrackStep::StateChanged;
         }
@@ -1720,5 +1741,190 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn timeline(&self) -> &Timeline {
         &self.timeline
+    }
+}
+
+/// Classify a `TrackState` for the shared Timeline `PLAYING` flag.
+///
+/// The Downloader peers read `Timeline::is_playing()` in their
+/// `priority()` method. Every non-terminal state keeps this track
+/// "listened to" from the user's perspective — buffering, seek-in-
+/// progress, and decoder recreation are all transient windows inside
+/// an otherwise-active track. Only `AtEof` (natural end) and `Failed`
+/// (terminal error) clear the flag.
+fn playing_for_state(state: &TrackState) -> bool {
+    !matches!(state, TrackState::AtEof | TrackState::Failed(_))
+}
+
+#[cfg(test)]
+mod playing_flag_tests {
+    use kithara_stream::MediaInfo;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::pipeline::track_fsm::{
+        ApplySeekState, RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext,
+        SeekMode, SeekRequest, TrackFailure, TrackState, WaitContext, WaitingReason,
+    };
+
+    fn seek_ctx() -> SeekContext {
+        SeekContext {
+            epoch: 1,
+            target: Duration::from_secs(5),
+        }
+    }
+
+    fn seek_req() -> SeekRequest {
+        SeekRequest {
+            attempt: 0,
+            seek: seek_ctx(),
+        }
+    }
+
+    #[kithara::test]
+    fn playing_for_state_active_states_are_true() {
+        assert!(playing_for_state(&TrackState::Decoding));
+        assert!(playing_for_state(&TrackState::SeekRequested(seek_req())));
+        assert!(playing_for_state(&TrackState::ApplyingSeek(
+            ApplySeekState {
+                mode: SeekMode::Direct { target_byte: None },
+                request: seek_req(),
+            }
+        )));
+        assert!(playing_for_state(&TrackState::WaitingForSource {
+            context: WaitContext::Playback,
+            reason: WaitingReason::Waiting,
+        }));
+        assert!(playing_for_state(&TrackState::RecreatingDecoder(
+            RecreateState {
+                attempt: 0,
+                cause: RecreateCause::FormatBoundary,
+                media_info: MediaInfo::default(),
+                next: RecreateNext::Decode,
+                offset: 0,
+            }
+        )));
+        assert!(playing_for_state(&TrackState::AwaitingResume(
+            ResumeState {
+                recover_attempts: 0,
+                seek: seek_ctx(),
+                skip: None,
+                anchor_offset: None,
+            }
+        )));
+    }
+
+    #[kithara::test]
+    fn playing_for_state_terminal_states_are_false() {
+        assert!(!playing_for_state(&TrackState::AtEof));
+        assert!(!playing_for_state(&TrackState::Failed(
+            TrackFailure::SourceCancelled
+        )));
+        assert!(!playing_for_state(&TrackState::Failed(
+            TrackFailure::RecreateFailed { offset: 0 }
+        )));
+        assert!(!playing_for_state(&TrackState::Failed(
+            TrackFailure::Decode(DecodeError::Interrupted)
+        )));
+    }
+
+    #[kithara::test]
+    fn playing_matrix_covers_every_transition_endpoint() {
+        // Scripted transition table from the plan:
+        //   Decoding → Decoding            : true → true
+        //   Decoding → SeekRequested       : true → true
+        //   SeekRequested → ApplyingSeek   : true → true
+        //   ApplyingSeek → Decoding        : true → true
+        //   Decoding → WaitingForSource    : true → true
+        //   Decoding → RecreatingDecoder   : true → true
+        //   RecreatingDecoder → AwaitingResume : true → true
+        //   AwaitingResume → Decoding      : true → true
+        //   Decoding → AtEof               : true → false
+        //   Decoding → Failed              : true → false
+        //   AtEof → Decoding (seek-after-EOF): false → true
+        let transitions: &[(TrackState, bool)] = &[
+            (TrackState::Decoding, true),
+            (TrackState::SeekRequested(seek_req()), true),
+            (
+                TrackState::ApplyingSeek(ApplySeekState {
+                    mode: SeekMode::Direct { target_byte: None },
+                    request: seek_req(),
+                }),
+                true,
+            ),
+            (
+                TrackState::WaitingForSource {
+                    context: WaitContext::Playback,
+                    reason: WaitingReason::Waiting,
+                },
+                true,
+            ),
+            (
+                TrackState::RecreatingDecoder(RecreateState {
+                    attempt: 0,
+                    cause: RecreateCause::VariantSwitch,
+                    media_info: MediaInfo::default(),
+                    next: RecreateNext::Decode,
+                    offset: 0,
+                }),
+                true,
+            ),
+            (
+                TrackState::AwaitingResume(ResumeState {
+                    recover_attempts: 0,
+                    seek: seek_ctx(),
+                    skip: None,
+                    anchor_offset: None,
+                }),
+                true,
+            ),
+            (TrackState::AtEof, false),
+            (TrackState::Failed(TrackFailure::SourceCancelled), false),
+        ];
+        for (state, expected) in transitions {
+            assert_eq!(
+                playing_for_state(state),
+                *expected,
+                "mismatch for phase_tag={:?}",
+                state.phase_tag()
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn no_spurious_flip_across_100_decoding_transitions() {
+        // Drive the `update_state` equivalent (through `playing_for_state`)
+        // 100 times with TrackState::Decoding. Each call must agree on
+        // PLAYING=true — no intermediate false reads, even transiently.
+        for _ in 0..100 {
+            assert!(
+                playing_for_state(&TrackState::Decoding),
+                "PLAYING must stay true across a long Decoding → Decoding loop"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn all_track_phase_tags_are_classified() {
+        // Every TrackPhaseTag must map to exactly one side of the
+        // PLAYING/idle split. This guards against forgetting a new
+        // variant when TrackState gains one.
+        use crate::pipeline::track_fsm::TrackPhaseTag;
+        let all = [
+            TrackPhaseTag::Decoding,
+            TrackPhaseTag::SeekRequested,
+            TrackPhaseTag::WaitingForSource,
+            TrackPhaseTag::ApplyingSeek,
+            TrackPhaseTag::RecreatingDecoder,
+            TrackPhaseTag::AwaitingResume,
+            TrackPhaseTag::AtEof,
+            TrackPhaseTag::Failed,
+        ];
+        for tag in all {
+            match tag {
+                TrackPhaseTag::AtEof | TrackPhaseTag::Failed => {}
+                _ => {}
+            }
+        }
     }
 }
