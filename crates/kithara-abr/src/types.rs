@@ -1,52 +1,11 @@
 use std::fmt;
 
 use derivative::Derivative;
+// Shared ABR vocabulary now lives in `kithara-events`. These re-exports keep
+// the existing `kithara_abr::{AbrMode, VariantInfo, ThroughputSampleSource}`
+// paths working while downstream crates migrate to `kithara_events::*`.
+pub use kithara_events::{AbrMode, BandwidthSource as ThroughputSampleSource, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
-
-/// Threshold separating Manual (below) from Auto (at or above) in the packed
-/// `usize` representation of [`AbrMode`].
-const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
-
-/// ABR mode selection.
-#[derive(Clone, Copy, Debug, Derivative, PartialEq, Eq)]
-#[derivative(Default)]
-pub enum AbrMode {
-    /// Automatic bitrate adaptation (ABR enabled).
-    /// Optionally specify initial variant index (defaults to 0).
-    #[derivative(Default)]
-    Auto(Option<usize>),
-    /// Manual variant selection (ABR disabled).
-    /// Always use the specified variant index.
-    Manual(usize),
-}
-
-impl From<AbrMode> for usize {
-    fn from(mode: AbrMode) -> Self {
-        match mode {
-            AbrMode::Manual(v) => {
-                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
-                v
-            }
-            AbrMode::Auto(None) => Self::MAX,
-            AbrMode::Auto(Some(v)) => {
-                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
-                Self::MAX - 1 - v
-            }
-        }
-    }
-}
-
-impl From<usize> for AbrMode {
-    fn from(val: usize) -> Self {
-        if val == usize::MAX {
-            Self::Auto(None)
-        } else if val >= ABR_MODE_AUTO_THRESHOLD {
-            Self::Auto(Some(usize::MAX - 1 - val))
-        } else {
-            Self::Manual(val)
-        }
-    }
-}
 
 /// ABR (Adaptive Bitrate) configuration.
 #[derive(Clone, Derivative)]
@@ -107,12 +66,6 @@ impl AbrOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThroughputSampleSource {
-    Network,
-    Cache,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ThroughputSample {
     pub bytes: u64,
@@ -127,25 +80,6 @@ pub struct ThroughputSample {
 pub struct Variant {
     pub variant_index: usize,
     pub bandwidth_bps: u64,
-}
-
-/// Extended variant metadata for UI and monitoring.
-///
-/// Contains all available information about a variant extracted from
-/// the master playlist. This is emitted via `HlsEvent::VariantsDiscovered`
-/// after the master playlist is loaded.
-#[derive(Clone, Debug)]
-pub struct VariantInfo {
-    /// Variant index (stable identifier).
-    pub index: usize,
-    /// Bandwidth in bits per second (if available).
-    pub bandwidth_bps: Option<u64>,
-    /// Human-readable name (if available).
-    pub name: Option<String>,
-    /// Codec information (e.g., "avc1.64001f,mp4a.40.2").
-    pub codecs: Option<String>,
-    /// Container format (MP4, MPEG-TS, etc.).
-    pub container: Option<String>,
 }
 
 #[cfg(test)]

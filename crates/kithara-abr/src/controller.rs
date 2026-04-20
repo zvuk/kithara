@@ -6,25 +6,13 @@ use std::{
     time::Duration,
 };
 
+pub use kithara_events::AbrReason;
 use kithara_platform::{Mutex, time::Instant};
 
 use super::{AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample, Variant};
 use crate::estimator::Estimator;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AbrReason {
-    Initial,
-    ManualOverride,
-    UpSwitch,
-    DownSwitch,
-    MinInterval,
-    NoEstimate,
-    BufferTooLowForUpSwitch,
-    AlreadyOptimal,
-    Locked,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AbrDecision {
     pub target_variant_index: usize,
     pub reason: AbrReason,

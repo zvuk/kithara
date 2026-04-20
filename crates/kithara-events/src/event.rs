@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "abr")]
+use crate::AbrEvent;
 #[cfg(feature = "app")]
 use crate::AppEvent;
 #[cfg(feature = "audio")]
@@ -56,6 +58,9 @@ pub enum Event {
     /// Queue-level event (track added/removed/status/current/ended).
     #[cfg(feature = "queue")]
     Queue(QueueEvent),
+    /// ABR controller event.
+    #[cfg(feature = "abr")]
+    Abr(AbrEvent),
 }
 
 #[cfg(feature = "downloader")]
@@ -135,6 +140,13 @@ impl From<QueueEvent> for Event {
     }
 }
 
+#[cfg(feature = "abr")]
+impl From<AbrEvent> for Event {
+    fn from(e: AbrEvent) -> Self {
+        Self::Abr(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -172,7 +184,7 @@ mod tests {
             HlsEvent::VariantApplied {
                 from_variant: 0,
                 to_variant: 1,
-                reason: kithara_abr::AbrReason::UpSwitch,
+                reason: crate::AbrReason::UpSwitch,
             }
         )
     }
@@ -184,7 +196,7 @@ mod tests {
         HlsEvent::VariantApplied {
             from_variant: 0,
             to_variant: 1,
-            reason: kithara_abr::AbrReason::UpSwitch,
+            reason: crate::AbrReason::UpSwitch,
         },
         hls_is_variant_applied_upswitch
     )]

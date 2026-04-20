@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-use kithara_abr::{AbrMode, AbrReason, VariantInfo};
 use kithara_platform::time::Duration;
 
-use crate::SeekEpoch;
+use crate::{AbrMode, AbrReason, SeekEpoch, VariantInfo};
 
 /// Events emitted during HLS playback.
 #[derive(Clone, Debug)]

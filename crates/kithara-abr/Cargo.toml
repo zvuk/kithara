@@ -10,6 +10,7 @@ description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 [dependencies]
 delegate = { workspace = true }
 derivative = { workspace = true }
+kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 tracing = { workspace = true }
 
