@@ -13,6 +13,28 @@ use crate::{
 /// HTTP 206 Partial Content status code.
 const HTTP_PARTIAL_CONTENT: u16 = 206;
 
+/// Truncate an HTTP error body so it stays useful in logs without dumping
+/// kilobytes of HTML (rate-limit stubs, anti-bot challenges). Preserves
+/// the first 200 characters (char-aligned to not split a UTF-8 codepoint)
+/// and appends a `…(truncated, N chars total)` suffix for anything longer.
+fn truncate_error_body(mut body: String) -> String {
+    /// Maximum characters of an HTTP error body kept in
+    /// [`NetError::HttpError`].
+    const MAX_CHARS: usize = 200;
+
+    let total = body.chars().count();
+    if total <= MAX_CHARS {
+        return body;
+    }
+    let cut_at = body
+        .char_indices()
+        .nth(MAX_CHARS)
+        .map_or(body.len(), |(i, _)| i);
+    body.truncate(cut_at);
+    body.push_str(&format!("…(truncated, {total} chars total)"));
+    body
+}
+
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &reqwest::Response) -> Headers {
     let mut headers = Headers::new();
@@ -120,7 +142,7 @@ impl Net for HttpClient {
         let status = resp.status();
 
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
             return Err(NetError::HttpError {
                 url,
                 status: status.as_u16(),
@@ -145,7 +167,7 @@ impl Net for HttpClient {
         let status = resp.status();
 
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
             return Err(NetError::HttpError {
                 url,
                 status: status.as_u16(),
@@ -174,7 +196,7 @@ impl Net for HttpClient {
         let status = resp.status();
 
         if !(status.is_success() || status.as_u16() == HTTP_PARTIAL_CONTENT) {
-            let body = resp.text().await.unwrap_or_default();
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
             return Err(NetError::HttpError {
                 url,
                 status: status.as_u16(),
@@ -209,7 +231,7 @@ impl Net for HttpClient {
         let status = resp.status();
 
         if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
-            let body = resp.text().await.unwrap_or_default();
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
             return Err(NetError::HttpError {
                 url,
                 status: status.as_u16(),
