@@ -126,6 +126,9 @@ perf = [
     "hotpath/hotpath",
     "kithara/perf",
 ]
+# End-to-end tests that require real networks and real audio hardware.
+# Gated off by default so `just test` never compiles `suite_e2e`.
+e2e = []
 
 [[bin]]
 name = "test_server"
@@ -152,6 +155,11 @@ path = "tests/suite_heavy.rs"
 [[test]]
 name = "suite_stress"
 path = "tests/suite_stress.rs"
+
+[[test]]
+name = "suite_e2e"
+path = "tests/suite_e2e.rs"
+required-features = ["e2e"]
 
 [[test]]
 name = "suite_perf"

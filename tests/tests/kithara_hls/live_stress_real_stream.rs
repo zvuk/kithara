@@ -17,9 +17,10 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::sleep;
-use kithara_platform::{time::Instant, tokio};
+use kithara_platform::{
+    time::{Instant, sleep},
+    tokio,
+};
 use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;

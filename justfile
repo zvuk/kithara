@@ -61,6 +61,13 @@ test-doc:
 test-stress:
     cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile test-release
 
+# Run end-to-end tests that hit real networks (silvercomet.top, zvq.me) and real
+# audio hardware (cpal). Excluded from `just test` by cargo feature gating.
+# Pass extra filters after `just test-e2e`, e.g.
+#   just test-e2e kithara_play::silvercomet_seek_hang
+test-e2e *ARGS:
+    cargo nextest run -p kithara-integration-tests --features e2e --cargo-profile test-release --test suite_e2e --run-ignored all {{ARGS}}
+
 test-all: test test-doc
 
 # Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
