@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 delegate = { workspace = true }
+serde = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }

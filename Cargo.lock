@@ -4434,6 +4434,7 @@ dependencies = [
  "kithara-play",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

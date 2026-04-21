@@ -7,7 +7,6 @@ mod error;
 mod loader;
 mod navigation;
 mod queue;
-mod seek_watchdog;
 mod track;
 
 pub use config::QueueConfig;

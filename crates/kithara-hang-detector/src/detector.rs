@@ -1,84 +1,84 @@
 #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 use std::env;
+#[cfg(not(feature = "disable-hang-detector"))]
+use std::path::PathBuf;
 #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
 #[cfg(not(feature = "disable-hang-detector"))]
 use web_time::Instant;
 
-/// Callback invoked the first time a hang is detected. Runs before the
-/// native panic (or before the WASM error log), so it can dump state
-/// into a file / logs while the hang is still observable.
 #[cfg(not(feature = "disable-hang-detector"))]
-pub(crate) type OnHangCallback = Box<dyn Fn() + Send + Sync>;
+use crate::dump::write_dump;
+use crate::dump::{HangDump, NoContext};
 
 /// Watchdog that detects loops stuck without progress.
 ///
-/// On native targets `tick()` panics after the deadline.
-/// On `wasm32` it logs an error and resets — panics are fatal there
+/// Generic over the context payload `C`. Defaults to `NoContext` so the
+/// old call-site `HangDetector::new("label", timeout)` stays
+/// source-compatible. When a hang fires the stored context (if any) is
+/// serialized and written to disk (native) or logged (wasm) via
+/// [`crate::dump::write_dump`], then — on native only — the process
+/// panics with a stacktrace-friendly message.
+///
+/// On native targets `tick()` panics after the deadline. On `wasm32`
+/// it logs an error and resets — panics there are fatal
 /// (`panic = "immediate-abort"` turns every panic into
 /// `RuntimeError: unreachable` which kills the Web Worker).
 #[cfg(not(feature = "disable-hang-detector"))]
-pub struct HangDetector {
+pub struct HangDetector<C: HangDump = NoContext> {
     deadline: Instant,
     label: &'static str,
     timeout: Duration,
-    /// Optional pre-panic / pre-log hook. Called exactly once per hang
-    /// window so a consumer can dump state (Timeline flags, scheduler,
-    /// pending fetches) while the process is still alive.
-    on_hang: Option<OnHangCallback>,
-    /// Set after `on_hang` fires for the current window; cleared by
-    /// `reset()`. Prevents duplicate dumps when `tick()` is called
-    /// multiple times past the deadline (WASM path resets the deadline
-    /// internally, native path panics so sees it once — but this keeps
-    /// the contract uniform).
+    /// Last context snapshot moved in via [`Self::tick_with`]. Read
+    /// only when the deadline fires; otherwise untouched.
+    ctx: Option<C>,
+    /// Explicit dump directory set via [`Self::with_dump_dir`]. Wins
+    /// over `KITHARA_HANG_DUMP_DIR` and `std::env::temp_dir()`.
+    dump_dir: Option<PathBuf>,
+    /// Set after the dump for the current hang window has been
+    /// written. Cleared by [`Self::reset`].
     fired: bool,
+    _marker: PhantomData<C>,
 }
 
 #[cfg(not(feature = "disable-hang-detector"))]
-impl HangDetector {
+impl<C: HangDump> HangDetector<C> {
     #[must_use]
     pub fn new(label: &'static str, timeout: Duration) -> Self {
         Self {
             deadline: Instant::now() + timeout,
             label,
             timeout,
-            on_hang: None,
+            ctx: None,
+            dump_dir: None,
             fired: false,
+            _marker: PhantomData,
         }
     }
 
-    /// Attach a state-dump callback invoked once per hang window before
-    /// the panic / error log. Useful for writing a `/tmp/*.json` snapshot
-    /// of the frozen subsystem so post-mortem analysis isn't limited to
-    /// a stacktrace.
+    /// Override the dump directory with highest precedence (beats both
+    /// `KITHARA_HANG_DUMP_DIR` and `std::env::temp_dir()`).
     #[must_use]
-    pub fn with_on_hang<F>(mut self, callback: F) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.on_hang = Some(Box::new(callback));
+    pub fn with_dump_dir(mut self, dir: PathBuf) -> Self {
+        self.dump_dir = Some(dir);
         self
     }
 
-    /// Check progress.
+    /// Progress check without updating the stored context. Keeps whatever
+    /// was moved in by the last [`Self::tick_with`].
     ///
     /// # Panics
     ///
-    /// On native targets, panics when no progress is observed before the
-    /// configured timeout. On `wasm32` logs an error to the console instead.
+    /// On native targets, panics when no progress is observed before
+    /// the configured timeout. On `wasm32` logs an error to the console
+    /// instead.
     pub fn tick(&mut self) {
         if Instant::now() < self.deadline {
             return;
         }
-
-        if !self.fired {
-            if let Some(cb) = &self.on_hang {
-                cb();
-            }
-            self.fired = true;
-        }
+        self.fire_dump();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -90,45 +90,60 @@ impl HangDetector {
 
         #[cfg(target_arch = "wasm32")]
         {
-            tracing::error!(
-                label = self.label,
-                timeout_secs = self.timeout.as_secs(),
-                "[HangDetector] no progress — possible deadlock or hang"
-            );
             // Reset to avoid busy-logging every tick.
             self.deadline = Instant::now() + self.timeout;
         }
+    }
+
+    /// Progress check that also replaces the stored context snapshot.
+    /// Hot-path cost is an `Instant::now()` comparison plus an inline
+    /// move of `C` into the local `Option<C>` — no allocations.
+    /// Serialization happens only when the deadline fires.
+    pub fn tick_with(&mut self, ctx: C) {
+        self.ctx = Some(ctx);
+        self.tick();
     }
 
     pub fn reset(&mut self) {
         self.deadline = Instant::now() + self.timeout;
         self.fired = false;
     }
+
+    fn fire_dump(&mut self) {
+        if self.fired {
+            return;
+        }
+        self.fired = true;
+        match self.ctx.as_ref() {
+            Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref()),
+            None => write_dump(self.label, &NoContext, self.dump_dir.as_deref()),
+        }
+    }
 }
 
 /// Zero-cost no-op stub when hang detection is disabled.
 #[cfg(feature = "disable-hang-detector")]
-pub struct HangDetector;
+pub struct HangDetector<C: HangDump = NoContext>(PhantomData<C>);
 
 #[cfg(feature = "disable-hang-detector")]
-impl HangDetector {
+impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     #[must_use]
     pub fn new(_label: &'static str, _timeout: Duration) -> Self {
-        Self
+        Self(PhantomData)
     }
 
     #[inline(always)]
     #[must_use]
-    pub fn with_on_hang<F>(self, _callback: F) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
+    pub fn with_dump_dir(self, _dir: std::path::PathBuf) -> Self {
         self
     }
 
     #[inline(always)]
     pub fn tick(&mut self) {}
+
+    #[inline(always)]
+    pub fn tick_with(&mut self, _ctx: C) {}
 
     #[inline(always)]
     pub fn reset(&mut self) {}
@@ -203,7 +218,7 @@ mod tests {
 
     #[kithara::test]
     fn tick_within_timeout_does_not_panic() {
-        let mut detector = HangDetector::new("test", Duration::from_secs(5));
+        let mut detector: HangDetector = HangDetector::new("test", Duration::from_secs(5));
         for _ in 0..100 {
             detector.tick();
         }
@@ -213,7 +228,7 @@ mod tests {
     #[kithara::test(native)]
     #[should_panic(expected = "HangDetector")]
     fn tick_after_timeout_panics() {
-        let mut detector = HangDetector::new("test.wait", Duration::from_millis(1));
+        let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
         sleep(Duration::from_millis(10));
         detector.tick();
     }
@@ -221,7 +236,7 @@ mod tests {
     #[cfg(not(feature = "disable-hang-detector"))]
     #[kithara::test(wasm)]
     fn tick_after_timeout_does_not_panic_on_wasm() {
-        let mut detector = HangDetector::new("test.wait", Duration::from_millis(1));
+        let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
         sleep(Duration::from_millis(10));
         detector.tick();
     }
@@ -229,62 +244,53 @@ mod tests {
     #[cfg(not(feature = "disable-hang-detector"))]
     #[kithara::test]
     fn reset_extends_deadline() {
-        let mut detector = HangDetector::new("test", Duration::from_millis(50));
+        let mut detector: HangDetector = HangDetector::new("test", Duration::from_millis(50));
         sleep(Duration::from_millis(30));
         detector.reset();
         sleep(Duration::from_millis(30));
         detector.tick();
     }
 
-    #[cfg(not(feature = "disable-hang-detector"))]
+    #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
     #[kithara::test(native)]
-    #[should_panic(expected = "HangDetector")]
-    fn on_hang_fires_before_panic() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        };
-
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_clone = Arc::clone(&fired);
-        let mut detector =
-            HangDetector::new("test.hook", Duration::from_millis(1)).with_on_hang(move || {
-                fired_clone.store(true, Ordering::SeqCst);
-            });
-        sleep(Duration::from_millis(10));
-        // Sanity: the hook runs before panic, so we can observe it from
-        // a `std::panic::catch_unwind` harness in a separate test. Here
-        // we only assert the panic; the next test exercises the side
-        // effect under `catch_unwind`.
-        assert!(!fired.load(Ordering::SeqCst));
-        detector.tick();
-    }
-
-    #[cfg(not(feature = "disable-hang-detector"))]
-    #[kithara::test(native)]
-    fn on_hang_side_effect_visible_under_catch_unwind() {
+    fn tick_with_stores_context_for_dump() {
         use std::{
             panic::{AssertUnwindSafe, catch_unwind},
-            sync::{
-                Arc,
-                atomic::{AtomicBool, Ordering},
-            },
+            path::PathBuf,
         };
 
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_clone = Arc::clone(&fired);
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let mut detector = HangDetector::new("test.hook.catch", Duration::from_millis(1))
-                .with_on_hang(move || {
-                    fired_clone.store(true, Ordering::SeqCst);
-                });
+        #[derive(serde::Serialize)]
+        struct Ctx {
+            phase: u32,
+        }
+
+        let dir: PathBuf = env::temp_dir().join("kithara-hang-tick-with-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let dir_for_closure = dir.clone();
+
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let mut detector: HangDetector<Ctx> =
+                HangDetector::new("tests.tick_with", Duration::from_millis(1))
+                    .with_dump_dir(dir_for_closure);
+            detector.tick_with(Ctx { phase: 5 });
             sleep(Duration::from_millis(10));
-            detector.tick();
+            detector.tick_with(Ctx { phase: 7 });
         }));
-        assert!(result.is_err(), "tick past deadline must panic");
-        assert!(
-            fired.load(Ordering::SeqCst),
-            "on_hang callback must fire before the panic"
-        );
+        assert!(result.is_err(), "detector must panic past deadline");
+
+        let newest = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("kithara-hang-tests.tick_with-")
+            })
+            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap())
+            .expect("no dump file produced");
+        let body = std::fs::read_to_string(newest.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["phase"], 7, "last tick_with wins");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
