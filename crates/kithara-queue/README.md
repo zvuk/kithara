@@ -91,28 +91,35 @@ status `Pending`, then spawns a background task:
    `TrackStatusChanged { Loaded }`.
 6. If the loaded track was stashed in `pending_select` (a `select(id)`
    arrived before loading finished), call `select_item(index, true)`.
-7. Otherwise, if `autoplay` is on and the player is idle, call
-   `select_item(index, true)`.
+   Otherwise the track stays `Loaded` and does nothing until the caller
+   explicitly selects it.
 
 After `select_item` succeeds the engine has consumed `items[index]`, so
 the Queue immediately transitions the entry to `TrackStatus::Consumed`.
 Re-selecting a `Consumed` track respawns the load.
+
+The Queue never starts playback on its own: there is no autoplay. The
+caller drives the first `select` / `play` explicitly so playback order
+is deterministic and independent of which load finishes first.
 
 ## Minimal Usage
 
 ```rust
 use std::sync::Arc;
 
-use kithara_play::PlayerConfig;
-use kithara_queue::{Queue, QueueConfig};
+use kithara_queue::{Queue, QueueConfig, Transition};
 
 #[tokio::main]
 async fn main() {
-    let mut config = QueueConfig::new(PlayerConfig::default());
-    config.autoplay = true;
-
-    let queue = Arc::new(Queue::new(config));
+    let queue = Arc::new(Queue::new(QueueConfig::new()));
     queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.mp3"]);
+
+    // Caller explicitly picks the first track to play. Queue does not
+    // autoplay on its own — the UI (or any other caller) is responsible
+    // for calling `select` / `play` when the user is ready.
+    if let Some(first) = queue.tracks().first() {
+        let _ = queue.select(first.id, Transition::None);
+    }
 
     let mut rx = queue.subscribe();
     while let Ok(event) = rx.recv().await {

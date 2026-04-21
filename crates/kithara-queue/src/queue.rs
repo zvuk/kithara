@@ -107,7 +107,6 @@ pub struct Queue {
     /// downstream UIs should read from this field rather than polling
     /// the engine directly.
     cached_position: Arc<Mutex<Option<f64>>>,
-    autoplay: bool,
 }
 
 impl Queue {
@@ -128,7 +127,6 @@ impl Queue {
         let QueueConfig {
             player,
             max_concurrent_loads,
-            autoplay,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
@@ -151,7 +149,6 @@ impl Queue {
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(Mutex::new(None)),
             cached_position: Arc::new(Mutex::new(None)),
-            autoplay,
         }
     }
 
@@ -661,7 +658,6 @@ impl Queue {
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let bus = self.bus.clone();
-        let autoplay = self.autoplay;
         tokio::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
@@ -720,18 +716,6 @@ impl Queue {
                             duration_seconds: crossfade,
                         });
                     }
-                    mark_consumed();
-                }
-            } else if autoplay && !player.is_playing() {
-                // First autoplay is always an immediate cut — nothing
-                // is playing yet, so there's nothing to fade from.
-                if let Err(e) = player.select_item_with_crossfade(index, true, 0.0) {
-                    warn!(id = id.as_u64(), error = %e, "autoplay select failed");
-                } else {
-                    navigation
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .select(index);
                     mark_consumed();
                 }
             }

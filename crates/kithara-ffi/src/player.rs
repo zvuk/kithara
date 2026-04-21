@@ -87,9 +87,7 @@ impl AudioPlayer {
             ..PlayerConfig::default()
         };
         let player = Arc::new(PlayerImpl::new(player_config));
-        let queue_config = QueueConfig::default()
-            .with_player(player)
-            .with_autoplay(false);
+        let queue_config = QueueConfig::default().with_player(player);
         #[cfg(feature = "dev")]
         let net = NetOptions {
             insecure: true,

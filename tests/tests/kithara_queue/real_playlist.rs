@@ -63,7 +63,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
             };
             let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
             let config = AppConfig::new(downloader);
-            let queue = Arc::new(Queue::new(QueueConfig::default().with_autoplay(true)));
+            let queue = Arc::new(Queue::new(QueueConfig::default()));
 
             // Background tick driver: Queue::tick updates cached
             // position, drains engine events, and arms crossfade. In
