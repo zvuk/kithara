@@ -19,7 +19,6 @@ backend-web-audio = ["kithara-play/backend-web-audio"]
 kithara-play = { workspace = true, features = ["file", "hls"] }
 kithara-abr = { workspace = true }
 kithara-events = { workspace = true }
-kithara-hang-detector = { workspace = true }
 
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -27,7 +26,6 @@ thiserror = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 delegate = { workspace = true }
-serde = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }

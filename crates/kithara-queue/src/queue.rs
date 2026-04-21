@@ -10,7 +10,6 @@ use delegate::delegate;
 use kithara_events::{
     Event, EventBus, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
 };
-use kithara_hang_detector::HangDetector;
 use kithara_play::{PlayError, PlayerConfig, PlayerImpl, ResourceSrc};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, warn};
@@ -22,111 +21,6 @@ use crate::{
     navigation::{NavigationState, RepeatMode},
     track::{TrackEntry, TrackSource, Tracks},
 };
-
-/// Frozen snapshot of queue state captured when a seek hang is detected.
-/// Serialized via `serde`/`serde_json` through the `HangDump` blanket
-/// impl inside `kithara-hang-detector`, then written to
-/// `{temp_dir}/kithara-hang-queue.seek_progress-*.json` when the hang
-/// fires.
-#[derive(Debug, Clone, serde::Serialize)]
-struct SeekHangCtx {
-    track_id: Option<u64>,
-    track_name: Option<String>,
-    track_url: Option<String>,
-    seek_target_seconds: f64,
-    seek_wallclock_ms: u128,
-    last_observed_position: Option<f64>,
-    duration_seconds: Option<f64>,
-    is_playing: bool,
-    rate: f32,
-}
-
-/// Active watchdog for one in-flight seek. Created on `Queue::seek`,
-/// polled from `Queue::tick`, cleared once progress is observed (or
-/// panics on hang through the embedded [`HangDetector`]).
-struct SeekWatchdog {
-    detector: HangDetector<SeekHangCtx>,
-    target_seconds: f64,
-    seek_wallclock_ms: u128,
-    baseline_position: Option<f64>,
-}
-
-impl SeekWatchdog {
-    fn new(target_seconds: f64) -> Self {
-        /// How long the watchdog waits for position to advance after a
-        /// seek before declaring a hang. Tuned to be longer than the
-        /// typical HLS segment fetch latency (2–3 s) yet short enough
-        /// to surface a real freeze before the user gives up.
-        const SEEK_HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-        Self {
-            detector: HangDetector::<SeekHangCtx>::new("queue.seek_progress", SEEK_HANG_TIMEOUT),
-            target_seconds,
-            seek_wallclock_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0),
-            baseline_position: None,
-        }
-    }
-}
-
-enum SeekPollOutcome {
-    /// Seek progress confirmed — drop the watchdog.
-    Drop,
-    /// Still in-flight — put the watchdog back into the slot.
-    Keep,
-}
-
-/// Advance (or confirm) the watchdog from a pre-read player snapshot.
-/// Free function so `Queue::poll_seek_watchdog` can release the slot
-/// lock before calling `HangDetector::tick_with` (which may panic on
-/// native); keeps the lock held only for the swap.
-fn poll_outcome(
-    wd: &mut SeekWatchdog,
-    is_playing: bool,
-    rate: f32,
-    position: Option<f64>,
-    duration: Option<f64>,
-    entry: Option<&TrackEntry>,
-) -> SeekPollOutcome {
-    /// Minimum position delta that counts as "making progress". Below
-    /// this threshold we treat the position as stuck.
-    const PROGRESS_EPSILON_SECS: f64 = 0.1;
-
-    if !is_playing {
-        // Paused — user intent, not a hang. Keep the baseline so that
-        // when playback resumes we still measure progress from the
-        // last known post-seek position.
-        wd.detector.reset();
-        return SeekPollOutcome::Keep;
-    }
-    match (wd.baseline_position, position) {
-        (None, Some(cur)) => {
-            wd.baseline_position = Some(cur);
-            wd.detector.reset();
-            SeekPollOutcome::Keep
-        }
-        (Some(prev), Some(cur)) if (cur - prev).abs() > PROGRESS_EPSILON_SECS => {
-            SeekPollOutcome::Drop
-        }
-        _ => {
-            let ctx = SeekHangCtx {
-                track_id: entry.map(|e| e.id.as_u64()),
-                track_name: entry.map(|e| e.name.clone()),
-                track_url: entry.and_then(|e| e.url.clone()),
-                seek_target_seconds: wd.target_seconds,
-                seek_wallclock_ms: wd.seek_wallclock_ms,
-                last_observed_position: position,
-                duration_seconds: duration,
-                is_playing,
-                rate,
-            };
-            wd.detector.tick_with(ctx);
-            SeekPollOutcome::Keep
-        }
-    }
-}
 
 /// Minimum position threshold used to suppress spurious 0.0 reports on
 /// pause/resume. Values above this are considered a valid non-zero position.
@@ -213,11 +107,6 @@ pub struct Queue {
     /// downstream UIs should read from this field rather than polling
     /// the engine directly.
     cached_position: Arc<Mutex<Option<f64>>>,
-    /// Active seek watchdog. Armed by [`Self::seek`], polled by
-    /// [`Self::tick`], cleared once the player reports position
-    /// advancement. Panics via `HangDetector` when playback stays
-    /// frozen past the configured seek-hang timeout.
-    seek_watchdog: Arc<Mutex<Option<SeekWatchdog>>>,
 }
 
 impl Queue {
@@ -260,7 +149,6 @@ impl Queue {
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(Mutex::new(None)),
             cached_position: Arc::new(Mutex::new(None)),
-            seek_watchdog: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -601,62 +489,16 @@ impl Queue {
 
     /// Seek within the currently-playing track.
     ///
-    /// On success, arms a watchdog that panics if playback doesn't
-    /// advance within the configured seek-hang timeout — turning
-    /// silent deadlocks in the HLS / decoder pipeline into loud,
-    /// post-mortem-ready failures with a JSON dump under the system
-    /// temp dir.
+    /// Seek-hang detection is not handled here: the audio pipeline's
+    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
+    /// `Stream::read`, `decode_next_chunk`) already panics with a
+    /// stacktrace and context dump when no progress is observed. Adding
+    /// a second Queue-level watchdog would just duplicate those panics.
     ///
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
     pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
-        self.player
-            .seek_seconds(seconds)
-            .map_err(QueueError::from)?;
-        self.arm_seek_watchdog(seconds);
-        Ok(())
-    }
-
-    fn arm_seek_watchdog(&self, target_seconds: f64) {
-        *self
-            .seek_watchdog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SeekWatchdog::new(target_seconds));
-    }
-
-    fn poll_seek_watchdog(&self) {
-        let is_playing = self.player.is_playing();
-        let rate = self.player.rate();
-        let position = self.position_seconds();
-        let duration = self.player.duration_seconds();
-        let entry = self.current();
-
-        // Take the watchdog out of the slot so the mutex isn't held
-        // while we tick / reset the detector.
-        let Some(mut wd) = self
-            .seek_watchdog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        else {
-            return;
-        };
-
-        let outcome = poll_outcome(
-            &mut wd,
-            is_playing,
-            rate,
-            position,
-            duration,
-            entry.as_ref(),
-        );
-
-        if matches!(outcome, SeekPollOutcome::Keep) {
-            *self
-                .seek_watchdog
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(wd);
-        }
+        self.player.seek_seconds(seconds).map_err(QueueError::from)
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
@@ -669,7 +511,6 @@ impl Queue {
         self.player.tick()?;
         self.drain_player_events();
         self.update_cached_position();
-        self.poll_seek_watchdog();
         self.maybe_arm_crossfade();
         Ok(())
     }
@@ -1224,14 +1065,6 @@ mod tests {
             should_arm_crossfade(pos, dur, crossfade, current_id, armed_for),
             expected
         );
-    }
-
-    #[kithara::test]
-    fn seek_watchdog_new_captures_target_and_wallclock() {
-        let wd = SeekWatchdog::new(42.0);
-        assert!((wd.target_seconds - 42.0).abs() < f64::EPSILON);
-        assert!(wd.baseline_position.is_none());
-        assert!(wd.seek_wallclock_ms > 0, "wallclock must be populated");
     }
 
     #[kithara::test(tokio)]
