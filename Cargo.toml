@@ -287,6 +287,7 @@ lru = "0.17"
 # fuzzing
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+proptest = "1"
 
 # memory profiling
 dhat = "0.3"

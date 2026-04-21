@@ -27,6 +27,7 @@ kithara-abr = { path = ".", default-features = false, features = ["internal"] }
 unimock = { workspace = true }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+proptest = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
