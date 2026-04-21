@@ -77,6 +77,9 @@ impl HlsScheduler {
             .lock_sync()
             .commit_segment(variant, seg_idx, data);
 
+        self.committed_segment
+            .fetch_max(seg_idx + 1, Ordering::AcqRel);
+
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
         let next_download = current_download.max(end_offset);

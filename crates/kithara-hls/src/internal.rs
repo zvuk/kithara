@@ -82,6 +82,7 @@ pub fn make_test_source_with_backend(
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
+        reader_segment: Arc::new(AtomicUsize::new(0)),
     }
 }
 
@@ -163,6 +164,8 @@ pub fn build_source(
         variants,
         config,
         Arc::clone(hls_peer.abr()),
+        hls_peer.reader_segment_cursor(),
+        hls_peer.committed_segment_cursor(),
         playlist_state,
         bus,
         timeline,

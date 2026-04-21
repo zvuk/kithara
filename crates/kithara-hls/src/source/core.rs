@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_abr::AbrState;
@@ -42,6 +45,10 @@ pub struct HlsSource {
     pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
     /// Peer handle. Dropped with this source, cancelling the peer.
     pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
+    /// Shared with `HlsPeer::reader_segment` — `read_at` updates this
+    /// cursor after each successful read so `HlsPeer::progress` can report
+    /// `reader_playback_time` to the ABR controller.
+    pub(crate) reader_segment: Arc<AtomicUsize>,
 }
 
 impl Drop for HlsSource {
@@ -317,6 +324,8 @@ pub(crate) fn build_pair(
     _variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
     abr: Arc<AbrState>,
+    reader_segment: Arc<AtomicUsize>,
+    committed_segment: Arc<AtomicUsize>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
     timeline: Timeline,
@@ -362,6 +371,7 @@ pub(crate) fn build_pair(
         demand_throttle_until: None,
         announced_cached_count: HashMap::new(),
         in_flight_segments: HashSet::new(),
+        committed_segment,
     };
 
     let source = HlsSource {
@@ -373,6 +383,7 @@ pub(crate) fn build_pair(
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
+        reader_segment,
     };
 
     (downloader, source)

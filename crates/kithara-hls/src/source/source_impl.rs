@@ -287,6 +287,9 @@ impl Source for HlsSource {
                 self.coord.reader_advanced.notify_one();
             }
 
+            self.reader_segment
+                .store(seg.segment_index, Ordering::Release);
+
             let total = self.segments.lock_sync().max_end_offset();
             self.bus.publish(HlsEvent::ByteProgress {
                 position: new_pos,

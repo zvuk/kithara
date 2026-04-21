@@ -2,15 +2,21 @@ use std::{
     io::Error as IoError,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
 };
 
 use kithara_abr::{Abr, AbrState};
-use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, EventBus, HlsEvent};
+use kithara_events::{
+    AbrMode, AbrProgressSnapshot, AbrVariant, EventBus, HlsEvent, VariantDuration,
+};
 use kithara_net::NetError;
-use kithara_platform::{Mutex, RwLock, time::Instant, tokio};
+use kithara_platform::{
+    Mutex, RwLock,
+    time::{Duration, Instant},
+    tokio,
+};
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
@@ -50,6 +56,14 @@ pub(crate) struct HlsPeer {
     /// Track-scoped bus cell. Written by `PeerHandle::with_bus` via the
     /// `Abr::with_bus` trait method; read by the controller on publish.
     bus: Arc<RwLock<Option<EventBus>>>,
+    /// Highest segment index the reader has touched on the current variant.
+    /// Updated by `HlsSource::read_at` after a successful read; consumed by
+    /// `progress()` together with `committed_segment` to drive buffer-ahead
+    /// decisions in the ABR controller.
+    reader_segment: Arc<AtomicUsize>,
+    /// One past the highest segment index the scheduler has committed on
+    /// the current variant. Updated by `HlsScheduler::commit_segment`.
+    committed_segment: Arc<AtomicUsize>,
 }
 
 impl HlsPeer {
@@ -61,6 +75,8 @@ impl HlsPeer {
             timeline,
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             bus: Arc::new(RwLock::new(None)),
+            reader_segment: Arc::new(AtomicUsize::new(0)),
+            committed_segment: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -72,6 +88,27 @@ impl HlsPeer {
     /// Shared ABR state for the scheduler's lock/unlock and seek routing.
     pub(crate) fn abr(&self) -> &Arc<AbrState> {
         &self.abr
+    }
+
+    /// Shared cursor tracking the segment the reader is currently consuming.
+    pub(crate) fn reader_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.reader_segment)
+    }
+
+    /// Shared counter of segments the scheduler has committed — one past the
+    /// highest index ever committed on the current variant.
+    pub(crate) fn committed_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.committed_segment)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_committed_segment(&self, count: usize) {
+        self.committed_segment.store(count, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reader_segment(&self, idx: usize) {
+        self.reader_segment.store(idx, Ordering::Release);
     }
 
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
@@ -160,10 +197,24 @@ impl Abr for HlsPeer {
     }
 
     fn progress(&self) -> Option<AbrProgressSnapshot> {
-        // v1: no buffer signal — the controller falls back to time- and
-        // bandwidth-only gates. Commit 3 wires actual reader/download
-        // positions from the scheduler.
-        None
+        let current = self.abr.current_variant_index();
+        let variants = self.abr.variants_snapshot();
+        let variant = variants.iter().find(|v| v.variant_index == current)?;
+        let durations = match &variant.duration {
+            VariantDuration::Segmented(d) => d.as_slice(),
+            VariantDuration::Total(_) | VariantDuration::Unknown => return None,
+        };
+        let reader_idx = self.reader_segment.load(Ordering::Acquire);
+        let committed = self.committed_segment.load(Ordering::Acquire);
+        let reader_clamped = reader_idx.min(durations.len());
+        let committed_clamped = committed.min(durations.len());
+        let reader_playback_time: Duration = durations[..reader_clamped].iter().copied().sum();
+        let download_head_playback_time: Duration =
+            durations[..committed_clamped].iter().copied().sum();
+        Some(AbrProgressSnapshot {
+            reader_playback_time,
+            download_head_playback_time,
+        })
     }
 
     fn bus(&self) -> Option<EventBus> {
@@ -601,7 +652,7 @@ fn build_batch(
                 &meta,
                 init_len,
                 init_url,
-                std::time::Duration::ZERO,
+                Duration::ZERO,
             );
             state.scheduler.advance_current_segment_index(seg_idx + 1);
             debug!(
@@ -756,10 +807,14 @@ fn build_fetch_cmd(
 mod tests {
     //! RED tests confirming specific root causes of integration-test failures.
 
-    use std::{sync::Arc, task::Context, time::Duration};
+    use std::{
+        sync::{Arc, atomic::AtomicUsize},
+        task::Context,
+        time::Duration,
+    };
 
     use futures::task::noop_waker;
-    use kithara_abr::{AbrDecision, AbrMode, AbrReason, AbrState};
+    use kithara_abr::{Abr, AbrDecision, AbrMode, AbrReason, AbrState};
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
@@ -867,6 +922,8 @@ mod tests {
             &parsed,
             &config,
             abr,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
             playlist_state,
             EventBus::new(16),
             timeline,
@@ -1874,5 +1931,43 @@ mod tests {
             crate::peer::Priority::High,
             "peer's Timeline clone must observe writes to sibling clones"
         );
+    }
+
+    #[kithara::test]
+    fn hls_peer_progress_reflects_download_and_reader() {
+        use kithara_events::{AbrVariant, VariantDuration};
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline, AbrMode::Auto(Some(0)));
+        peer.set_abr_variants(vec![AbrVariant {
+            variant_index: 0,
+            bandwidth_bps: 128_000,
+            duration: VariantDuration::Segmented(vec![Duration::from_secs(10); 10]),
+        }]);
+
+        // No reads, no commits yet.
+        let p = peer.progress().expect("variants cover current variant");
+        assert_eq!(p.reader_playback_time, Duration::ZERO);
+        assert_eq!(p.download_head_playback_time, Duration::ZERO);
+
+        peer.set_reader_segment(2);
+        peer.set_last_committed_segment(6);
+        let p = peer.progress().expect("variants cover current variant");
+        assert_eq!(p.reader_playback_time, Duration::from_secs(20));
+        assert_eq!(p.download_head_playback_time, Duration::from_secs(60));
+    }
+
+    #[kithara::test]
+    fn hls_peer_progress_none_when_duration_unknown() {
+        use kithara_events::{AbrVariant, VariantDuration};
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline, AbrMode::Auto(Some(0)));
+        peer.set_abr_variants(vec![AbrVariant {
+            variant_index: 0,
+            bandwidth_bps: 128_000,
+            duration: VariantDuration::Unknown,
+        }]);
+        peer.set_reader_segment(2);
+        peer.set_last_committed_segment(6);
+        assert!(peer.progress().is_none());
     }
 }

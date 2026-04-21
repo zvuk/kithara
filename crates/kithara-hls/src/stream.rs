@@ -150,13 +150,26 @@ impl StreamType for Hls {
         ));
 
         // Build the variant list and hand it to the peer's ABR state.
+        // Populate per-segment durations so `HlsPeer::progress` can map
+        // `reader_segment` / `committed_segment` back into playback time
+        // for the ABR controller's buffer-ahead gate.
         let abr_variants: Vec<kithara_events::AbrVariant> = master
             .variants
             .iter()
-            .map(|v| kithara_events::AbrVariant {
-                variant_index: v.id.0,
-                bandwidth_bps: v.bandwidth.unwrap_or(0),
-                duration: kithara_events::VariantDuration::Unknown,
+            .zip(media_playlists.iter())
+            .map(|(v, (_, playlist))| {
+                let durations: Vec<kithara_platform::time::Duration> =
+                    playlist.segments.iter().map(|s| s.duration).collect();
+                let duration = if durations.is_empty() {
+                    kithara_events::VariantDuration::Unknown
+                } else {
+                    kithara_events::VariantDuration::Segmented(durations)
+                };
+                kithara_events::AbrVariant {
+                    variant_index: v.id.0,
+                    bandwidth_bps: v.bandwidth.unwrap_or(0),
+                    duration,
+                }
             })
             .collect();
         hls_peer.set_abr_variants(abr_variants);
@@ -187,6 +200,8 @@ impl StreamType for Hls {
             &master.variants,
             &config,
             Arc::clone(hls_peer.abr()),
+            hls_peer.reader_segment_cursor(),
+            hls_peer.committed_segment_cursor(),
             Arc::clone(&playlist_state),
             bus,
             timeline,

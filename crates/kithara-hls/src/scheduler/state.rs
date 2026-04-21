@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_abr::{AbrDecision, AbrState};
@@ -70,6 +73,10 @@ pub(crate) struct HlsScheduler {
     /// `AssetResource`). Cleared on new seek epoch (the old epoch's
     /// cancel token drops any in-flight fetches).
     pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
+    /// One past the highest segment index ever committed — shared with the
+    /// owning `HlsPeer::committed_segment` cursor so `HlsPeer::progress`
+    /// can expose `download_head_playback_time` to the ABR controller.
+    pub(crate) committed_segment: Arc<AtomicUsize>,
 }
 
 /// Maximum initial segment index for verbose logging.
