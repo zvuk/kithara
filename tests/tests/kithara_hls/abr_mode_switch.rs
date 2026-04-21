@@ -152,7 +152,6 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[ignore = "TODO(commit 3): re-enable after FFI/play set_abr_mode is re-wired through PeerHandle::abr().set_mode()"]
 async fn vod_manual_switch_affects_future_segments() {
     let segment_count = 30;
     let init_segment = Arc::new(create_wav_init_segment());

@@ -114,6 +114,8 @@ impl<T: StreamType> Stream<T> {
             pub fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             /// Get current media info if known.
             pub fn media_info(&self) -> Option<MediaInfo>;
+            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
+            pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
             /// Get current segment byte range (for segmented sources like HLS).

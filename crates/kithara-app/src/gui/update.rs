@@ -169,10 +169,14 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         Message::SetAbrMode(variant) => {
             state.abr_mode_is_auto = variant.is_none();
             state.selected_variant = variant;
-            // Runtime per-track mode change now lives on
-            // `PeerHandle::abr().set_mode(...)`. Re-wiring the GUI to
-            // hold the active peer handle is deferred to Commit 3.
-            let _ = variant;
+            if let Some(handle) = state.queue.current_abr_handle() {
+                let mode = variant.map_or(kithara::abr::AbrMode::Auto(None), |idx| {
+                    kithara::abr::AbrMode::Manual(idx)
+                });
+                if let Err(err) = handle.set_mode(mode) {
+                    error!(?err, ?variant, "SetAbrMode rejected by ABR state");
+                }
+            }
             Task::none()
         }
 

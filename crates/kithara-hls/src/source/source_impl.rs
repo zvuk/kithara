@@ -304,6 +304,10 @@ impl Source for HlsSource {
         self.effective_total_bytes()
     }
 
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self._peer_handle.as_ref().map(|h| h.abr().clone())
+    }
+
     fn media_info(&self) -> Option<MediaInfo> {
         let hinted_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
         let reader_variant = self.current_loaded_segment_key().map(|(v, _)| v);

@@ -162,6 +162,15 @@ impl Queue {
         &self.player
     }
 
+    /// ABR handle of the currently playing adaptive item, if any.
+    ///
+    /// Returned handle drives runtime variant/bandwidth control — FFI and
+    /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.player.current_abr_handle()
+    }
+
     /// Subscribe to the unified event stream: `QueueEvent` + underlying
     /// player / audio / hls / file events.
     #[must_use]

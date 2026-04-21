@@ -53,6 +53,7 @@ impl<T: StreamType> SharedStream<T> {
             fn position(&self) -> u64;
             pub(crate) fn len(&self) -> Option<u64>;
             fn media_info(&self) -> Option<MediaInfo>;
+            pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             fn current_segment_range(&self) -> Option<Range<u64>>;
             fn format_change_segment_range(&self) -> Option<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);

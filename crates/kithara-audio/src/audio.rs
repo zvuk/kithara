@@ -150,6 +150,10 @@ pub struct Audio<S> {
     /// Standalone workers are shut down when the track is dropped.
     is_standalone_worker: bool,
 
+    /// Runtime ABR handle snapshot taken at construction — cloned from the
+    /// underlying stream's source. `None` for non-adaptive sources.
+    abr_handle: Option<kithara_abr::AbrHandle>,
+
     /// Marker for source type.
     _marker: PhantomData<S>,
 }
@@ -805,6 +809,7 @@ where
         let notify_waiting = shared_stream.make_notify_fn();
 
         let initial_variant = stream_media_info.as_ref().and_then(|i| i.variant_index);
+        let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
@@ -858,6 +863,7 @@ where
             worker: Some(worker),
             reader_wake,
             is_standalone_worker: is_standalone,
+            abr_handle,
             _marker: PhantomData,
         })
     }
@@ -951,6 +957,10 @@ impl<S: Send> PcmReader for Audio<S> {
         &self.bus
     }
 
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle.clone()
+    }
+
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.host_sample_rate
             .store(sample_rate.get(), Ordering::Relaxed);
@@ -1038,6 +1048,7 @@ mod tests {
             worker: None,
             reader_wake: Arc::new(ThreadWake::new()),
             is_standalone_worker: false,
+            abr_handle: None,
             _marker: PhantomData,
         }
     }
@@ -1095,6 +1106,7 @@ mod tests {
             worker: None,
             reader_wake: Arc::new(ThreadWake::new()),
             is_standalone_worker: false,
+            abr_handle: None,
             _marker: PhantomData,
         };
         (audio, data_tx)

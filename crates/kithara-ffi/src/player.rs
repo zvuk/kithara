@@ -309,11 +309,33 @@ impl AudioPlayer {
         self.queue.set_default_rate(rate);
     }
 
-    pub fn set_abr_mode(&self, _mode: FfiAbrMode) {
-        // Runtime per-track mode change now lives on
-        // `PeerHandle::abr().set_mode(...)`. Wiring it from the FFI
-        // layer requires plumbing the currently-playing peer handle up
-        // — deferred to Commit 3 of the ABR refactor.
+    pub fn set_abr_mode(&self, mode: FfiAbrMode) {
+        let Some(handle) = self.queue.current_abr_handle() else {
+            return;
+        };
+        let abr_mode = match mode {
+            FfiAbrMode::Auto => AbrMode::Auto(None),
+            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
+        };
+        if let Err(err) = handle.set_mode(abr_mode) {
+            tracing::warn!(?err, "set_abr_mode rejected by ABR state");
+        }
+    }
+
+    /// Cap the ABR controller's choice by a preferred peak bitrate (bps).
+    ///
+    /// Pass `0` to clear the cap and let ABR consider all variants again.
+    /// No-op when no adaptive item is currently loaded.
+    pub fn set_preferred_peak_bitrate(&self, bitrate_bps: u64) {
+        let Some(handle) = self.queue.current_abr_handle() else {
+            return;
+        };
+        let cap = if bitrate_bps == 0 {
+            None
+        } else {
+            Some(bitrate_bps)
+        };
+        handle.set_max_bandwidth_bps(cap);
     }
 
     pub fn rate(&self) -> f32 {

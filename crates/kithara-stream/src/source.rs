@@ -182,6 +182,15 @@ pub trait Source: Send + 'static {
         None
     }
 
+    /// Current ABR handle for runtime mode/bandwidth control.
+    ///
+    /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
+    /// queue, FFI, UI — can switch variant or cap bandwidth mid-playback.
+    /// Non-adaptive sources (File) keep the default `None`.
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        None
+    }
+
     /// Get current segment byte range.
     ///
     /// For segmented sources (HLS), returns `Some(range)` of the current segment.

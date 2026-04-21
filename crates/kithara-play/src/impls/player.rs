@@ -99,6 +99,11 @@ pub struct PlayerImpl {
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
 
+    /// ABR handle for the currently loaded item, when the item is adaptive
+    /// (HLS). Populated by [`load_current_item`]; drained when the item
+    /// is replaced. Exposes runtime `set_mode` / `set_max_bandwidth_bps`.
+    active_abr: Mutex<Option<kithara_abr::AbrHandle>>,
+
     /// Engine drops last — worker shutdown happens after all tracks unregister.
     engine: EngineImpl,
 }
@@ -136,6 +141,7 @@ impl PlayerImpl {
             rate: AtomicF32::new(0.0), // starts paused
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
+            active_abr: Mutex::new(None),
             engine,
             config,
         }
@@ -148,6 +154,15 @@ impl PlayerImpl {
     #[must_use]
     pub fn worker(&self) -> &AudioWorkerHandle {
         self.engine.worker()
+    }
+
+    /// ABR handle of the currently loaded item.
+    ///
+    /// Returns `Some` only while an adaptive (HLS) item is loaded; `None`
+    /// otherwise (no item, non-adaptive file item).
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.active_abr.lock_sync().clone()
     }
 
     /// Runtime handle captured by this player's engine.
@@ -709,6 +724,11 @@ impl PlayerImpl {
         let Some(resource) = items[index].take() else {
             return; // Already loaded
         };
+
+        // Snapshot the resource's ABR handle — `None` for non-adaptive
+        // sources. Runtime `set_abr_mode` / `set_preferred_peak_bitrate`
+        // route through this handle until the current item changes.
+        *self.active_abr.lock_sync() = resource.abr_handle();
 
         // Propagate current playback rate to the resource's audio pipeline.
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);

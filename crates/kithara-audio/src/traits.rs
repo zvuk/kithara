@@ -85,6 +85,15 @@ pub trait PcmReader: Send {
     /// Access the unified event bus for subscribing to all pipeline events.
     fn event_bus(&self) -> &EventBus;
 
+    /// Runtime ABR handle for the underlying stream.
+    ///
+    /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
+    /// drive `set_mode` / `set_max_bandwidth_bps` mid-playback. Default
+    /// `None` for non-adaptive readers (file, test fixtures).
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        None
+    }
+
     /// Set the target sample rate of the audio host.
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
