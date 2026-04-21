@@ -4217,6 +4217,8 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
+ "serde_json",
  "tracing",
  "wasm-bindgen-test",
  "web-time",
