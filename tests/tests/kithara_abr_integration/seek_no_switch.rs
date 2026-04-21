@@ -83,13 +83,6 @@ async fn lock_refcount_holds_across_record_bandwidth() {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
-        fn progress(&self) -> Option<kithara_events::AbrProgressSnapshot> {
-            None
-        }
-        fn bus(&self) -> Option<kithara_events::EventBus> {
-            None
-        }
-        fn with_bus(&self, _bus: Option<kithara_events::EventBus>) {}
     }
     let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
     state.lock();

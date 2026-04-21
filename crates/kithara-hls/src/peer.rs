@@ -8,12 +8,10 @@ use std::{
 };
 
 use kithara_abr::{Abr, AbrState};
-use kithara_events::{
-    AbrMode, AbrProgressSnapshot, AbrVariant, EventBus, HlsEvent, VariantDuration,
-};
+use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, HlsEvent, VariantDuration};
 use kithara_net::NetError;
 use kithara_platform::{
-    Mutex, RwLock,
+    Mutex,
     time::{Duration, Instant},
     tokio,
 };
@@ -53,9 +51,6 @@ pub(crate) struct HlsPeer {
     timeline: Timeline,
     /// Per-peer ABR state owned by this peer, shared with the controller.
     abr: Arc<AbrState>,
-    /// Track-scoped bus cell. Written by `PeerHandle::with_bus` via the
-    /// `Abr::with_bus` trait method; read by the controller on publish.
-    bus: Arc<RwLock<Option<EventBus>>>,
     /// Highest segment index the reader has touched on the current variant.
     /// Updated by `HlsSource::read_at` after a successful read; consumed by
     /// `progress()` together with `committed_segment` to drive buffer-ahead
@@ -74,7 +69,6 @@ impl HlsPeer {
             wake_cancel: CancellationToken::new(),
             timeline,
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
-            bus: Arc::new(RwLock::new(None)),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             committed_segment: Arc::new(AtomicUsize::new(0)),
         }
@@ -215,14 +209,6 @@ impl Abr for HlsPeer {
             reader_playback_time,
             download_head_playback_time,
         })
-    }
-
-    fn bus(&self) -> Option<EventBus> {
-        self.bus.lock_sync_read().clone()
-    }
-
-    fn with_bus(&self, bus: Option<EventBus>) {
-        *self.bus.lock_sync_write() = bus;
     }
 }
 

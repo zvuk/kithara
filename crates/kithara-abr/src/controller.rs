@@ -10,7 +10,7 @@ use std::{
 use derivative::Derivative;
 use kithara_events::{AbrEvent, AbrMode, AbrReason, BandwidthSource, EventBus, VariantInfo};
 use kithara_platform::{
-    Mutex,
+    Mutex, RwLock,
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -106,12 +106,19 @@ pub struct AbrController {
 struct PeerEntry {
     peer_weak: Weak<dyn Abr>,
     state: Option<Arc<AbrState>>,
+    bus: Arc<RwLock<Option<EventBus>>>,
     bytes_downloaded: AtomicU64,
     variants_registered_published: AtomicBool,
     warmup_completed: AtomicBool,
     last_variant_switch: Mutex<Option<(Instant, Duration)>>,
     incoherence_cancel: Mutex<Option<CancellationToken>>,
     throttle: Mutex<EventThrottleCache>,
+}
+
+impl PeerEntry {
+    fn bus(&self) -> Option<EventBus> {
+        self.bus.lock_sync_read().clone()
+    }
 }
 
 #[derive(Default)]
@@ -162,9 +169,11 @@ impl AbrController {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
         let entry = Arc::new(PeerEntry {
-            peer_weak: Weak::clone(&peer_weak),
+            peer_weak,
             state: state.clone(),
+            bus: Arc::clone(&bus),
             bytes_downloaded: AtomicU64::new(0),
             variants_registered_published: AtomicBool::new(false),
             warmup_completed: AtomicBool::new(false),
@@ -173,7 +182,7 @@ impl AbrController {
             throttle: Mutex::new(EventThrottleCache::default()),
         });
         self.peers.lock_sync().insert(id, entry);
-        AbrHandle::new(Arc::clone(self), id, state, peer_weak)
+        AbrHandle::new(Arc::clone(self), id, state, bus)
     }
 
     /// Called from [`AbrHandle::drop`].
@@ -214,7 +223,7 @@ impl AbrController {
         let now_total = prev.saturating_add(bytes);
 
         let now = Instant::now();
-        let bus = entry.peer_weak.upgrade().and_then(|p| p.bus());
+        let bus = entry.bus();
         if let Some(ref bus) = bus {
             let mut throttle = entry.throttle.lock_sync();
             let emit = throttle
@@ -259,7 +268,7 @@ impl AbrController {
             return;
         };
 
-        let bus = peer.bus();
+        let bus = entry.bus();
         let variants = peer.variants();
         let progress = peer.progress();
         let buffer_ahead = progress.map(|p| {
@@ -433,7 +442,7 @@ impl AbrController {
             return;
         };
         if progress.reader_playback_time <= reader_pt_at_switch
-            && let Some(bus) = peer.bus()
+            && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::Incoherence {
                 description: format!(
@@ -446,8 +455,7 @@ impl AbrController {
 
     pub(crate) fn on_mode_changed(&self, peer_id: AbrPeerId, mode: AbrMode) {
         if let Some(entry) = self.peer_entry(peer_id)
-            && let Some(peer) = entry.peer_weak.upgrade()
-            && let Some(bus) = peer.bus()
+            && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::ModeChanged { mode });
         }
@@ -456,8 +464,7 @@ impl AbrController {
 
     pub(crate) fn on_max_bandwidth_cap_changed(&self, peer_id: AbrPeerId, cap: Option<u64>) {
         if let Some(entry) = self.peer_entry(peer_id)
-            && let Some(peer) = entry.peer_weak.upgrade()
-            && let Some(bus) = peer.bus()
+            && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::MaxBandwidthCapChanged { cap });
         }
@@ -466,8 +473,7 @@ impl AbrController {
 
     pub(crate) fn on_locked(&self, peer_id: AbrPeerId) {
         if let Some(entry) = self.peer_entry(peer_id)
-            && let Some(peer) = entry.peer_weak.upgrade()
-            && let Some(bus) = peer.bus()
+            && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::Locked);
         }
@@ -475,8 +481,7 @@ impl AbrController {
 
     pub(crate) fn on_unlocked(&self, peer_id: AbrPeerId) {
         if let Some(entry) = self.peer_entry(peer_id)
-            && let Some(peer) = entry.peer_weak.upgrade()
-            && let Some(bus) = peer.bus()
+            && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::Unlocked);
         }

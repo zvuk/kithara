@@ -7,7 +7,7 @@ use kithara_abr::{
     Abr, AbrController, AbrMode, AbrSettings, AbrState, BandwidthSource, Estimator,
     ThroughputEstimator,
 };
-use kithara_events::{AbrProgressSnapshot, AbrVariant, EventBus, VariantDuration};
+use kithara_events::{AbrProgressSnapshot, AbrVariant, VariantDuration};
 use kithara_platform::time::Duration;
 
 fn settings() -> AbrSettings {
@@ -61,12 +61,6 @@ impl Abr for BenchPeer {
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         None
     }
-
-    fn bus(&self) -> Option<EventBus> {
-        None
-    }
-
-    fn with_bus(&self, _bus: Option<EventBus>) {}
 }
 
 fn bench_estimator_push_and_estimate(c: &mut Criterion) {

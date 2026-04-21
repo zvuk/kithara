@@ -32,7 +32,6 @@ fn fast_settings() -> AbrSettings {
 
 struct AdvancingPeer {
     state: Arc<AbrState>,
-    bus: Arc<kithara_platform::RwLock<Option<EventBus>>>,
     reader: Arc<AtomicUsize>,
     committed: Arc<AtomicUsize>,
     durations: Vec<Duration>,
@@ -55,12 +54,6 @@ impl kithara_abr::Abr for AdvancingPeer {
             download_head_playback_time: self.durations[..c].iter().copied().sum(),
         })
     }
-    fn bus(&self) -> Option<EventBus> {
-        self.bus.lock_sync_read().clone()
-    }
-    fn with_bus(&self, bus: Option<EventBus>) {
-        *self.bus.lock_sync_write() = bus;
-    }
 }
 
 #[kithara::test(tokio)]
@@ -82,10 +75,8 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     let state = Arc::new(AbrState::new(variants, AbrMode::Auto(Some(0))));
     let reader = Arc::new(AtomicUsize::new(0));
     let committed = Arc::new(AtomicUsize::new(3));
-    let peer_bus = Arc::new(kithara_platform::RwLock::new(None::<EventBus>));
     let peer: Arc<dyn kithara_abr::Abr> = Arc::new(AdvancingPeer {
         state: Arc::clone(&state),
-        bus: Arc::clone(&peer_bus),
         reader: Arc::clone(&reader),
         committed: Arc::clone(&committed),
         durations,

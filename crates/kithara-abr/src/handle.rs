@@ -1,9 +1,9 @@
-use std::sync::{Arc, Weak, atomic::AtomicUsize};
+use std::sync::{Arc, atomic::AtomicUsize};
 
 use kithara_events::{AbrMode, EventBus};
+use kithara_platform::RwLock;
 
 use crate::{
-    abr::Abr,
     controller::{AbrController, AbrPeerId},
     state::{AbrError, AbrState},
 };
@@ -12,17 +12,18 @@ use crate::{
 ///
 /// Mirrors the shape of `PeerHandle` in `kithara-stream`: the consumer
 /// attaches the track-scoped event bus with [`Self::with_bus`] and keeps
-/// the handle alive for the lifetime of the peer.
+/// the handle alive for the lifetime of the peer. The bus lives inside
+/// the handle — peers stay free of event-bus plumbing.
 #[derive(Clone)]
 pub struct AbrHandle {
     inner: Arc<HandleInner>,
 }
 
-struct HandleInner {
-    controller: Arc<AbrController>,
-    peer_id: AbrPeerId,
-    state: Option<Arc<AbrState>>,
-    peer_weak: Weak<dyn Abr>,
+pub(crate) struct HandleInner {
+    pub(crate) controller: Arc<AbrController>,
+    pub(crate) peer_id: AbrPeerId,
+    pub(crate) state: Option<Arc<AbrState>>,
+    pub(crate) bus: Arc<RwLock<Option<EventBus>>>,
 }
 
 impl AbrHandle {
@@ -30,27 +31,30 @@ impl AbrHandle {
         controller: Arc<AbrController>,
         peer_id: AbrPeerId,
         state: Option<Arc<AbrState>>,
-        peer_weak: Weak<dyn Abr>,
+        bus: Arc<RwLock<Option<EventBus>>>,
     ) -> Self {
         Self {
             inner: Arc::new(HandleInner {
                 controller,
                 peer_id,
                 state,
-                peer_weak,
+                bus,
             }),
         }
     }
 
-    /// Attach the track-scoped event bus. Chains through to the peer's own
-    /// `Abr::with_bus`, so `AbrController` can retrieve it later via
-    /// `Abr::bus`.
+    /// Attach the track-scoped event bus. Stored directly on the handle;
+    /// the controller reads it through the shared `Arc` when publishing.
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        if let Some(peer) = self.inner.peer_weak.upgrade() {
-            peer.with_bus(Some(bus));
-        }
+        *self.inner.bus.lock_sync_write() = Some(bus);
         self
+    }
+
+    /// Current track-scoped event bus clone, if any.
+    #[must_use]
+    pub fn bus(&self) -> Option<EventBus> {
+        self.inner.bus.lock_sync_read().clone()
     }
 
     #[must_use]

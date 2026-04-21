@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_events::{AbrProgressSnapshot, AbrVariant, EventBus};
+use kithara_events::{AbrProgressSnapshot, AbrVariant};
 #[cfg(any(test, feature = "internal"))]
 use unimock::unimock;
 
@@ -11,7 +11,8 @@ use crate::state::AbrState;
 ///
 /// `HlsPeer` provides the full set of capabilities; simpler peers (e.g. a
 /// direct file download) rely on the default methods — no variants, no state,
-/// no progress, no bus.
+/// no progress. The track-scoped event bus is owned by
+/// [`AbrHandle`](crate::AbrHandle); peers do not need to juggle it.
 #[cfg_attr(any(test, feature = "internal"), unimock(api = AbrMock))]
 pub trait Abr: Send + Sync + 'static {
     /// All variants known to the peer.
@@ -29,13 +30,4 @@ pub trait Abr: Send + Sync + 'static {
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         None
     }
-
-    /// Current track-scoped event bus attached to the peer.
-    fn bus(&self) -> Option<EventBus> {
-        None
-    }
-
-    /// Attach or detach the track-scoped event bus. Called when
-    /// `PeerHandle::with_bus` is invoked on the stream-layer handle.
-    fn with_bus(&self, _bus: Option<EventBus>) {}
 }

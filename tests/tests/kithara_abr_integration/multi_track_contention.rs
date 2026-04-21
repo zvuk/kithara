@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
-use kithara_events::{AbrProgressSnapshot, AbrVariant, BandwidthSource, EventBus, VariantDuration};
+use kithara_events::{AbrVariant, BandwidthSource, VariantDuration};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
@@ -29,13 +29,6 @@ impl kithara_abr::Abr for TestPeer {
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
     }
-    fn progress(&self) -> Option<AbrProgressSnapshot> {
-        None
-    }
-    fn bus(&self) -> Option<EventBus> {
-        None
-    }
-    fn with_bus(&self, _bus: Option<EventBus>) {}
 }
 
 fn variants(bitrates: &[u64]) -> Vec<AbrVariant> {
