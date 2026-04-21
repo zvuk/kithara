@@ -1,6 +1,29 @@
 use std::time::Duration;
 
+use kithara_hang_detector::HangDump;
 use kithara_test_utils::kithara;
+
+#[kithara::test]
+fn no_context_serializes_to_null() {
+    assert_eq!(kithara_hang_detector::NoContext.to_json(), "null");
+}
+
+#[kithara::test]
+fn blanket_impl_serializes_serde_type() {
+    #[derive(serde::Serialize)]
+    struct Ctx {
+        value: i32,
+        name: &'static str,
+    }
+    let json = Ctx {
+        value: 7,
+        name: "x",
+    }
+    .to_json();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["value"], 7);
+    assert_eq!(parsed["name"], "x");
+}
 
 struct Consts;
 impl Consts {
