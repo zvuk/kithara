@@ -19,6 +19,7 @@ use crate::{
     error::QueueError,
     loader::Loader,
     navigation::{NavigationState, RepeatMode},
+    seek_watchdog::{SeekHangContext, SeekWatchdog},
     track::{TrackEntry, TrackSource, Tracks},
 };
 
@@ -107,6 +108,11 @@ pub struct Queue {
     /// downstream UIs should read from this field rather than polling
     /// the engine directly.
     cached_position: Arc<Mutex<Option<f64>>>,
+    /// Active seek watchdog. Armed by [`Self::seek`], polled by
+    /// [`Self::tick`], cleared once the player reports position
+    /// advancement. Panics via `HangDetector` when playback stays
+    /// frozen past [`seek_watchdog::SEEK_HANG_TIMEOUT`].
+    seek_watchdog: Arc<Mutex<Option<SeekWatchdog>>>,
 }
 
 impl Queue {
@@ -149,6 +155,7 @@ impl Queue {
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(Mutex::new(None)),
             cached_position: Arc::new(Mutex::new(None)),
+            seek_watchdog: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -489,10 +496,60 @@ impl Queue {
 
     /// Seek within the currently-playing track.
     ///
+    /// On success, arms a watchdog that panics if playback doesn't
+    /// advance within [`seek_watchdog::SEEK_HANG_TIMEOUT`] — turning
+    /// silent deadlocks in the HLS / decoder pipeline into loud,
+    /// post-mortem-ready failures with a JSON dump under the system
+    /// temp dir.
+    ///
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
     pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
-        self.player.seek_seconds(seconds).map_err(QueueError::from)
+        self.player
+            .seek_seconds(seconds)
+            .map_err(QueueError::from)?;
+        self.arm_seek_watchdog(seconds);
+        Ok(())
+    }
+
+    fn arm_seek_watchdog(&self, target_seconds: f64) {
+        let entry = self.current();
+        let ctx = SeekHangContext {
+            track_id: entry.as_ref().map(|e| e.id),
+            track_name: entry.as_ref().map(|e| e.name.clone()),
+            track_url: entry.as_ref().and_then(|e| e.url.clone()),
+            seek_target_seconds: target_seconds,
+            seek_wallclock_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+            last_observed_position: self.position_seconds(),
+            duration_seconds: self.player.duration_seconds(),
+            is_playing: self.player.is_playing(),
+            rate: self.player.rate(),
+        };
+        *self
+            .seek_watchdog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SeekWatchdog::new(ctx));
+    }
+
+    fn poll_seek_watchdog(&self) {
+        let mut guard = self
+            .seek_watchdog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(wd) = guard.as_mut() else {
+            return;
+        };
+        let confirmed = wd.observe(
+            self.player.is_playing(),
+            self.position_seconds(),
+            self.player.rate(),
+        );
+        if confirmed {
+            *guard = None;
+        }
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
@@ -505,6 +562,7 @@ impl Queue {
         self.player.tick()?;
         self.drain_player_events();
         self.update_cached_position();
+        self.poll_seek_watchdog();
         self.maybe_arm_crossfade();
         Ok(())
     }

@@ -7,6 +7,12 @@ use std::time::Duration;
 #[cfg(not(feature = "disable-hang-detector"))]
 use web_time::Instant;
 
+/// Callback invoked the first time a hang is detected. Runs before the
+/// native panic (or before the WASM error log), so it can dump state
+/// into a file / logs while the hang is still observable.
+#[cfg(not(feature = "disable-hang-detector"))]
+pub(crate) type OnHangCallback = Box<dyn Fn() + Send + Sync>;
+
 /// Watchdog that detects loops stuck without progress.
 ///
 /// On native targets `tick()` panics after the deadline.
@@ -18,8 +24,15 @@ pub struct HangDetector {
     deadline: Instant,
     label: &'static str,
     timeout: Duration,
-    /// Suppresses repeated WASM error logs (one message per timeout window).
-    #[cfg(target_arch = "wasm32")]
+    /// Optional pre-panic / pre-log hook. Called exactly once per hang
+    /// window so a consumer can dump state (Timeline flags, scheduler,
+    /// pending fetches) while the process is still alive.
+    on_hang: Option<OnHangCallback>,
+    /// Set after `on_hang` fires for the current window; cleared by
+    /// `reset()`. Prevents duplicate dumps when `tick()` is called
+    /// multiple times past the deadline (WASM path resets the deadline
+    /// internally, native path panics so sees it once — but this keeps
+    /// the contract uniform).
     fired: bool,
 }
 
@@ -31,9 +44,22 @@ impl HangDetector {
             deadline: Instant::now() + timeout,
             label,
             timeout,
-            #[cfg(target_arch = "wasm32")]
+            on_hang: None,
             fired: false,
         }
+    }
+
+    /// Attach a state-dump callback invoked once per hang window before
+    /// the panic / error log. Useful for writing a `/tmp/*.json` snapshot
+    /// of the frozen subsystem so post-mortem analysis isn't limited to
+    /// a stacktrace.
+    #[must_use]
+    pub fn with_on_hang<F>(mut self, callback: F) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_hang = Some(Box::new(callback));
+        self
     }
 
     /// Check progress.
@@ -43,37 +69,40 @@ impl HangDetector {
     /// On native targets, panics when no progress is observed before the
     /// configured timeout. On `wasm32` logs an error to the console instead.
     pub fn tick(&mut self) {
-        if Instant::now() >= self.deadline {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                panic!(
-                    "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
-                    self.label, self.timeout,
-                );
-            }
+        if Instant::now() < self.deadline {
+            return;
+        }
 
-            #[cfg(target_arch = "wasm32")]
-            {
-                if !self.fired {
-                    tracing::error!(
-                        label = self.label,
-                        timeout_secs = self.timeout.as_secs(),
-                        "[HangDetector] no progress — possible deadlock or hang"
-                    );
-                    self.fired = true;
-                }
-                // Reset to avoid busy-logging every tick.
-                self.deadline = Instant::now() + self.timeout;
+        if !self.fired {
+            if let Some(cb) = &self.on_hang {
+                cb();
             }
+            self.fired = true;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            panic!(
+                "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
+                self.label, self.timeout,
+            );
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            tracing::error!(
+                label = self.label,
+                timeout_secs = self.timeout.as_secs(),
+                "[HangDetector] no progress — possible deadlock or hang"
+            );
+            // Reset to avoid busy-logging every tick.
+            self.deadline = Instant::now() + self.timeout;
         }
     }
 
     pub fn reset(&mut self) {
         self.deadline = Instant::now() + self.timeout;
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.fired = false;
-        }
+        self.fired = false;
     }
 }
 
@@ -87,6 +116,15 @@ impl HangDetector {
     #[must_use]
     pub fn new(_label: &'static str, _timeout: Duration) -> Self {
         Self
+    }
+
+    #[inline(always)]
+    #[must_use]
+    pub fn with_on_hang<F>(self, _callback: F) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self
     }
 
     #[inline(always)]
@@ -196,5 +234,57 @@ mod tests {
         detector.reset();
         sleep(Duration::from_millis(30));
         detector.tick();
+    }
+
+    #[cfg(not(feature = "disable-hang-detector"))]
+    #[kithara::test(native)]
+    #[should_panic(expected = "HangDetector")]
+    fn on_hang_fires_before_panic() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        let mut detector =
+            HangDetector::new("test.hook", Duration::from_millis(1)).with_on_hang(move || {
+                fired_clone.store(true, Ordering::SeqCst);
+            });
+        sleep(Duration::from_millis(10));
+        // Sanity: the hook runs before panic, so we can observe it from
+        // a `std::panic::catch_unwind` harness in a separate test. Here
+        // we only assert the panic; the next test exercises the side
+        // effect under `catch_unwind`.
+        assert!(!fired.load(Ordering::SeqCst));
+        detector.tick();
+    }
+
+    #[cfg(not(feature = "disable-hang-detector"))]
+    #[kithara::test(native)]
+    fn on_hang_side_effect_visible_under_catch_unwind() {
+        use std::{
+            panic::{AssertUnwindSafe, catch_unwind},
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+        };
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut detector = HangDetector::new("test.hook.catch", Duration::from_millis(1))
+                .with_on_hang(move || {
+                    fired_clone.store(true, Ordering::SeqCst);
+                });
+            sleep(Duration::from_millis(10));
+            detector.tick();
+        }));
+        assert!(result.is_err(), "tick past deadline must panic");
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "on_hang callback must fire before the panic"
+        );
     }
 }

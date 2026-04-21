@@ -4427,6 +4427,7 @@ dependencies = [
  "derive_setters",
  "kithara-abr",
  "kithara-events",
+ "kithara-hang-detector",
  "kithara-platform",
  "kithara-play",
  "kithara-test-utils",
