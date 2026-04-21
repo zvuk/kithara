@@ -3913,6 +3913,7 @@ name = "kithara-abr"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "derivative",
  "kithara-abr",
  "kithara-events",
  "kithara-platform",

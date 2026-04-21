@@ -162,7 +162,7 @@ pub fn build_source(
         handle,
         variants,
         config,
-        Arc::clone(hls_peer.abr_state()),
+        Arc::clone(hls_peer.abr()),
         playlist_state,
         bus,
         timeline,

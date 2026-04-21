@@ -29,8 +29,8 @@ mod queue;
 
 #[cfg(feature = "abr")]
 pub use abr::{
-    AbrDecision, AbrEvent, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings,
-    AbrVariant, BandwidthSource, VariantDuration, VariantInfo,
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource,
+    VariantDuration, VariantInfo,
 };
 #[cfg(feature = "app")]
 pub use app::AppEvent;

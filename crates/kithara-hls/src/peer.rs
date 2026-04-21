@@ -46,7 +46,7 @@ pub(crate) struct HlsPeer {
     /// audio FSM are published here and observed by `priority()`.
     timeline: Timeline,
     /// Per-peer ABR state owned by this peer, shared with the controller.
-    abr_state: Arc<AbrState>,
+    abr: Arc<AbrState>,
     /// Track-scoped bus cell. Written by `PeerHandle::with_bus` via the
     /// `Abr::with_bus` trait method; read by the controller on publish.
     bus: Arc<RwLock<Option<EventBus>>>,
@@ -59,19 +59,19 @@ impl HlsPeer {
             pending_waker: Mutex::new(None),
             wake_cancel: CancellationToken::new(),
             timeline,
-            abr_state: Arc::new(AbrState::new(Vec::new(), initial_mode)),
+            abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             bus: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Fill in the variant list after the master playlist is parsed.
     pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
-        self.abr_state.set_variants(variants);
+        self.abr.set_variants(variants);
     }
 
     /// Shared ABR state for the scheduler's lock/unlock and seek routing.
-    pub(crate) fn abr_state(&self) -> &Arc<AbrState> {
-        &self.abr_state
+    pub(crate) fn abr(&self) -> &Arc<AbrState> {
+        &self.abr
     }
 
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
@@ -152,11 +152,11 @@ impl Drop for HlsPeer {
 
 impl Abr for HlsPeer {
     fn variants(&self) -> Vec<AbrVariant> {
-        self.abr_state.variants_snapshot()
+        self.abr.variants_snapshot()
     }
 
     fn state(&self) -> Option<Arc<AbrState>> {
-        Some(Arc::clone(&self.abr_state))
+        Some(Arc::clone(&self.abr))
     }
 
     fn progress(&self) -> Option<AbrProgressSnapshot> {
@@ -418,9 +418,9 @@ fn resolve_variant(
     sched: &mut HlsScheduler,
     demand_variant_override: Option<usize>,
 ) -> (usize, usize) {
-    let old_variant = sched.abr_state.current_variant_index();
+    let old_variant = sched.abr.current_variant_index();
     let _decision = sched.make_abr_decision();
-    let mut variant = sched.abr_state.current_variant_index();
+    let mut variant = sched.abr.current_variant_index();
 
     // Demand variant override.
     if let Some(dv) = demand_variant_override
@@ -860,13 +860,13 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let abr_state = Arc::new(AbrState::new(Vec::new(), AbrMode::default()));
+        let abr = Arc::new(AbrState::new(Vec::new(), AbrMode::default()));
         let (scheduler, _source) = build_pair(
             backend,
             handle,
             &parsed,
             &config,
-            abr_state,
+            abr,
             playlist_state,
             EventBus::new(16),
             timeline,
@@ -1157,7 +1157,7 @@ mod tests {
             .reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
         state.scheduler.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
-        state.scheduler.abr_state.apply(
+        state.scheduler.abr.apply(
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::DownSwitch,
@@ -1172,7 +1172,7 @@ mod tests {
             "precondition: cursor at tail"
         );
         assert_eq!(
-            state.scheduler.abr_state.current_variant_index(),
+            state.scheduler.abr.current_variant_index(),
             1,
             "precondition: ABR wants variant 1"
         );
@@ -1491,7 +1491,7 @@ mod tests {
         // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
         // After throughput measurement it decides to up-switch to
         // variant 1. `abr.get_current_variant_index()` now returns 1.
-        state.scheduler.abr_state.apply(
+        state.scheduler.abr.apply(
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::UpSwitch,
@@ -1726,7 +1726,7 @@ mod tests {
         let mut state = make_hls_state();
 
         assert!(
-            !state.scheduler.abr_state.is_locked(),
+            !state.scheduler.abr.is_locked(),
             "precondition: ABR starts unlocked on a fresh track"
         );
 
@@ -1750,7 +1750,7 @@ mod tests {
         let decision = state.scheduler.make_abr_decision();
 
         assert!(
-            state.scheduler.abr_state.is_locked(),
+            state.scheduler.abr.is_locked(),
             "ABR must be locked for the duration of a pending seek; leaving \
              it unlocked opens the mid-seek variant switch that makes the \
              anchor byte_offset unreachable"
@@ -1778,7 +1778,7 @@ mod tests {
         let epoch = timeline.initiate_seek(Duration::from_secs(30));
         let _ = state.scheduler.make_abr_decision();
         assert!(
-            state.scheduler.abr_state.is_locked(),
+            state.scheduler.abr.is_locked(),
             "precondition: ABR is locked during the pending seek",
         );
 
@@ -1793,7 +1793,7 @@ mod tests {
 
         let decision = state.scheduler.make_abr_decision();
         assert!(
-            !state.scheduler.abr_state.is_locked(),
+            !state.scheduler.abr.is_locked(),
             "ABR must unlock on the first tick after seek_pending clears — \
              otherwise the first seek pins the variant for the rest of the \
              session and ABR stops reacting to network conditions"

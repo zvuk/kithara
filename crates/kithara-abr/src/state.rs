@@ -5,8 +5,18 @@ use std::sync::{
 
 #[cfg(any(test, feature = "internal"))]
 use kithara_events::VariantDuration;
-use kithara_events::{AbrDecision, AbrMode, AbrReason, AbrSettings, AbrVariant};
+use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::{Mutex, time::Instant};
+
+use crate::controller::AbrSettings;
+
+/// Outcome of an ABR decision step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AbrDecision {
+    pub target_variant_index: usize,
+    pub reason: AbrReason,
+    pub changed: bool,
+}
 
 /// Per-peer ABR state owned by a peer and shared with the controller.
 pub struct AbrState {
@@ -380,11 +390,11 @@ pub fn test_variants_3() -> Vec<AbrVariant> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::AbrSettings;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::controller::AbrSettings;
 
     fn settings_fast() -> AbrSettings {
         AbrSettings {

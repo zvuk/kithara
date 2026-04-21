@@ -3,10 +3,10 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use kithara_abr::AbrState;
+use kithara_abr::{AbrDecision, AbrState};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{AbrDecision, AbrReason, EventBus, HlsEvent, SeekEpoch};
+use kithara_events::{AbrReason, EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use tracing::debug;
 
@@ -34,7 +34,7 @@ pub(crate) struct HlsScheduler {
     /// Shared ABR state — same `Arc` the owning `HlsPeer` exposes via
     /// `Abr::state()`. Lock/unlock drives the seek-no-switch invariant;
     /// `current_variant_index()` is the source of truth for the scheduler.
-    pub(crate) abr_state: Arc<AbrState>,
+    pub(crate) abr: Arc<AbrState>,
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     pub(crate) bus: EventBus,
@@ -142,7 +142,7 @@ impl HlsScheduler {
         if variant == layout {
             return false;
         }
-        let current_variant = self.abr_state.current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         variant == current_variant && segment_index < self.gap_scan_start_segment()
     }
 
@@ -151,7 +151,7 @@ impl HlsScheduler {
         reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
     )]
     pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
-        let variant = self.abr_state.current_variant_index();
+        let variant = self.abr.current_variant_index();
         let anchor = {
             let segments = self.segments.lock_sync();
             let vs = segments.variant_segments(variant)?;
@@ -244,9 +244,9 @@ impl HlsScheduler {
         self.download_variant = variant;
         self.filling_layout_gap = false;
 
-        let current_variant = self.abr_state.current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         if current_variant != variant {
-            self.abr_state.apply(
+            self.abr.apply(
                 &AbrDecision {
                     target_variant_index: variant,
                     reason: AbrReason::ManualOverride,

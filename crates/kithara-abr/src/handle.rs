@@ -1,10 +1,10 @@
 use std::sync::{Arc, Weak, atomic::AtomicUsize};
 
-use kithara_events::{AbrMode, AbrPeerId, EventBus};
+use kithara_events::{AbrMode, EventBus};
 
 use crate::{
     abr::Abr,
-    controller::AbrController,
+    controller::{AbrController, AbrPeerId},
     state::{AbrError, AbrState},
 };
 

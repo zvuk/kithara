@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::{AbrDecision, HlsEvent};
+use kithara_abr::AbrDecision;
+use kithara_events::HlsEvent;
 use tracing::debug;
 
 use super::{helpers::first_missing_segment, state::HlsScheduler};
@@ -147,7 +148,7 @@ impl HlsScheduler {
     }
 
     fn rewind_reference_variant(&self, fallback_variant: usize) -> usize {
-        let current_variant = self.abr_state.current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         if current_variant < self.playlist_state.num_variants() {
             current_variant
         } else {
@@ -247,7 +248,7 @@ impl HlsScheduler {
             return false;
         }
 
-        let current = self.abr_state.current_variant_index();
+        let current = self.abr.current_variant_index();
         variant != current
     }
 
@@ -256,14 +257,14 @@ impl HlsScheduler {
     /// variant — the Controller owns all decide/apply logic.
     pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
         let seek_pending = self.coord.timeline().is_seek_pending();
-        match (self.abr_state.is_locked(), seek_pending) {
-            (false, true) => self.abr_state.lock(),
-            (true, false) => self.abr_state.unlock(),
+        match (self.abr.is_locked(), seek_pending) {
+            (false, true) => self.abr.lock(),
+            (true, false) => self.abr.unlock(),
             _ => {}
         }
 
-        let current_variant = self.abr_state.current_variant_index();
-        let reason = if self.abr_state.is_locked() {
+        let current_variant = self.abr.current_variant_index();
+        let reason = if self.abr.is_locked() {
             kithara_events::AbrReason::Locked
         } else {
             kithara_events::AbrReason::AlreadyOptimal

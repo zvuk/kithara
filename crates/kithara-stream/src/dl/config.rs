@@ -1,7 +1,7 @@
 //! Downloader configuration.
 
 use derive_setters::Setters;
-use kithara_events::AbrSettings;
+use kithara_abr::AbrSettings;
 use kithara_net::NetOptions;
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use tokio_util::sync::CancellationToken;

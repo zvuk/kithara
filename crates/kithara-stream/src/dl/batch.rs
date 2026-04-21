@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, atomic::Ordering};
 
-use kithara_abr::AbrController;
-use kithara_events::{AbrPeerId, BandwidthSource, DownloaderEvent, EventBus};
+use kithara_abr::{AbrController, AbrPeerId};
+use kithara_events::{BandwidthSource, DownloaderEvent, EventBus};
 use kithara_net::{HttpClient, NetError};
 use kithara_platform::{
     CancelGroup,

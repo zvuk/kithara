@@ -316,13 +316,13 @@ pub(crate) fn build_pair(
     _track: kithara_stream::dl::PeerHandle,
     _variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    abr_state: Arc<AbrState>,
+    abr: Arc<AbrState>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
     timeline: Timeline,
 ) -> (HlsScheduler, HlsSource) {
     let cancel = config.cancel.clone().unwrap_or_default();
-    let abr_variant_index = abr_state.variant_index_handle();
+    let abr_variant_index = abr.variant_index_handle();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
     let num_variants = playlist_state.num_variants();
@@ -351,7 +351,7 @@ pub(crate) fn build_pair(
         cursor: DownloadCursor::fill(0),
         force_init_for_seek: false,
         sent_init_for_variant: HashSet::new(),
-        abr_state: Arc::clone(&abr_state),
+        abr: Arc::clone(&abr),
         coord: Arc::clone(&coord),
         segments: Arc::clone(&segments),
         bus: bus.clone(),

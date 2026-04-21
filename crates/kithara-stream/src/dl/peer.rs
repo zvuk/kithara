@@ -6,8 +6,8 @@ use std::{
 };
 
 use futures::future::join_all;
-use kithara_abr::{Abr, AbrHandle};
-use kithara_events::{AbrPeerId, EventBus};
+use kithara_abr::{Abr, AbrHandle, AbrPeerId};
+use kithara_events::EventBus;
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, RwLock,

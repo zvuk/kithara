@@ -2,11 +2,10 @@
 
 //! Shared ABR (adaptive bitrate) vocabulary and events.
 //!
-//! Types here are the single source of truth for the ABR domain — the
-//! `kithara-abr` crate depends on this module for shared shapes and
-//! publishes [`AbrEvent`] into peer-scoped event buses.
-
-use std::num::NonZeroU64;
+//! Cross-crate types live here (those referenced by [`AbrEvent`]). Controller-
+//! internal shapes (`AbrSettings`, `AbrDecision`, `AbrPeerId`) live in
+//! `kithara-abr`; events only carry `AbrMode`, `AbrReason`, `BandwidthSource`,
+//! `AbrVariant`, `VariantDuration`, `VariantInfo`, `AbrProgressSnapshot`.
 
 use derivative::Derivative;
 use kithara_platform::time::Duration;
@@ -108,82 +107,6 @@ pub struct AbrProgressSnapshot {
     pub download_head_playback_time: Duration,
 }
 
-/// Opaque peer identifier assigned by the ABR controller on `register`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct AbrPeerId(NonZeroU64);
-
-impl AbrPeerId {
-    /// Construct from a non-zero identifier.
-    #[must_use]
-    pub fn new(id: NonZeroU64) -> Self {
-        Self(id)
-    }
-
-    /// Raw numeric value.
-    #[must_use]
-    pub fn get(self) -> NonZeroU64 {
-        self.0
-    }
-}
-
-/// ABR controller settings.
-#[derive(Clone, Debug, Derivative, PartialEq)]
-#[derivative(Default)]
-pub struct AbrSettings {
-    /// Number of bytes that must be downloaded before ABR will switch.
-    #[derivative(Default(value = "128 * 1024"))]
-    pub warmup_min_bytes: u64,
-    /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
-    pub min_buffer_for_up_switch: Duration,
-    /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
-    pub urgent_downswitch_buffer: Duration,
-    /// Minimum interval between variant switches.
-    #[derivative(Default(value = "Duration::from_secs(30)"))]
-    pub min_switch_interval: Duration,
-    /// Safety factor applied to the throughput estimate before comparing to
-    /// candidate variants (e.g. `1.5` uses ~66% of the raw estimate).
-    #[derivative(Default(value = "1.5"))]
-    pub throughput_safety_factor: f64,
-    /// Hysteresis ratio for up-switch (adjusted throughput must exceed
-    /// candidate bandwidth by this factor).
-    #[derivative(Default(value = "1.3"))]
-    pub up_hysteresis_ratio: f64,
-    /// Hysteresis ratio for down-switch.
-    #[derivative(Default(value = "0.8"))]
-    pub down_hysteresis_ratio: f64,
-    /// Minimum download duration (ms) to record a bandwidth sample — fetches
-    /// faster than this are ignored.
-    #[derivative(Default(value = "10"))]
-    pub min_throughput_record_ms: u128,
-    /// Global data-saver cap. Per-peer overrides live in `AbrState`.
-    pub max_bandwidth_bps: Option<u64>,
-    /// Deadline for the incoherence watcher spawned after a variant switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
-    pub incoherence_deadline: Duration,
-    /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[derivative(Default(value = "Duration::from_secs(1)"))]
-    pub bandwidth_emit_min_interval: Duration,
-    /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
-    #[derivative(Default(value = "0.10"))]
-    pub bandwidth_emit_min_delta_ratio: f64,
-    /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
-    pub buffer_emit_min_interval: Duration,
-    /// Minimum absolute delta between `BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
-    pub buffer_emit_min_delta: Duration,
-}
-
-/// Outcome of an ABR decision step.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AbrDecision {
-    pub target_variant_index: usize,
-    pub reason: AbrReason,
-    pub changed: bool,
-}
-
 /// Extended variant metadata for UI and monitoring.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VariantInfo {
@@ -276,25 +199,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn abr_settings_default_values() {
-        let s = AbrSettings::default();
-        assert_eq!(s.warmup_min_bytes, 128 * 1024);
-        assert_eq!(s.min_buffer_for_up_switch, Duration::from_secs(10));
-        assert_eq!(s.urgent_downswitch_buffer, Duration::from_secs(5));
-        assert_eq!(s.min_switch_interval, Duration::from_secs(30));
-        assert!((s.throughput_safety_factor - 1.5).abs() < f64::EPSILON);
-        assert!((s.up_hysteresis_ratio - 1.3).abs() < f64::EPSILON);
-        assert!((s.down_hysteresis_ratio - 0.8).abs() < f64::EPSILON);
-        assert_eq!(s.min_throughput_record_ms, 10);
-        assert!(s.max_bandwidth_bps.is_none());
-        assert_eq!(s.incoherence_deadline, Duration::from_secs(5));
-        assert_eq!(s.bandwidth_emit_min_interval, Duration::from_secs(1));
-        assert!((s.bandwidth_emit_min_delta_ratio - 0.10).abs() < f64::EPSILON);
-        assert_eq!(s.buffer_emit_min_interval, Duration::from_millis(500));
-        assert_eq!(s.buffer_emit_min_delta, Duration::from_millis(500));
-    }
-
-    #[kithara::test]
     fn variant_duration_equality() {
         assert_eq!(
             VariantDuration::Total(Duration::from_secs(30)),
@@ -333,12 +237,5 @@ mod tests {
                 reason: AbrReason::UpSwitch,
             })
         ));
-    }
-
-    #[kithara::test]
-    fn abr_peer_id_round_trip() {
-        let raw = NonZeroU64::new(42).unwrap();
-        let id = AbrPeerId::new(raw);
-        assert_eq!(id.get(), raw);
     }
 }

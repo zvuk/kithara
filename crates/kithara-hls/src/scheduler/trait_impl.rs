@@ -63,7 +63,7 @@ impl HlsScheduler {
             debug!(
                 variant,
                 segment_index = seg_idx,
-                current_variant = self.abr_state.current_variant_index(),
+                current_variant = self.abr.current_variant_index(),
                 "dropping stale cross-codec fetch after switched anchor"
             );
             self.coord.clear_pending_segment_request(SegmentRequest {

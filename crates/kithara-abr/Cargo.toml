@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 
 [dependencies]
+derivative = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 thiserror = { workspace = true }

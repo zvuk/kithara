@@ -7,7 +7,8 @@ use std::{
     task::Poll,
 };
 
-use kithara_events::{AbrPeerId, EventBus};
+use kithara_abr::AbrPeerId;
+use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;

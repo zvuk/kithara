@@ -3,8 +3,8 @@
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use futures::task::AtomicWaker;
-use kithara_abr::{Abr, AbrController};
-use kithara_events::{AbrPeerId, EventBus};
+use kithara_abr::{Abr, AbrController, AbrPeerId};
+use kithara_events::EventBus;
 use kithara_net::HttpClient;
 use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
 use tokio_util::sync::CancellationToken;

@@ -1,9 +1,13 @@
-// Shared ABR vocabulary lives in `kithara-events`. Re-exporting here keeps
-// a single authoritative path for the protocol-agnostic names inside
-// `kithara-abr` internals.
+// Local to `kithara-abr`.
+// Cross-crate vocabulary owned by `kithara-events`.
 pub use kithara_events::{
-    AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrVariant,
-    BandwidthSource, VariantDuration, VariantInfo,
+    AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource, VariantDuration,
+    VariantInfo,
+};
+
+pub use crate::{
+    controller::{AbrPeerId, AbrSettings},
+    state::AbrDecision,
 };
 
 #[cfg(test)]

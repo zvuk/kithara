@@ -161,7 +161,7 @@ impl StreamType for Hls {
             .collect();
         hls_peer.set_abr_variants(abr_variants);
         let initial_variant = hls_peer
-            .abr_state()
+            .abr()
             .current_variant_index()
             .min(master.variants.len().saturating_sub(1));
 
@@ -186,7 +186,7 @@ impl StreamType for Hls {
             peer_handle.clone(),
             &master.variants,
             &config,
-            Arc::clone(hls_peer.abr_state()),
+            Arc::clone(hls_peer.abr()),
             Arc::clone(&playlist_state),
             bus,
             timeline,
