@@ -13,7 +13,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
     decode::PcmChunk,
-    events::{Event, HlsEvent},
+    events::{AbrEvent, Event, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -303,31 +303,26 @@ async fn live_ephemeral_revisit_sequence_regression(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits
@@ -450,31 +445,26 @@ async fn live_real_stream_fixed_seek_window_regression(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits
@@ -570,31 +560,26 @@ async fn live_real_stream_random_seek_prefix_regression(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits
@@ -779,32 +764,26 @@ async fn live_stress_real_stream_seek_read_cache(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
-
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits

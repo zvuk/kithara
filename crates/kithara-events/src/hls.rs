@@ -2,24 +2,11 @@
 
 use kithara_platform::time::Duration;
 
-use crate::{AbrMode, AbrReason, SeekEpoch, VariantInfo};
+use crate::SeekEpoch;
 
 /// Events emitted during HLS playback.
 #[derive(Clone, Debug)]
 pub enum HlsEvent {
-    /// Master playlist loaded and variants discovered.
-    VariantsDiscovered {
-        variants: Vec<VariantInfo>,
-        initial_variant: usize,
-    },
-    /// ABR mode changed at runtime.
-    AbrModeChanged { mode: AbrMode },
-    /// Variant (quality level) changed.
-    VariantApplied {
-        from_variant: usize,
-        to_variant: usize,
-        reason: AbrReason,
-    },
     /// Segment download started.
     SegmentStart {
         variant: usize,
@@ -34,8 +21,6 @@ pub enum HlsEvent {
         cached: bool,
         duration: Duration,
     },
-    /// Throughput measurement.
-    ThroughputSample { bytes_per_second: f64 },
     /// Cumulative download progress.
     DownloadProgress { offset: u64, total: Option<u64> },
     /// Download completed successfully.

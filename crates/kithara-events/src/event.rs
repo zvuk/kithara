@@ -178,28 +178,8 @@ mod tests {
     }
 
     #[cfg(feature = "hls")]
-    fn hls_is_variant_applied_upswitch(event: &HlsEvent) -> bool {
-        matches!(
-            event,
-            HlsEvent::VariantApplied {
-                from_variant: 0,
-                to_variant: 1,
-                reason: crate::AbrReason::UpSwitch,
-            }
-        )
-    }
-
-    #[cfg(feature = "hls")]
     #[kithara::test]
     #[case(HlsEvent::EndOfStream, hls_is_end_of_stream)]
-    #[case(
-        HlsEvent::VariantApplied {
-            from_variant: 0,
-            to_variant: 1,
-            reason: crate::AbrReason::UpSwitch,
-        },
-        hls_is_variant_applied_upswitch
-    )]
     fn hls_event_into_event(#[case] hls_event: HlsEvent, #[case] check: fn(&HlsEvent) -> bool) {
         let event: Event = hls_event.into();
         assert!(matches!(event, Event::Hls(inner) if check(&inner)));

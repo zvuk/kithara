@@ -8,7 +8,7 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    events::{Event, EventBus, HlsEvent},
+    events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     play::internal::offline::{OfflinePlayer, resource_from_reader},
@@ -182,7 +182,6 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-#[ignore = "TODO(commit 3): re-enable after subscribers migrate from HlsEvent::VariantApplied to AbrEvent::VariantApplied"]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;
     let store = StoreOptions::new(temp_dir.path());
@@ -213,7 +212,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         progress_probe.drain(&mut progress_rx);
         loop {
             match hls_rx.try_recv() {
-                Ok(Event::Hls(HlsEvent::VariantApplied { .. })) => {
+                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
                     switch_seen = true;
                 }

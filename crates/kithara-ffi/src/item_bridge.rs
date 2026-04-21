@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kithara::abr::AbrMode;
-use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
+use kithara_events::{AbrEvent, AudioEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -162,9 +162,9 @@ impl ItemEventBridge {
         variants: &mut Vec<crate::types::FfiVariant>,
     ) {
         match event {
-            Event::Hls(HlsEvent::VariantsDiscovered {
+            Event::Abr(AbrEvent::VariantsRegistered {
                 variants: v,
-                initial_variant,
+                initial,
             }) => {
                 let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
@@ -180,14 +180,14 @@ impl ItemEventBridge {
                 });
                 // Synthesize initial VariantApplied so the UI immediately
                 // knows the current quality without waiting for an ABR change.
-                let initial_u32 = *initial_variant as u32;
+                let initial_u32 = *initial as u32;
                 if let Some(initial) = variants.iter().find(|v| v.index == initial_u32) {
                     observer.on_event(FfiItemEvent::VariantApplied {
                         variant: initial.clone(),
                     });
                 }
             }
-            Event::Hls(HlsEvent::AbrModeChanged {
+            Event::Abr(AbrEvent::ModeChanged {
                 mode: AbrMode::Manual(idx),
             }) => {
                 let idx_u32 = *idx as u32;
@@ -202,8 +202,8 @@ impl ItemEventBridge {
                     });
                 observer.on_event(FfiItemEvent::VariantSelected { variant });
             }
-            Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
-                let idx_u32 = *to_variant as u32;
+            Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                let idx_u32 = *to as u32;
                 let variant = variants
                     .iter()
                     .find(|v| v.index == idx_u32)

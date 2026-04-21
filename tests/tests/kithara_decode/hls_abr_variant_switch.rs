@@ -19,7 +19,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    events::{Event, EventBus, HlsEvent},
+    events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -93,19 +93,9 @@ async fn test_abr_variant_switch_no_byte_glitches(
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
-                Event::Hls(HlsEvent::VariantApplied {
-                    from_variant,
-                    to_variant,
-                    ..
-                }) => {
-                    info!(
-                        "Variant switch detected: {} -> {}",
-                        from_variant, to_variant
-                    );
-                    variant_switches_clone
-                        .lock()
-                        .unwrap()
-                        .push((from_variant, to_variant));
+                Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
+                    info!("Variant switch detected: {} -> {}", from, to);
+                    variant_switches_clone.lock().unwrap().push((from, to));
                 }
                 Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
@@ -289,17 +279,9 @@ async fn test_abr_variant_switch_with_seek_backward(
 
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
-            if let Event::Hls(HlsEvent::VariantApplied {
-                from_variant,
-                to_variant,
-                ..
-            }) = ev
-            {
-                println!("Variant switch: {} -> {}", from_variant, to_variant);
-                variant_switches_clone
-                    .lock()
-                    .unwrap()
-                    .push((from_variant, to_variant));
+            if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
+                println!("Variant switch: {} -> {}", from, to);
+                variant_switches_clone.lock().unwrap().push((from, to));
             }
         }
     });

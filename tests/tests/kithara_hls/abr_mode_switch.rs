@@ -21,7 +21,7 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    events::{Event, EventBus, HlsEvent},
+    events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -99,10 +99,8 @@ impl EventCollector {
                             cached: *cached,
                         });
                     }
-                    Event::Hls(HlsEvent::VariantApplied {
-                        to_variant, reason, ..
-                    }) => {
-                        info!(to = to_variant, ?reason, "VariantApplied");
+                    Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                        info!(to = to, ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
                     }
                     _ => {}

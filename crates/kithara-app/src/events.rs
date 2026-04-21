@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use kithara::prelude::{AudioEvent, Event, FileEvent, HlsEvent};
+use kithara::{
+    events::AbrEvent,
+    prelude::{AudioEvent, Event, FileEvent, HlsEvent},
+};
 
 #[must_use]
 pub fn is_progress_event(event: &Event) -> bool {
@@ -27,8 +30,10 @@ pub fn source_note(source: &str, event: &Event) -> Option<String> {
             "{source} seek {}",
             format_seconds(position.as_secs_f64())
         )),
-        Event::Hls(HlsEvent::VariantApplied {
-            to_variant, reason, ..
+        Event::Abr(AbrEvent::VariantApplied {
+            to: to_variant,
+            reason,
+            ..
         }) => Some(format!("{source} abr v{to_variant} {reason:?}")),
         Event::Audio(AudioEvent::DecoderReady {
             base_offset,
