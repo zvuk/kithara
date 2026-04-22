@@ -393,6 +393,27 @@ impl StreamIndex {
         }
     }
 
+    /// Best-known total size of a segment in the given variant.
+    ///
+    /// Prefers stored actual bytes, then the HEAD-derived expected size,
+    /// then the playlist's own estimate. Returns `None` when no source
+    /// knows the size.
+    fn segment_total_size(
+        &self,
+        variant: VariantIndex,
+        seg_idx: SegmentIndex,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<u64> {
+        self.stored_segment(variant, seg_idx)
+            .map(SegmentData::total_len)
+            .or_else(|| {
+                self.expected_sizes
+                    .get(variant)
+                    .and_then(|v| v.get(seg_idx).copied())
+            })
+            .or_else(|| playlist.segment_size(variant, seg_idx))
+    }
+
     /// Byte offset of a logical segment in the layout variant's byte space.
     #[must_use]
     pub(crate) fn layout_offset_for_segment(
@@ -403,15 +424,7 @@ impl StreamIndex {
         let variant = self.layout_variant;
         let mut offset = 0u64;
         for seg_idx in 0..target_segment.min(self.num_segments) {
-            let seg_len = self
-                .stored_segment(variant, seg_idx)
-                .map(SegmentData::total_len)
-                .or_else(|| {
-                    self.expected_sizes
-                        .get(variant)
-                        .and_then(|v| v.get(seg_idx).copied())
-                })
-                .or_else(|| playlist.segment_size(variant, seg_idx))?;
+            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
             offset = offset.saturating_add(seg_len);
         }
         Some(offset)
@@ -507,16 +520,7 @@ impl StreamIndex {
         let variant = self.layout_variant;
         let mut cursor = 0u64;
         for seg_idx in 0..self.num_segments {
-            let seg_len = self
-                .stored_segment(variant, seg_idx)
-                .map(SegmentData::total_len)
-                .or_else(|| {
-                    self.expected_sizes
-                        .get(variant)
-                        .and_then(|v| v.get(seg_idx).copied())
-                })
-                .or_else(|| playlist.segment_size(variant, seg_idx))?;
-
+            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
             let end = cursor.saturating_add(seg_len);
             if offset < end {
                 return Some((variant, seg_idx));
