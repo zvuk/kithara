@@ -119,6 +119,32 @@ impl HttpClient {
         let stream = resp.bytes_stream().map_err(NetError::from);
         crate::ByteStream::new(headers, Box::pin(stream))
     }
+
+    async fn send_checked(
+        &self,
+        req: reqwest::RequestBuilder,
+        headers: Option<Headers>,
+        url: Url,
+        accept_partial: bool,
+    ) -> Result<reqwest::Response, NetError> {
+        let req = Self::apply_headers(req, headers);
+        let req = req.timeout(self.options.request_timeout);
+
+        let resp = req.send().await.map_err(NetError::from)?;
+        let status = resp.status();
+
+        let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
+        if !ok {
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            return Err(NetError::HttpError {
+                url,
+                status: status.as_u16(),
+                body: Some(body),
+            });
+        }
+
+        Ok(resp)
+    }
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -135,21 +161,7 @@ impl Net for HttpClient {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
-        let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !status.is_success() {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
+        let resp = self.send_checked(req, headers, url, false).await?;
         resp.bytes().await.map_err(NetError::from)
     }
 
@@ -160,21 +172,7 @@ impl Net for HttpClient {
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
         let req = self.inner.get(url.clone());
-        let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !status.is_success() {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
+        let resp = self.send_checked(req, headers, url, false).await?;
         Ok(Self::response_to_stream(resp))
     }
 
@@ -185,25 +183,11 @@ impl Net for HttpClient {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let mut req = self
+        let req = self
             .inner
             .get(url.clone())
             .header("Range", range.to_header_value());
-        req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !(status.is_success() || status.as_u16() == HTTP_PARTIAL_CONTENT) {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
+        let resp = self.send_checked(req, headers, url, true).await?;
         Ok(Self::response_to_stream(resp))
     }
 
