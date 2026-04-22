@@ -193,11 +193,11 @@ similarity *ARGS:
 # Use `just mutants-all` for the full workspace (slow — hours on 20+ crates).
 mutants crate *ARGS:
     cargo mutants -p {{crate}} --profile test-release \
-      --timeout 120 --no-shuffle {{ARGS}}
+      --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
 
 mutants-all *ARGS:
     cargo mutants --workspace --profile test-release \
-      --timeout 120 --no-shuffle {{ARGS}}
+      --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
 
 # --- perf & benchmarks ---
 
