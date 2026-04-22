@@ -164,13 +164,12 @@ impl SymphoniaInner {
             // Direct reader creation (no probe) - needed for HLS fMP4
             // where we know the container and need to avoid seek-to-end behavior
             Self::new_direct(source, config, container, format_opts)
-        } else if config.probe_no_seek {
-            // Probe with seek disabled — prevents format readers from seeking
-            // to end to validate file/chunk sizes (ABR switch scenario)
-            Self::new_with_probe_no_seek(source, config, format_opts)
         } else {
-            // Fallback to probe - handles files with junk data, auto-detects format
-            Self::new_with_probe(source, config, format_opts)
+            // Probe-based creation. When `probe_no_seek` is true seek is
+            // disabled during probe (e.g. ABR switch where header-reported
+            // length may not match the adapter's view); otherwise seek is
+            // enabled so format readers can auto-detect and skip junk data.
+            Self::probe_with_seek(source, config, format_opts, !config.probe_no_seek)
         }
     }
 
@@ -221,37 +220,11 @@ impl SymphoniaInner {
 
     /// Create decoder using Symphonia's probe mechanism.
     ///
-    /// Used when container format is not known. Probe can automatically
-    /// detect format and skip junk data at the beginning of files.
-    fn new_with_probe<R>(
-        source: R,
-        config: &SymphoniaConfig,
-        format_opts: FormatOptions,
-    ) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        Self::probe_with_seek(source, config, format_opts, true)
-    }
-
-    /// Create decoder using Symphonia's probe with seek disabled.
-    ///
-    /// Used after ABR variant switches where the reported byte length
-    /// may not match the actual container header (e.g., WAV over HLS).
-    /// Disabling seek prevents format readers from seeking to end to
-    /// validate file size, which would fail with mismatched lengths.
-    fn new_with_probe_no_seek<R>(
-        source: R,
-        config: &SymphoniaConfig,
-        format_opts: FormatOptions,
-    ) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        Self::probe_with_seek(source, config, format_opts, false)
-    }
-
-    /// Shared implementation for probe-based decoder creation.
+    /// When `seek_enabled` is true the probe can seek freely (auto-detect,
+    /// skip junk data). When false, seek is disabled during probe to avoid
+    /// format readers seeking to end to validate file size — used after ABR
+    /// switches where reported byte length may not match the container
+    /// header (e.g. WAV over HLS). Seek is re-enabled after probe succeeds.
     fn probe_with_seek<R>(
         source: R,
         config: &SymphoniaConfig,
