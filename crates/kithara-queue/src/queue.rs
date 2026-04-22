@@ -69,6 +69,16 @@ struct PendingSelect {
     transition: Transition,
 }
 
+/// Where a new track should land in the queue's internal `Vec`.
+#[derive(Clone, Copy, Debug)]
+enum Placement {
+    /// Push past the tail — used by [`Queue::append`].
+    Append,
+    /// Insert at a caller-resolved position — used by [`Queue::insert`]
+    /// after it looks up `after_id`.
+    At(usize),
+}
+
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns an `Arc<PlayerImpl>` and a private async track loader, plus queue-level state
@@ -215,28 +225,7 @@ impl Queue {
 
     /// Append a track. Loading starts immediately in the background.
     pub fn append<S: Into<TrackSource>>(&self, source: S) -> TrackId {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let source = source.into();
-        let entry = TrackEntry {
-            id,
-            name: extract_track_name(&source),
-            url: source.uri().map(str::to_string),
-            status: TrackStatus::Pending,
-        };
-
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            guard.push(entry);
-            guard.len() - 1
-        };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, source.clone());
-        self.player.reserve_slots(index + 1);
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        self.spawn_apply_after_load(id, source);
-        id
+        self.insert_entry(source.into(), Placement::Append)
     }
 
     /// Insert a track after the given id, or at the head when `after` is
@@ -250,8 +239,30 @@ impl Queue {
         source: S,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let source = source.into();
+        let pos = {
+            let guard = self.lock_tracks();
+            match after {
+                None => 0,
+                Some(after_id) => guard
+                    .iter()
+                    .position(|e| e.id == after_id)
+                    .map(|i| i + 1)
+                    .ok_or(QueueError::UnknownTrackId(after_id))?,
+            }
+        };
+        Ok(self.insert_entry(source, Placement::At(pos)))
+    }
+
+    /// Shared insertion path for [`Self::append`] and [`Self::insert`].
+    ///
+    /// Allocates a fresh [`TrackId`], builds the [`TrackEntry`], places it
+    /// per `placement`, then mirrors the track into the player, bus, and
+    /// background loader. Position resolution — including fallible
+    /// `after_id` lookup — happens in the caller, so this helper is
+    /// infallible.
+    fn insert_entry(&self, source: TrackSource, placement: Placement) -> TrackId {
+        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let entry = TrackEntry {
             id,
             name: extract_track_name(&source),
@@ -261,16 +272,16 @@ impl Queue {
 
         let index = {
             let mut guard = self.lock_tracks_mut();
-            let pos = match after {
-                None => 0,
-                Some(after_id) => guard
-                    .iter()
-                    .position(|e| e.id == after_id)
-                    .map(|i| i + 1)
-                    .ok_or(QueueError::UnknownTrackId(after_id))?,
-            };
-            guard.insert(pos, entry);
-            pos
+            match placement {
+                Placement::Append => {
+                    guard.push(entry);
+                    guard.len() - 1
+                }
+                Placement::At(pos) => {
+                    guard.insert(pos, entry);
+                    pos
+                }
+            }
         };
         self.sources
             .lock()
@@ -279,7 +290,7 @@ impl Queue {
         self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
-        Ok(id)
+        id
     }
 
     /// Remove a track from the queue by id.
