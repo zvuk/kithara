@@ -32,12 +32,6 @@ impl AbrPeerId {
     pub fn new(id: NonZeroU64) -> Self {
         Self(id)
     }
-
-    /// Raw numeric value.
-    #[must_use]
-    pub fn get(self) -> NonZeroU64 {
-        self.0
-    }
 }
 
 /// ABR controller settings.
@@ -194,13 +188,6 @@ impl AbrController {
         }
     }
 
-    /// Test helper: is `id` registered?
-    #[cfg(any(test, feature = "internal"))]
-    #[must_use]
-    pub fn has_peer(&self, id: AbrPeerId) -> bool {
-        self.peers.lock_sync().contains_key(&id)
-    }
-
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader
     /// when a fetch completes. Also triggers a `tick` for the peer.
     pub fn record_bandwidth(
@@ -251,12 +238,6 @@ impl AbrController {
             bus.publish(AbrEvent::WarmupCompleted);
         }
 
-        self.tick(peer_id, now);
-    }
-
-    /// Test helper — drive a tick from outside the downloader.
-    #[cfg(any(test, feature = "internal"))]
-    pub fn tick_for_testing(&self, peer_id: AbrPeerId, now: Instant) {
         self.tick(peer_id, now);
     }
 

@@ -163,6 +163,22 @@ coverage:
     echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
     echo "==> line coverage threshold: $COVERAGE_MIN%"
 
+# Show lines not executed by any test (dead / uncovered code).
+# Accumulates coverage across unit/integration (+ rodio feature) and e2e
+# (real network + cpal hardware) runs.
+dead:
+    cargo llvm-cov clean --workspace
+    cargo llvm-cov nextest --no-report --workspace --exclude kithara-fuzz \
+      --features kithara-audio/rodio \
+      --cargo-profile test-release --no-fail-fast || true
+    cargo llvm-cov nextest --no-report \
+      -p kithara-integration-tests --features e2e \
+      --cargo-profile test-release \
+      --test suite_e2e --run-ignored all --no-fail-fast || true
+    cargo llvm-cov report \
+      --ignore-filename-regex '(tests/|examples/|benches/)' \
+      --show-missing-lines
+
 # --- perf & benchmarks ---
 
 perf-test:

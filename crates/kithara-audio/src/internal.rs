@@ -77,8 +77,8 @@ pub mod source {
         pipeline::{
             fetch::Fetch,
             track_fsm::{
-                RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
-                TrackState, WaitContext,
+                RecreateCause, RecreateNext, RecreateState, SeekContext, SeekRequest, TrackState,
+                WaitContext,
             },
         },
         traits::AudioEffect,
@@ -255,21 +255,6 @@ pub mod source {
         media_info: Option<MediaInfo>,
     ) {
         source.0.session.media_info = media_info;
-    }
-
-    pub fn set_awaiting_resume_state<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
-        epoch: u64,
-        target: Duration,
-        recover_attempts: u8,
-        skip: Option<Duration>,
-    ) {
-        source.0.state = TrackState::AwaitingResume(ResumeState {
-            recover_attempts,
-            seek: SeekContext { epoch, target },
-            skip,
-            anchor_offset: None,
-        });
     }
 
     pub fn set_recreating_decoder<T: StreamType>(

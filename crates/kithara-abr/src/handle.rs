@@ -51,25 +51,9 @@ impl AbrHandle {
         self
     }
 
-    /// Current track-scoped event bus clone, if any.
-    #[must_use]
-    pub fn bus(&self) -> Option<EventBus> {
-        self.inner.bus.lock_sync_read().clone()
-    }
-
     #[must_use]
     pub fn peer_id(&self) -> AbrPeerId {
         self.inner.peer_id
-    }
-
-    #[must_use]
-    pub fn state(&self) -> Option<&AbrState> {
-        self.inner.state.as_deref()
-    }
-
-    #[must_use]
-    pub fn controller(&self) -> &Arc<AbrController> {
-        &self.inner.controller
     }
 
     /// Current variant index — `None` for peers without state.
@@ -83,11 +67,6 @@ impl AbrHandle {
     #[must_use]
     pub fn variant_index_handle(&self) -> Option<Arc<AtomicUsize>> {
         self.inner.state.as_ref().map(|s| s.variant_index_handle())
-    }
-
-    #[must_use]
-    pub fn mode(&self) -> Option<AbrMode> {
-        self.inner.state.as_ref().map(|s| s.mode())
     }
 
     /// Change mode.
@@ -106,14 +85,6 @@ impl AbrHandle {
             }
             None => Ok(()),
         }
-    }
-
-    #[must_use]
-    pub fn max_bandwidth_bps(&self) -> Option<u64> {
-        self.inner
-            .state
-            .as_ref()
-            .and_then(|s| s.max_bandwidth_bps())
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
