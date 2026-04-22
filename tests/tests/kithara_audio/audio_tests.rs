@@ -2,33 +2,43 @@
 
 use std::{fs::File, io::Write};
 
+use kithara_assets::StoreOptions;
 use kithara_audio::internal::audio::*;
 use kithara_events::{AudioEvent, Event, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
-use kithara_test_utils::{create_test_wav, kithara};
+use kithara_test_utils::{TestTempDir, create_test_wav, kithara};
 use rodio::Source;
 use tempfile::NamedTempFile;
 
 /// Write test WAV to a temp file and return config for it.
-fn test_wav_config(sample_count: usize) -> (NamedTempFile, AudioConfig<kithara_file::File>) {
+///
+/// The returned [`TestTempDir`] owns an isolated cache directory —
+/// callers keep it alive for the lifetime of the test so the shared
+/// app cache at `env::temp_dir()/kithara` stays untouched, and the
+/// directory is auto-deleted when the test returns.
+fn test_wav_config(
+    sample_count: usize,
+) -> (TestTempDir, NamedTempFile, AudioConfig<kithara_file::File>) {
     let wav_data = create_test_wav(sample_count, 44100, 2);
     let tmp = NamedTempFile::new().unwrap();
     File::create(tmp.path())
         .unwrap()
         .write_all(&wav_data)
         .unwrap();
-    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()));
+    let cache = TestTempDir::new();
+    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
+        .with_store(StoreOptions::new(cache.path()));
     let config = AudioConfig::<kithara_file::File>::new(file_config).with_hint("wav");
-    (tmp, config)
+    (cache, tmp, config)
 }
 
 #[kithara::test(tokio)]
 #[case::short(16)]
 #[case::regular(1000)]
 async fn test_audio_new(#[case] sample_count: usize) {
-    let (_tmp, config) = test_wav_config(sample_count);
+    let (_cache, _tmp, config) = test_wav_config(sample_count);
     let _audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -36,7 +46,7 @@ async fn test_audio_new(#[case] sample_count: usize) {
 
 #[kithara::test(tokio)]
 async fn test_audio_receive_chunks() {
-    let (_tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -79,7 +89,7 @@ fn test_audio_config_with_media_info() {
 
 #[kithara::test(tokio)]
 async fn test_audio_spec() {
-    let (_tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(1000);
     let audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -91,7 +101,7 @@ async fn test_audio_spec() {
 
 #[kithara::test(tokio)]
 async fn test_audio_read() {
-    let (_tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -115,7 +125,7 @@ async fn test_audio_read() {
 #[case::tiny(100, 4)]
 #[case::wide(1000, 64)]
 async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_len: usize) {
-    let (_tmp, config) = test_wav_config(sample_count);
+    let (_cache, _tmp, config) = test_wav_config(sample_count);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -128,7 +138,7 @@ async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_l
 
 #[kithara::test(tokio)]
 async fn test_audio_is_eof() {
-    let (_tmp, config) = test_wav_config(10);
+    let (_cache, _tmp, config) = test_wav_config(10);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -144,7 +154,7 @@ async fn test_audio_is_eof() {
 
 #[kithara::test(tokio)]
 async fn test_audio_seek() {
-    let (_tmp, config) = test_wav_config(44100); // 1 second
+    let (_cache, _tmp, config) = test_wav_config(44100); // 1 second
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -163,7 +173,7 @@ async fn test_audio_seek() {
 
 #[kithara::test(tokio)]
 async fn test_rodio_source_try_seek() {
-    let (_tmp, config) = test_wav_config(44100);
+    let (_cache, _tmp, config) = test_wav_config(44100);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -180,7 +190,7 @@ async fn test_rodio_source_try_seek() {
 
 #[kithara::test(tokio)]
 async fn test_audio_playback_progress_uses_output_commit() {
-    let (_tmp, config) = test_wav_config(1024);
+    let (_cache, _tmp, config) = test_wav_config(1024);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -212,7 +222,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
 
 #[kithara::test(tokio)]
 async fn test_seek_emits_matching_playback_progress() {
-    let (_tmp, config) = test_wav_config(44_100 * 4);
+    let (_cache, _tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -241,7 +251,7 @@ async fn test_seek_emits_matching_playback_progress() {
 
 #[kithara::test(tokio)]
 async fn test_seek_complete_emitted_only_after_output_commit() {
-    let (_tmp, config) = test_wav_config(44_100 * 4);
+    let (_cache, _tmp, config) = test_wav_config(44_100 * 4);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -303,7 +313,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
 #[case::single(false)]
 #[case::idempotent(true)]
 async fn test_audio_preload(#[case] second_preload: bool) {
-    let (_tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -326,7 +336,7 @@ async fn test_audio_preload(#[case] second_preload: bool) {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn test_audio_preload_rearms_after_seek() {
-    let (_tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -356,7 +366,7 @@ async fn test_audio_preload_rearms_after_seek() {
 async fn preloaded_survives_seek() {
     use kithara_audio::internal::audio::is_preloaded;
 
-    let (_tmp, config) = test_wav_config(44100 * 2);
+    let (_cache, _tmp, config) = test_wav_config(44100 * 2);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .expect("create audio");

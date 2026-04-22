@@ -14,8 +14,9 @@ use kithara::{
     file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
+use kithara_assets::StoreOptions;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{Xorshift64, wav::create_test_wav};
+use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_test_wav};
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -51,7 +52,11 @@ async fn stress_random_seek_read_synthetic_wav() {
     .expect("write WAV data");
 
     // Step 2: Create Audio pipeline (mock decoder = real decoder on synthetic data)
-    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()));
+    // Isolated cache dir — auto-deleted on drop, keeps the shared app
+    // cache at `env::temp_dir()/kithara` untouched.
+    let cache = TestTempDir::new();
+    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
+        .with_store(StoreOptions::new(cache.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("wav");
     let mut audio = Audio::<Stream<File>>::new(config)
         .await

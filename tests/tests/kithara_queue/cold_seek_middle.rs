@@ -16,12 +16,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kithara_assets::StoreOptions;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, fixture_protocol::DelayRule, kithara,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
+    fixture_protocol::DelayRule, kithara, temp_dir,
 };
 use tokio::time::sleep;
 
@@ -89,7 +91,7 @@ async fn wait_for_position_at_least(
     ))
 }
 
-async fn run_seek_scenario(urls: &[&str], select_index: usize) {
+async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
     install_tracing();
     INIT_OFFLINE.call_once(init_offline_backend);
 
@@ -98,6 +100,12 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize) {
         .iter()
         .map(|p| server.url(p).as_str().to_string())
         .collect();
+
+    // `temp` is the shared `temp_dir` fixture — dropped (auto-deleted)
+    // at the end of this function, so the shared app cache at
+    // `env::temp_dir()/kithara` stays untouched.
+    let store = StoreOptions::new(temp.path());
+    let downloader = Downloader::new(DownloaderConfig::default());
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
@@ -116,7 +124,15 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize) {
     });
 
     let mut rx = queue.subscribe();
-    let ids: Vec<TrackId> = resolved.iter().map(|u| queue.append(u.clone())).collect();
+    let ids: Vec<TrackId> = resolved
+        .iter()
+        .map(|u| {
+            let mut cfg = ResourceConfig::new(u).expect("valid URL");
+            cfg = cfg.with_downloader(downloader.clone());
+            cfg.store = store.clone();
+            queue.append(TrackSource::Config(Box::new(cfg)))
+        })
+        .collect();
     let selected_id = ids[select_index];
 
     wait_for_status(
@@ -192,18 +208,18 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize) {
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_one_track_index0() {
-    run_seek_scenario(&["/master.m3u8"], 0).await;
+async fn queue_seek_one_track_index0(temp_dir: TestTempDir) {
+    run_seek_scenario(&["/master.m3u8"], 0, temp_dir).await;
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_two_tracks_index0() {
-    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 0).await;
+async fn queue_seek_two_tracks_index0(temp_dir: TestTempDir) {
+    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 0, temp_dir).await;
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_two_tracks_index1() {
-    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 1).await;
+async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
+    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 1, temp_dir).await;
 }
 
 /// Two concurrent `Queue::append` calls for the exact same HLS URL
@@ -221,8 +237,8 @@ async fn queue_seek_two_tracks_index1() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[ignore = "requires downloader request coalescing — see \
     .docs/plans/2026-04-21-downloader-request-coalescing.md"]
-async fn queue_seek_same_url_twice_index0() {
-    run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0).await;
+async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
+    run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0, temp_dir).await;
 }
 
 /// Long-track variant: 20 segments × 4s = 80s, with a 150ms delay on
@@ -230,7 +246,7 @@ async fn queue_seek_same_url_twice_index0() {
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn queue_seek_long_cold_cache_far_segment() {
+async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     install_tracing();
     INIT_OFFLINE.call_once(init_offline_backend);
 
@@ -274,10 +290,15 @@ async fn queue_seek_long_cold_cache_far_segment() {
     // is caused by shared HTTP pool / runtime contention, this is
     // where it would show up.
     let downloader = Downloader::new(DownloaderConfig::default());
+    // `temp_dir` is the shared `temp_dir` fixture — auto-deleted when
+    // the test returns. Keeps the shared app cache at
+    // `env::temp_dir()/kithara` untouched.
+    let store = StoreOptions::new(temp_dir.path());
     let track_source = |url: &str| -> TrackSource {
-        let cfg = ResourceConfig::new(url)
+        let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
             .with_downloader(downloader.clone());
+        cfg.store = store.clone();
         TrackSource::Config(Box::new(cfg))
     };
 
@@ -355,7 +376,7 @@ async fn queue_seek_long_cold_cache_far_segment() {
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn queue_seek_multi_variant_cold_far() {
+async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     install_tracing();
     INIT_OFFLINE.call_once(init_offline_backend);
 
@@ -400,10 +421,15 @@ async fn queue_seek_multi_variant_cold_far() {
     });
 
     let downloader = Downloader::new(DownloaderConfig::default());
+    // `temp_dir` is the shared `temp_dir` fixture — auto-deleted when
+    // the test returns. Keeps the shared app cache at
+    // `env::temp_dir()/kithara` untouched.
+    let store = StoreOptions::new(temp_dir.path());
     let track_source = |url: &str| -> TrackSource {
-        let cfg = ResourceConfig::new(url)
+        let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
             .with_downloader(downloader.clone());
+        cfg.store = store.clone();
         TrackSource::Config(Box::new(cfg))
     };
 

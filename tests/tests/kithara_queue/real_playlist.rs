@@ -22,12 +22,13 @@ use std::{
 };
 
 use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_assets::StoreOptions;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
 use kithara_play::internal::init_offline_backend;
-use kithara_queue::{Queue, QueueConfig, Transition};
+use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{Xorshift64, kithara};
+use kithara_test_utils::{TestTempDir, Xorshift64, kithara};
 use tokio::{
     sync::OnceCell,
     time::{sleep, timeout},
@@ -41,6 +42,24 @@ use tokio::{
 struct TestCtx {
     config: AppConfig,
     queue: Arc<Queue>,
+    /// Isolated cache dir, shared by every track this test binary
+    /// loads. Auto-deletes when the process exits, so real-network
+    /// runs don't pollute the shared app cache at
+    /// `env::temp_dir()/kithara`.
+    cache: TestTempDir,
+}
+
+/// Same as [`build_source`] but overrides `store.cache_dir` with this
+/// process's private temp dir so the real `kithara-app` cache stays
+/// clean.
+fn build_track_source(url: &str, ctx: &TestCtx) -> TrackSource {
+    match build_source(url, &ctx.config) {
+        TrackSource::Config(mut cfg) => {
+            cfg.store = StoreOptions::new(ctx.cache.path());
+            TrackSource::Config(cfg)
+        }
+        other => other,
+    }
 }
 
 mod test_statics {
@@ -77,7 +96,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 }
             });
 
-            TestCtx { config, queue }
+            TestCtx {
+                config,
+                queue,
+                cache: TestTempDir::new(),
+            }
         })
         .await
 }
@@ -229,7 +252,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 )]
 async fn track_plays_end_to_end(#[case] url: &str, #[case] rng_seed: u64) {
     let ctx = shared_test_ctx().await;
-    let source = build_source(url, &ctx.config);
+    let source = build_track_source(url, ctx);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source);
 
@@ -342,7 +365,7 @@ async fn queue_playlist_behavior() {
     let mut rx = ctx.queue.subscribe();
     let ids: Vec<TrackId> = urls
         .iter()
-        .map(|u| ctx.queue.append(build_source(u, &ctx.config)))
+        .map(|u| ctx.queue.append(build_track_source(u, ctx)))
         .collect();
 
     // (1) First track starts
