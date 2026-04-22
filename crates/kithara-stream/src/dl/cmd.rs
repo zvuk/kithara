@@ -78,11 +78,11 @@ pub struct FetchCmd {
 }
 
 impl FetchCmd {
-    /// HTTP GET command for the given URL.
-    #[must_use]
-    pub fn get(url: Url) -> Self {
+    /// Build a [`FetchCmd`] with the given method and URL; all other
+    /// fields start unset.
+    fn with_method(method: FetchMethod, url: Url) -> Self {
         Self {
-            method: FetchMethod::Stream,
+            method,
             url,
             range: None,
             headers: None,
@@ -93,19 +93,16 @@ impl FetchCmd {
         }
     }
 
+    /// HTTP GET command for the given URL.
+    #[must_use]
+    pub fn get(url: Url) -> Self {
+        Self::with_method(FetchMethod::Stream, url)
+    }
+
     /// HTTP HEAD command for the given URL.
     #[must_use]
     pub fn head(url: Url) -> Self {
-        Self {
-            method: FetchMethod::Head,
-            url,
-            range: None,
-            headers: None,
-            cancel: None,
-            writer: None,
-            on_complete: None,
-            validator: None,
-        }
+        Self::with_method(FetchMethod::Head, url)
     }
 
     /// Set the per-command body writer (streaming path).
