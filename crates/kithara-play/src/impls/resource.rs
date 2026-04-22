@@ -5,7 +5,7 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_stream::Stream;
+use kithara_stream::{Stream, StreamType};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
@@ -53,12 +53,12 @@ impl Resource {
             #[cfg(feature = "file")]
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.into_file_config();
-                Self::from_file(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await
             }
             #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
                 let audio_config = config.into_hls_config()?;
-                Self::from_hls(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await
             }
         }
     }
@@ -83,45 +83,29 @@ impl Resource {
         }
     }
 
-    /// Create a resource from a file audio config.
+    /// Create a resource from a concrete stream-backed audio config.
     ///
-    /// Use this when you need to customize `FileConfig` or `AudioConfig`
-    /// beyond what `Resource::new()` provides.
-    #[cfg(feature = "file")]
-    pub(crate) async fn from_file(
-        mut config: AudioConfig<kithara_file::File>,
+    /// Generic over any [`StreamType`] whose config carries an optional
+    /// `kithara_events::EventBus`. Callers wanting fine-grained control
+    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
+    pub(crate) async fn from_stream_audio<T>(
+        mut config: AudioConfig<T>,
         src: Arc<str>,
-    ) -> DecodeResult<Self> {
-        // Extract existing bus from stream config, or create a new one.
-        let bus = config.stream.bus.clone().unwrap_or_default();
-        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
-        config.stream.bus = Some(bus.clone());
+    ) -> DecodeResult<Self>
+    where
+        T: StreamType<Events = EventBus> + 'static,
+        Audio<Stream<T>>: PcmReader + 'static,
+    {
+        // Extract existing bus from stream config or fall back to the
+        // top-level `AudioConfig.bus`; create a fresh one when neither is set.
+        let bus = T::event_bus(&config.stream)
+            .or_else(|| config.bus.clone())
+            .unwrap_or_default();
+        // Ensure downstream `Audio::new()` resolves the same bus even
+        // when the stream-level field was empty.
+        config.bus = Some(bus.clone());
 
-        let mut audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
-        // Always non-blocking for the player render thread; see
-        // `from_reader` for rationale.
-        audio.preload();
-        Ok(Self {
-            inner: Box::new(audio),
-            bus,
-            src,
-        })
-    }
-
-    /// Create a resource from an HLS audio config.
-    ///
-    /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
-    #[cfg(feature = "hls")]
-    pub(crate) async fn from_hls(
-        mut config: AudioConfig<kithara_hls::Hls>,
-        src: Arc<str>,
-    ) -> DecodeResult<Self> {
-        // Extract existing bus from stream config, or create a new one.
-        let bus = config.stream.bus.clone().unwrap_or_default();
-        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
-        config.stream.bus = Some(bus.clone());
-
-        let mut audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
+        let mut audio = Audio::<Stream<T>>::new(config).await?;
         // Always non-blocking for the player render thread; see
         // `from_reader` for rationale.
         audio.preload();
