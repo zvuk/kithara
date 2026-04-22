@@ -186,6 +186,19 @@ similarity *ARGS:
       --exclude target --exclude .claude \
       $(find crates -maxdepth 2 -name src -type d | sort) {{ARGS}}
 
+# Mutation-testing: mutate each branch and check whether any test fails.
+# Survived mutants = either dead code or untested branch — either way, a
+# concrete refactor/test target. Run against one crate at a time:
+#   just mutants kithara-audio
+# Use `just mutants-all` for the full workspace (slow — hours on 20+ crates).
+mutants crate *ARGS:
+    cargo mutants -p {{crate}} --cargo-profile test-release \
+      --timeout 120 --no-shuffle {{ARGS}}
+
+mutants-all *ARGS:
+    cargo mutants --workspace --cargo-profile test-release \
+      --timeout 120 --no-shuffle {{ARGS}}
+
 # --- perf & benchmarks ---
 
 perf-test:
