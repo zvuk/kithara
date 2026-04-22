@@ -108,6 +108,9 @@ cast_precision_loss = "warn"
 derive_partial_eq_without_eq = "warn"
 significant_drop_tightening = "warn"
 cognitive_complexity = "warn"
+too_many_lines = "warn"
+too_many_arguments = "warn"
+type_complexity = "warn"
 approx_constant = "warn"
 
 [workspace.metadata.kithara]
