@@ -201,44 +201,24 @@ mod tests {
 
     // Helpers
 
-    fn make_registration(
-        source: MockSource,
+    fn make_registration<S>(
+        source: S,
         ringbuf_capacity: usize,
         preload_chunks: usize,
     ) -> (
         TrackRegistration,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
         Arc<Notify>,
-    ) {
+    )
+    where
+        S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
+    {
         let wake = Arc::new(ThreadWake::new());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
         let preload_notify = Arc::new(Notify::new());
 
         let reg = TrackRegistration {
             source: Box::new(source),
-            outlet,
-            preload_notify: Arc::clone(&preload_notify),
-            preload_chunks,
-            service_class: ServiceClass::Audible,
-        };
-        (reg, inlet, preload_notify)
-    }
-
-    fn make_registration_with_source(
-        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-        ringbuf_capacity: usize,
-        preload_chunks: usize,
-    ) -> (
-        TrackRegistration,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-        Arc<Notify>,
-    ) {
-        let wake = Arc::new(ThreadWake::new());
-        let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
-        let preload_notify = Arc::new(Notify::new());
-
-        let reg = TrackRegistration {
-            source,
             outlet,
             preload_notify: Arc::clone(&preload_notify),
             preload_chunks,
@@ -563,7 +543,7 @@ mod tests {
             timeline: Timeline::new(),
             blocking: Arc::clone(&blocking),
         };
-        let (reg_b, _rx_b, _) = make_registration_with_source(Box::new(blocking_source), 32, 0);
+        let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
         // Give worker 500ms to produce chunks for track A despite track B blocking.
@@ -635,7 +615,7 @@ mod tests {
             timeline: Timeline::new(),
             block_ms: 10,
         };
-        let (reg_b, mut rx_b, _) = make_registration_with_source(Box::new(slow_source), 32, 0);
+        let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
         // Simulate audio callback draining track A's ringbuf at real-time rate.

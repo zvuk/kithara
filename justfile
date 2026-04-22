@@ -179,6 +179,13 @@ dead:
       --ignore-filename-regex '(tests/|examples/|benches/)' \
       --show-missing-lines
 
+# Find near-duplicate functions (AST similarity) across production code.
+# Default threshold catches structural twins; raise it to narrow the signal.
+similarity *ARGS:
+    similarity-rs --threshold 0.85 --min-lines 10 \
+      --exclude target --exclude .claude \
+      $(find crates -maxdepth 2 -name src -type d | sort) {{ARGS}}
+
 # --- perf & benchmarks ---
 
 perf-test:
