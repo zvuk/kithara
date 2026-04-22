@@ -114,15 +114,7 @@ where
     A: Assets,
 {
     pub fn new(inner: Arc<A>, cancel: CancellationToken, pool: BytePool) -> Self {
-        Self {
-            byte_recorder: None,
-            cancel,
-            dirty: Arc::new(AtomicBool::new(false)),
-            inner,
-            live: Arc::new(Mutex::new(HashMap::new())),
-            pins: Arc::new(Mutex::new(HashSet::new())),
-            pool,
-        }
+        Self::with_byte_recorder(inner, cancel, None, pool)
     }
 
     /// Create with byte recorder for asset-size tracking.
