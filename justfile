@@ -192,11 +192,11 @@ similarity *ARGS:
 #   just mutants kithara-audio
 # Use `just mutants-all` for the full workspace (slow — hours on 20+ crates).
 mutants crate *ARGS:
-    cargo mutants -p {{crate}} --profile test-release \
+    cargo mutants -p {{crate}} --test-workspace=true --profile test-release \
       --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
 
 mutants-all *ARGS:
-    cargo mutants --workspace --profile test-release \
+    cargo mutants --workspace --test-workspace=true --profile test-release \
       --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
 
 # --- perf & benchmarks ---
