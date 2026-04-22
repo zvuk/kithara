@@ -166,45 +166,17 @@ pub(crate) fn decode_pcm16_to_f32(
     trim_frames: usize,
     channels: u16,
 ) -> Result<PcmBuf, DecodeError> {
-    const PCM16_BYTES_PER_SAMPLE: usize = 2;
-    let channels = usize::from(channels);
-    if channels == 0 {
-        return Err(DecodeError::Backend(Box::new(IoError::other(
-            "PCM16 output reported zero channels",
-        ))));
-    }
-    if !bytes.len().is_multiple_of(PCM16_BYTES_PER_SAMPLE) {
-        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
-            "PCM16 payload length {} is not aligned to {PCM16_BYTES_PER_SAMPLE} bytes",
-            bytes.len()
-        )))));
-    }
-
-    let total_samples = bytes.len() / PCM16_BYTES_PER_SAMPLE;
-    if !total_samples.is_multiple_of(channels) {
-        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
-            "PCM16 sample count {total_samples} is not aligned to {channels} channels"
-        )))));
-    }
-
-    let total_frames = total_samples / channels;
-    if trim_frames >= total_frames {
-        return Ok(pool.get());
-    }
-
-    let start_sample = trim_frames * channels;
-    let remaining_samples = total_samples - start_sample;
-    let mut pcm = pool_buffer(pool, remaining_samples)?;
-    for (dst, sample_bytes) in pcm.iter_mut().zip(
-        bytes
-            .chunks_exact(PCM16_BYTES_PER_SAMPLE)
-            .skip(start_sample),
-    ) {
-        let sample = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
-        *dst = f32::from(sample) / PCM_16_SCALE;
-    }
-
-    Ok(pcm)
+    convert_pcm_to_f32::<2>(
+        pool,
+        bytes,
+        trim_frames,
+        channels,
+        "PCM16",
+        |sample_bytes| {
+            let sample = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
+            f32::from(sample) / PCM_16_SCALE
+        },
+    )
 }
 
 pub(crate) fn copy_pcm_float_to_pool(
@@ -213,26 +185,50 @@ pub(crate) fn copy_pcm_float_to_pool(
     trim_frames: usize,
     channels: u16,
 ) -> Result<PcmBuf, DecodeError> {
-    const FLOAT_BYTES_PER_SAMPLE: usize = 4;
-    const FLOAT_BYTE_2: usize = 2;
-    const FLOAT_BYTE_3: usize = 3;
+    convert_pcm_to_f32::<4>(
+        pool,
+        bytes,
+        trim_frames,
+        channels,
+        "PCM float",
+        |sample_bytes| {
+            f32::from_le_bytes([
+                sample_bytes[0],
+                sample_bytes[1],
+                sample_bytes[2],
+                sample_bytes[3],
+            ])
+        },
+    )
+}
+
+/// Convert interleaved PCM bytes into `f32` samples via `convert`, applying
+/// `trim_frames` skip from the front. `LABEL` is used only in error messages.
+fn convert_pcm_to_f32<const BYTES_PER_SAMPLE: usize>(
+    pool: &PcmPool,
+    bytes: &[u8],
+    trim_frames: usize,
+    channels: u16,
+    label: &'static str,
+    convert: impl Fn(&[u8]) -> f32,
+) -> Result<PcmBuf, DecodeError> {
     let channels = usize::from(channels);
     if channels == 0 {
-        return Err(DecodeError::Backend(Box::new(IoError::other(
-            "PCM float output reported zero channels",
-        ))));
-    }
-    if !bytes.len().is_multiple_of(FLOAT_BYTES_PER_SAMPLE) {
         return Err(DecodeError::Backend(Box::new(IoError::other(format!(
-            "PCM float payload length {} is not aligned to {FLOAT_BYTES_PER_SAMPLE} bytes",
+            "{label} output reported zero channels"
+        )))));
+    }
+    if !bytes.len().is_multiple_of(BYTES_PER_SAMPLE) {
+        return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+            "{label} payload length {} is not aligned to {BYTES_PER_SAMPLE} bytes",
             bytes.len()
         )))));
     }
 
-    let total_samples = bytes.len() / FLOAT_BYTES_PER_SAMPLE;
+    let total_samples = bytes.len() / BYTES_PER_SAMPLE;
     if !total_samples.is_multiple_of(channels) {
         return Err(DecodeError::Backend(Box::new(IoError::other(format!(
-            "PCM float sample count {total_samples} is not aligned to {channels} channels"
+            "{label} sample count {total_samples} is not aligned to {channels} channels"
         )))));
     }
 
@@ -244,17 +240,11 @@ pub(crate) fn copy_pcm_float_to_pool(
     let start_sample = trim_frames * channels;
     let remaining_samples = total_samples - start_sample;
     let mut pcm = pool_buffer(pool, remaining_samples)?;
-    for (dst, sample_bytes) in pcm.iter_mut().zip(
-        bytes
-            .chunks_exact(FLOAT_BYTES_PER_SAMPLE)
-            .skip(start_sample),
-    ) {
-        *dst = f32::from_le_bytes([
-            sample_bytes[0],
-            sample_bytes[1],
-            sample_bytes[FLOAT_BYTE_2],
-            sample_bytes[FLOAT_BYTE_3],
-        ]);
+    for (dst, sample_bytes) in pcm
+        .iter_mut()
+        .zip(bytes.chunks_exact(BYTES_PER_SAMPLE).skip(start_sample))
+    {
+        *dst = convert(sample_bytes);
     }
 
     Ok(pcm)
