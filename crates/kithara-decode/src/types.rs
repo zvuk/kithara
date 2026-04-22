@@ -3,6 +3,8 @@ use std::{fmt, sync::Arc, time::Duration};
 use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, pcm_pool};
 
+use crate::GaplessInfo;
+
 /// Audio track metadata extracted from Symphonia tags.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
@@ -14,6 +16,8 @@ pub struct TrackMetadata {
     pub artwork: Option<Arc<Vec<u8>>>,
     /// Track title.
     pub title: Option<String>,
+    /// Gapless trim information applied by the engine pipeline.
+    pub gapless: Option<GaplessInfo>,
 }
 
 /// PCM specification - core audio format information

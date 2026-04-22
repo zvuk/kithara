@@ -4031,6 +4031,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ndk-context",
+ "smallvec",
  "symphonia 0.6.0-alpha.1",
  "thiserror 2.0.18",
  "tracing",

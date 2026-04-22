@@ -34,10 +34,8 @@ impl TestPcmReader {
         Self {
             spec,
             metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
                 title: Some("Mock".to_owned()),
+                ..Default::default()
             },
             total_frames,
             position_frames: 0,

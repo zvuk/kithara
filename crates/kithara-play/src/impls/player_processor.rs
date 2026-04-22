@@ -873,10 +873,8 @@ mod tests {
                 sample_rate: 44_100,
             },
             metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
                 title: Some("Tracking".to_owned()),
+                ..Default::default()
             },
             seek_log,
             bus: EventBus::default(),

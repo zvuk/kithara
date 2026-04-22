@@ -21,6 +21,8 @@
 
 mod error;
 mod factory;
+mod gapless;
+mod mp4;
 mod symphonia;
 mod traits;
 mod types;
@@ -43,6 +45,7 @@ mod hardware;
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderConfig, DecoderFactory};
+pub use gapless::{GaplessInfo, GaplessTrimmer, probe_mp4_gapless};
 // Public traits
 pub use traits::InnerDecoder;
 // Core types
