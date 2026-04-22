@@ -257,14 +257,13 @@ pub mod source {
         source.0.session.media_info = media_info;
     }
 
-    pub fn set_recreating_decoder<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
+    fn build_recreate_state(
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-    ) {
-        source.0.state = TrackState::RecreatingDecoder(RecreateState {
+    ) -> RecreateState {
+        RecreateState {
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
             media_info,
@@ -273,7 +272,18 @@ pub mod source {
                 seek: SeekContext { epoch, target },
             }),
             offset,
-        });
+        }
+    }
+
+    pub fn set_recreating_decoder<T: StreamType>(
+        source: &mut StreamAudioSource<T>,
+        epoch: u64,
+        target: Duration,
+        media_info: MediaInfo,
+        offset: u64,
+    ) {
+        source.0.state =
+            TrackState::RecreatingDecoder(build_recreate_state(epoch, target, media_info, offset));
     }
 
     pub fn set_waiting_recreation<T: StreamType>(
@@ -285,16 +295,9 @@ pub mod source {
         reason: WaitingReason,
     ) {
         source.0.state = TrackState::WaitingForSource {
-            context: WaitContext::Recreation(RecreateState {
-                attempt: 0,
-                cause: RecreateCause::VariantSwitch,
-                media_info,
-                next: RecreateNext::Seek(SeekRequest {
-                    attempt: 0,
-                    seek: SeekContext { epoch, target },
-                }),
-                offset,
-            }),
+            context: WaitContext::Recreation(build_recreate_state(
+                epoch, target, media_info, offset,
+            )),
             reason,
         };
     }
