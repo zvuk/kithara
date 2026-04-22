@@ -179,6 +179,31 @@ impl PeerHandle {
         self.inner.bus.lock_sync_read().clone()
     }
 
+    /// Build a High-priority imperative `InternalCmd` paired with its
+    /// response receiver. Shared by [`Self::execute`] and [`Self::batch`].
+    fn make_imperative(
+        &self,
+        cmd: FetchCmd,
+        bus: Option<EventBus>,
+        peer_id: AbrPeerId,
+    ) -> (
+        InternalCmd,
+        oneshot::Receiver<Result<FetchResponse, NetError>>,
+    ) {
+        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let internal = InternalCmd {
+            cmd,
+            cancel,
+            priority: Priority::High,
+            response: ResponseTarget::Channel(resp_tx),
+            peer: None,
+            bus,
+            peer_id,
+        };
+        (internal, resp_rx)
+    }
+
     /// Submit a single fetch command and await the response.
     ///
     /// Always runs at `High` priority — imperative requests are
@@ -188,17 +213,7 @@ impl PeerHandle {
     /// Returns [`NetError::Cancelled`] when the peer cancel fires,
     /// the downloader shuts down, or the HTTP request itself fails.
     pub async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
-        let (resp_tx, resp_rx) = oneshot::channel();
-        let internal = InternalCmd {
-            cmd,
-            cancel,
-            priority: Priority::High,
-            response: ResponseTarget::Channel(resp_tx),
-            peer: None,
-            bus: self.bus(),
-            peer_id: self.inner.abr.peer_id(),
-        };
+        let (internal, resp_rx) = self.make_imperative(cmd, self.bus(), self.inner.abr.peer_id());
         self.inner
             .cmd_tx
             .send(internal)
@@ -222,17 +237,7 @@ impl PeerHandle {
         let peer_id = self.inner.abr.peer_id();
 
         for cmd in cmds {
-            let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
-            let (resp_tx, resp_rx) = oneshot::channel();
-            let internal = InternalCmd {
-                cmd,
-                cancel,
-                priority: Priority::High,
-                response: ResponseTarget::Channel(resp_tx),
-                peer: None,
-                bus: bus.clone(),
-                peer_id,
-            };
+            let (internal, resp_rx) = self.make_imperative(cmd, bus.clone(), peer_id);
             if self.inner.cmd_tx.send(internal).await.is_err() {
                 receivers.push(None);
                 continue;
