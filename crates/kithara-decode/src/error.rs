@@ -55,42 +55,40 @@ fn is_variant_change_io(err: &io::Error) -> bool {
         .is_some()
 }
 
-fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
+fn walk_error_chain<I, L>(err: &(dyn StdError + 'static), check_io: &I, check_leaf: &L) -> bool
+where
+    I: Fn(&io::Error) -> bool,
+    L: Fn(&(dyn StdError + 'static)) -> bool,
+{
     if let Some(io_err) = err.downcast_ref::<io::Error>() {
-        return is_seek_pending_io(io_err);
+        return check_io(io_err);
     }
 
     if let Some(symphonia_err) = err.downcast_ref::<SymphoniaError>() {
         return match symphonia_err {
-            SymphoniaError::IoError(io_err) => is_seek_pending_io(io_err),
-            _ => symphonia_err.to_string().contains("seek pending"),
+            SymphoniaError::IoError(io_err) => check_io(io_err),
+            _ => check_leaf(err),
         };
     }
 
-    if err.to_string().contains("seek pending") {
+    if check_leaf(err) {
         return true;
     }
 
-    err.source().is_some_and(error_chain_is_interrupted)
+    err.source()
+        .is_some_and(|source| walk_error_chain(source, check_io, check_leaf))
+}
+
+fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
+    walk_error_chain(err, &is_seek_pending_io, &|leaf| {
+        leaf.to_string().contains("seek pending")
+    })
 }
 
 fn error_chain_is_variant_change(err: &(dyn StdError + 'static)) -> bool {
-    if let Some(io_err) = err.downcast_ref::<io::Error>() {
-        return is_variant_change_io(io_err);
-    }
-
-    if let Some(symphonia_err) = err.downcast_ref::<SymphoniaError>() {
-        return match symphonia_err {
-            SymphoniaError::IoError(io_err) => is_variant_change_io(io_err),
-            _ => false,
-        };
-    }
-
-    if err.downcast_ref::<VariantChangeError>().is_some() {
-        return true;
-    }
-
-    err.source().is_some_and(error_chain_is_variant_change)
+    walk_error_chain(err, &is_variant_change_io, &|leaf| {
+        leaf.downcast_ref::<VariantChangeError>().is_some()
+    })
 }
 
 impl DecodeError {
