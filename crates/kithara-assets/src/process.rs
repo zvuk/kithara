@@ -289,12 +289,7 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        let inner = self.inner.open_resource(key)?;
-
-        let processed =
-            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
-
-        Ok(processed)
+        Ok(self.wrap(self.inner.open_resource(key)?, ctx))
     }
 
     fn acquire_resource_with_ctx(
@@ -302,12 +297,18 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        let inner = self.inner.acquire_resource(key)?;
+        Ok(self.wrap(self.inner.acquire_resource(key)?, ctx))
+    }
+}
 
-        let processed =
-            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
-
-        Ok(processed)
+impl<A, Ctx> ProcessingAssets<A, Ctx>
+where
+    A: Assets,
+    A::Context: Default,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
+    fn wrap(&self, inner: A::Res, ctx: Option<Ctx>) -> ProcessedResource<A::Res, Ctx> {
+        ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone())
     }
 }
 

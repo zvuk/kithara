@@ -169,6 +169,31 @@ where
         }
     }
 
+    fn open_index_resource<F>(
+        &self,
+        cache_key: CacheKey<A::Context>,
+        load: F,
+    ) -> AssetsResult<A::IndexRes>
+    where
+        F: FnOnce() -> AssetsResult<A::IndexRes>,
+    {
+        if !self.is_active() {
+            return load();
+        }
+
+        let mut cache = self.cache.lock_sync();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
+            return Ok(res.clone());
+        }
+
+        let res = load()?;
+        let _ = self.cache_entry(&mut cache, cache_key, CacheEntry::Index(res.clone()));
+        drop(cache);
+
+        Ok(res)
+    }
+
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
         let (committed, has_active) = {
             let mut cache = self.cache.lock_sync();
@@ -436,47 +461,13 @@ where
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.is_active() {
-            return self.inner.open_pins_index_resource();
-        }
-
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
-            return Ok(res.clone());
-        }
-
-        let res = self.inner.open_pins_index_resource()?;
-        let _ = self.cache_entry(
-            &mut cache,
-            CacheKey::PinsIndex,
-            CacheEntry::Index(res.clone()),
-        );
-        drop(cache);
-
-        Ok(res)
+        self.open_index_resource(CacheKey::PinsIndex, || {
+            self.inner.open_pins_index_resource()
+        })
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.is_active() {
-            return self.inner.open_lru_index_resource();
-        }
-
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
-            return Ok(res.clone());
-        }
-
-        let res = self.inner.open_lru_index_resource()?;
-        let _ = self.cache_entry(
-            &mut cache,
-            CacheKey::LruIndex,
-            CacheEntry::Index(res.clone()),
-        );
-        drop(cache);
-
-        Ok(res)
+        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
