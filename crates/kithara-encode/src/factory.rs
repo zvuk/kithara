@@ -31,9 +31,7 @@ impl EncoderFactory {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = target;
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Self::wasm_unsupported()
         }
     }
 
@@ -55,10 +53,15 @@ impl EncoderFactory {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = codec;
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Self::wasm_unsupported()
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wasm_unsupported() -> EncodeResult<Box<dyn InnerEncoder>> {
+        Err(EncodeError::InvalidInput(
+            "encoding is not supported on wasm32".to_owned(),
+        ))
     }
 
     /// Return the natural frame size for packaged encoding of `codec`.
