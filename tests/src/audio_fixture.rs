@@ -19,6 +19,12 @@ impl EmbeddedAudio {
     /// A test MP3 file (short audio clip)
     const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
 
+    /// Nominal playback duration of [`Self::mp3`] in seconds.
+    ///
+    /// Derived from the bundled `assets/test.mp3` asset. Several tests hard-coded
+    /// this constant locally before; keep values in sync with the asset here.
+    pub const MP3_EXPECTED_DURATION_SECS: f64 = 187.0;
+
     /// Get the embedded audio data
     pub fn get() -> Self {
         Self {
@@ -35,5 +41,10 @@ impl EmbeddedAudio {
     /// Get MP3 data
     pub fn mp3(&self) -> &'static [u8] {
         self.mp3
+    }
+
+    /// Nominal playback duration for [`Self::mp3`] in seconds.
+    pub fn mp3_expected_duration_secs(&self) -> f64 {
+        Self::MP3_EXPECTED_DURATION_SECS
     }
 }
