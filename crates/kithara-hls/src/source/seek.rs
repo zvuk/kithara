@@ -139,6 +139,43 @@ impl HlsSource {
         // tells us where it actually landed.
         self.coord.clear_segment_requests();
 
+        self.apply_layout_plan(layout, variant, segment_index, seek_epoch, anchor);
+
+        // Do not commit reader position here. The authoritative post-seek
+        // byte position is whatever the decoder actually lands on after
+        // `decoder.seek(...)` drives the underlying `Read + Seek` stream.
+        self.coord.reader_advanced.notify_one();
+        self.coord.condvar.notify_all();
+
+        if previous_hint != segment_index {
+            self.bus.publish(kithara_events::HlsEvent::Seek {
+                stage: "seek_anchor_set_hint",
+                seek_epoch,
+                variant,
+                offset: anchor.byte_offset,
+                from_segment_index: previous_hint,
+                to_segment_index: segment_index,
+            });
+        }
+
+        trace!(
+            seek_epoch,
+            target_ms = ?anchor.segment_start,
+            variant,
+            segment_index,
+            byte_offset = anchor.byte_offset,
+            "seek_time_anchor: resolved seek anchor"
+        );
+    }
+
+    fn apply_layout_plan(
+        &mut self,
+        layout: &SeekLayout,
+        variant: usize,
+        segment_index: usize,
+        seek_epoch: u64,
+        anchor: &SourceSeekAnchor,
+    ) {
         match *layout {
             SeekLayout::Preserve => {
                 // Keep segments — byte layout valid, decoder seeks in place.
@@ -172,31 +209,5 @@ impl HlsSource {
                 );
             }
         }
-
-        // Do not commit reader position here. The authoritative post-seek
-        // byte position is whatever the decoder actually lands on after
-        // `decoder.seek(...)` drives the underlying `Read + Seek` stream.
-        self.coord.reader_advanced.notify_one();
-        self.coord.condvar.notify_all();
-
-        if previous_hint != segment_index {
-            self.bus.publish(kithara_events::HlsEvent::Seek {
-                stage: "seek_anchor_set_hint",
-                seek_epoch,
-                variant,
-                offset: anchor.byte_offset,
-                from_segment_index: previous_hint,
-                to_segment_index: segment_index,
-            });
-        }
-
-        trace!(
-            seek_epoch,
-            target_ms = ?anchor.segment_start,
-            variant,
-            segment_index,
-            byte_offset = anchor.byte_offset,
-            "seek_time_anchor: resolved seek anchor"
-        );
     }
 }

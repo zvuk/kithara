@@ -371,84 +371,90 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     };
 
     if req.seek_epoch != sched.active_seek_epoch {
-        // New seek epoch — full reset.
-        state.epoch_cancel.cancel();
-        state.epoch_cancel = CancellationToken::new();
-        sched.demand_throttle_until = None;
-
-        let (is_variant_switch, is_midstream_switch) =
-            sched.classify_variant_transition(req.variant, req.segment_index);
-        sched.handle_midstream_switch(is_midstream_switch);
-        if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
-            sched
-                .segments
-                .lock_sync()
-                .set_expected_sizes(req.variant, sizes);
-        }
-        if is_variant_switch {
-            sched.download_variant = req.variant;
-        }
-        let (cached_count, cached_end_offset) =
-            sched.populate_cached_segments_if_needed(req.variant);
-        sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
-
+        reset_for_new_epoch(state, &req);
         cx.waker().wake_by_ref();
         return DemandResult::ResetAndPend;
     }
 
-    // Same-epoch demand.
-    let mut variant_override = None;
-    if req.segment_index < sched.current_segment_index() {
-        // Two cases where rewinding the cursor re-emits a duplicate FetchCmd
-        // and drives a hot loop with the reader's condvar re-demand pump:
-        //  1. The demanded segment is already committed — the original
-        //     already-loaded check.
-        //  2. The demanded segment is IN FLIGHT — a `FetchCmd` has been
-        //     emitted but its `on_complete` has not fired yet. Issuing a
-        //     duplicate `FetchCmd` races two writers on the same cached
-        //     `AssetResource`; on mmap storage the first commit flips the
-        //     resource to `Committed` and the second `write_at` fails,
-        //     starving the reader until the hang detector fires.
-        let in_flight = sched
-            .in_flight_segments
-            .contains(&(req.variant, req.segment_index));
-        let already_loaded = !in_flight
-            && sched
-                .segments
-                .lock_sync()
-                .is_segment_loaded(req.variant, req.segment_index);
-        if in_flight {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand for in-flight segment, skipping rewind"
-            );
-        } else if already_loaded {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand already committed, skipping rewind"
-            );
-        } else {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand behind cursor, rewinding"
-            );
-            sched.rewind_current_segment_index(req.segment_index);
-        }
-    }
-    if req.variant != sched.download_variant {
-        variant_override = Some(req.variant);
-    }
+    resolve_same_epoch_demand(&mut state.scheduler, &req)
+}
 
+fn reset_for_new_epoch(state: &mut HlsState, req: &crate::coord::SegmentRequest) {
+    let sched = &mut state.scheduler;
+    state.epoch_cancel.cancel();
+    state.epoch_cancel = CancellationToken::new();
+    sched.demand_throttle_until = None;
+
+    let (is_variant_switch, is_midstream_switch) =
+        sched.classify_variant_transition(req.variant, req.segment_index);
+    sched.handle_midstream_switch(is_midstream_switch);
+    if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
+        sched
+            .segments
+            .lock_sync()
+            .set_expected_sizes(req.variant, sizes);
+    }
+    if is_variant_switch {
+        sched.download_variant = req.variant;
+    }
+    let (cached_count, cached_end_offset) =
+        sched.populate_cached_segments_if_needed(req.variant);
+    sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
+}
+
+fn resolve_same_epoch_demand(
+    sched: &mut HlsScheduler,
+    req: &crate::coord::SegmentRequest,
+) -> DemandResult {
+    if req.segment_index < sched.current_segment_index() {
+        maybe_rewind_for_demand(sched, req);
+    }
+    let variant_override = (req.variant != sched.download_variant).then_some(req.variant);
     DemandResult::Demand {
         segment: req.segment_index,
         variant_override,
     }
+}
+
+fn maybe_rewind_for_demand(sched: &mut HlsScheduler, req: &crate::coord::SegmentRequest) {
+    // Two cases where rewinding the cursor re-emits a duplicate FetchCmd
+    // and drives a hot loop with the reader's condvar re-demand pump:
+    //  1. The demanded segment is already committed — the original
+    //     already-loaded check.
+    //  2. The demanded segment is IN FLIGHT — a `FetchCmd` has been
+    //     emitted but its `on_complete` has not fired yet. Issuing a
+    //     duplicate `FetchCmd` races two writers on the same cached
+    //     `AssetResource`; on mmap storage the first commit flips the
+    //     resource to `Committed` and the second `write_at` fails,
+    //     starving the reader until the hang detector fires.
+    let reason = classify_rewind(sched, req);
+    debug!(
+        variant = req.variant,
+        segment = req.segment_index,
+        cursor = sched.current_segment_index(),
+        "{}",
+        reason
+    );
+    if matches!(reason, "poll_next: same-epoch demand behind cursor, rewinding") {
+        sched.rewind_current_segment_index(req.segment_index);
+    }
+}
+
+fn classify_rewind(sched: &HlsScheduler, req: &crate::coord::SegmentRequest) -> &'static str {
+    if sched
+        .in_flight_segments
+        .contains(&(req.variant, req.segment_index))
+    {
+        return "poll_next: same-epoch demand for in-flight segment, skipping rewind";
+    }
+    if sched
+        .segments
+        .lock_sync()
+        .is_segment_loaded(req.variant, req.segment_index)
+    {
+        return "poll_next: same-epoch demand already committed, skipping rewind";
+    }
+    "poll_next: same-epoch demand behind cursor, rewinding"
 }
 
 fn resolve_variant(
@@ -555,6 +561,7 @@ fn build_batch(
                 is_variant_switch,
             ));
     let prefetch_count = state.scheduler.prefetch_count;
+    let old_variant_for_skip = is_variant_switch.then_some(old_variant);
 
     for batch_i in 0..prefetch_count {
         let seg_idx = state.scheduler.current_segment_index();
@@ -563,25 +570,15 @@ fn build_batch(
         }
 
         let is_demanded = demand_segment == Some(seg_idx);
-        let skipped = !is_demanded
-            && state.scheduler.should_skip_planned_segment(
-                variant,
-                seg_idx,
-                is_midstream_switch,
-                if is_variant_switch {
-                    Some(old_variant)
-                } else {
-                    None
-                },
-            );
-        if skipped {
-            debug!(
-                variant,
-                seg_idx,
-                batch_i,
-                cursor_after = state.scheduler.current_segment_index(),
-                "poll_next: skipped segment"
-            );
+        if skip_planned_segment(
+            state,
+            variant,
+            seg_idx,
+            batch_i,
+            is_demanded,
+            is_midstream_switch,
+            old_variant_for_skip,
+        ) {
             continue;
         }
 
@@ -609,46 +606,18 @@ fn build_batch(
             }
         };
 
-        // Cached hit — commit directly.
         if let Some(cached_len) = prepared.cached_len {
-            let init_meta = if plan_need_init {
-                state.loader.get_init_segment_cached(variant)
-            } else {
-                None
-            };
-            let init_len = init_meta.as_ref().map_or(0, |m| m.len);
-            let init_url = init_meta.map(|m| m.url);
-
-            let meta = match state.loader.complete_media(&prepared, cached_len) {
-                Ok(m) => m,
-                Err(e) => {
-                    state
-                        .scheduler
-                        .publish_download_error("complete_media cached", &e);
-                    state.scheduler.advance_current_segment_index(seg_idx + 1);
-                    continue;
-                }
-            };
-
-            let cursor_before = state.scheduler.current_segment_index();
-            state.scheduler.commit_fetch_inline(
-                variant,
-                seg_idx,
-                seek_epoch,
-                &meta,
-                init_len,
-                init_url,
-                Duration::ZERO,
-            );
-            state.scheduler.advance_current_segment_index(seg_idx + 1);
-            debug!(
-                variant,
-                seg_idx,
-                batch_i,
-                cached_len,
-                cursor_before,
-                cursor_after = state.scheduler.current_segment_index(),
-                "poll_next: cached commit"
+            commit_cached_segment(
+                state,
+                CachedCommit {
+                    variant,
+                    seg_idx,
+                    batch_i,
+                    seek_epoch,
+                    prepared: &prepared,
+                    cached_len,
+                    plan_need_init,
+                },
             );
             continue;
         }
@@ -677,6 +646,88 @@ fn build_batch(
     }
 
     cmds
+}
+
+fn skip_planned_segment(
+    state: &mut HlsState,
+    variant: usize,
+    seg_idx: usize,
+    batch_i: usize,
+    is_demanded: bool,
+    is_midstream_switch: bool,
+    old_variant_for_skip: Option<usize>,
+) -> bool {
+    if is_demanded {
+        return false;
+    }
+    let skipped = state.scheduler.should_skip_planned_segment(
+        variant,
+        seg_idx,
+        is_midstream_switch,
+        old_variant_for_skip,
+    );
+    if skipped {
+        debug!(
+            variant,
+            seg_idx,
+            batch_i,
+            cursor_after = state.scheduler.current_segment_index(),
+            "poll_next: skipped segment"
+        );
+    }
+    skipped
+}
+
+struct CachedCommit<'a> {
+    variant: usize,
+    seg_idx: usize,
+    batch_i: usize,
+    seek_epoch: u64,
+    prepared: &'a PreparedMedia,
+    cached_len: u64,
+    plan_need_init: bool,
+}
+
+fn commit_cached_segment(state: &mut HlsState, c: CachedCommit<'_>) {
+    let init_meta = if c.plan_need_init {
+        state.loader.get_init_segment_cached(c.variant)
+    } else {
+        None
+    };
+    let init_len = init_meta.as_ref().map_or(0, |m| m.len);
+    let init_url = init_meta.map(|m| m.url);
+
+    let meta = match state.loader.complete_media(c.prepared, c.cached_len) {
+        Ok(m) => m,
+        Err(e) => {
+            state
+                .scheduler
+                .publish_download_error("complete_media cached", &e);
+            state.scheduler.advance_current_segment_index(c.seg_idx + 1);
+            return;
+        }
+    };
+
+    let cursor_before = state.scheduler.current_segment_index();
+    state.scheduler.commit_fetch_inline(
+        c.variant,
+        c.seg_idx,
+        c.seek_epoch,
+        &meta,
+        init_len,
+        init_url,
+        Duration::ZERO,
+    );
+    state.scheduler.advance_current_segment_index(c.seg_idx + 1);
+    debug!(
+        variant = c.variant,
+        seg_idx = c.seg_idx,
+        batch_i = c.batch_i,
+        cached_len = c.cached_len,
+        cursor_before,
+        cursor_after = state.scheduler.current_segment_index(),
+        "poll_next: cached commit"
+    );
 }
 
 #[expect(clippy::significant_drop_tightening)]

@@ -65,70 +65,81 @@ impl HlsScheduler {
         // Always check for invalidated/missing segments at tail — not just
         // after midstream switches. LRU eviction or DRM re-processing can
         // invalidate committed segments behind the cursor.
-        {
-            let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
-                self.rewind_reference_variant(variant)
-            } else {
-                variant
-            };
-            if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
-                return false;
-            }
+        let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            self.rewind_reference_variant(variant)
+        } else {
+            variant
+        };
+        if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
+            return false;
         }
 
         let layout = self.layout_variant();
-        if layout != variant {
-            let new_variant_empty = self
-                .segments
-                .lock_sync()
-                .variant_segments(variant)
-                .is_none_or(crate::stream_index::VariantSegments::is_empty);
-            if new_variant_empty {
-                debug!(
-                    layout,
-                    new_variant = variant,
-                    num_segments,
-                    "ABR variant switch in tail state (no segments yet); \
-                     resetting cursor to segment 0"
-                );
-                self.reset_cursor(0);
-                self.coord.condvar.notify_all();
-                return false;
-            }
-
-            // ABR variant done, but reader is still on the old layout
-            // variant. Check if the layout variant has gaps that need
-            // filling so the reader can make progress. Clamp the scan by
-            // reader position so we don't backfill segments the reader has
-            // already passed (see `rewind_to_first_missing_segment`).
-            let layout_num = self.num_segments(layout).unwrap_or(0);
-            let scan_start = self.reader_segment_floor();
-            let layout_gap = {
-                let segs = self.segments.lock_sync();
-                first_missing_segment(
-                    &segs,
-                    layout,
-                    scan_start,
-                    layout_num,
-                    self.backend.is_ephemeral(),
-                )
-            };
-            if let Some(gap_seg) = layout_gap {
-                debug!(
-                    layout,
-                    gap_seg, variant, "tail: ABR variant done, filling layout variant gap"
-                );
-                self.filling_layout_gap = true;
-                self.download_variant = layout;
-                self.reset_cursor(gap_seg);
-                self.coord.condvar.notify_all();
-                return false;
-            }
-            self.filling_layout_gap = false;
-        } else {
+        if layout != variant && self.handle_abr_done_with_layout(variant, layout, num_segments) {
+            return false;
+        }
+        if layout == variant {
             self.filling_layout_gap = false;
         }
 
+        self.finalize_tail_state()
+    }
+
+    fn handle_abr_done_with_layout(
+        &mut self,
+        variant: usize,
+        layout: usize,
+        num_segments: usize,
+    ) -> bool {
+        let new_variant_empty = self
+            .segments
+            .lock_sync()
+            .variant_segments(variant)
+            .is_none_or(crate::stream_index::VariantSegments::is_empty);
+        if new_variant_empty {
+            debug!(
+                layout,
+                new_variant = variant,
+                num_segments,
+                "ABR variant switch in tail state (no segments yet); \
+                 resetting cursor to segment 0"
+            );
+            self.reset_cursor(0);
+            self.coord.condvar.notify_all();
+            return true;
+        }
+
+        // ABR variant done, but reader is still on the old layout variant.
+        // Clamp the scan by reader position so we don't backfill segments
+        // the reader has already passed (see `rewind_to_first_missing_segment`).
+        let layout_num = self.num_segments(layout).unwrap_or(0);
+        let scan_start = self.reader_segment_floor();
+        let layout_gap = {
+            let segs = self.segments.lock_sync();
+            first_missing_segment(
+                &segs,
+                layout,
+                scan_start,
+                layout_num,
+                self.backend.is_ephemeral(),
+            )
+        };
+        if let Some(gap_seg) = layout_gap {
+            debug!(
+                layout,
+                gap_seg, variant, "tail: ABR variant done, filling layout variant gap"
+            );
+            self.filling_layout_gap = true;
+            self.download_variant = layout;
+            self.reset_cursor(gap_seg);
+            self.coord.condvar.notify_all();
+            return true;
+        }
+        self.filling_layout_gap = false;
+        false
+    }
+
+    fn finalize_tail_state(&mut self) -> bool {
         let stream_end = self.effective_total_bytes().unwrap_or(0);
         let playback_at_end =
             stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;

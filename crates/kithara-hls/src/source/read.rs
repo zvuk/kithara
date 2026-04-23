@@ -30,36 +30,56 @@ impl HlsSource {
         let local_start = range.start.saturating_sub(seg_ref.byte_offset);
         let local_end = range_end.saturating_sub(seg_ref.byte_offset);
 
-        let init_end = seg_ref.data.init_len.min(local_end);
-        if local_start < init_end {
-            let Some(ref init_url) = seg_ref.data.init_url else {
-                tracing::trace!(seg = seg_ref.segment_index, "range_ready: no init_url");
-                return false;
-            };
-            if !self
-                .backend
-                .contains_range(&ResourceKey::from_url(init_url), local_start..init_end)
-            {
-                tracing::trace!(
-                    seg = seg_ref.segment_index,
-                    local_start,
-                    init_end,
-                    "range_ready: init not in backend"
-                );
-                return false;
-            }
-        }
+        self.init_range_ready(&seg_ref, local_start, local_end)
+            && self.media_range_ready(&seg_ref, local_start, local_end)
+    }
 
+    fn init_range_ready(
+        &self,
+        seg_ref: &crate::stream_index::SegmentRef<'_>,
+        local_start: u64,
+        local_end: u64,
+    ) -> bool {
+        let init_end = seg_ref.data.init_len.min(local_end);
+        if local_start >= init_end {
+            return true;
+        }
+        let Some(ref init_url) = seg_ref.data.init_url else {
+            tracing::trace!(seg = seg_ref.segment_index, "range_ready: no init_url");
+            return false;
+        };
+        if !self
+            .backend
+            .contains_range(&ResourceKey::from_url(init_url), local_start..init_end)
+        {
+            tracing::trace!(
+                seg = seg_ref.segment_index,
+                local_start,
+                init_end,
+                "range_ready: init not in backend"
+            );
+            return false;
+        }
+        true
+    }
+
+    fn media_range_ready(
+        &self,
+        seg_ref: &crate::stream_index::SegmentRef<'_>,
+        local_start: u64,
+        local_end: u64,
+    ) -> bool {
         let media_start = local_start
             .max(seg_ref.data.init_len)
             .saturating_sub(seg_ref.data.init_len);
         let media_end = local_end.saturating_sub(seg_ref.data.init_len);
-        if media_start < media_end
-            && !self.backend.contains_range(
-                &ResourceKey::from_url(&seg_ref.data.media_url),
-                media_start..media_end,
-            )
-        {
+        if media_start >= media_end {
+            return true;
+        }
+        if !self.backend.contains_range(
+            &ResourceKey::from_url(&seg_ref.data.media_url),
+            media_start..media_end,
+        ) {
             tracing::trace!(
                 seg = seg_ref.segment_index,
                 variant = seg_ref.variant,
@@ -69,7 +89,6 @@ impl HlsSource {
             );
             return false;
         }
-
         true
     }
 
