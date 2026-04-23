@@ -296,6 +296,23 @@ fn container_to_file_type(container: ContainerFormat) -> Option<AudioFileTypeID>
     }
 }
 
+/// Resolve the source length, preferring the HTTP byte-length handle.
+///
+/// Falls back to seeking to end and back to start when no handle is
+/// available. Returns `None` only when neither path yields a positive length.
+fn resolve_source_len(source: &mut BoxedSource, config: &AppleConfig) -> Option<u64> {
+    config
+        .byte_len_handle
+        .as_ref()
+        .map(|h| h.load(Ordering::Acquire))
+        .filter(|&len| len > 0)
+        .or_else(|| {
+            let len = source.seek(SeekFrom::End(0)).ok()?;
+            source.seek(SeekFrom::Start(0)).ok()?;
+            Some(len)
+        })
+}
+
 /// A compressed audio packet with its description.
 #[derive(Clone)]
 struct AudioPacket {
@@ -463,10 +480,149 @@ impl AppleInner {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "FFI initialization sequence is inherently sequential"
-    )]
+    /// Feed the parser until the format is ready or an error occurs.
+    ///
+    /// Returns the total number of bytes parsed on success. The caller
+    /// owns `stream_parser` and is responsible for closing it on error.
+    fn parse_until_format_ready(
+        source: &mut BoxedSource,
+        stream_parser: AudioFileStreamID,
+        parser_state: &mut StreamParserState,
+        read_buffer: &mut [u8],
+    ) -> Result<usize, DecodeError> {
+        let mut total_parsed = 0usize;
+        loop {
+            let n = source
+                .read(read_buffer)
+                .map_err(|error| DecodeError::Backend(Box::new(error)))?;
+
+            if n == 0 {
+                return Err(DecodeError::InvalidData(
+                    "EOF before audio format detected".into(),
+                ));
+            }
+
+            total_parsed += n;
+
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "read buffer is 32 KB, fits in u32"
+            )]
+            // SAFETY: `stream_parser` is a valid handle created by `AudioFileStreamOpen`.
+            // `read_buffer` is a valid slice with `n` bytes read from the source.
+            let status = unsafe {
+                AudioFileStreamParseBytes(
+                    stream_parser,
+                    n as UInt32,
+                    read_buffer.as_ptr() as *const c_void,
+                    0,
+                )
+            };
+
+            if status != Consts::noErr && status != Consts::kAudioFileStreamError_NotOptimized {
+                let err_str = os_status_to_string(status);
+                warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
+                return Err(DecodeError::Backend(Box::new(IoError::new(
+                    ErrorKind::InvalidData,
+                    format!("AudioFileStreamParseBytes failed: {}", err_str),
+                ))));
+            }
+
+            if let Some(ref format) = parser_state.format
+                && parser_state.ready
+            {
+                debug!(
+                    sample_rate = format.mSampleRate,
+                    channels = format.mChannelsPerFrame,
+                    format_id = format.mFormatID,
+                    frames_per_packet = format.mFramesPerPacket,
+                    bytes_parsed = total_parsed,
+                    "Apple decoder: format detected"
+                );
+                return Ok(total_parsed);
+            }
+
+            if let Some(ref err) = parser_state.error {
+                return Err(DecodeError::InvalidData(err.clone()));
+            }
+
+            if total_parsed > Consts::MAX_PARSE_BYTES {
+                return Err(DecodeError::InvalidData(
+                    "Could not detect format after 1MB".into(),
+                ));
+            }
+        }
+    }
+
+    /// Apply the magic cookie to the converter, if one was collected.
+    ///
+    /// Failures are logged but not propagated; AAC typically requires a
+    /// cookie, but the decoder may still succeed without it.
+    fn apply_magic_cookie(converter: AudioConverterRef, cookie: Option<&[u8]>) {
+        let Some(cookie) = cookie else {
+            return;
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "magic cookie size fits in u32"
+        )]
+        // SAFETY: `converter` is a valid handle. `cookie` is a valid byte slice.
+        let status = unsafe {
+            AudioConverterSetProperty(
+                converter,
+                Consts::kAudioConverterDecompressionMagicCookie,
+                cookie.len() as UInt32,
+                cookie.as_ptr() as *const c_void,
+            )
+        };
+        if status == Consts::noErr {
+            debug!(
+                cookie_size = cookie.len(),
+                "Apple decoder: magic cookie set"
+            );
+        } else {
+            warn!(
+                status,
+                err = %os_status_to_string(status),
+                "Apple decoder: failed to set magic cookie (continuing anyway)"
+            );
+        }
+    }
+
+    /// Query codec-reported priming (encoder delay) from a freshly created converter.
+    fn query_initial_prime_info(converter: AudioConverterRef) -> Option<AudioConverterPrimeInfo> {
+        let mut info = AudioConverterPrimeInfo::default();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "size_of result fits in u32"
+        )]
+        let mut size = size_of::<AudioConverterPrimeInfo>() as UInt32;
+        // SAFETY: `converter` is a valid handle; `info` is a valid mutable reference to a repr(C) struct.
+        let status = unsafe {
+            AudioConverterGetProperty(
+                converter,
+                Consts::kAudioConverterPrimeInfo,
+                &mut size,
+                &mut info as *mut _ as *mut c_void,
+            )
+        };
+        if status == Consts::noErr {
+            debug!(
+                leading_frames = info.leading_frames,
+                trailing_frames = info.trailing_frames,
+                "Apple decoder: prime info from codec"
+            );
+            Some(info)
+        } else {
+            debug!(
+                status,
+                err = %os_status_to_string(status),
+                "Apple decoder: prime info not available"
+            );
+            None
+        }
+    }
+
     fn try_new(
         mut source: BoxedSource,
         config: &AppleConfig,
@@ -487,19 +643,7 @@ impl AppleInner {
             ));
         };
 
-        // Get source length for duration estimation and seek calculations.
-        // Prefer byte_len_handle (Content-Length from HTTP) over seek(End(0))
-        // because streaming sources may have only a fraction downloaded.
-        let source_len = config
-            .byte_len_handle
-            .as_ref()
-            .map(|h| h.load(Ordering::Acquire))
-            .filter(|&len| len > 0)
-            .or_else(|| {
-                let len = source.seek(SeekFrom::End(0)).ok()?;
-                source.seek(SeekFrom::Start(0)).ok()?;
-                Some(len)
-            });
+        let source_len = resolve_source_len(&mut source, config);
 
         debug!(
             ?container,
@@ -541,111 +685,22 @@ impl AppleInner {
 
         debug!("Apple decoder: AudioFileStream opened");
 
-        // Read initial data to get format info
         let mut read_buffer = vec![0u8; Consts::PARSE_READ_BUFFER_SIZE];
-        let mut total_parsed = 0usize;
-
-        // Parse until we have format info or hit EOF
-        loop {
-            let n = match source.read(&mut read_buffer) {
-                Ok(n) => n,
-                Err(error) => {
-                    // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
-                    unsafe {
-                        AudioFileStreamClose(stream_parser);
-                    }
-                    return Err(recoverable_hardware_error(
-                        source,
-                        DecodeError::Backend(Box::new(error)),
-                    ));
-                }
-            };
-
-            if n == 0 {
-                // EOF before getting format
+        let total_parsed = match Self::parse_until_format_ready(
+            &mut source,
+            stream_parser,
+            &mut parser_state,
+            &mut read_buffer,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => {
                 // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
                 unsafe {
                     AudioFileStreamClose(stream_parser);
                 }
-                return Err(recoverable_hardware_error(
-                    source,
-                    DecodeError::InvalidData("EOF before audio format detected".into()),
-                ));
+                return Err(recoverable_hardware_error(source, error));
             }
-
-            total_parsed += n;
-
-            // SAFETY: `stream_parser` is a valid handle; `read_buffer` is a live slice with `n` valid bytes.
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "read buffer is 32 KB, fits in u32"
-            )]
-            // SAFETY: `stream_parser` is a valid handle created by `AudioFileStreamOpen`.
-            // `read_buffer` is a valid slice with `n` bytes read from the source.
-            let status = unsafe {
-                AudioFileStreamParseBytes(
-                    stream_parser,
-                    n as UInt32,
-                    read_buffer.as_ptr() as *const c_void,
-                    0,
-                )
-            };
-
-            if status != Consts::noErr && status != Consts::kAudioFileStreamError_NotOptimized {
-                // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
-                unsafe {
-                    AudioFileStreamClose(stream_parser);
-                }
-                let err_str = os_status_to_string(status);
-                warn!(status, err = %err_str, "Apple decoder: AudioFileStreamParseBytes failed");
-                return Err(recoverable_hardware_error(
-                    source,
-                    DecodeError::Backend(Box::new(IoError::new(
-                        ErrorKind::InvalidData,
-                        format!("AudioFileStreamParseBytes failed: {}", err_str),
-                    ))),
-                ));
-            }
-
-            // Check if we have format now
-            if let Some(ref format) = parser_state.format
-                && parser_state.ready
-            {
-                debug!(
-                    sample_rate = format.mSampleRate,
-                    channels = format.mChannelsPerFrame,
-                    format_id = format.mFormatID,
-                    frames_per_packet = format.mFramesPerPacket,
-                    bytes_parsed = total_parsed,
-                    "Apple decoder: format detected"
-                );
-                break;
-            }
-
-            // Check for callback error
-            if let Some(ref err) = parser_state.error {
-                // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
-                unsafe {
-                    AudioFileStreamClose(stream_parser);
-                }
-                return Err(recoverable_hardware_error(
-                    source,
-                    DecodeError::InvalidData(err.clone()),
-                ));
-            }
-
-            // Safety limit
-            if total_parsed > Consts::MAX_PARSE_BYTES {
-                // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
-                unsafe {
-                    AudioFileStreamClose(stream_parser);
-                }
-                return Err(recoverable_hardware_error(
-                    source,
-                    DecodeError::InvalidData("Could not detect format after 1MB".into()),
-                ));
-            }
-        }
+        };
 
         let Some(format) = parser_state.format else {
             // SAFETY: `stream_parser` is a valid handle from `AudioFileStreamOpen`.
@@ -706,70 +761,8 @@ impl AppleInner {
 
         debug!("Apple decoder: AudioConverter created");
 
-        // Set magic cookie if available (required for AAC)
-        if let Some(ref cookie) = parser_state.magic_cookie {
-            // SAFETY: `converter` is a valid handle; `cookie` is a live slice.
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "magic cookie size fits in u32"
-            )]
-            // SAFETY: `converter` is a valid handle. `cookie` is a valid byte slice.
-            let status = unsafe {
-                AudioConverterSetProperty(
-                    converter,
-                    Consts::kAudioConverterDecompressionMagicCookie,
-                    cookie.len() as UInt32,
-                    cookie.as_ptr() as *const c_void,
-                )
-            };
-
-            if status != Consts::noErr {
-                warn!(
-                    status,
-                    err = %os_status_to_string(status),
-                    "Apple decoder: failed to set magic cookie (continuing anyway)"
-                );
-            } else {
-                debug!(
-                    cookie_size = cookie.len(),
-                    "Apple decoder: magic cookie set"
-                );
-            }
-        }
-
-        // Query codec-reported priming (encoder delay).
-        let prime_info = {
-            let mut info = AudioConverterPrimeInfo::default();
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "size_of result fits in u32"
-            )]
-            let mut size = size_of::<AudioConverterPrimeInfo>() as UInt32;
-            // SAFETY: `converter` is a valid handle; `info` is a valid mutable reference to a repr(C) struct.
-            let status = unsafe {
-                AudioConverterGetProperty(
-                    converter,
-                    Consts::kAudioConverterPrimeInfo,
-                    &mut size,
-                    &mut info as *mut _ as *mut c_void,
-                )
-            };
-            if status == Consts::noErr {
-                debug!(
-                    leading_frames = info.leading_frames,
-                    trailing_frames = info.trailing_frames,
-                    "Apple decoder: prime info from codec"
-                );
-                Some(info)
-            } else {
-                debug!(
-                    status,
-                    err = %os_status_to_string(status),
-                    "Apple decoder: prime info not available"
-                );
-                None
-            }
-        };
+        Self::apply_magic_cookie(converter, parser_state.magic_cookie.as_deref());
+        let prime_info = Self::query_initial_prime_info(converter);
 
         let spec = PcmSpec {
             channels,
@@ -858,118 +851,141 @@ impl AppleInner {
             // Set up converter input
             self.converter_input.current_packet = Some(packet);
 
-            // Prepare output buffer
             let channels = self.spec.channels as usize;
-            let frames_per_packet = self
-                .parser_state
-                .format
-                .map_or(Consts::DEFAULT_BUFFER_FRAMES, |f| {
-                    f.mFramesPerPacket as usize
-                });
+            let output_frames = self.ensure_pcm_buffer_capacity(channels);
 
-            let output_frames = frames_per_packet.max(Consts::DEFAULT_BUFFER_FRAMES);
-            if self.pcm_buffer.len() < output_frames * channels {
-                self.pcm_buffer.resize(output_frames * channels, 0.0);
+            match self.run_converter(output_frames)? {
+                Some(output_packets) => {
+                    return Ok(Some(self.finalize_chunk(output_packets, channels)?));
+                }
+                None => continue,
             }
-
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "PCM buffer size fits in u32"
-            )]
-            let mut buffer_list = AudioBufferList {
-                mNumberBuffers: 1,
-                mBuffers: [AudioBuffer {
-                    mNumberChannels: u32::from(self.spec.channels),
-                    mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize)
-                        as u32,
-                    mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
-                }],
-            };
-
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "output frame count fits in u32"
-            )]
-            let mut output_packets = output_frames as UInt32;
-            let input_ptr =
-                self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
-
-            // SAFETY: `self.converter` is a valid handle; `input_ptr` points to a live `ConverterInputState`;
-            // `buffer_list` is a valid output buffer on the stack.
-            let status = unsafe {
-                AudioConverterFillComplexBuffer(
-                    self.converter,
-                    converter_input_callback,
-                    input_ptr,
-                    &mut output_packets,
-                    &mut buffer_list,
-                    ptr::null_mut(),
-                )
-            };
-
-            // Converter needs more input packets.
-            if status == Consts::kAudioConverterErr_NoDataNow {
-                trace!("Apple decoder: converter needs more data");
-                continue;
-            }
-
-            if status != Consts::noErr && output_packets == 0 {
-                let err_str = os_status_to_string(status);
-                warn!(
-                    status,
-                    err = %err_str,
-                    "Apple decoder: AudioConverterFillComplexBuffer failed"
-                );
-                return Err(DecodeError::Backend(Box::new(IoError::other(format!(
-                    "AudioConverterFillComplexBuffer failed: {}",
-                    err_str
-                )))));
-            }
-
-            if output_packets == 0 {
-                // No output yet, need more input.
-                continue;
-            }
-
-            let frames = output_packets as usize;
-            let samples = frames * channels;
-
-            // Decode into a pool-backed buffer (reuses allocations).
-            let mut pooled = self.pool.get();
-            pooled
-                .ensure_len(samples)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-            pooled[..samples].copy_from_slice(&self.pcm_buffer[..samples]);
-
-            let meta = PcmMeta {
-                spec: self.spec,
-                frame_offset: self.frame_offset,
-                timestamp: self.position,
-                segment_index: None,
-                variant_index: None,
-                epoch: 0,
-            };
-            let chunk = PcmChunk::new(meta, pooled);
-
-            // Update position and frame offset
-            self.frames_decoded += frames as u64;
-            self.frame_offset += frames as u64;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "precision loss acceptable for position tracking"
-            )]
-            let pos_secs = self.frames_decoded as f64 / f64::from(self.spec.sample_rate);
-            self.position = Duration::from_secs_f64(pos_secs);
-
-            trace!(
-                frames,
-                samples,
-                position_ms = self.position.as_millis(),
-                "Apple decoder: decoded chunk"
-            );
-
-            return Ok(Some(chunk));
         }
+    }
+
+    /// Resize `pcm_buffer` to fit one converter call and return the target output frame count.
+    fn ensure_pcm_buffer_capacity(&mut self, channels: usize) -> usize {
+        let frames_per_packet = self
+            .parser_state
+            .format
+            .map_or(Consts::DEFAULT_BUFFER_FRAMES, |f| {
+                f.mFramesPerPacket as usize
+            });
+        let output_frames = frames_per_packet.max(Consts::DEFAULT_BUFFER_FRAMES);
+        if self.pcm_buffer.len() < output_frames * channels {
+            self.pcm_buffer.resize(output_frames * channels, 0.0);
+        }
+        output_frames
+    }
+
+    /// Run the `AudioConverter` once for the current staged packet.
+    ///
+    /// Returns `Ok(Some(output_packets))` when PCM frames were produced,
+    /// `Ok(None)` when the converter needs more input (caller should loop),
+    /// or `Err` on a hard failure.
+    fn run_converter(&mut self, output_frames: usize) -> DecodeResult<Option<UInt32>> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "PCM buffer size fits in u32"
+        )]
+        let mut buffer_list = AudioBufferList {
+            mNumberBuffers: 1,
+            mBuffers: [AudioBuffer {
+                mNumberChannels: u32::from(self.spec.channels),
+                mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize)
+                    as u32,
+                mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
+            }],
+        };
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "output frame count fits in u32"
+        )]
+        let mut output_packets = output_frames as UInt32;
+        let input_ptr =
+            self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
+
+        // SAFETY: `self.converter` is a valid handle; `input_ptr` points to a live `ConverterInputState`;
+        // `buffer_list` is a valid output buffer on the stack.
+        let status = unsafe {
+            AudioConverterFillComplexBuffer(
+                self.converter,
+                converter_input_callback,
+                input_ptr,
+                &mut output_packets,
+                &mut buffer_list,
+                ptr::null_mut(),
+            )
+        };
+
+        if status == Consts::kAudioConverterErr_NoDataNow {
+            trace!("Apple decoder: converter needs more data");
+            return Ok(None);
+        }
+
+        if status != Consts::noErr && output_packets == 0 {
+            let err_str = os_status_to_string(status);
+            warn!(
+                status,
+                err = %err_str,
+                "Apple decoder: AudioConverterFillComplexBuffer failed"
+            );
+            return Err(DecodeError::Backend(Box::new(IoError::other(format!(
+                "AudioConverterFillComplexBuffer failed: {}",
+                err_str
+            )))));
+        }
+
+        if output_packets == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(output_packets))
+    }
+
+    /// Copy decoded PCM into a pooled chunk and advance position tracking.
+    fn finalize_chunk(
+        &mut self,
+        output_packets: UInt32,
+        channels: usize,
+    ) -> DecodeResult<PcmChunk> {
+        let frames = output_packets as usize;
+        let samples = frames * channels;
+
+        let mut pooled = self.pool.get();
+        pooled
+            .ensure_len(samples)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        pooled[..samples].copy_from_slice(&self.pcm_buffer[..samples]);
+
+        let meta = PcmMeta {
+            spec: self.spec,
+            frame_offset: self.frame_offset,
+            timestamp: self.position,
+            segment_index: None,
+            variant_index: None,
+            epoch: 0,
+        };
+        let chunk = PcmChunk::new(meta, pooled);
+
+        self.frames_decoded += frames as u64;
+        self.frame_offset += frames as u64;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "precision loss acceptable for position tracking"
+        )]
+        let pos_secs = self.frames_decoded as f64 / f64::from(self.spec.sample_rate);
+        self.position = Duration::from_secs_f64(pos_secs);
+
+        trace!(
+            frames,
+            samples,
+            position_ms = self.position.as_millis(),
+            "Apple decoder: decoded chunk"
+        );
+
+        Ok(chunk)
     }
 
     fn feed_parser(&mut self) -> DecodeResult<()> {
@@ -1038,7 +1054,6 @@ impl AppleInner {
             "Apple decoder: seek requested"
         );
 
-        // Calculate approximate byte offset using bitrate estimation
         let byte_offset = self.estimate_byte_offset(pos);
 
         debug!(
@@ -1047,33 +1062,12 @@ impl AppleInner {
             "Apple decoder: seeking to byte offset"
         );
 
-        // Seek in source
         self.source
             .seek(SeekFrom::Start(byte_offset))
             .map_err(|e| DecodeError::SeekFailed(format!("Source seek failed: {}", e)))?;
-
         self.source_byte_pos = byte_offset;
 
-        // Reset converter
-        // SAFETY: `self.converter` is a valid handle from `AudioConverterNew`.
-        let status = unsafe { AudioConverterReset(self.converter) };
-        if status != Consts::noErr {
-            warn!(
-                status,
-                err = %os_status_to_string(status),
-                "Apple decoder: converter reset failed"
-            );
-        }
-
-        // Clear packet buffer
-        while self.parser_state.packet_buffer.pop().is_some() {}
-
-        // Clear converter input state
-        self.converter_input.current_packet = None;
-        self.converter_input.held_packet_data = None;
-
-        // Reset EOF flag
-        self.source_eof = false;
+        self.reset_for_seek();
 
         // Parse with discontinuity flag to signal decoder reset
         self.feed_parser_with_flags(Consts::kAudioFileStreamParseFlag_Discontinuity)?;
@@ -1091,6 +1085,28 @@ impl AppleInner {
         );
 
         Ok(())
+    }
+
+    /// Reset the converter and clear all buffered packet/converter state.
+    ///
+    /// Called during seek before feeding new data into the parser.
+    fn reset_for_seek(&mut self) {
+        // SAFETY: `self.converter` is a valid handle from `AudioConverterNew`.
+        let status = unsafe { AudioConverterReset(self.converter) };
+        if status != Consts::noErr {
+            warn!(
+                status,
+                err = %os_status_to_string(status),
+                "Apple decoder: converter reset failed"
+            );
+        }
+
+        while self.parser_state.packet_buffer.pop().is_some() {}
+
+        self.converter_input.current_packet = None;
+        self.converter_input.held_packet_data = None;
+
+        self.source_eof = false;
     }
 
     /// Estimate byte offset from time position using bitrate calculation.
