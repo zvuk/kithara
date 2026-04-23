@@ -265,9 +265,10 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
         // so the decoder should return ~all frames.
         let tol = Consts::WAV_FRAMES / 200;
         let diff = Consts::WAV_FRAMES.abs_diff(frames);
+        let expected = Consts::WAV_FRAMES;
         assert!(
             diff <= tol,
-            "{backend:?}: decoded {frames} frames, expected ~{Consts::WAV_FRAMES} (tol {tol})"
+            "{backend:?}: decoded {frames} frames, expected ~{expected} (tol {tol})"
         );
 
         let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
