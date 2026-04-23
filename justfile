@@ -243,8 +243,29 @@ mutants-ci OUTPUT:
     if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
     JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
     mkdir -p "{{OUTPUT}}"
+    # Only mutate production library code. Excluded crates (by file glob —
+    # cargo-mutants 27 has no --exclude-package flag):
+    #   - kithara-test-utils / kithara-test-macros: test-only helpers
+    #   - kithara-integration-tests: integration test harness
+    #   - kithara-fuzz: fuzzing harness
+    #   - xtask: developer tooling
+    #   - kithara-ffi: FFI bindings (glue, not logic)
+    #   - kithara-app: application assembly (tui/gui wiring, no logic)
+    #   - kithara-wasm / kithara-wasm-macros: WASM bindings and proc-macros
+    # --exclude-re additionally skips per-file test fixtures inside prod crates
+    # (e.g. kithara-platform/src/test_env.rs).
     cargo mutants --workspace --test-workspace=true --baseline=skip \
       --test-tool=nextest --profile test-release \
+      --exclude 'crates/kithara-test-utils/**' \
+      --exclude 'crates/kithara-test-macros/**' \
+      --exclude 'crates/kithara-integration-tests/**' \
+      --exclude 'crates/kithara-fuzz/**' \
+      --exclude 'crates/kithara-ffi/**' \
+      --exclude 'crates/kithara-app/**' \
+      --exclude 'crates/kithara-wasm/**' \
+      --exclude 'crates/kithara-wasm-macros/**' \
+      --exclude 'xtask/**' \
+      --exclude-re 'src/.*test.*\.rs' \
       -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
       --no-shuffle --output "{{OUTPUT}}"
 
