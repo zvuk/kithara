@@ -7,8 +7,8 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use super::DecoderConfig;
 use crate::{
     InnerDecoder,
+    backend::BoxedSource,
     error::{DecodeError, DecodeResult},
-    hardware::BoxedSource,
     symphonia::{
         Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
     },

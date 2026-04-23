@@ -33,8 +33,8 @@ use super::{
     },
 };
 use crate::{
+    backend::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     error::{DecodeError, DecodeResult},
-    hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 

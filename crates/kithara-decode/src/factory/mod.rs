@@ -39,8 +39,8 @@ use self::{
 };
 use crate::{
     InnerDecoder,
+    backend::{BoxedSource, HardwareBackend, current::Current},
     error::{DecodeError, DecodeResult},
-    hardware::{BoxedSource, HardwareBackend, PlatformBackend},
 };
 
 /// Configuration for `DecoderFactory`.
@@ -87,7 +87,7 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
     {
         let source: BoxedSource = Box::new(source);
-        Self::create_with_backend::<PlatformBackend>(source, selector, config)
+        Self::create_with_backend::<Current>(source, selector, config)
     }
 
     fn create_with_backend<B: HardwareBackend>(
@@ -230,7 +230,7 @@ mod tests {
     use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
-    use crate::hardware::{
+    use crate::backend::{
         BoxedSource, HardwareBackend, RecoverableHardwareError, recoverable_hardware_error,
     };
 

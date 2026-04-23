@@ -9,6 +9,7 @@
 //! Supports AAC, MP3, FLAC, and ALAC codecs with hardware acceleration
 //! when available on macOS and iOS.
 
+mod backend;
 mod config;
 mod consts;
 mod converter;
@@ -21,11 +22,11 @@ use std::{fmt, marker::PhantomData, sync::atomic::Ordering, time::Duration};
 use kithara_stream::AudioCodec;
 use tracing::debug;
 
-pub(crate) use self::config::AppleConfig;
 use self::inner::AppleInner;
+pub(crate) use self::{backend::AppleBackend, config::AppleConfig};
 use crate::{
+    backend::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     error::{DecodeError, DecodeResult},
-    hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };

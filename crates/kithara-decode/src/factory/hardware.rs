@@ -5,7 +5,7 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use super::DecoderConfig;
 use crate::{
     InnerDecoder,
-    hardware::{BoxedSource, HardwareBackend, RecoverableHardwareError, hardware_accepts},
+    backend::{BoxedSource, HardwareBackend, RecoverableHardwareError, hardware_accepts},
 };
 
 /// Outcome of a single hardware decoder attempt.
