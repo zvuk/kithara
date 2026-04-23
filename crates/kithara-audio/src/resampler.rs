@@ -301,13 +301,7 @@ impl ResamplerProcessor {
         let channels = self.channels;
         let buffered = self.input_buffer[0].len();
 
-        // Pad with zeros to reach input_frames
-        let padding_needed = input_frames.saturating_sub(buffered);
-        for buf in &mut self.input_buffer {
-            buf.extend(iter::repeat_n(0.0, padding_needed));
-        }
-
-        debug!(buffered, padding_needed, "Flushing resampler buffer");
+        self.pad_input_for_flush(input_frames, buffered);
 
         self.ensure_temp_buffers(channels);
 
@@ -324,45 +318,57 @@ impl ResamplerProcessor {
         };
 
         match result {
-            Ok(out_len) => {
-                for buf in &mut self.input_buffer {
-                    buf.clear();
-                }
-
-                #[expect(
-                    clippy::cast_precision_loss,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "audio buffer size calculation: always positive and within usize range"
-                )]
-                let actual_output_frames = ((buffered as f64) * self.current_ratio).ceil() as usize;
-                let frames_to_use = actual_output_frames.min(out_len);
-
-                if frames_to_use == 0 {
-                    return None;
-                }
-
-                for buf in &mut self.temp_output_all {
-                    buf.clear();
-                }
-                for (ch, buf) in self.temp_output_bufs.iter().enumerate() {
-                    self.temp_output_all[ch].extend_from_slice(&buf[..frames_to_use]);
-                }
-
-                let interleaved = self.interleave(&self.temp_output_all);
-                Some(PcmChunk::new(
-                    PcmMeta {
-                        spec: self.output_spec,
-                        ..Default::default()
-                    },
-                    interleaved,
-                ))
-            }
+            Ok(out_len) => self.build_flush_output(buffered, out_len),
             Err(e) => {
                 trace!(err = %e, "Resampler flush error");
                 None
             }
         }
+    }
+
+    /// Pad input buffer with zeros so a final block can be processed.
+    fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
+        let padding_needed = input_frames.saturating_sub(buffered);
+        for buf in &mut self.input_buffer {
+            buf.extend(iter::repeat_n(0.0, padding_needed));
+        }
+        debug!(buffered, padding_needed, "Flushing resampler buffer");
+    }
+
+    /// Assemble the final `PcmChunk` from a successful flush `process_block`.
+    fn build_flush_output(&mut self, buffered: usize, out_len: usize) -> Option<PcmChunk> {
+        for buf in &mut self.input_buffer {
+            buf.clear();
+        }
+
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "audio buffer size calculation: always positive and within usize range"
+        )]
+        let actual_output_frames = ((buffered as f64) * self.current_ratio).ceil() as usize;
+        let frames_to_use = actual_output_frames.min(out_len);
+
+        if frames_to_use == 0 {
+            return None;
+        }
+
+        for buf in &mut self.temp_output_all {
+            buf.clear();
+        }
+        for (ch, buf) in self.temp_output_bufs.iter().enumerate() {
+            self.temp_output_all[ch].extend_from_slice(&buf[..frames_to_use]);
+        }
+
+        let interleaved = self.interleave(&self.temp_output_all);
+        Some(PcmChunk::new(
+            PcmMeta {
+                spec: self.output_spec,
+                ..Default::default()
+            },
+            interleaved,
+        ))
     }
 
     fn is_passthrough(&self) -> bool {
@@ -597,22 +603,41 @@ impl ResamplerProcessor {
         }
 
         self.ensure_temp_buffers(channels);
+        self.reset_output_accumulator(channels);
 
+        let loop_ok = self.drive_resample_loop(channels, input_frames);
+        if !loop_ok {
+            return None;
+        }
+
+        self.finalize_resample_chunk(input_frames)
+    }
+
+    /// Clear and resize the per-channel output accumulator used by `resample`.
+    fn reset_output_accumulator(&mut self, channels: usize) {
         if self.temp_output_all.len() < channels {
             self.temp_output_all.resize_with(channels, Vec::new);
         }
         for buf in &mut self.temp_output_all {
             buf.clear();
         }
+    }
 
+    /// Drain accumulated input into `temp_output_all` one block at a time.
+    /// Returns `false` if the underlying resampler errored.
+    fn drive_resample_loop(&mut self, channels: usize, input_frames: usize) -> bool {
         while self.input_buffer[0].len() >= input_frames {
             let output_frames = {
-                let resampler = self.resampler.as_ref()?;
+                let Some(resampler) = self.resampler.as_ref() else {
+                    return false;
+                };
                 resampler.output_frames_next()
             };
 
             let result = {
-                let mut resampler = self.resampler.take()?;
+                let Some(mut resampler) = self.resampler.take() else {
+                    return false;
+                };
                 let res = self.process_block(&mut resampler, input_frames, output_frames);
                 self.resampler = Some(resampler);
                 res
@@ -634,11 +659,15 @@ impl ResamplerProcessor {
                 }
                 Err(e) => {
                     trace!(err = %e, "Resampler error");
-                    return None;
+                    return false;
                 }
             }
         }
+        true
+    }
 
+    /// Turn the accumulated planar output into an interleaved `PcmChunk`.
+    fn finalize_resample_chunk(&self, input_frames: usize) -> Option<PcmChunk> {
         if self.temp_output_all[0].is_empty() {
             trace!(
                 buffered = self.input_buffer[0].len(),
@@ -721,60 +750,79 @@ fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
 }
 
+impl ResamplerProcessor {
+    /// React to a changed channel count in incoming chunks (ABR switch).
+    fn handle_channel_change(&mut self, chunk_channels: usize, chunk_rate: u32) {
+        debug!(
+            old_channels = self.channels,
+            new_channels = chunk_channels,
+            old_rate = self.source_rate,
+            new_rate = chunk_rate,
+            "Channel count changed, recreating resampler"
+        );
+        self.channels = chunk_channels;
+        self.source_rate = chunk_rate;
+        self.input_buffer = smallvec_new_vecs(chunk_channels);
+        self.temp_input_slice = smallvec_new_vecs(chunk_channels);
+        self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
+        self.temp_output_all = smallvec_new_vecs(chunk_channels);
+        self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "channel count is always small"
+        )]
+        let channels_u16 = chunk_channels as u16;
+        self.output_spec.channels = channels_u16;
+        self.resampler = None;
+    }
+
+    /// React to a changed source sample rate while channel count is stable.
+    fn handle_source_rate_change(&mut self, chunk_rate: u32) {
+        debug!(
+            old_rate = self.source_rate,
+            new_rate = chunk_rate,
+            "Source sample rate changed, updating ratio dynamically"
+        );
+        self.source_rate = chunk_rate;
+        for buf in &mut self.input_buffer {
+            buf.clear();
+        }
+    }
+
+    /// Apply incoming chunk spec changes in-place (channels first, then rate).
+    fn apply_source_spec_changes(&mut self, chunk_channels: usize, chunk_rate: u32) {
+        if chunk_channels != self.channels {
+            self.handle_channel_change(chunk_channels, chunk_rate);
+        } else if chunk_rate != self.source_rate {
+            self.handle_source_rate_change(chunk_rate);
+        }
+    }
+
+    /// Passthrough path: take the chunk, stamp the current output spec, return it.
+    fn passthrough_chunk(&self, mut chunk: PcmChunk) -> PcmChunk {
+        trace!(
+            source_rate = self.source_rate,
+            target_rate = self.output_spec.sample_rate,
+            chunk_samples = chunk.pcm.len(),
+            "Resampler passthrough (no resampling)"
+        );
+        chunk.meta.spec = self.output_spec;
+        chunk
+    }
+}
+
 impl AudioEffect for ResamplerProcessor {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         let chunk_rate = chunk.spec().sample_rate;
         let chunk_channels = chunk.spec().channels as usize;
 
-        // Handle source spec changes (ABR switch)
-        if chunk_channels != self.channels {
-            debug!(
-                old_channels = self.channels,
-                new_channels = chunk_channels,
-                old_rate = self.source_rate,
-                new_rate = chunk_rate,
-                "Channel count changed, recreating resampler"
-            );
-            self.channels = chunk_channels;
-            self.source_rate = chunk_rate;
-            self.input_buffer = smallvec_new_vecs(chunk_channels);
-            self.temp_input_slice = smallvec_new_vecs(chunk_channels);
-            self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
-            self.temp_output_all = smallvec_new_vecs(chunk_channels);
-            self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "channel count is always small"
-            )]
-            let channels_u16 = chunk_channels as u16;
-            self.output_spec.channels = channels_u16;
-            self.resampler = None;
-        } else if chunk_rate != self.source_rate {
-            debug!(
-                old_rate = self.source_rate,
-                new_rate = chunk_rate,
-                "Source sample rate changed, updating ratio dynamically"
-            );
-            self.source_rate = chunk_rate;
-            for buf in &mut self.input_buffer {
-                buf.clear();
-            }
-        }
+        self.apply_source_spec_changes(chunk_channels, chunk_rate);
 
         self.update_resampler_if_needed();
 
         if self.is_passthrough() {
-            trace!(
-                source_rate = self.source_rate,
-                target_rate = self.output_spec.sample_rate,
-                chunk_samples = chunk.pcm.len(),
-                "Resampler passthrough (no resampling)"
-            );
-            // Passthrough: transfer ownership, just update spec
-            let mut out = chunk;
-            out.meta.spec = self.output_spec;
-            return Some(out);
+            return Some(self.passthrough_chunk(chunk));
         }
 
         trace!(
