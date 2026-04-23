@@ -252,6 +252,8 @@ mutants-ci OUTPUT:
     #   - kithara-ffi: FFI bindings (glue, not logic)
     #   - kithara-app: application assembly (tui/gui wiring, no logic)
     #   - kithara-wasm / kithara-wasm-macros: WASM bindings and proc-macros
+    #   - kithara-hang-detector / kithara-hang-detector-macros: diagnostic
+    #     tooling, not part of the runtime contract
     # --exclude-re additionally skips per-file test fixtures inside prod crates
     # (e.g. kithara-platform/src/test_env.rs).
     cargo mutants --workspace --test-workspace=true --baseline=skip \
@@ -264,6 +266,8 @@ mutants-ci OUTPUT:
       --exclude 'crates/kithara-app/**' \
       --exclude 'crates/kithara-wasm/**' \
       --exclude 'crates/kithara-wasm-macros/**' \
+      --exclude 'crates/kithara-hang-detector/**' \
+      --exclude 'crates/kithara-hang-detector-macros/**' \
       --exclude 'xtask/**' \
       --exclude-re 'src/.*test.*\.rs' \
       -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
