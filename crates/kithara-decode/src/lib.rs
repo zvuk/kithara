@@ -23,6 +23,7 @@ mod backend;
 mod error;
 mod factory;
 mod pcm;
+#[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;
 mod types;

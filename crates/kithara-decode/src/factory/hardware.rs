@@ -1,24 +1,27 @@
 //! Hardware-attempt flow: try the platform backend, classify the outcome.
+//!
+//! The factory owns the `prefer_hardware` decision — this module only
+//! probes whether the backend accepts the codec/container and reports
+//! the construction result.
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::DecoderConfig;
 use crate::{
     InnerDecoder,
-    backend::{BoxedSource, HardwareBackend, RecoverableHardwareError, hardware_accepts},
+    backend::{BoxedSource, HardwareBackend, hardware_accepts},
+    error::DecodeError,
 };
 
 /// Outcome of a single hardware decoder attempt.
 pub(super) enum HardwareAttempt {
     /// Hardware backend successfully produced a decoder.
     Decoded(Box<dyn InnerDecoder>),
-    /// Hardware disabled or backend does not accept this codec/container.
-    /// Source is untouched and ready for the software path.
-    Skipped(BoxedSource),
-    /// Hardware accepted the codec but construction failed. Source was
-    /// recovered from the [`RecoverableHardwareError`] and can be retried
-    /// against Symphonia.
-    Failed(BoxedSource),
+    /// Backend does not accept this codec/container.
+    Skipped,
+    /// Hardware accepted the codec but construction failed. The error
+    /// is propagated; no fallback path exists.
+    Failed(DecodeError),
 }
 
 /// Attempt the hardware decoder path for `B`.
@@ -28,11 +31,8 @@ pub(super) fn try_hardware_decoder<B: HardwareBackend>(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> HardwareAttempt {
-    if !config.prefer_hardware {
-        return HardwareAttempt::Skipped(source);
-    }
     let Some(resolved) = hardware_accepts::<B>(codec, container) else {
-        return HardwareAttempt::Skipped(source);
+        return HardwareAttempt::Skipped;
     };
     tracing::info!(
         ?codec,
@@ -49,7 +49,7 @@ pub(super) fn try_hardware_decoder<B: HardwareBackend>(
 }
 
 fn into_hardware_attempt(
-    result: Result<Box<dyn InnerDecoder>, RecoverableHardwareError>,
+    result: Result<Box<dyn InnerDecoder>, DecodeError>,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     resolved: ContainerFormat,
@@ -64,15 +64,15 @@ fn into_hardware_attempt(
             );
             HardwareAttempt::Decoded(decoder)
         }
-        Err(recoverable) => {
+        Err(error) => {
             tracing::warn!(
-                error = ?recoverable.error,
+                ?error,
                 ?codec,
                 requested_container = ?container,
                 resolved_container = ?resolved,
-                "Hardware decoder creation failed; falling back to Symphonia"
+                "Hardware decoder creation failed — terminal (no software fallback)"
             );
-            HardwareAttempt::Failed(recoverable.source)
+            HardwareAttempt::Failed(error)
         }
     }
 }

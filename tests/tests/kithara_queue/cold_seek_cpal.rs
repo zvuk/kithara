@@ -35,6 +35,8 @@ use kithara_test_utils::{
 };
 use tokio::time::sleep;
 
+use crate::common::decoder_backend::DecoderBackend;
+
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
     let _ = fmt()
@@ -101,8 +103,14 @@ async fn wait_for_position_at_least(
 /// Cold-cache seek into a far segment over a real cpal backend.
 /// Matches the `kithara-app` GUI demo pipeline exactly.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
 #[ignore = "uses real cpal device — poisons session singleton; run manually with --ignored"]
-async fn cpal_cold_seek_far_segment_hls() {
+async fn cpal_cold_seek_far_segment_hls(#[case] backend: DecoderBackend) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     install_tracing();
 
     let helper = TestServerHelper::new().await;
@@ -153,6 +161,7 @@ async fn cpal_cold_seek_far_segment_hls() {
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
+    cfg.prefer_hardware = backend.prefer_hardware();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();
@@ -228,11 +237,17 @@ async fn cpal_cold_seek_far_segment_hls() {
 /// silvercomet-specific HTTP / format behaviour rather than anything in
 /// the kithara pipeline abstract.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
 #[ignore = "real network + real cpal; run manually: \
     cargo test --test suite_heavy \
     kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
-async fn cpal_cold_seek_silvercomet_hls() {
+async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     install_tracing();
 
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -264,6 +279,7 @@ async fn cpal_cold_seek_silvercomet_hls() {
     let mut cfg = ResourceConfig::new(URL).expect("valid silvercomet URL");
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
+    cfg.prefer_hardware = backend.prefer_hardware();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

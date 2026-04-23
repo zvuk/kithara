@@ -36,6 +36,8 @@ use kithara_platform::{
 };
 use kithara_test_utils::temp_dir;
 
+use crate::common::decoder_backend::DecoderBackend;
+
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = 44_100;
@@ -137,6 +139,7 @@ async fn build_resource(
     downloader: &Downloader,
     iter_label: &str,
     store: StoreOptions,
+    backend: DecoderBackend,
 ) -> Resource {
     let mut cfg =
         ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
@@ -144,6 +147,7 @@ async fn build_resource(
         .with_downloader(downloader.clone())
         .with_name(format!("{iter_label}|{url}"));
     cfg.store = store;
+    cfg.prefer_hardware = backend.prefer_hardware();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
@@ -217,8 +221,14 @@ fn rms(samples: &[f32]) -> f32 {
 // decoder observes a full window of silence even when the HLS logic itself
 // is correct.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
 #[ignore = "real network to silvercomet.top; run with --run-ignored only"]
-async fn silvercomet_3tracks_seek_middle_hang_10x() {
+async fn silvercomet_3tracks_seek_middle_hang_10x(#[case] backend: DecoderBackend) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     // Pipe kithara_* trace output to /tmp/silvercomet-trace.log so failures
     // surface the FSM seek transitions and HLS peer fetches that a nextest
     // capture typically loses after the panic. `try_init()` keeps the test
@@ -261,7 +271,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
             eprintln!("[iter {iter}][t{track_idx}] building resource: {url}");
-            let resource = build_resource(url, &downloader, &iter_label, store.clone()).await;
+            let resource =
+                build_resource(url, &downloader, &iter_label, store.clone(), backend).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
             player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
 

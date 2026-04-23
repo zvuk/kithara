@@ -16,7 +16,7 @@ ignored = ["serial_test"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "test-utils", "internal"] }
-kithara-audio = { workspace = true, features = ["internal", "test-utils"] }
+kithara-audio = { workspace = true, features = ["internal", "test-utils", "symphonia"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true, features = ["internal"] }
 kithara-drm = { workspace = true }
@@ -67,7 +67,7 @@ async-trait = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Additional kithara features (rodio not available on WASM)
 kithara = { workspace = true, features = ["rodio"] }
-kithara-decode = { workspace = true, features = ["test-utils"] }
+kithara-decode = { workspace = true, features = ["test-utils", "symphonia"] }
 kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal", "internal", "test-utils"] }
 

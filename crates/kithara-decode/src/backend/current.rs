@@ -10,12 +10,12 @@ use kithara_stream::{AudioCodec, ContainerFormat};
     all(feature = "apple", any(target_os = "macos", target_os = "ios")),
     all(feature = "android", target_os = "android")
 )))]
-use super::{BoxedSource, HardwareBackend, RecoverableHardwareError};
+use super::{BoxedSource, HardwareBackend};
 #[cfg(not(any(
     all(feature = "apple", any(target_os = "macos", target_os = "ios")),
     all(feature = "android", target_os = "android")
 )))]
-use crate::{DecoderConfig, InnerDecoder};
+use crate::{DecodeError, DecoderConfig, InnerDecoder};
 
 /// Hardware backend selected at compile time.
 ///
@@ -64,7 +64,7 @@ impl HardwareBackend for NoopBackend {
         _config: &DecoderConfig,
         _codec: AudioCodec,
         _container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
         // `hardware_accepts::<Self>(..)` always returns `None`, so the
         // factory never reaches `try_create`.
         unreachable!("NoopBackend::try_create is gated by hardware_accepts")

@@ -630,6 +630,7 @@ where
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
         pcm_pool: PcmPool,
+        byte_pool: kithara_bufpool::BytePool,
         prefer_hardware: bool,
         stream_ctx: Arc<dyn StreamContext>,
     ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
@@ -640,6 +641,7 @@ where
             hint: hint.clone(),
             byte_len_handle: Some(Arc::clone(&byte_len_handle)),
             pcm_pool: Some(pcm_pool),
+            byte_pool: Some(byte_pool),
             stream_ctx: Some(stream_ctx),
             ..Default::default()
         };
@@ -698,11 +700,13 @@ where
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
+        byte_pool: &kithara_bufpool::BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
         let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
+        let factory_byte_pool = byte_pool.clone();
         Box::new(move |stream, info, base_offset| {
             // Compute byte_len from current stream length minus base_offset.
             // Must be recomputed on every recreation — variant switches change
@@ -717,15 +721,13 @@ where
                 prefer_hardware,
                 byte_len_handle: Some(Arc::clone(&factory_byte_len)),
                 pcm_pool: Some(factory_pool.clone()),
+                byte_pool: Some(factory_byte_pool.clone()),
                 stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
                 epoch: current_epoch,
                 ..Default::default()
             };
-            match DecoderFactory::create_for_recreate(
-                || OffsetReader::new(stream.clone(), base_offset),
-                info,
-                config,
-            ) {
+            let make_source = || OffsetReader::new(stream.clone(), base_offset);
+            match DecoderFactory::create_for_recreate(make_source, info, &config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
                     Some(d)
@@ -777,7 +779,7 @@ where
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
-        let stream = Self::create_stream_with_probe(stream_config, byte_pool).await?;
+        let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let stream_media_info = stream.media_info();
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -795,6 +797,7 @@ where
             initial_media_info.clone(),
             hint.clone(),
             pool.clone(),
+            byte_pool.clone(),
             prefer_hardware,
             Arc::clone(&stream_ctx),
         )
@@ -828,6 +831,7 @@ where
             &epoch,
             &byte_len_handle,
             pool,
+            &byte_pool,
         );
         let notify_waiting = shared_stream.make_notify_fn();
 

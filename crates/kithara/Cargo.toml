@@ -35,7 +35,10 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
 
 [features]
-default = ["file", "hls"]
+default = ["file", "hls", "symphonia"]
+# Enable the Symphonia software decoder path. Disable to compile with
+# only a hardware backend (apple/android) and no software fallback.
+symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net", "kithara-play/file"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm", "kithara-play/hls"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]

@@ -31,10 +31,15 @@ pub(crate) struct ReaderBootstrap {
 
 /// Create a format reader directly from a known container format.
 ///
-/// Disables seek during initialization for most containers (especially
-/// HLS): some readers (`IsoMp4Reader`) try to seek to end looking for
-/// atoms, which breaks streaming. Seek is re-enabled after init. Standard
-/// MP4 is the exception — it requires seek to find the moov atom.
+/// Seek is disabled during reader construction for streaming-friendly
+/// formats (all headers at the start) so readers that otherwise probe
+/// the tail of the stream — `IsoMp4Reader` for fMP4, `WavReader` —
+/// don't stall an HLS source. Seek is re-enabled unconditionally once
+/// the reader is built so subsequent decode/seek operations work.
+///
+/// Standard MP4 is the exception: its `moov` atom lives at the tail of
+/// the file, so the reader must seek to it during construction. This is
+/// safe because standard-MP4 consumers pass a fully materialised source.
 pub(crate) fn new_direct<R>(
     source: R,
     config: &SymphoniaConfig,
@@ -44,8 +49,7 @@ pub(crate) fn new_direct<R>(
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let seek_enabled = container == ContainerFormat::Mp4;
-
+    let seek_enabled = matches!(container, ContainerFormat::Mp4);
     let adapter = if let Some(ref handle) = config.byte_len_handle {
         ReadSeekAdapter::new_inner(source, Some(Arc::clone(handle)), seek_enabled)
     } else {

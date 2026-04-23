@@ -78,10 +78,18 @@ impl SymphoniaInner {
     {
         let format_opts = FormatOptions::default();
 
+        // Seek stays off for the whole initialization window: this is a
+        // streaming player, and Symphonia's probe/direct readers otherwise
+        // seek-to-end to validate container sizes, which either stalls
+        // waiting for bytes that haven't arrived or walks off a short
+        // variant buffer after an ABR hop. Every container we support
+        // places its headers at the front of the stream, so linear reads
+        // during init are sufficient. Seek is re-enabled by the bootstrap
+        // routine as soon as the reader is built.
         let bootstrap = if let Some(container) = config.container {
             new_direct(source, config, container, format_opts)?
         } else {
-            probe_with_seek(source, config, format_opts, !config.probe_no_seek)?
+            probe_with_seek(source, config, format_opts, false)?
         };
 
         Self::init_from_bootstrap(bootstrap, config)

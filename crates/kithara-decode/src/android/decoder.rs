@@ -3,8 +3,6 @@
 use std::{
     cell::Cell,
     fmt,
-    io::Cursor,
-    marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -29,12 +27,13 @@ use super::{
 };
 use crate::{
     DecodeResult,
-    hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
+    backend::BoxedSource,
+    error::DecodeError,
     pcm::{
         conversion::{copy_pcm_float_to_pool, decode_pcm16_to_f32},
         timeline::{SeekTrimOutcome, pcm_meta_from_pts_us, seek_trim_for_buffer},
     },
-    traits::{Aac, CodecType, Flac, InnerDecoder, Mp3},
+    traits::InnerDecoder,
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
@@ -57,16 +56,11 @@ struct AndroidInner {
     pcm_encoding: AndroidPcmEncoding,
 }
 
-pub(crate) struct Android<C: CodecType> {
+pub(crate) struct Android {
     inner: AndroidInner,
-    _codec: PhantomData<C>,
 }
 
-pub(crate) type AndroidAac = Android<Aac>;
-pub(crate) type AndroidMp3 = Android<Mp3>;
-pub(crate) type AndroidFlac = Android<Flac>;
-
-impl<C: CodecType> fmt::Debug for Android<C> {
+impl fmt::Debug for Android {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Android")
             .field("spec", &self.inner.spec)
@@ -75,27 +69,22 @@ impl<C: CodecType> fmt::Debug for Android<C> {
     }
 }
 
-impl<C: CodecType> Android<C> {
+impl Android {
     const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
     const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
 
     fn bootstrap(
         source: BoxedSource,
         config: AndroidConfig,
-    ) -> Result<Self, RecoverableHardwareError> {
+        codec: AudioCodec,
+    ) -> Result<Self, DecodeError> {
         if let Err(error) = ensure_current_thread_attached() {
-            return Err(recoverable_hardware_error(
-                source,
-                error.into_decode_error(),
-            ));
+            return Err(error.into_decode_error());
         }
 
         let api_level = ffi::current_api_level();
-        if !supports_codec_at_api(C::CODEC, api_level) {
-            return Err(recoverable_hardware_error(
-                source,
-                AndroidBackendError::api_level_unavailable(api_level).into_decode_error(),
-            ));
+        if !supports_codec_at_api(codec, api_level) {
+            return Err(AndroidBackendError::api_level_unavailable(api_level).into_decode_error());
         }
 
         let byte_len_handle = config
@@ -109,23 +98,18 @@ impl<C: CodecType> Android<C> {
 
         let media_source = match OwnedMediaDataSource::new(source, Arc::clone(&byte_len_handle)) {
             Ok(media_source) => media_source,
-            Err((source, error)) => {
-                return Err(recoverable_hardware_error(
-                    source,
-                    error.into_decode_error(),
-                ));
+            Err((_source, error)) => {
+                return Err(error.into_decode_error());
             }
         };
 
-        let extractor_bootstrap = match bootstrap_extractor(media_source, C::CODEC) {
+        let extractor_bootstrap = match bootstrap_extractor(media_source, codec) {
             Ok(bootstrap) => bootstrap,
             Err((media_source, error)) => {
                 return Err(recover_media_source_failure(media_source, error));
             }
         };
 
-        // Bootstrap is staged so each step can hand ownership back to the
-        // Symphonia fallback if Android setup fails partway through.
         let codec_bootstrap = match bootstrap_codec(
             &extractor_bootstrap.extractor,
             &extractor_bootstrap.selected_track,
@@ -153,7 +137,6 @@ impl<C: CodecType> Android<C> {
                 owner_thread: Cell::new(None),
                 pcm_encoding: codec_bootstrap.pcm_encoding,
             },
-            _codec: PhantomData,
         })
     }
 
@@ -356,7 +339,7 @@ impl<C: CodecType> Android<C> {
     }
 }
 
-impl<C: CodecType> InnerDecoder for Android<C> {
+impl InnerDecoder for Android {
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.assert_owner_thread()
             .map_err(AndroidBackendError::into_decode_error)?;
@@ -451,28 +434,26 @@ pub(crate) fn try_create_android_decoder(
     codec: AudioCodec,
     source: BoxedSource,
     config: AndroidConfig,
-) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+) -> Result<Box<dyn InnerDecoder>, DecodeError> {
     let _ = config.container;
     match codec {
-        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            AndroidAac::bootstrap(source, config)
-                .map(|decoder| Box::new(decoder) as Box<dyn InnerDecoder>)
+        AudioCodec::AacLc
+        | AudioCodec::AacHe
+        | AudioCodec::AacHeV2
+        | AudioCodec::Mp3
+        | AudioCodec::Flac
+        | AudioCodec::Pcm => Android::bootstrap(source, config, codec)
+            .map(|decoder| Box::new(decoder) as Box<dyn InnerDecoder>),
+        unsupported => {
+            Err(AndroidBackendError::UnsupportedCodec { codec: unsupported }.into_decode_error())
         }
-        AudioCodec::Mp3 => AndroidMp3::bootstrap(source, config)
-            .map(|decoder| Box::new(decoder) as Box<dyn InnerDecoder>),
-        AudioCodec::Flac => AndroidFlac::bootstrap(source, config)
-            .map(|decoder| Box::new(decoder) as Box<dyn InnerDecoder>),
-        unsupported => Err(recoverable_hardware_error(
-            source,
-            AndroidBackendError::UnsupportedCodec { codec: unsupported }.into_decode_error(),
-        )),
     }
 }
 
 fn recover_codec_failure(
     bootstrap: super::extractor::ExtractorBootstrap,
     error: AndroidBackendError,
-) -> RecoverableHardwareError {
+) -> DecodeError {
     drop(bootstrap.extractor);
     recover_media_source_failure(bootstrap.media_source, error)
 }
@@ -480,12 +461,9 @@ fn recover_codec_failure(
 fn recover_media_source_failure(
     media_source: OwnedMediaDataSource,
     error: AndroidBackendError,
-) -> RecoverableHardwareError {
+) -> DecodeError {
     match media_source.into_source() {
-        Ok(source) => recoverable_hardware_error(source, error.into_decode_error()),
-        Err(recover_error) => RecoverableHardwareError {
-            source: Box::new(Cursor::new(Vec::<u8>::new())),
-            error: recover_error.into_decode_error(),
-        },
+        Ok(_source) => error.into_decode_error(),
+        Err(recover_error) => recover_error.into_decode_error(),
     }
 }

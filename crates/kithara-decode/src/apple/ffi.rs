@@ -1,4 +1,8 @@
 //! Raw FFI bindings to Apple `AudioToolbox`.
+//!
+//! The backend parses containers through `AudioFile` (opened with
+//! callbacks so we can feed an arbitrary `Read + Seek` source) and
+//! decodes compressed packets to PCM through `AudioConverter`.
 
 #![allow(unsafe_code)]
 #![allow(non_camel_case_types)]
@@ -7,9 +11,9 @@
 use std::ffi::c_void;
 
 pub(super) type OSStatus = i32;
-pub(super) type AudioFileStreamID = *mut c_void;
+pub(super) type AudioFileID = *mut c_void;
 pub(super) type AudioFileTypeID = u32;
-pub(super) type AudioFileStreamPropertyID = u32;
+pub(super) type AudioFilePropertyID = u32;
 pub(super) type AudioFormatID = u32;
 pub(super) type AudioFormatFlags = u32;
 pub(super) type AudioConverterRef = *mut c_void;
@@ -17,7 +21,6 @@ pub(super) type UInt32 = u32;
 pub(super) type SInt64 = i64;
 pub(super) type Float64 = f64;
 
-// AudioStreamPacketDescription
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct AudioStreamPacketDescription {
@@ -54,23 +57,28 @@ pub(super) struct AudioBufferList {
     pub(super) mBuffers: [AudioBuffer; 1],
 }
 
-// Callback types for AudioFileStream
-pub(super) type AudioFileStream_PropertyListenerProc = extern "C" fn(
-    inClientData: *mut c_void,
-    inAudioFileStream: AudioFileStreamID,
-    inPropertyID: AudioFileStreamPropertyID,
-    ioFlags: *mut UInt32,
-);
+/// Translation between frame index and packet index (VBR containers).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct AudioFramePacketTranslation {
+    pub(super) mFrame: SInt64,
+    pub(super) mPacket: SInt64,
+    pub(super) mFrameOffsetInPacket: UInt32,
+}
 
-pub(super) type AudioFileStream_PacketsProc = extern "C" fn(
+/// Callbacks supplied to `AudioFileOpenWithCallbacks`. `inClientData`
+/// receives the pointer passed to `AudioFileOpenWithCallbacks`.
+pub(super) type AudioFile_ReadProc = extern "C" fn(
     inClientData: *mut c_void,
-    inNumberBytes: UInt32,
-    inNumberPackets: UInt32,
-    inInputData: *const c_void,
-    inPacketDescriptions: *mut AudioStreamPacketDescription,
-);
+    inPosition: SInt64,
+    requestCount: UInt32,
+    buffer: *mut c_void,
+    actualCount: *mut UInt32,
+) -> OSStatus;
 
-// Callback type for AudioConverter
+pub(super) type AudioFile_GetSizeProc = extern "C" fn(inClientData: *mut c_void) -> SInt64;
+
+/// Callback type for `AudioConverterFillComplexBuffer`.
 pub(super) type AudioConverterComplexInputDataProc = extern "C" fn(
     inAudioConverter: AudioConverterRef,
     ioNumberDataPackets: *mut UInt32,
@@ -81,36 +89,41 @@ pub(super) type AudioConverterComplexInputDataProc = extern "C" fn(
 
 #[link(name = "AudioToolbox", kind = "framework")]
 unsafe extern "C" {
-    pub(super) fn AudioFileStreamOpen(
+    pub(super) fn AudioFileOpenWithCallbacks(
         inClientData: *mut c_void,
-        inPropertyListenerProc: AudioFileStream_PropertyListenerProc,
-        inPacketsProc: AudioFileStream_PacketsProc,
+        inReadFunc: AudioFile_ReadProc,
+        inWriteFunc: *const c_void,
+        inGetSizeFunc: AudioFile_GetSizeProc,
+        inSetSizeFunc: *const c_void,
         inFileTypeHint: AudioFileTypeID,
-        outAudioFileStream: *mut AudioFileStreamID,
+        outAudioFile: *mut AudioFileID,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileStreamParseBytes(
-        inAudioFileStream: AudioFileStreamID,
-        inDataByteSize: UInt32,
-        inData: *const c_void,
-        inFlags: UInt32,
+    pub(super) fn AudioFileClose(inAudioFile: AudioFileID) -> OSStatus;
+
+    pub(super) fn AudioFileGetPropertyInfo(
+        inAudioFile: AudioFileID,
+        inPropertyID: AudioFilePropertyID,
+        outDataSize: *mut UInt32,
+        isWritable: *mut UInt32,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileStreamGetPropertyInfo(
-        inAudioFileStream: AudioFileStreamID,
-        inPropertyID: AudioFileStreamPropertyID,
-        outPropertyDataSize: *mut UInt32,
-        outWritable: *mut u8,
-    ) -> OSStatus;
-
-    pub(super) fn AudioFileStreamGetProperty(
-        inAudioFileStream: AudioFileStreamID,
-        inPropertyID: AudioFileStreamPropertyID,
-        ioPropertyDataSize: *mut UInt32,
+    pub(super) fn AudioFileGetProperty(
+        inAudioFile: AudioFileID,
+        inPropertyID: AudioFilePropertyID,
+        ioDataSize: *mut UInt32,
         outPropertyData: *mut c_void,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileStreamClose(inAudioFileStream: AudioFileStreamID) -> OSStatus;
+    pub(super) fn AudioFileReadPacketData(
+        inAudioFile: AudioFileID,
+        inUseCache: u8,
+        ioNumBytes: *mut UInt32,
+        outPacketDescriptions: *mut AudioStreamPacketDescription,
+        inStartingPacket: SInt64,
+        ioNumPackets: *mut UInt32,
+        outBuffer: *mut c_void,
+    ) -> OSStatus;
 
     pub(super) fn AudioConverterNew(
         inSourceFormat: *const AudioStreamBasicDescription,

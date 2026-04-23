@@ -14,7 +14,7 @@ workspace = true
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
 derivative = { workspace = true }
-symphonia = { workspace = true }
+symphonia = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
@@ -26,21 +26,34 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
+symphonia-core = { workspace = true, optional = true }
+symphonia-format-isomp4 = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
 ndk-context = { workspace = true }
 
 [features]
-default = []
+# Default pulls in Symphonia so `cargo build` on any platform produces a
+# usable decoder. Consumers wanting an apple/android hardware-only build
+# set `default-features = false` and enable just the platform feature.
+default = ["symphonia"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-apple = ["dep:core-foundation", "dep:core-foundation-sys"]
+apple = [
+    "dep:core-foundation",
+    "dep:core-foundation-sys",
+    "dep:symphonia-core",
+    "dep:symphonia-format-isomp4",
+]
 android = []
+# Enables the software (Symphonia) decoder path. When disabled, the
+# factory only uses the compiled hardware backend — no fallback.
+symphonia = ["dep:symphonia"]
 test-utils = ["unimock"]
 internal = []
 
 [dev-dependencies]
-kithara-decode = { path = ".", default-features = false, features = ["internal"] }
+kithara-decode = { path = ".", default-features = false, features = ["internal", "symphonia"] }
 kithara-test-utils = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

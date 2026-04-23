@@ -1,7 +1,7 @@
 //! Symphonia-based audio decoder backend.
 //!
-//! Provides the generic [`Symphonia<C>`] decoder that implements
-//! [`AudioDecoder`] for any codec type implementing [`CodecType`].
+//! Provides the [`Symphonia`] decoder that adapts `SymphoniaInner` to the
+//! [`InnerDecoder`] trait used by the rest of the crate.
 //!
 //! # Direct Reader Creation (No Probe)
 //!
@@ -9,43 +9,51 @@
 //! appropriate format reader directly without probing. This is critical
 //! for HLS streams where the container format is known.
 
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 
 use self::inner::SymphoniaInner;
 use crate::{
     error::DecodeResult,
-    traits::{Aac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3, Vorbis},
+    traits::{DecoderInput, InnerDecoder},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
 pub(crate) mod adapter;
 pub(crate) mod config;
+pub(crate) mod entry;
+pub(crate) mod error_chain;
 pub(crate) mod inner;
 pub(crate) mod probe;
 
-pub(crate) use self::config::SymphoniaConfig;
+pub(crate) use self::{
+    config::SymphoniaConfig,
+    entry::{create_from_boxed, create_probed_from_boxed},
+};
 
-/// Generic Symphonia-based decoder parameterized by codec type.
-pub(crate) struct Symphonia<C: CodecType> {
+/// Symphonia-backed decoder. Codec selection happens inside
+/// `SymphoniaInner` from the config's `container` (direct reader) or
+/// via Symphonia's probe chain — no compile-time codec marker needed.
+pub(crate) struct Symphonia {
     inner: SymphoniaInner,
-    _codec: PhantomData<C>,
 }
 
-impl<C: CodecType> AudioDecoder for Symphonia<C> {
-    type Config = SymphoniaConfig;
-    type Source = Box<dyn DecoderInput>;
-
-    fn create(source: Self::Source, config: Self::Config) -> DecodeResult<Self>
-    where
-        Self: Sized,
-    {
-        let inner = SymphoniaInner::new(source, &config)?;
-        Ok(Self {
-            inner,
-            _codec: PhantomData,
-        })
+impl Symphonia {
+    /// Create a Symphonia decoder from a boxed source and config.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::error::DecodeError`] when the source cannot be
+    /// read, the codec/container is unsupported, or construction fails.
+    pub(crate) fn new(
+        source: Box<dyn DecoderInput>,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<Self> {
+        let inner = SymphoniaInner::new(source, config)?;
+        Ok(Self { inner })
     }
+}
 
+impl InnerDecoder for Symphonia {
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.inner.next_chunk()
     }
@@ -58,48 +66,18 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         self.inner.seek(pos)
     }
 
-    fn duration(&self) -> Option<Duration> {
-        self.inner.duration
-    }
-}
-
-impl<C: CodecType> InnerDecoder for Symphonia<C> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        AudioDecoder::next_chunk(self)
-    }
-
-    fn spec(&self) -> PcmSpec {
-        AudioDecoder::spec(self)
-    }
-
-    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
-        AudioDecoder::seek(self, pos)
-    }
-
     fn update_byte_len(&self, len: u64) {
         self.inner.update_byte_len(len);
     }
 
     fn duration(&self) -> Option<Duration> {
-        AudioDecoder::duration(self)
+        self.inner.duration
     }
 
     fn metadata(&self) -> TrackMetadata {
         self.inner.metadata.clone()
     }
 }
-
-/// Symphonia-based AAC decoder.
-pub(crate) type SymphoniaAac = Symphonia<Aac>;
-
-/// Symphonia-based MP3 decoder.
-pub(crate) type SymphoniaMp3 = Symphonia<Mp3>;
-
-/// Symphonia-based FLAC decoder.
-pub(crate) type SymphoniaFlac = Symphonia<Flac>;
-
-/// Symphonia-based Vorbis decoder.
-pub(crate) type SymphoniaVorbis = Symphonia<Vorbis>;
 
 #[cfg(test)]
 mod tests {
@@ -108,29 +86,11 @@ mod tests {
         sync::{Arc, atomic::AtomicU64},
     };
 
-    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_stream::ContainerFormat;
     use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
-    use crate::{
-        error::DecodeError,
-        traits::{AudioDecoder, CodecType},
-    };
-
-    #[kithara::test]
-    fn test_symphonia_types_exist() {
-        fn _check_aac(_: SymphoniaAac) {}
-        fn _check_mp3(_: SymphoniaMp3) {}
-        fn _check_flac(_: SymphoniaFlac) {}
-        fn _check_vorbis(_: SymphoniaVorbis) {}
-    }
-
-    struct Pcm;
-    impl CodecType for Pcm {
-        const CODEC: AudioCodec = AudioCodec::Pcm;
-    }
-
-    type SymphoniaPcm = Symphonia<Pcm>;
+    use crate::error::DecodeError;
 
     #[kithara::test]
     #[case(Some(ContainerFormat::Wav))]
@@ -143,12 +103,12 @@ mod tests {
             container,
             ..Default::default()
         };
-        let decoder = SymphoniaPcm::create(Box::new(cursor), config);
+        let decoder = Symphonia::new(Box::new(cursor), &config);
         assert!(decoder.is_ok(), "decoder creation should succeed");
 
         let decoder = decoder.unwrap();
-        assert_eq!(AudioDecoder::spec(&decoder).sample_rate, 44100);
-        assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
+        assert_eq!(decoder.spec().sample_rate, 44100);
+        assert_eq!(decoder.spec().channels, 2);
     }
 
     #[kithara::test]
@@ -160,9 +120,9 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
+        let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
+        let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
 
         let chunk = chunk.unwrap();
@@ -180,11 +140,11 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
+        let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        while AudioDecoder::next_chunk(&mut decoder).unwrap().is_some() {}
+        while decoder.next_chunk().unwrap().is_some() {}
 
-        let result = AudioDecoder::next_chunk(&mut decoder).unwrap();
+        let result = decoder.next_chunk().unwrap();
         assert!(result.is_none());
     }
 
@@ -197,14 +157,14 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
+        let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
-        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
+        let _ = decoder.next_chunk().unwrap();
+        let _ = decoder.next_chunk().unwrap();
 
-        AudioDecoder::seek(&mut decoder, Duration::from_secs(0)).unwrap();
+        decoder.seek(Duration::from_secs(0)).unwrap();
 
-        let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
+        let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
     }
 
@@ -217,9 +177,9 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
+        let decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        let duration = AudioDecoder::duration(&decoder);
+        let duration = decoder.duration();
         assert!(duration.is_some());
 
         let dur = duration.unwrap();
@@ -236,7 +196,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let result = SymphoniaPcm::create(Box::new(cursor), config);
+        let result = Symphonia::new(Box::new(cursor), &config);
         assert!(result.is_err());
     }
 
@@ -249,7 +209,7 @@ mod tests {
             container: Some(ContainerFormat::MpegTs),
             ..Default::default()
         };
-        let result = SymphoniaPcm::create(Box::new(cursor), config);
+        let result = Symphonia::new(Box::new(cursor), &config);
         assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
     }
 

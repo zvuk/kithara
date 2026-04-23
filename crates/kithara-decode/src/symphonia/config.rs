@@ -27,14 +27,6 @@ pub(crate) struct SymphoniaConfig {
     ///
     /// Used only when `container` is not set, as a hint for the probe.
     pub hint: Option<String>,
-    /// Disable seek during probe-based initialization.
-    ///
-    /// When true, seek is disabled during Symphonia probe, preventing format
-    /// readers from seeking to end to validate file/chunk sizes. Useful after
-    /// ABR variant switches where the byte length seen by the adapter may not
-    /// match container header expectations (e.g., WAV `data_size` vs actual
-    /// available data). Seek is re-enabled after successful initialization.
-    pub probe_no_seek: bool,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
@@ -79,7 +71,6 @@ mod tests {
             byte_len_handle: Some(Arc::clone(&handle)),
             container: Some(ContainerFormat::Fmp4),
             hint: Some("mp4".to_string()),
-            probe_no_seek: false,
             stream_ctx: None,
             epoch: 0,
             pcm_pool: None,

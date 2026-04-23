@@ -26,6 +26,12 @@ services:
       context: ..
       dockerfile: docker/ci.Dockerfile
     profiles: ["fast"]
+    # Hard cap on host resources: leave headroom so we do not take the host
+    # down under sustained full-workspace rebuilds. Assumes a 32-core / ~124
+    # GiB server; scale down the caps if running elsewhere.
+    cpus: "24"
+    mem_limit: 80g
+    memswap_limit: 80g
     volumes:
       - ../:/repo:rw
       - /var/kithara-ci-results-fast:/ci-out:rw
@@ -38,8 +44,10 @@ services:
       CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
       RUSTC_WRAPPER: "sccache"
       SCCACHE_DIR: "/sccache"
-      SCCACHE_CACHE_SIZE: "100G"
+      SCCACHE_CACHE_SIZE: "60G"
       SCCACHE_IDLE_TIMEOUT: "0"
+      # Cap cargo-mutants parallelism to match host headroom.
+      MUTANTS_JOBS: "8"
     command: just ci-full-run /ci-out
     restart: "no"
 

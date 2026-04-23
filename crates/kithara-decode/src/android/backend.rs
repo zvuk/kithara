@@ -8,8 +8,8 @@ use super::{
     supports_codec as android_supports_codec, try_create_android_decoder,
 };
 use crate::{
-    DecoderConfig, InnerDecoder,
-    backend::{BoxedSource, HardwareBackend, RecoverableHardwareError},
+    DecodeError, DecoderConfig, InnerDecoder,
+    backend::{BoxedSource, HardwareBackend},
 };
 
 pub(crate) struct AndroidBackend;
@@ -32,7 +32,7 @@ impl HardwareBackend for AndroidBackend {
         config: &DecoderConfig,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
         let android_config = AndroidConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,

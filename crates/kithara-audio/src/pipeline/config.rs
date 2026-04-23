@@ -92,7 +92,11 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_buffer_chunks: Self::DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             playback_rate: None,
-            prefer_hardware: cfg!(any(feature = "apple", feature = "android")),
+            // Default to software path; hardware decoders are opt-in via
+            // `with_prefer_hardware(true)`. No fallback happens, so an
+            // implicit default would silently fail whenever the hardware
+            // backend cannot seek the active container (e.g. Apple + fMP4).
+            prefer_hardware: false,
             preload_chunks: Self::DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,

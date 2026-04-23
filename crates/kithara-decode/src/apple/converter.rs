@@ -1,32 +1,60 @@
 //! `AudioConverter` input-data callback and associated state.
+//!
+//! The callback hands `AudioConverter` a pointer+len into the active
+//! packet buffer without any per-packet allocation. `AppleInner` writes
+//! the current packet into `ConverterInputState` before each
+//! `AudioConverterFillComplexBuffer` call and clears `has_packet` once
+//! the converter consumes it.
 
 #![allow(unsafe_code)]
 
-use std::ffi::c_void;
+use std::{ffi::c_void, ptr};
 
 use super::{
     consts::Consts,
     ffi::{AudioBufferList, AudioConverterRef, AudioStreamPacketDescription, OSStatus, UInt32},
-    parser::AudioPacket,
 };
 
-/// State for `AudioConverter` input callback.
+/// Zero-alloc input state fed into `AudioConverterFillComplexBuffer`.
+///
+/// All fields point at memory owned by the `PacketReader`'s internal
+/// buffer — they stay valid until the next `read_next_packet` call, which
+/// is always issued by `AppleInner` *after* the converter has finished
+/// consuming the current packet.
 pub(super) struct ConverterInputState {
-    /// Current packet being provided to converter.
-    pub(super) current_packet: Option<AudioPacket>,
-    /// Packet description for current packet.
+    pub(super) packet_ptr: *const u8,
+    pub(super) packet_len: UInt32,
     pub(super) packet_desc: AudioStreamPacketDescription,
-    /// Holds packet data while converter uses it (prevents memory leak).
-    pub(super) held_packet_data: Option<Vec<u8>>,
+    pub(super) has_packet: bool,
 }
 
 impl ConverterInputState {
     pub(super) fn new() -> Self {
         Self {
-            current_packet: None,
+            packet_ptr: ptr::null(),
+            packet_len: 0,
             packet_desc: AudioStreamPacketDescription::default(),
-            held_packet_data: None,
+            has_packet: false,
         }
+    }
+
+    pub(super) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
+        #[expect(clippy::cast_possible_truncation, reason = "packet size fits in u32")]
+        let len = data.len() as UInt32;
+        self.packet_ptr = data.as_ptr();
+        self.packet_len = len;
+        self.packet_desc = AudioStreamPacketDescription {
+            mStartOffset: 0,
+            mVariableFramesInPacket: description.mVariableFramesInPacket,
+            mDataByteSize: len,
+        };
+        self.has_packet = true;
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.packet_ptr = ptr::null();
+        self.packet_len = 0;
+        self.has_packet = false;
     }
 }
 
@@ -38,50 +66,32 @@ pub(super) extern "C" fn converter_input_callback(
     out_packet_desc: *mut *mut AudioStreamPacketDescription,
     user_data: *mut c_void,
 ) -> OSStatus {
-    // SAFETY: `user_data` was set to a valid `ConverterInputState` pointer by the caller.
+    // SAFETY: `user_data` was set to a valid `ConverterInputState` pointer
+    // by `AppleInner::run_converter`; the state outlives the callback.
     let state = unsafe { &mut *(user_data as *mut ConverterInputState) };
 
-    let Some(packet) = state.current_packet.take() else {
-        // No data available
-        // SAFETY: `io_num_packets` is a valid mutable pointer provided by AudioConverter.
+    if !state.has_packet {
+        // SAFETY: `io_num_packets` is a valid out-param provided by AudioConverter.
         unsafe {
             *io_num_packets = 0;
         }
         return Consts::kAudioConverterErr_NoDataNow;
-    };
+    }
 
-    // Store packet data in state to keep it alive during conversion
-    let data_len = packet.data.len();
-    state.held_packet_data = Some(packet.data);
-
-    // SAFETY: `io_data` and `io_num_packets` are valid pointers provided by AudioConverter.
-    // `held_packet_data` was set to `Some` on the line above, so `unwrap` cannot panic.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "packet data length fits in u32"
-    )]
-    // SAFETY: `io_data` is a valid pointer provided by `AudioConverter` callback.
-    // `held_packet_data` was set to `Some` two lines above.
+    // SAFETY: `io_data`, `io_num_packets` are valid pointers supplied by
+    // AudioConverter. `packet_ptr` is either owned by the
+    // `PacketReader`'s internal buffer (AudioFile) or by an `Fmp4Reader`
+    // buffer; both stay alive for the duration of this call.
     unsafe {
-        #[expect(
-            clippy::unwrap_used,
-            reason = "held_packet_data was set to Some two lines above"
-        )]
-        let data_ptr = state.held_packet_data.as_ref().unwrap().as_ptr();
-        (*io_data).mBuffers[0].mDataByteSize = data_len as UInt32;
-        (*io_data).mBuffers[0].mData = data_ptr as *mut c_void;
+        (*io_data).mBuffers[0].mDataByteSize = state.packet_len;
+        (*io_data).mBuffers[0].mData = state.packet_ptr as *mut c_void;
         *io_num_packets = 1;
 
-        // Provide packet description if requested
         if !out_packet_desc.is_null() {
-            state.packet_desc = AudioStreamPacketDescription {
-                mStartOffset: 0,
-                mVariableFramesInPacket: packet.description.mVariableFramesInPacket,
-                mDataByteSize: data_len as UInt32,
-            };
             *out_packet_desc = &mut state.packet_desc;
         }
     }
 
+    state.has_packet = false;
     Consts::noErr
 }

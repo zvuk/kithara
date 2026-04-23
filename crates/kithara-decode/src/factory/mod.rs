@@ -1,7 +1,11 @@
 //! Factory for creating decoders with runtime codec selection.
 //!
-//! This module provides [`DecoderFactory`] which creates decoders
-//! based on runtime codec information, handling probing and backend selection.
+//! Exactly one decoder path is taken per call — no fallback. The factory
+//! picks either the compiled hardware backend (when `prefer_hardware` is
+//! set and the backend accepts the codec/container) or Symphonia (when
+//! the `symphonia` feature is enabled). If neither path is available
+//! the call fails with a classified `DecodeError` — callers must treat
+//! such failures as terminal.
 //!
 //! # Example
 //!
@@ -14,13 +18,12 @@
 //! let decoder = DecoderFactory::create_from_media_info(
 //!     file,
 //!     &media_info,
-//!     DecoderConfig::default(),
+//!     &DecoderConfig::default(),
 //! )?;
 //! ```
 
 mod hardware;
 mod probe;
-mod symphonia_entry;
 
 use std::{
     io::{Read, Seek},
@@ -28,14 +31,13 @@ use std::{
 };
 
 use derivative::Derivative;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_stream::{MediaInfo, StreamContext};
 
 pub(crate) use self::probe::{CodecSelector, ProbeHint};
 use self::{
     hardware::{HardwareAttempt, try_hardware_decoder},
     probe::{container_from_extension, probe_codec, resolve_codec_container},
-    symphonia_entry::{create_symphonia_from_boxed, create_with_symphonia_probe},
 };
 use crate::{
     InnerDecoder,
@@ -47,7 +49,10 @@ use crate::{
 #[derive(Clone, Derivative)]
 #[derivative(Default)]
 pub struct DecoderConfig {
-    /// Prefer hardware decoder when available.
+    /// Route decoding through the hardware backend (Apple `AudioToolbox`
+    /// or Android `MediaCodec`). When `false`, the factory uses Symphonia
+    /// (requires the `symphonia` feature). There is no fallback between
+    /// the two paths.
     pub prefer_hardware: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
@@ -66,18 +71,26 @@ pub struct DecoderConfig {
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub pcm_pool: Option<PcmPool>,
+    /// Optional byte buffer pool override.
+    ///
+    /// Used by backends that need a reusable raw byte buffer (e.g. the
+    /// Apple fMP4 reader loads the container into a pooled slice and
+    /// slices packets out without per-packet allocations).  When `None`,
+    /// the global `kithara_bufpool::byte_pool()` is used.
+    pub byte_pool: Option<BytePool>,
 }
 
-/// Factory for creating decoders with runtime backend selection.
+/// Factory for creating decoders with a single, strict backend selection.
 ///
-/// Supports multiple backends with automatic fallback:
-/// - Apple `AudioToolbox` (macOS/iOS) when the `apple` feature is enabled
-/// - Android `MediaCodec` (Android) when the `android` feature is enabled
-/// - Symphonia (software, all platforms) as a default fallback
+/// Backend matrix:
+/// - `prefer_hardware == true` → hardware backend (Apple/Android). Fails if
+///   the codec/container is unsupported or decoder construction errors.
+/// - `prefer_hardware == false` → Symphonia (requires `feature = "symphonia"`).
+///   Without the feature the call fails with `UnsupportedCodec`.
 pub struct DecoderFactory;
 
 impl DecoderFactory {
-    /// Create a decoder with automatic backend selection.
+    /// Create a decoder with the single selected backend.
     pub(crate) fn create<R>(
         source: R,
         selector: &CodecSelector,
@@ -104,51 +117,45 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        let source = match try_hardware_decoder::<B>(source, codec, container, config) {
-            HardwareAttempt::Decoded(decoder) => return Ok(decoder),
-            HardwareAttempt::Skipped(src) | HardwareAttempt::Failed(src) => src,
-        };
-
-        create_symphonia_from_boxed(source, codec, container, config)
-    }
-
-    /// Create a decoder for seek-time recreation with a metadata-first strategy.
-    ///
-    /// First tries `create_from_media_info`. If that fails, retries with
-    /// native Symphonia probing from a fresh source.
-    ///
-    /// # Errors
-    ///
-    /// Returns error when both strategies fail.
-    pub fn create_for_recreate<R, F>(
-        make_source: F,
-        media_info: &MediaInfo,
-        config: DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-        F: Fn() -> R,
-    {
-        match Self::create_from_media_info(make_source(), media_info, &config) {
-            Ok(decoder) => Ok(decoder),
-            Err(error) => {
+        if config.prefer_hardware {
+            match try_hardware_decoder::<B>(source, codec, container, config) {
+                HardwareAttempt::Decoded(decoder) => Ok(decoder),
+                HardwareAttempt::Skipped => {
+                    tracing::warn!(
+                        ?codec,
+                        ?container,
+                        "hardware backend does not support codec/container; \
+                         no fallback when prefer_hardware=true"
+                    );
+                    Err(DecodeError::UnsupportedCodec(codec))
+                }
+                HardwareAttempt::Failed(err) => Err(err),
+            }
+        } else {
+            #[cfg(feature = "symphonia")]
+            {
+                crate::symphonia::create_from_boxed(source, codec, container, config)
+            }
+            #[cfg(not(feature = "symphonia"))]
+            {
+                let _ = (source, container);
                 tracing::warn!(
-                    ?error,
-                    ?media_info,
-                    "create_from_media_info failed during recreate; retrying with native probe"
+                    ?codec,
+                    "symphonia feature disabled; software decoder unavailable"
                 );
-                Self::create_with_symphonia_probe(make_source(), config)
+                Err(DecodeError::UnsupportedCodec(codec))
             }
         }
     }
 
-    /// Create decoder from `MediaInfo` (for kithara-audio compatibility).
+    /// Create decoder from `MediaInfo` (kithara-audio entry point).
     ///
     /// Extracts codec from `MediaInfo` and creates the appropriate decoder.
     ///
     /// # Errors
     ///
-    /// Returns error if no codec can be determined or decoder creation fails.
+    /// Returns error if codec cannot be determined or decoder creation fails.
+    /// No fallback — a failure is terminal.
     pub fn create_from_media_info<R>(
         source: R,
         media_info: &MediaInfo,
@@ -169,12 +176,61 @@ impl DecoderFactory {
         Self::create(source, &CodecSelector::Probe(hint), config)
     }
 
-    /// Create decoder from a file-extension hint. Falls back to native probe when
-    /// the hint is missing or too weak to pick a codec.
+    /// Recreate a decoder on HLS variant switch / format change.
+    ///
+    /// Tries the metadata-driven path first (`create_from_media_info`).
+    /// When the new segment's actual layout disagrees with the stored
+    /// `MediaInfo` (for instance a WAV header rewritten at an unexpected
+    /// offset after an ABR hop), the probe path parses the bitstream and
+    /// resolves the codec/container from scratch. This is recreation-only
+    /// robustness; backend selection (hardware vs software) stays strict.
     ///
     /// # Errors
     ///
-    /// Returns error if codec cannot be determined or decoder creation fails.
+    /// Returns error when both the metadata-first and the probe attempts
+    /// fail.
+    pub fn create_for_recreate<R, F>(
+        make_source: F,
+        media_info: &MediaInfo,
+        config: &DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+        F: Fn() -> R,
+    {
+        match Self::create_from_media_info(make_source(), media_info, config) {
+            Ok(decoder) => Ok(decoder),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    ?media_info,
+                    "create_from_media_info failed during recreate; retrying with native probe"
+                );
+                #[cfg(feature = "symphonia")]
+                {
+                    let boxed: BoxedSource = Box::new(make_source());
+                    crate::symphonia::create_probed_from_boxed(boxed, config)
+                }
+                #[cfg(not(feature = "symphonia"))]
+                {
+                    let _ = make_source;
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    /// Create decoder from a file-extension hint.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
+    /// weak to pick a codec, and `DecodeError::*` for backend failures.
+    /// No fallback — callers must supply a usable hint.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "by-value lets callers pass DecoderConfig::default() without explicit borrow"
+    )]
     pub fn create_with_probe<R>(
         source: R,
         hint: Option<&str>,
@@ -189,33 +245,8 @@ impl DecoderFactory {
             ..Default::default()
         };
 
-        if probe_codec(&probe_hint).is_err() {
-            return Self::create_with_symphonia_probe(source, config);
-        }
-
-        match Self::create(source, &CodecSelector::Probe(probe_hint), &config) {
-            Ok(decoder) => Ok(decoder),
-            Err(DecodeError::ProbeFailed) => Err(DecodeError::ProbeFailed),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Create a decoder by delegating to Symphonia's native probe.
-    ///
-    /// Useful after ABR variant switches when HLS metadata disagrees with the
-    /// actual data (e.g., WAV served via HLS).
-    ///
-    /// # Errors
-    ///
-    /// Returns error if Symphonia's probe fails or decoder creation fails.
-    pub fn create_with_symphonia_probe<R>(
-        source: R,
-        config: DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        create_with_symphonia_probe(source, config)
+        probe_codec(&probe_hint)?;
+        Self::create(source, &CodecSelector::Probe(probe_hint), &config)
     }
 }
 
@@ -230,9 +261,7 @@ mod tests {
     use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
-    use crate::backend::{
-        BoxedSource, HardwareBackend, RecoverableHardwareError, recoverable_hardware_error,
-    };
+    use crate::backend::{BoxedSource, HardwareBackend};
 
     const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -255,15 +284,14 @@ mod tests {
         }
 
         fn try_create(
-            source: BoxedSource,
+            _source: BoxedSource,
             _config: &DecoderConfig,
             _codec: AudioCodec,
             _container: Option<ContainerFormat>,
-        ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
-            Err(recoverable_hardware_error(
-                source,
-                DecodeError::Backend(Box::new(IoError::other("forced hardware failure"))),
-            ))
+        ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
+            Err(DecodeError::Backend(Box::new(IoError::other(
+                "forced hardware failure",
+            ))))
         }
     }
 
@@ -286,6 +314,7 @@ mod tests {
             stream_ctx: None,
             epoch: 0,
             pcm_pool: None,
+            byte_pool: None,
         };
         assert!(config.prefer_hardware);
         assert!(config.byte_len_handle.is_some());
@@ -301,49 +330,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_create_for_recreate_falls_back_to_native_probe_on_mismatch() {
-        let wav_data = create_test_wav(64, 44_100, 2);
-        let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
-
-        let decoder = DecoderFactory::create_for_recreate(
-            || Cursor::new(wav_data.clone()),
-            &wrong_info,
-            DecoderConfig::default(),
-        )
-        .expect("native probe fallback should recreate decoder");
-
-        let spec = decoder.spec();
-        assert_eq!(spec.channels, 2);
-        assert_eq!(spec.sample_rate, 44_100);
-    }
-
-    #[kithara::test]
-    fn test_create_for_recreate_fails_when_all_strategies_fail() {
-        let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
-        let result = DecoderFactory::create_for_recreate(
-            || Cursor::new(Vec::<u8>::new()),
-            &wrong_info,
-            DecoderConfig::default(),
-        );
-        assert!(result.is_err());
-    }
-
-    #[kithara::test]
-    fn test_create_with_probe_without_hint_falls_back_to_symphonia_probe() {
-        let decoder = DecoderFactory::create_with_probe(
-            Cursor::new(TEST_MP3_BYTES.to_vec()),
-            None,
-            DecoderConfig::default(),
-        )
-        .expect("native probe fallback should create MP3 decoder");
-
-        let spec = decoder.spec();
-        assert!(spec.channels > 0);
-        assert!(spec.sample_rate > 0);
-    }
-
-    #[kithara::test]
-    fn test_recoverable_hardware_failure_falls_back_to_symphonia() {
+    fn test_hardware_failure_is_terminal_no_symphonia_fallback() {
         let wav_data = create_test_wav(64, 44_100, 2);
         let config = DecoderConfig {
             prefer_hardware: true,
@@ -355,16 +342,40 @@ mod tests {
             ..Default::default()
         };
 
-        let decoder = DecoderFactory::create_with_backend::<FailingHardwareBackend>(
+        let result = DecoderFactory::create_with_backend::<FailingHardwareBackend>(
             Box::new(Cursor::new(wav_data)),
             &CodecSelector::Probe(hint),
             &config,
+        );
+        assert!(
+            result.is_err(),
+            "hardware failure with prefer_hardware=true must not fall back to Symphonia"
+        );
+    }
+
+    #[kithara::test]
+    fn test_create_with_probe_without_hint_fails_with_probe_failed() {
+        let result = DecoderFactory::create_with_probe(
+            Cursor::new(TEST_MP3_BYTES.to_vec()),
+            None,
+            DecoderConfig::default(),
+        );
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[cfg(feature = "symphonia")]
+    #[kithara::test]
+    fn test_create_with_probe_with_mp3_hint_succeeds() {
+        let decoder = DecoderFactory::create_with_probe(
+            Cursor::new(TEST_MP3_BYTES.to_vec()),
+            Some("mp3"),
+            DecoderConfig::default(),
         )
-        .expect("recoverable hardware failure should fall back to Symphonia");
+        .expect("mp3 hint should produce a decoder");
 
         let spec = decoder.spec();
-        assert_eq!(spec.channels, 2);
-        assert_eq!(spec.sample_rate, 44_100);
+        assert!(spec.channels > 0);
+        assert!(spec.sample_rate > 0);
     }
 
     #[kithara::test]

@@ -8,44 +8,11 @@
 
 pub(crate) mod current;
 
-use std::io::{Seek, SeekFrom};
-
 use kithara_stream::{AudioCodec, ContainerFormat};
-#[cfg(any(
-    test,
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-use tracing::warn;
 
 use crate::{DecodeError, DecoderConfig, InnerDecoder, traits::DecoderInput};
 
 pub(crate) type BoxedSource = Box<dyn DecoderInput>;
-
-pub(crate) struct RecoverableHardwareError {
-    pub(crate) source: BoxedSource,
-    pub(crate) error: DecodeError,
-}
-
-#[cfg(any(
-    test,
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-pub(crate) fn recoverable_hardware_error(
-    mut source: BoxedSource,
-    error: DecodeError,
-) -> RecoverableHardwareError {
-    if let Err(rewind_error) = Seek::seek(&mut *source, SeekFrom::Start(0)) {
-        warn!(
-            ?error,
-            ?rewind_error,
-            "Hardware backend failed and source rewind for Symphonia fallback also failed"
-        );
-    }
-
-    RecoverableHardwareError { source, error }
-}
 
 /// Check whether a hardware backend accepts this codec/container pair.
 ///
@@ -84,7 +51,7 @@ pub(crate) trait HardwareBackend {
         config: &DecoderConfig,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError>;
+    ) -> Result<Box<dyn InnerDecoder>, DecodeError>;
 }
 
 #[cfg(test)]
@@ -98,7 +65,7 @@ mod tests {
         _config: &DecoderConfig,
         _codec: AudioCodec,
         _container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
         unreachable!("capability-only test backend should never construct a decoder")
     }
 
@@ -123,7 +90,7 @@ mod tests {
             config: &DecoderConfig,
             codec: AudioCodec,
             container: Option<ContainerFormat>,
-        ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+        ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
             unsupported_try_create(source, config, codec, container)
         }
     }
@@ -146,7 +113,7 @@ mod tests {
             config: &DecoderConfig,
             codec: AudioCodec,
             container: Option<ContainerFormat>,
-        ) -> Result<Box<dyn InnerDecoder>, RecoverableHardwareError> {
+        ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
             unsupported_try_create(source, config, codec, container)
         }
     }

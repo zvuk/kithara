@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, atomic::AtomicU64};
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_stream::ContainerFormat;
 
 /// Configuration for Apple `AudioToolbox` decoder.
@@ -16,6 +16,10 @@ pub(crate) struct AppleConfig {
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub(crate) pcm_pool: Option<PcmPool>,
+    /// Optional byte buffer pool for the fMP4 reader's backing storage.
+    ///
+    /// When `None`, the global `kithara_bufpool::byte_pool()` is used.
+    pub(crate) byte_pool: Option<BytePool>,
 }
 
 #[cfg(test)]

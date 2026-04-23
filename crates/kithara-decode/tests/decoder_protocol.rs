@@ -15,12 +15,20 @@ use std::{io::Cursor, time::Duration};
 
 use kithara_decode::{DecoderConfig, DecoderFactory, InnerDecoder};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{create_test_wav, kithara};
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/test.mp3"
 ));
+
+struct Consts;
+
+impl Consts {
+    const WAV_SAMPLE_RATE: u32 = 44_100;
+    const WAV_CHANNELS: u16 = 2;
+    const WAV_FRAMES: usize = Self::WAV_SAMPLE_RATE as usize * 2;
+}
 
 /// Backend selector for cross-decoder comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,28 +39,37 @@ enum Backend {
 }
 
 impl Backend {
-    fn make_mp3(self) -> Box<dyn InnerDecoder> {
-        let source = Cursor::new(TEST_MP3_BYTES.to_vec());
-        let media_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+    fn prefer_hardware(self) -> bool {
         match self {
-            Self::Symphonia => {
-                let config = DecoderConfig {
-                    prefer_hardware: false,
-                    ..Default::default()
-                };
-                DecoderFactory::create_from_media_info(source, &media_info, &config)
-                    .expect("symphonia mp3 decoder should create")
-            }
+            Self::Symphonia => false,
             #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-            Self::Apple => {
-                let config = DecoderConfig {
-                    prefer_hardware: true,
-                    ..Default::default()
-                };
-                DecoderFactory::create_from_media_info(source, &media_info, &config)
-                    .expect("apple mp3 decoder should create")
-            }
+            Self::Apple => true,
         }
+    }
+
+    fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn InnerDecoder> {
+        let source = Cursor::new(bytes);
+        let config = DecoderConfig {
+            prefer_hardware: self.prefer_hardware(),
+            ..Default::default()
+        };
+        DecoderFactory::create_from_media_info(source, info, &config)
+            .unwrap_or_else(|e| panic!("{self:?} decoder should create: {e}"))
+    }
+
+    fn make_mp3(self) -> Box<dyn InnerDecoder> {
+        let info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+        self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
+    }
+
+    fn make_wav(self) -> Box<dyn InnerDecoder> {
+        let bytes = create_test_wav(
+            Consts::WAV_FRAMES,
+            Consts::WAV_SAMPLE_RATE,
+            Consts::WAV_CHANNELS,
+        );
+        let info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+        self.make_decoder(bytes, &info)
     }
 }
 
@@ -217,6 +234,47 @@ fn end_of_stream_returns_none_repeatedly() {
                 "backend {backend:?} must keep returning None at EOF"
             );
         }
+    }
+}
+
+#[kithara::test]
+fn wav_pcm_round_trip_matches_signal_across_backends() {
+    // The fixture is 16-bit little-endian PCM with a deterministic sine
+    // signal. Every backend that claims to support PCM+WAV must decode it
+    // to a non-trivial f32 stream with the expected frame count and energy.
+    for backend in available_backends() {
+        let mut dec = backend.make_wav();
+
+        let spec = dec.spec();
+        assert_eq!(
+            spec.sample_rate,
+            Consts::WAV_SAMPLE_RATE,
+            "{backend:?}: sample rate mismatch"
+        );
+        assert_eq!(
+            spec.channels,
+            Consts::WAV_CHANNELS,
+            "{backend:?}: channel count mismatch"
+        );
+
+        let samples = drain_all(&mut *dec);
+        let channels = usize::from(spec.channels).max(1);
+        let frames = samples.len() / channels;
+
+        // Allow a small priming difference; the WAV fixture is uncompressed
+        // so the decoder should return ~all frames.
+        let tol = Consts::WAV_FRAMES / 200;
+        let diff = Consts::WAV_FRAMES.abs_diff(frames);
+        assert!(
+            diff <= tol,
+            "{backend:?}: decoded {frames} frames, expected ~{Consts::WAV_FRAMES} (tol {tol})"
+        );
+
+        let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            peak > 0.1,
+            "{backend:?}: decoded PCM peak {peak} is too quiet — signal likely dropped"
+        );
     }
 }
 

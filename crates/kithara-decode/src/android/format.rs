@@ -26,6 +26,7 @@ pub(crate) fn supports_codec_at_api(codec: AudioCodec, api_level: Option<u32>) -
             | AudioCodec::AacHeV2
             | AudioCodec::Mp3
             | AudioCodec::Flac
+            | AudioCodec::Pcm
     )
 }
 
@@ -37,6 +38,7 @@ pub(crate) fn can_seek_container(container: ContainerFormat) -> bool {
             | ContainerFormat::Fmp4
             | ContainerFormat::MpegAudio
             | ContainerFormat::Flac
+            | ContainerFormat::Wav
     )
 }
 
@@ -46,6 +48,7 @@ pub(crate) fn default_container_for_codec(codec: AudioCodec) -> Option<Container
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => Some(ContainerFormat::Adts),
         AudioCodec::Mp3 => Some(ContainerFormat::MpegAudio),
         AudioCodec::Flac => Some(ContainerFormat::Flac),
+        AudioCodec::Pcm => Some(ContainerFormat::Wav),
         _ => None,
     }
 }
@@ -56,6 +59,7 @@ pub(crate) fn mime_for_codec(codec: AudioCodec) -> Option<&'static str> {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => Some("audio/mp4a-latm"),
         AudioCodec::Mp3 => Some("audio/mpeg"),
         AudioCodec::Flac => Some("audio/flac"),
+        AudioCodec::Pcm => Some("audio/raw"),
         _ => None,
     }
 }
@@ -92,6 +96,7 @@ mod tests {
     #[case(AudioCodec::AacHeV2, Some(ContainerFormat::Adts))]
     #[case(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))]
     #[case(AudioCodec::Flac, Some(ContainerFormat::Flac))]
+    #[case(AudioCodec::Pcm, Some(ContainerFormat::Wav))]
     #[case(AudioCodec::Alac, None)]
     fn default_container_mapping_is_conservative(
         #[case] codec: AudioCodec,
@@ -105,8 +110,8 @@ mod tests {
     #[case(ContainerFormat::Fmp4, true)]
     #[case(ContainerFormat::MpegAudio, true)]
     #[case(ContainerFormat::Flac, true)]
+    #[case(ContainerFormat::Wav, true)]
     #[case(ContainerFormat::MpegTs, false)]
-    #[case(ContainerFormat::Wav, false)]
     fn seekable_container_prefilter_matches_v1_scope(
         #[case] container: ContainerFormat,
         #[case] expected: bool,

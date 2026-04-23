@@ -35,8 +35,12 @@ use kithara_test_utils::{
 use tokio::time::timeout;
 use tracing::{debug, info};
 
-use crate::continuity::{
-    CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
+use crate::{
+    common::decoder_backend::DecoderBackend,
+    continuity::{
+        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
+        render_offline_window,
+    },
 };
 
 struct Consts;
@@ -166,27 +170,36 @@ fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
     store
 }
 
-fn resource_config(url: &url::Url, store: StoreOptions) -> ResourceConfig {
-    ResourceConfig::new(url.as_str())
+fn resource_config(url: &url::Url, store: StoreOptions, backend: DecoderBackend) -> ResourceConfig {
+    let mut cfg = ResourceConfig::new(url.as_str())
         .unwrap()
         .with_hint("mp3")
-        .with_store(store)
+        .with_store(store);
+    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg
 }
 
-fn resource_config_no_hint(url: &url::Url, store: StoreOptions) -> ResourceConfig {
-    ResourceConfig::new(url.as_str()).unwrap().with_store(store)
+fn resource_config_no_hint(
+    url: &url::Url,
+    store: StoreOptions,
+    backend: DecoderBackend,
+) -> ResourceConfig {
+    let mut cfg = ResourceConfig::new(url.as_str()).unwrap().with_store(store);
+    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg
 }
 
 fn resource_config_with_worker(
     url: &url::Url,
     store: StoreOptions,
     worker: AudioWorkerHandle,
+    backend: DecoderBackend,
 ) -> ResourceConfig {
-    resource_config(url, store).with_worker(worker)
+    resource_config(url, store, backend).with_worker(worker)
 }
 
-async fn open_resource(url: &url::Url, store: StoreOptions) -> Resource {
-    Resource::new(resource_config(url, store))
+async fn open_resource(url: &url::Url, store: StoreOptions, backend: DecoderBackend) -> Resource {
+    Resource::new(resource_config(url, store, backend))
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -195,18 +208,25 @@ async fn open_resource_with_worker(
     url: &url::Url,
     store: StoreOptions,
     worker: AudioWorkerHandle,
+    backend: DecoderBackend,
 ) -> Resource {
-    Resource::new(resource_config_with_worker(url, store, worker))
+    Resource::new(resource_config_with_worker(url, store, worker, backend))
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
-async fn warm_hls_worker(url: &url::Url, store: StoreOptions, worker: AudioWorkerHandle) -> f64 {
+async fn warm_hls_worker(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: AudioWorkerHandle,
+    backend: DecoderBackend,
+) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let hls_config = HlsConfig::new(url.clone()).with_store(store);
     let config = AudioConfig::<Hls>::new(hls_config)
         .with_media_info(wav_info)
-        .with_worker(worker);
+        .with_worker(worker)
+        .with_prefer_hardware(backend.prefer_hardware());
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -258,12 +278,14 @@ async fn warm_hls_worker_without_seek(
     url: &url::Url,
     store: StoreOptions,
     worker: AudioWorkerHandle,
+    backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let hls_config = HlsConfig::new(url.clone()).with_store(store);
     let config = AudioConfig::<Hls>::new(hls_config)
         .with_media_info(wav_info)
-        .with_worker(worker);
+        .with_worker(worker)
+        .with_prefer_hardware(backend.prefer_hardware());
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -331,8 +353,10 @@ async fn open_packaged_hls_audio(
     url: &url::Url,
     store: StoreOptions,
     _codec: AudioCodec,
+    backend: DecoderBackend,
 ) -> Audio<Stream<Hls>> {
-    let config = AudioConfig::<Hls>::new(HlsConfig::new(url.clone()).with_store(store));
+    let config = AudioConfig::<Hls>::new(HlsConfig::new(url.clone()).with_store(store))
+        .with_prefer_hardware(backend.prefer_hardware());
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
@@ -402,13 +426,22 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn player_resource_repeated_unavailable_mp3_does_not_panic(temp_dir: TestTempDir) {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn player_resource_repeated_unavailable_mp3_does_not_panic(
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, true);
     let ok_url = server.url("/ok.mp3");
     let bad_url = server.url("/gone.mp3");
 
-    let mut ok = open_resource(&ok_url, store.clone()).await;
+    let mut ok = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut ok, "initial_ok").await > 0);
     let forward_pos = seek_and_read(&mut ok, Duration::from_secs(2), "ok_seek_forward").await;
     assert!(
@@ -418,14 +451,14 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(temp_dir: TestT
     drop(ok);
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(&bad_url, store.clone())).await;
+        let result = Resource::new(resource_config(&bad_url, store.clone(), backend)).await;
         assert!(
             result.is_err(),
             "unavailable resource attempt {attempt} must return error"
         );
     }
 
-    let mut ok_again = open_resource(&ok_url, store).await;
+    let mut ok_again = open_resource(&ok_url, store, backend).await;
     let replay_pos = seek_and_read(
         &mut ok_again,
         Duration::from_secs(1),
@@ -448,17 +481,34 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(temp_dir: TestT
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
-#[case::ephemeral(true)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_symphonia(false, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_apple(false, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_android(false, DecoderBackend::Android)
+)]
+#[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
+#[case::ephemeral_apple(true, DecoderBackend::Apple)]
+#[case::ephemeral_android(true, DecoderBackend::Android)]
 async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[case] ephemeral: bool,
+    #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, ephemeral);
     let ok_url = server.url("/ok.mp3");
 
-    let mut first = open_resource(&ok_url, store.clone()).await;
+    let mut first = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut first, "first_initial").await > 0);
     let first_forward = seek_and_read(&mut first, Duration::from_secs(3), "first_forward").await;
     let first_backward =
@@ -469,7 +519,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
     drop(first);
 
-    let mut second = open_resource(&ok_url, store).await;
+    let mut second = open_resource(&ok_url, store, backend).await;
     assert!(read_some(&mut second, "second_initial").await > 0);
     let second_forward = seek_and_read(&mut second, Duration::from_secs(3), "second_forward").await;
     let second_backward =
@@ -490,12 +540,29 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
-#[case::ephemeral(true)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_symphonia(false, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_apple(false, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_android(false, DecoderBackend::Android)
+)]
+#[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
+#[case::ephemeral_apple(true, DecoderBackend::Apple)]
+#[case::ephemeral_android(true, DecoderBackend::Android)]
 async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     #[case] ephemeral: bool,
+    #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -505,7 +572,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let ok_url = file_server.url("/ok.mp3");
     let bad_url = file_server.url("/gone.mp3");
 
-    let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone()).await;
+    let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
         hls_pos > 1.0,
         "HLS warmup seek should advance playback position, got {hls_pos}"
@@ -516,6 +583,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
             &bad_url,
             store.clone(),
             worker.clone(),
+            backend,
         ))
         .await;
         assert!(
@@ -524,7 +592,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
         );
     }
 
-    let mut ok = open_resource_with_worker(&ok_url, store, worker).await;
+    let mut ok = open_resource_with_worker(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut ok, "mp3_after_hls_initial").await > 0);
     let forward = seek_and_read(
         &mut ok,
@@ -554,7 +622,16 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_dir: TestTempDir) {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let worker = AudioWorkerHandle::new();
@@ -562,13 +639,14 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_di
     let hls_url = hls_server.url("/master.m3u8");
     let ok_url = file_server.url("/ok.mp3");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone()).await;
+    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first = open_resource_with_worker(&ok_url, store.clone(), worker.clone()).await;
+    let mut first =
+        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "shared_mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -588,7 +666,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_di
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker.clone()).await;
+    let mut second = open_resource_with_worker(&ok_url, store, worker.clone(), backend).await;
     assert!(read_some(&mut second, "shared_mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
@@ -620,7 +698,15 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(temp_di
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
+    #[case] backend: DecoderBackend,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -632,14 +718,14 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone()).await;
+    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await;
     assert!(
         first_pos > 1.0,
         "first HLS warmup must advance playback position, got {first_pos}"
     );
     worker_a.shutdown();
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone()).await;
+    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
     assert!(
         second_pos > 1.0,
         "second HLS warmup after a prior session must still advance playback position, got {second_pos}"
@@ -653,7 +739,15 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session() {
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session() {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session(
+    #[case] backend: DecoderBackend,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -665,14 +759,14 @@ async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session(
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone()).await;
+    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await;
     assert!(
         first_pos > 1.0,
         "first HLS warmup must advance playback position, got {first_pos}"
     );
     drop(worker_a);
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone()).await;
+    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
     assert!(
         second_pos > 1.0,
         "second HLS warmup after only dropping the first worker must still advance playback position, got {second_pos}"
@@ -686,7 +780,15 @@ async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session() {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session(
+    #[case] backend: DecoderBackend,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -698,14 +800,15 @@ async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_pos = warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone()).await;
+    let first_pos =
+        warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone(), backend).await;
     assert!(
         first_pos >= 0.0,
         "first HLS read-only warmup must produce samples, got {first_pos}"
     );
     drop(worker_a);
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone()).await;
+    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
     assert!(
         second_pos > 1.0,
         "second HLS warmup after a read-only first session must still advance playback position, got {second_pos}"
@@ -748,18 +851,26 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     timeout(Duration::from_secs(25)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-#[case::aac(AudioCodec::AacLc)]
-#[case::flac(AudioCodec::Flac)]
+#[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia)]
+#[case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple)]
+#[case::aac_android(AudioCodec::AacLc, DecoderBackend::Android)]
+#[case::flac_symphonia(AudioCodec::Flac, DecoderBackend::Symphonia)]
+#[case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple)]
+#[case::flac_android(AudioCodec::Flac, DecoderBackend::Android)]
 async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] codec: AudioCodec,
+    #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     use kithara::play::internal::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
     let store = StoreOptions::new(temp_dir.path());
 
-    let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec).await;
+    let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec, backend).await;
     let mut progress_rx = progress_audio.events();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut total_samples = 0u64;
@@ -802,7 +913,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.max_gap_between_events
     );
 
-    let decode_audio = open_packaged_hls_audio(&url, store, codec).await;
+    let decode_audio = open_packaged_hls_audio(&url, store, codec, backend).await;
     let mut resource = resource_from_reader(decode_audio);
     timeout(Consts::READ_TIMEOUT, resource.preload())
         .await
@@ -841,12 +952,29 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[cfg_attr(not(target_arch = "wasm32"), case::disk(false))]
-#[case::ephemeral(true)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_symphonia(false, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_apple(false, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case::disk_android(false, DecoderBackend::Android)
+)]
+#[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
+#[case::ephemeral_apple(true, DecoderBackend::Apple)]
+#[case::ephemeral_android(true, DecoderBackend::Android)]
 async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     #[case] ephemeral: bool,
+    #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -855,13 +983,14 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let hls_url = hls_server.url("/master.m3u8");
     let ok_url = file_server.url("/ok.mp3");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone()).await;
+    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first = open_resource_with_worker(&ok_url, store.clone(), worker.clone()).await;
+    let mut first =
+        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -881,7 +1010,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker).await;
+    let mut second = open_resource_with_worker(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut second, "mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
@@ -1074,15 +1203,26 @@ async fn stress_offline_crossfade_no_gaps() {
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::with_extension("/ok.mp3")]
-#[case::no_extension("/track/stream")]
-async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir: TestTempDir) {
+#[case::with_extension_symphonia("/ok.mp3", DecoderBackend::Symphonia)]
+#[case::with_extension_apple("/ok.mp3", DecoderBackend::Apple)]
+#[case::with_extension_android("/ok.mp3", DecoderBackend::Android)]
+#[case::no_extension_symphonia("/track/stream", DecoderBackend::Symphonia)]
+#[case::no_extension_apple("/track/stream", DecoderBackend::Apple)]
+#[case::no_extension_android("/track/stream", DecoderBackend::Android)]
+async fn resource_mp3_no_hint_decodes_with_duration(
+    #[case] path: &str,
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let server = TestHttpServer::new(test_app()).await;
     let url = server.url(path);
     let store = store_options(&temp_dir, true);
 
     // No hint — ResourceConfig must extract it from URL or pipeline must probe raw bytes.
-    let config = resource_config_no_hint(&url, store);
+    let config = resource_config_no_hint(&url, store, backend);
     let mut resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
@@ -1148,22 +1288,82 @@ async fn resource_mp3_no_hint_decodes_with_duration(#[case] path: &str, temp_dir
     )
 )]
 #[ignore = "requires internet; zvuk URLs require corporate VPN"]
-#[case::silvercomet_mp3("https://stream.silvercomet.top/track.mp3")]
-#[case::silvercomet_hls("https://stream.silvercomet.top/hls/master.m3u8")]
-#[case::zvuk_27390231("https://cdn-edge.zvq.me/track/streamhq?id=27390231")]
-#[case::zvuk_151585912("https://cdn-edge.zvq.me/track/streamhq?id=151585912")]
-#[case::zvuk_125475417("https://cdn-edge.zvq.me/track/streamhq?id=125475417")]
-async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir: TestTempDir) {
+#[case::silvercomet_mp3_symphonia(
+    "https://stream.silvercomet.top/track.mp3",
+    DecoderBackend::Symphonia
+)]
+#[case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)]
+#[case::silvercomet_mp3_android(
+    "https://stream.silvercomet.top/track.mp3",
+    DecoderBackend::Android
+)]
+#[case::silvercomet_hls_symphonia(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    DecoderBackend::Symphonia
+)]
+#[case::silvercomet_hls_apple(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    DecoderBackend::Apple
+)]
+#[case::silvercomet_hls_android(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    DecoderBackend::Android
+)]
+#[case::zvuk_27390231_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+    DecoderBackend::Symphonia
+)]
+#[case::zvuk_27390231_apple(
+    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+    DecoderBackend::Apple
+)]
+#[case::zvuk_27390231_android(
+    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+    DecoderBackend::Android
+)]
+#[case::zvuk_151585912_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+    DecoderBackend::Symphonia
+)]
+#[case::zvuk_151585912_apple(
+    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+    DecoderBackend::Apple
+)]
+#[case::zvuk_151585912_android(
+    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+    DecoderBackend::Android
+)]
+#[case::zvuk_125475417_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Symphonia
+)]
+#[case::zvuk_125475417_apple(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Apple
+)]
+#[case::zvuk_125475417_android(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Android
+)]
+async fn live_remote_resource_decodes_with_duration(
+    #[case] url: &str,
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let store = store_options(&temp_dir, true);
     let net = NetOptions {
         request_timeout: Duration::from_secs(25),
         ..NetOptions::default()
     };
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    let config = ResourceConfig::new(url)
+    let mut config = ResourceConfig::new(url)
         .expect("valid URL")
         .with_store(store)
         .with_downloader(downloader);
+    config.prefer_hardware = backend.prefer_hardware();
 
     let mut resource = Resource::new(config)
         .await
@@ -1226,15 +1426,42 @@ async fn live_remote_resource_decodes_with_duration(#[case] url: &str, temp_dir:
     )
 )]
 #[ignore = "requires internet; zvuk URLs require corporate VPN"]
-#[case::silvercomet_mp3("https://stream.silvercomet.top/track.mp3")]
-#[case::zvuk_125475417("https://cdn-edge.zvq.me/track/streamhq?id=125475417")]
-async fn player_mp3_duration_matches_app_flow(#[case] url: &str, temp_dir: TestTempDir) {
+#[case::silvercomet_mp3_symphonia(
+    "https://stream.silvercomet.top/track.mp3",
+    DecoderBackend::Symphonia
+)]
+#[case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)]
+#[case::silvercomet_mp3_android(
+    "https://stream.silvercomet.top/track.mp3",
+    DecoderBackend::Android
+)]
+#[case::zvuk_125475417_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Symphonia
+)]
+#[case::zvuk_125475417_apple(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Apple
+)]
+#[case::zvuk_125475417_android(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    DecoderBackend::Android
+)]
+async fn player_mp3_duration_matches_app_flow(
+    #[case] url: &str,
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     let store = store_options(&temp_dir, true);
 
     let player = PlayerImpl::new(PlayerConfig::default());
     player.reserve_slots(1);
 
     let mut config = ResourceConfig::new(url).unwrap().with_store(store);
+    config.prefer_hardware = backend.prefer_hardware();
     player.prepare_config(&mut config);
 
     let resource = Resource::new(config)

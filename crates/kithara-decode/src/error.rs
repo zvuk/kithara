@@ -3,10 +3,7 @@
 use std::{error::Error as StdError, io, io::ErrorKind};
 
 use kithara_stream::{AudioCodec, ContainerFormat, VariantChangeError};
-use symphonia::core::errors;
 use thiserror::Error;
-
-type SymphoniaError = errors::Error;
 
 /// Errors that can occur during audio decoding.
 ///
@@ -64,11 +61,9 @@ where
         return check_io(io_err);
     }
 
-    if let Some(symphonia_err) = err.downcast_ref::<SymphoniaError>() {
-        return match symphonia_err {
-            SymphoniaError::IoError(io_err) => check_io(io_err),
-            _ => check_leaf(err),
-        };
+    #[cfg(feature = "symphonia")]
+    if let Some(hit) = crate::symphonia::error_chain::inspect(err, check_io, check_leaf) {
+        return hit;
     }
 
     if check_leaf(err) {
@@ -196,14 +191,6 @@ mod tests {
     fn test_backend_other_io_is_not_interrupted() {
         let decode_err = DecodeError::Backend(Box::new(IoError::other("other backend error")));
         assert!(!decode_err.is_interrupted());
-    }
-
-    #[kithara::test]
-    fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(SymphoniaError::IoError(IoError::other(
-            "seek pending",
-        ))));
-        assert!(decode_err.is_interrupted());
     }
 
     #[kithara::test]

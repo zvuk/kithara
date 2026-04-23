@@ -4062,6 +4062,8 @@ dependencies = [
  "kithara-workspace-hack",
  "ndk-context",
  "symphonia 0.6.0-alpha.1",
+ "symphonia-core 0.6.0-alpha.1",
+ "symphonia-format-isomp4 0.6.0-alpha.1",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
