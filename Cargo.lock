@@ -3922,7 +3922,6 @@ dependencies = [
  "proptest",
  "thiserror 2.0.18",
  "tokio-util",
- "tracing",
  "unimock",
  "wasm-bindgen-test",
 ]

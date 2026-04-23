@@ -100,24 +100,36 @@ impl SegmentLoader {
         url: &Url,
         decrypt_ctx: Option<DecryptContext>,
     ) -> HlsResult<(u64, bool)> {
+        match self.try_cached_fetch(url, decrypt_ctx)? {
+            CachedOrPending::Cached(len) => Ok((len, true)),
+            CachedOrPending::Pending(res) => {
+                trace!(url = %url, "start_fetch: downloading via PeerHandle");
+                let bytes = self.download_stream_via_downloader(url, &res).await?;
+                Ok((bytes, false))
+            }
+        }
+    }
+
+    /// Resolve whether `url` is already cached. On hit returns the
+    /// committed length; on miss returns an acquired resource ready
+    /// for network download.
+    fn try_cached_fetch(
+        &self,
+        url: &Url,
+        decrypt_ctx: Option<DecryptContext>,
+    ) -> HlsResult<CachedOrPending> {
         let key = ResourceKey::from_url(url);
         if let Some(len) = self.backend.final_len(&key) {
             trace!(url = %url, len, "start_fetch: cache hit via AssetStore availability index");
-            return Ok((len, true));
+            return Ok(CachedOrPending::Cached(len));
         }
 
         let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
-
-        let status = res.status();
-        if let ResourceStatus::Committed { final_len } = status {
-            let len = final_len.unwrap_or(0);
+        if let Some(len) = committed_len(&res) {
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok((len, true));
+            return Ok(CachedOrPending::Cached(len));
         }
-
-        trace!(url = %url, "start_fetch: downloading via PeerHandle");
-        let bytes = self.download_stream_via_downloader(url, &res).await?;
-        Ok((bytes, false))
+        Ok(CachedOrPending::Pending(Box::new(res)))
     }
 
     /// Stream a fetch into an `AssetResource` via [`PeerHandle`].
@@ -448,6 +460,22 @@ impl SegmentLoader {
             len,
         })
     }
+}
+
+/// Return `Some(len)` when the resource is already committed, else `None`.
+fn committed_len(res: &AssetResource<DecryptContext>) -> Option<u64> {
+    match res.status() {
+        ResourceStatus::Committed { final_len } => Some(final_len.unwrap_or(0)),
+        _ => None,
+    }
+}
+
+/// Outcome of a pre-fetch cache probe.
+enum CachedOrPending {
+    /// Resource already committed with the given length.
+    Cached(u64),
+    /// Resource acquired but not yet populated; caller must download.
+    Pending(Box<AssetResource<DecryptContext>>),
 }
 
 /// A media segment prepared for download via `poll_next` / `on_chunk`.
