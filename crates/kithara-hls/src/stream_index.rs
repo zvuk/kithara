@@ -286,9 +286,12 @@ impl StreamIndex {
 
     // Mutations: segment data
 
-    /// Commit a downloaded segment.
+    /// Commit a downloaded segment (or replace it for DRM reconciliation).
     ///
-    /// Updates the variant's byte map with correct byte offsets.
+    /// Inserts/updates the segment data in the variant and rebuilds the
+    /// byte map from that segment onward. Callers that need
+    /// DRM-reconciliation semantics simply call this again with the
+    /// updated data — the second call replaces and re-rebuilds.
     pub fn commit_segment(
         &mut self,
         variant: VariantIndex,
@@ -302,25 +305,6 @@ impl StreamIndex {
             "stream_index::commit_segment"
         );
         self.variants[variant].insert(segment_index, data);
-        self.rebuild_variant_byte_map(variant, segment_index);
-    }
-
-    /// DRM reconciliation: segment actual size differs from HEAD estimate.
-    ///
-    /// Replaces segment data and rebuilds byte map from that segment onward.
-    pub fn reconcile_segment(
-        &mut self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-        new_data: SegmentData,
-    ) {
-        trace!(
-            variant,
-            segment_index,
-            new_total_len = new_data.total_len(),
-            "stream_index::reconcile_segment"
-        );
-        self.variants[variant].insert(segment_index, new_data);
         self.rebuild_variant_byte_map(variant, segment_index);
     }
 
@@ -860,8 +844,10 @@ mod tests {
         idx.commit_segment(0, 2, make_segment_data(0, 300)); // 300
         assert_eq!(idx.max_end_offset(), 1300);
 
-        // DRM reconciliation: segment 0 actual is smaller
-        idx.reconcile_segment(0, 0, make_segment_data(90, 500));
+        // DRM reconciliation: re-commit segment 0 with smaller actual size
+        // (commit_segment is idempotent — the second call replaces data and
+        // rebuilds the byte map from that segment onward).
+        idx.commit_segment(0, 0, make_segment_data(90, 500));
         assert_eq!(idx.max_end_offset(), 1290);
 
         let seg1 = idx.find_at_offset(590).expect("seg 1 starts at 590");
