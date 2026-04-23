@@ -388,6 +388,22 @@ where
     where
         F: FnOnce(&mut T),
     {
+        let (value, shard_idx) = self.acquire(init);
+        Pooled {
+            value: Some(value),
+            pool: self,
+            shard_idx,
+        }
+    }
+
+    /// Shared implementation for `Pool::get_with` and `SharedPool::get_with`:
+    /// picks a shard, tries home → steal → alloc, updates stats, runs init,
+    /// tracks byte delta. Returns `(value, shard_idx)` so callers can wrap
+    /// it in `Pooled<'_>` or `PooledOwned` depending on ownership.
+    pub(crate) fn acquire<F>(&self, init: F) -> (T, usize)
+    where
+        F: FnOnce(&mut T),
+    {
         let shard_idx = self.shard_index();
         let mut value = {
             let mut shard = self.shards[shard_idx].lock_sync();
@@ -411,11 +427,7 @@ where
         let after = value.byte_size();
         self.track_byte_delta(before, after);
 
-        Pooled {
-            value: Some(value),
-            pool: self,
-            shard_idx,
-        }
+        (value, shard_idx)
     }
 }
 
@@ -676,29 +688,7 @@ where
     where
         F: FnOnce(&mut T),
     {
-        let shard_idx = self.0.shard_index();
-        let mut value = {
-            let mut shard = self.0.shards[shard_idx].lock_sync();
-            shard.try_get()
-        };
-
-        if value.is_some() {
-            self.0.stat_home_hits.fetch_add(1, Ordering::Relaxed);
-        } else {
-            value = self.0.try_steal(shard_idx);
-            if value.is_some() {
-                self.0.stat_steal_hits.fetch_add(1, Ordering::Relaxed);
-            } else {
-                self.0.stat_alloc_misses.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        let mut value = value.unwrap_or_default();
-        let before = value.byte_size();
-        init(&mut value);
-        let after = value.byte_size();
-        self.0.track_byte_delta(before, after);
-
+        let (value, shard_idx) = self.0.acquire(init);
         PooledOwned {
             value: Some(value),
             pool: Arc::clone(&self.0),
