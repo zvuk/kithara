@@ -263,17 +263,31 @@ impl PlayerImpl {
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
-        // Start engine and allocate slot if needed.
-        if let Err(e) = self.ensure_engine_started() {
-            warn!(?e, "failed to start engine");
-            return;
-        }
-        if let Err(e) = self.ensure_slot() {
-            warn!(?e, "failed to allocate slot");
+        if !self.prepare_playback_slot() {
             return;
         }
 
-        // Load current resource into slot and start playback.
+        self.kick_off_playback(rate);
+        debug!(rate, "play");
+    }
+
+    /// Ensure engine is started and a slot is allocated. Logs failures and
+    /// returns `false` if either step fails (caller should bail out).
+    fn prepare_playback_slot(&self) -> bool {
+        if let Err(e) = self.ensure_engine_started() {
+            warn!(?e, "failed to start engine");
+            return false;
+        }
+        if let Err(e) = self.ensure_slot() {
+            warn!(?e, "failed to allocate slot");
+            return false;
+        }
+        true
+    }
+
+    /// Load the current item into the slot, push initial commands, and
+    /// publish status + rate events.
+    fn kick_off_playback(&self, rate: f32) {
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         self.load_current_item();
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
@@ -282,7 +296,6 @@ impl PlayerImpl {
         self.set_status(PlayerStatus::ReadyToPlay);
         self.bus.publish(PlayerEvent::CurrentItemChanged);
         self.bus.publish(PlayerEvent::RateChanged { rate });
-        debug!(rate, "play");
     }
 
     /// Pause playback (sets rate to 0.0).
@@ -683,13 +696,20 @@ impl PlayerImpl {
 
     /// Apply effective volume to the current slot (per-instance).
     fn apply_effective_volume(&self, volume: f32) {
-        if let Some(slot_id) = *self.current_slot.lock_sync() {
-            debug!(volume, ?slot_id, "applying effective volume to slot");
-            if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
-                warn!(?e, volume, "failed to set slot volume");
-            }
-        } else {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
             debug!(volume, "apply_effective_volume: no slot allocated yet");
+            return;
+        };
+        self.set_slot_volume_logged(slot_id, volume);
+    }
+
+    /// Set volume on an allocated slot, logging success at debug and any
+    /// error at warn. Extracted to keep `apply_effective_volume` below the
+    /// cognitive-complexity threshold.
+    fn set_slot_volume_logged(&self, slot_id: SlotId, volume: f32) {
+        debug!(volume, ?slot_id, "applying effective volume to slot");
+        if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
+            warn!(?e, volume, "failed to set slot volume");
         }
     }
 
