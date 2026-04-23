@@ -13,7 +13,6 @@ kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
-tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
