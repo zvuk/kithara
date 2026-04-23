@@ -94,6 +94,19 @@ pub struct DecoderConfig {
 /// - Symphonia (software, all platforms) as a default fallback
 pub struct DecoderFactory;
 
+/// Outcome of a single hardware decoder attempt.
+enum HardwareAttempt {
+    /// Hardware backend successfully produced a decoder.
+    Decoded(Box<dyn InnerDecoder>),
+    /// Hardware disabled or backend does not accept this codec/container.
+    /// Source is untouched and ready for the software path.
+    Skipped(BoxedSource),
+    /// Hardware accepted the codec but construction failed. Source was
+    /// recovered from the `RecoverableHardwareError` and can be retried
+    /// against Symphonia.
+    Failed(BoxedSource),
+}
+
 impl DecoderFactory {
     /// Create a decoder with automatic backend selection.
     ///
@@ -133,22 +146,7 @@ impl DecoderFactory {
         selector: &CodecSelector,
         config: DecoderConfig,
     ) -> DecodeResult<Box<dyn InnerDecoder>> {
-        let config = DecoderConfig {
-            prefer_hardware: config.prefer_hardware,
-            byte_len_handle: config.byte_len_handle,
-            gapless: config.gapless,
-            hint: config.hint,
-            stream_ctx: config.stream_ctx,
-            epoch: config.epoch,
-            pcm_pool: config.pcm_pool,
-        };
-
-        // Determine codec and container from selector
-        let (codec, container) = match *selector {
-            CodecSelector::Exact(c) => (c, None),
-            CodecSelector::Probe(ref hint) => (Self::probe_codec(hint)?, hint.container),
-            CodecSelector::Auto => return Err(DecodeError::ProbeFailed),
-        };
+        let (codec, container) = Self::resolve_codec_container(selector)?;
 
         tracing::debug!(
             ?codec,
@@ -157,41 +155,86 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        // Try hardware decoder when preferred.  Each backend declares its own
-        // codec + container capabilities via `HardwareBackend`.
-        if config.prefer_hardware
-            && let Some(resolved) = hardware_accepts::<B>(codec, container)
-        {
-            tracing::info!(
-                ?codec,
-                requested_container = ?container,
-                resolved_container = ?resolved,
-                "Attempting hardware decoder"
-            );
-            return match B::try_create(source, &config, codec, Some(resolved)) {
-                Ok(decoder) => {
-                    tracing::info!(
-                        ?codec,
-                        requested_container = ?container,
-                        resolved_container = ?resolved,
-                        "Hardware decoder created successfully"
-                    );
-                    Ok(decoder)
-                }
-                Err(recoverable) => {
-                    tracing::warn!(
-                        error = ?recoverable.error,
-                        ?codec,
-                        requested_container = ?container,
-                        resolved_container = ?resolved,
-                        "Hardware decoder creation failed; falling back to Symphonia"
-                    );
-                    Self::create_symphonia_from_boxed(recoverable.source, codec, container, &config)
-                }
-            };
-        }
+        let source = match Self::try_hardware_decoder::<B>(source, codec, container, &config) {
+            HardwareAttempt::Decoded(decoder) => return Ok(decoder),
+            HardwareAttempt::Skipped(src) | HardwareAttempt::Failed(src) => src,
+        };
 
         Self::create_symphonia_from_boxed(source, codec, container, &config)
+    }
+
+    fn resolve_codec_container(
+        selector: &CodecSelector,
+    ) -> DecodeResult<(AudioCodec, Option<ContainerFormat>)> {
+        match *selector {
+            CodecSelector::Exact(c) => Ok((c, None)),
+            CodecSelector::Probe(ref hint) => Ok((Self::probe_codec(hint)?, hint.container)),
+            CodecSelector::Auto => Err(DecodeError::ProbeFailed),
+        }
+    }
+
+    /// Attempt the hardware decoder path for the current backend.
+    ///
+    /// Returns one of:
+    /// - `Decoded`: hardware produced a ready decoder; ship it.
+    /// - `Skipped`: hardware disabled or backend does not accept the
+    ///   codec/container; caller should fall back to Symphonia using the
+    ///   returned untouched source.
+    /// - `Failed`: hardware accepted but construction failed; caller
+    ///   should fall back to Symphonia using the recoverable source.
+    fn try_hardware_decoder<B: HardwareBackend>(
+        source: BoxedSource,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+        config: &DecoderConfig,
+    ) -> HardwareAttempt {
+        if !config.prefer_hardware {
+            return HardwareAttempt::Skipped(source);
+        }
+        let Some(resolved) = hardware_accepts::<B>(codec, container) else {
+            return HardwareAttempt::Skipped(source);
+        };
+        tracing::info!(
+            ?codec,
+            requested_container = ?container,
+            resolved_container = ?resolved,
+            "Attempting hardware decoder"
+        );
+        Self::into_hardware_attempt(
+            B::try_create(source, config, codec, Some(resolved)),
+            codec,
+            container,
+            resolved,
+        )
+    }
+
+    fn into_hardware_attempt(
+        result: Result<Box<dyn InnerDecoder>, crate::hardware::RecoverableHardwareError>,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+        resolved: ContainerFormat,
+    ) -> HardwareAttempt {
+        match result {
+            Ok(decoder) => {
+                tracing::info!(
+                    ?codec,
+                    requested_container = ?container,
+                    resolved_container = ?resolved,
+                    "Hardware decoder created successfully"
+                );
+                HardwareAttempt::Decoded(decoder)
+            }
+            Err(recoverable) => {
+                tracing::warn!(
+                    error = ?recoverable.error,
+                    ?codec,
+                    requested_container = ?container,
+                    resolved_container = ?resolved,
+                    "Hardware decoder creation failed; falling back to Symphonia"
+                );
+                HardwareAttempt::Failed(recoverable.source)
+            }
+        }
     }
 
     fn create_symphonia_from_boxed(
