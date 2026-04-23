@@ -260,8 +260,7 @@ mutants-ci OUTPUT:
       --test-tool=nextest --profile test-release \
       --exclude 'crates/kithara-test-utils/**' \
       --exclude 'crates/kithara-test-macros/**' \
-      --exclude 'crates/kithara-integration-tests/**' \
-      --exclude 'crates/kithara-fuzz/**' \
+      --exclude 'tests/**' \
       --exclude 'crates/kithara-ffi/**' \
       --exclude 'crates/kithara-app/**' \
       --exclude 'crates/kithara-wasm/**' \
