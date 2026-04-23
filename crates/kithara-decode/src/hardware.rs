@@ -261,6 +261,7 @@ impl HardwareBackend for AppleBackend {
         let apple_config = AppleConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,
+            gapless: config.gapless,
             pcm_pool: config.pcm_pool.clone(),
         };
 

@@ -37,6 +37,7 @@ use kithara_stream::ContainerFormat;
 use tracing::{debug, trace, warn};
 
 use crate::{
+    GaplessInfo,
     error::{DecodeError, DecodeResult},
     hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
@@ -381,6 +382,8 @@ pub(crate) struct AppleConfig {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     /// Container format hint for file type detection.
     pub(crate) container: Option<ContainerFormat>,
+    /// Enable gapless metadata capture from `AudioConverterPrimeInfo`.
+    pub(crate) gapless: bool,
     /// Optional PCM buffer pool override.
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
@@ -429,6 +432,10 @@ struct AppleInner {
     data_offset: u64,
     /// Codec-reported priming info (encoder delay).
     prime_info: Option<AudioConverterPrimeInfo>,
+    /// Whether gapless metadata capture is enabled for this decoder.
+    gapless_enabled: bool,
+    /// `PrimeInfo` can become reliable only after the first successful pull.
+    prime_info_refresh_pending: bool,
     /// Cached duration estimate computed before the first seek (while
     /// `frames_decoded` and `source_byte_pos` are still consistent).
     cached_duration: Option<Duration>,
@@ -730,7 +737,7 @@ impl AppleInner {
         }
 
         // Query codec-reported priming (encoder delay).
-        let prime_info = {
+        let prime_info = if config.gapless {
             let mut info = AudioConverterPrimeInfo::default();
             #[expect(
                 clippy::cast_possible_truncation,
@@ -761,7 +768,14 @@ impl AppleInner {
                 );
                 None
             }
+        } else {
+            None
         };
+
+        let track_info = DecoderTrackInfo {
+            gapless: prime_info.and_then(gapless_info_from_prime_info),
+        };
+        log_gapless_prime_info("init", prime_info, track_info.gapless);
 
         let spec = PcmSpec {
             channels,
@@ -808,7 +822,7 @@ impl AppleInner {
             frame_offset: 0,
             duration: cached_duration,
             metadata: TrackMetadata::default(),
-            track_info: DecoderTrackInfo::default(),
+            track_info,
             byte_len_handle,
             pcm_buffer,
             source_eof: false,
@@ -817,6 +831,8 @@ impl AppleInner {
             source_byte_pos: total_parsed as u64,
             data_offset,
             prime_info,
+            gapless_enabled: config.gapless,
+            prime_info_refresh_pending: config.gapless,
             cached_duration,
             pool,
             owner_thread: Cell::new(None),
@@ -956,6 +972,7 @@ impl AppleInner {
                 position_ms = self.position.as_millis(),
                 "Apple decoder: decoded chunk"
             );
+            self.refresh_gapless_after_first_chunk();
 
             return Ok(Some(chunk));
         }
@@ -1125,6 +1142,11 @@ impl AppleInner {
 
     /// Query kAudioConverterPrimeInfo from the converter.
     fn query_prime_info(&self) -> Option<(u32, u32)> {
+        self.prime_info_from_converter()
+            .map(|info| (info.leading_frames, info.trailing_frames))
+    }
+
+    fn prime_info_from_converter(&self) -> Option<AudioConverterPrimeInfo> {
         self.assert_thread_affinity();
         if self.converter.is_null() {
             return None;
@@ -1144,10 +1166,21 @@ impl AppleInner {
                 &mut info as *mut _ as *mut c_void,
             )
         };
-        if status == noErr {
-            Some((info.leading_frames, info.trailing_frames))
-        } else {
-            None
+        if status == noErr { Some(info) } else { None }
+    }
+
+    fn refresh_gapless_after_first_chunk(&mut self) {
+        if !self.gapless_enabled || !self.prime_info_refresh_pending {
+            return;
+        }
+
+        self.prime_info_refresh_pending = false;
+        let prime_info = self.prime_info_from_converter();
+        let gapless = prime_info.and_then(gapless_info_from_prime_info);
+        log_gapless_prime_info("post_first_chunk", prime_info, gapless);
+        if let Some(prime_info) = prime_info {
+            self.prime_info = Some(prime_info);
+            self.track_info.gapless = gapless;
         }
     }
 
@@ -1254,6 +1287,48 @@ impl AppleInner {
         )]
         let duration_secs = estimated_total_frames as f64 / f64::from(self.spec.sample_rate);
         Duration::from_secs_f64(duration_secs)
+    }
+}
+
+fn gapless_info_from_prime_info(info: AudioConverterPrimeInfo) -> Option<GaplessInfo> {
+    if info.leading_frames == 0 && info.trailing_frames == 0 {
+        return None;
+    }
+
+    Some(GaplessInfo {
+        leading_frames: u64::from(info.leading_frames),
+        trailing_frames: u64::from(info.trailing_frames),
+    })
+}
+
+fn log_gapless_prime_info(
+    stage: &'static str,
+    prime_info: Option<AudioConverterPrimeInfo>,
+    gapless: Option<GaplessInfo>,
+) {
+    match (prime_info, gapless) {
+        (_, Some(info)) => debug!(
+            target: "kithara::gapless",
+            source = "apple_prime_info",
+            stage,
+            leading_frames = info.leading_frames,
+            trailing_frames = info.trailing_frames,
+            "captured gapless metadata from Apple PrimeInfo"
+        ),
+        (Some(info), None) => debug!(
+            target: "kithara::gapless",
+            source = "apple_prime_info",
+            stage,
+            leading_frames = info.leading_frames,
+            trailing_frames = info.trailing_frames,
+            "Apple PrimeInfo reported no gapless trim"
+        ),
+        (None, None) => debug!(
+            target: "kithara::gapless",
+            source = "apple_prime_info",
+            stage,
+            "Apple PrimeInfo not available"
+        ),
     }
 }
 
@@ -1699,12 +1774,32 @@ mod tests {
     fn test_apple_config_container(#[case] container: Option<ContainerFormat>) {
         let config = AppleConfig {
             container,
+            gapless: true,
             pcm_pool: None,
             ..Default::default()
         };
         assert!(config.byte_len_handle.is_none());
         assert_eq!(config.container, container);
+        assert!(config.gapless);
         assert!(config.pcm_pool.is_none());
+    }
+
+    #[kithara::test]
+    fn test_gapless_info_from_prime_info_maps_non_zero_values() {
+        let info = AudioConverterPrimeInfo {
+            leading_frames: 2_112,
+            trailing_frames: 960,
+        };
+
+        let gapless = gapless_info_from_prime_info(info).expect("gapless");
+        assert_eq!(gapless.leading_frames, 2_112);
+        assert_eq!(gapless.trailing_frames, 960);
+    }
+
+    #[kithara::test]
+    fn test_gapless_info_from_prime_info_ignores_zero_zero() {
+        let info = AudioConverterPrimeInfo::default();
+        assert_eq!(gapless_info_from_prime_info(info), None);
     }
 
     #[kithara::test]
