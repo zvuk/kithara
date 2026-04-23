@@ -91,57 +91,14 @@ fn build_scripted_inner_decoder(
     verify_in_drop: bool,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
-    let seek_queue = Arc::new(MockLog::new(VecDeque::from(seek_results)));
-    let seek_log = Arc::new(MockLog::new(Vec::new()));
-    let byte_len_log = Arc::new(MockLog::new(Vec::new()));
-
     let next_chunk_queue = Arc::clone(&chunk_queue);
-    let seek_results_queue = Arc::clone(&seek_queue);
-    let seek_log_for_seek = Arc::clone(&seek_log);
-    let byte_len_log_for_update = Arc::clone(&byte_len_log);
 
-    let mock = Unimock::new((
-        InnerDecoderMock::next_chunk
-            .each_call(matching!())
-            .answers_arc(Arc::new(move |_| Ok(next_chunk_queue.lock().pop_front())))
-            .at_least_times(0),
-        InnerDecoderMock::spec
-            .each_call(matching!())
-            .returns(spec)
-            .at_least_times(0),
-        InnerDecoderMock::seek
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(move |_, pos| {
-                seek_log_for_seek.lock().push(pos);
-                if let Some(result) = seek_results_queue.lock().pop_front() {
-                    return result;
-                }
-                Ok(())
-            }))
-            .at_least_times(0),
-        InnerDecoderMock::update_byte_len
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(move |_, len| {
-                byte_len_log_for_update.lock().push(len);
-            }))
-            .at_least_times(0),
-        InnerDecoderMock::duration
-            .each_call(matching!())
-            .returns(duration)
-            .at_least_times(0),
-    ));
-    let mock = if verify_in_drop {
-        mock
-    } else {
-        mock.no_verify_in_drop()
-    };
-
-    (
-        Box::new(mock),
-        InnerDecoderLogs {
-            byte_len_log,
-            seek_log,
-        },
+    build_inner_decoder_mock(
+        spec,
+        move |_| Ok(next_chunk_queue.lock().pop_front()),
+        seek_results,
+        duration,
+        verify_in_drop,
     )
 }
 
@@ -182,6 +139,37 @@ fn build_infinite_inner_decoder(
     /// Default mock track duration in seconds.
     const MOCK_DURATION_SECS: u64 = 220;
 
+    build_inner_decoder_mock(
+        spec,
+        move |_| {
+            if stop.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            Ok(Some(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    ..Default::default()
+                },
+                pcm_pool().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
+            )))
+        },
+        Vec::new(),
+        Some(Duration::from_secs(MOCK_DURATION_SECS)),
+        verify_in_drop,
+    )
+}
+
+fn build_inner_decoder_mock<F>(
+    spec: PcmSpec,
+    next_chunk: F,
+    seek_results: Vec<DecodeResult<()>>,
+    duration: Option<Duration>,
+    verify_in_drop: bool,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs)
+where
+    F: Fn(&mut Unimock) -> DecodeResult<Option<PcmChunk>> + Send + Sync + 'static,
+{
+    let seek_queue = Arc::new(MockLog::new(VecDeque::from(seek_results)));
     let seek_log = Arc::new(MockLog::new(Vec::new()));
     let byte_len_log = Arc::new(MockLog::new(Vec::new()));
 
@@ -191,18 +179,7 @@ fn build_infinite_inner_decoder(
     let mock = Unimock::new((
         InnerDecoderMock::next_chunk
             .each_call(matching!())
-            .answers_arc(Arc::new(move |_| {
-                if stop.load(Ordering::Acquire) {
-                    return Ok(None);
-                }
-                Ok(Some(PcmChunk::new(
-                    PcmMeta {
-                        spec,
-                        ..Default::default()
-                    },
-                    pcm_pool().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
-                )))
-            }))
+            .answers_arc(Arc::new(next_chunk))
             .at_least_times(0),
         InnerDecoderMock::spec
             .each_call(matching!())
@@ -212,6 +189,9 @@ fn build_infinite_inner_decoder(
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, pos| {
                 seek_log_for_seek.lock().push(pos);
+                if let Some(result) = seek_queue.lock().pop_front() {
+                    return result;
+                }
                 Ok(())
             }))
             .at_least_times(0),
@@ -223,7 +203,7 @@ fn build_infinite_inner_decoder(
             .at_least_times(0),
         InnerDecoderMock::duration
             .each_call(matching!())
-            .returns(Some(Duration::from_secs(MOCK_DURATION_SECS)))
+            .returns(duration)
             .at_least_times(0),
     ));
     let mock = if verify_in_drop {
