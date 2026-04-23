@@ -50,7 +50,7 @@ impl<T: StreamType> SharedStream<T> {
 
     delegate! {
         to self.inner.lock_sync() {
-            fn position(&self) -> u64;
+            pub(crate) fn position(&self) -> u64;
             pub(crate) fn len(&self) -> Option<u64>;
             fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -64,11 +64,11 @@ impl<T: StreamType> SharedStream<T> {
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.
-            fn phase(&self) -> SourcePhase;
+            pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
-            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             /// Signal that the given byte range will be needed soon.
-            fn demand_range(&self, range: Range<u64>);
+            pub(crate) fn demand_range(&self, range: Range<u64>);
             /// Wake blocked `wait_range()` calls and downstream waiters.
             ///
             /// Safe to call outside of `read()`; briefly takes the inner mutex.
@@ -1218,26 +1218,19 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Submit a demand signal for the byte range corresponding to the
-    /// current `WaitingForSource` state.  This is a non-blocking hint
+    /// current `WaitingForSource` state. This is a non-blocking hint
     /// that tells the source (and transitively the downloader) which
     /// data the worker needs next.
+    ///
+    /// The byte target is resolved through `TrackState::seek_location()`
+    /// so the dispatch over `WaitContext × SeekMode` lives in one place.
     fn submit_demand_for_current_state(&self) {
-        let TrackState::WaitingForSource { context, .. } = &self.state else {
+        if !matches!(self.state, TrackState::WaitingForSource { .. }) {
             return;
-        };
-        let start = match context {
-            WaitContext::ApplySeek(applying) => match applying.mode {
-                SeekMode::Anchor(anchor) => anchor.byte_offset,
-                SeekMode::Direct {
-                    target_byte: Some(byte),
-                } => byte,
-                SeekMode::Direct { target_byte: None } => self.shared_stream.position(),
-            },
-            WaitContext::Recreation(recreate) => recreate.offset,
-            _ => self.shared_stream.position(),
-        };
-        self.shared_stream
-            .demand_range(start..start.saturating_add(1));
+        }
+        self.state
+            .seek_location()
+            .submit_demand(&self.shared_stream);
     }
 
     /// Decode one chunk using the decode loop.
