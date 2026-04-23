@@ -1,0 +1,94 @@
+//! Configuration for Symphonia-based decoders.
+
+use std::sync::{Arc, atomic::AtomicU64};
+
+use kithara_bufpool::PcmPool;
+use kithara_stream::{ContainerFormat, StreamContext};
+
+/// Configuration for Symphonia-based decoders.
+#[derive(Default)]
+pub(crate) struct SymphoniaConfig {
+    /// Enable data verification (slower but safer).
+    pub verify: bool,
+    /// Enable gapless playback.
+    pub gapless: bool,
+    /// Handle for dynamic byte length updates (HLS).
+    pub byte_len_handle: Option<Arc<AtomicU64>>,
+    /// Container format for direct reader creation (no probe).
+    ///
+    /// When set, bypasses Symphonia's probe mechanism and creates
+    /// the appropriate format reader directly. This is critical for
+    /// HLS streams where the container format is known from playlist.
+    ///
+    /// When not set, falls back to Symphonia's probe mechanism which
+    /// can automatically detect format and skip junk data.
+    pub container: Option<ContainerFormat>,
+    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    ///
+    /// Used only when `container` is not set, as a hint for the probe.
+    pub hint: Option<String>,
+    /// Disable seek during probe-based initialization.
+    ///
+    /// When true, seek is disabled during Symphonia probe, preventing format
+    /// readers from seeking to end to validate file/chunk sizes. Useful after
+    /// ABR variant switches where the byte length seen by the adapter may not
+    /// match container header expectations (e.g., WAV `data_size` vs actual
+    /// available data). Seek is re-enabled after successful initialization.
+    pub probe_no_seek: bool,
+    /// Stream context for segment/variant metadata.
+    pub stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
+    /// Optional PCM buffer pool override.
+    ///
+    /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
+    pub pcm_pool: Option<PcmPool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn test_symphonia_config_default() {
+        let config = SymphoniaConfig::default();
+        assert!(!config.verify);
+        assert!(!config.gapless);
+        assert!(config.byte_len_handle.is_none());
+        assert!(config.container.is_none());
+        assert!(config.hint.is_none());
+    }
+
+    #[kithara::test]
+    fn test_symphonia_config_with_container() {
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Fmp4),
+            ..Default::default()
+        };
+        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
+    }
+
+    #[kithara::test]
+    fn test_config_with_custom_handle() {
+        let handle = Arc::new(AtomicU64::new(12345));
+        let config = SymphoniaConfig {
+            verify: true,
+            gapless: false,
+            byte_len_handle: Some(Arc::clone(&handle)),
+            container: Some(ContainerFormat::Fmp4),
+            hint: Some("mp4".to_string()),
+            probe_no_seek: false,
+            stream_ctx: None,
+            epoch: 0,
+            pcm_pool: None,
+        };
+
+        assert!(config.verify);
+        assert!(!config.gapless);
+        assert!(config.byte_len_handle.is_some());
+        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(config.hint, Some("mp4".to_string()));
+    }
+}
