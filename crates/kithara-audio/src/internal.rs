@@ -275,30 +275,29 @@ pub mod source {
         }
     }
 
-    pub fn set_recreating_decoder<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
-        epoch: u64,
-        target: Duration,
-        media_info: MediaInfo,
-        offset: u64,
-    ) {
-        source.0.state =
-            TrackState::RecreatingDecoder(build_recreate_state(epoch, target, media_info, offset));
+    /// Where a recreate state should land when placed on the FSM:
+    /// either directly (active decoder recreation) or wrapped in a
+    /// `WaitingForSource` context with a matching wait reason.
+    pub enum RecreateKind {
+        Decoder,
+        WaitingFor(WaitingReason),
     }
 
-    pub fn set_waiting_recreation<T: StreamType>(
+    pub fn set_recreate<T: StreamType>(
         source: &mut StreamAudioSource<T>,
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-        reason: WaitingReason,
+        kind: RecreateKind,
     ) {
-        source.0.state = TrackState::WaitingForSource {
-            context: WaitContext::Recreation(build_recreate_state(
-                epoch, target, media_info, offset,
-            )),
-            reason,
+        let state = build_recreate_state(epoch, target, media_info, offset);
+        source.0.state = match kind {
+            RecreateKind::Decoder => TrackState::RecreatingDecoder(state),
+            RecreateKind::WaitingFor(reason) => TrackState::WaitingForSource {
+                context: WaitContext::Recreation(state),
+                reason,
+            },
         };
     }
 }

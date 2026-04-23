@@ -1145,13 +1145,13 @@ fn waiting_recreation_uses_recreate_offset_for_readiness() {
     );
 
     state.lock_sync().ready_until = Some(128);
-    set_waiting_recreation(
+    set_recreate(
         &mut source,
         1,
         Duration::from_secs(12),
         v3_info(),
         500,
-        WaitingReason::Waiting,
+        RecreateKind::WaitingFor(WaitingReason::Waiting),
     );
 
     assert!(matches!(
@@ -1184,7 +1184,14 @@ fn recreating_decoder_waits_for_recreate_offset_before_factory() {
     );
 
     state.lock_sync().ready_until = Some(128);
-    set_recreating_decoder(&mut source, 1, Duration::from_secs(12), v3_info(), 500);
+    set_recreate(
+        &mut source,
+        1,
+        Duration::from_secs(12),
+        v3_info(),
+        500,
+        RecreateKind::Decoder,
+    );
 
     assert!(matches!(
         step_track(&mut source),
