@@ -132,7 +132,7 @@ impl DecoderFactory {
     pub(crate) fn create<R>(
         source: R,
         selector: &CodecSelector,
-        config: DecoderConfig,
+        config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn InnerDecoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -144,7 +144,7 @@ impl DecoderFactory {
     fn create_with_backend<B: HardwareBackend>(
         source: BoxedSource,
         selector: &CodecSelector,
-        config: DecoderConfig,
+        config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn InnerDecoder>> {
         let (codec, container) = Self::resolve_codec_container(selector)?;
 
@@ -155,12 +155,12 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        let source = match Self::try_hardware_decoder::<B>(source, codec, container, &config) {
+        let source = match Self::try_hardware_decoder::<B>(source, codec, container, config) {
             HardwareAttempt::Decoded(decoder) => return Ok(decoder),
             HardwareAttempt::Skipped(src) | HardwareAttempt::Failed(src) => src,
         };
 
-        Self::create_symphonia_from_boxed(source, codec, container, &config)
+        Self::create_symphonia_from_boxed(source, codec, container, config)
     }
 
     fn resolve_codec_container(
@@ -424,7 +424,7 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
         F: Fn() -> R,
     {
-        match Self::create_from_media_info(make_source(), media_info, config.clone()) {
+        match Self::create_from_media_info(make_source(), media_info, &config) {
             Ok(decoder) => Ok(decoder),
             Err(error) => {
                 tracing::warn!(
@@ -454,7 +454,7 @@ impl DecoderFactory {
     pub fn create_from_media_info<R>(
         source: R,
         media_info: &MediaInfo,
-        config: DecoderConfig,
+        config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn InnerDecoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -503,7 +503,7 @@ impl DecoderFactory {
             return Self::create_with_symphonia_probe(source, config);
         }
 
-        match Self::create(source, &CodecSelector::Probe(probe_hint), config) {
+        match Self::create(source, &CodecSelector::Probe(probe_hint), &config) {
             Ok(decoder) => Ok(decoder),
             Err(DecodeError::ProbeFailed) => Err(DecodeError::ProbeFailed),
             Err(e) => Err(e),
@@ -814,7 +814,7 @@ mod tests {
     #[kithara::test]
     fn test_auto_selector_fails() {
         let empty = Cursor::new(Vec::new());
-        let result = DecoderFactory::create(empty, &CodecSelector::Auto, DecoderConfig::default());
+        let result = DecoderFactory::create(empty, &CodecSelector::Auto, &DecoderConfig::default());
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
     }
 
@@ -876,7 +876,7 @@ mod tests {
         let decoder = DecoderFactory::create_with_backend::<FailingHardwareBackend>(
             Box::new(Cursor::new(wav_data)),
             &CodecSelector::Probe(hint),
-            config,
+            &config,
         )
         .expect("recoverable hardware failure should fall back to Symphonia");
 

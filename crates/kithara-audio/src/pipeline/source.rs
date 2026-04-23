@@ -175,6 +175,9 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 pub(crate) type DecoderFactory<T> =
     Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
 
+/// Variant, segment index, and byte range spanning the current seek target.
+type SeekContextTuple = (Option<usize>, Option<u32>, Option<u64>, Option<u64>);
+
 /// Audio source for Stream with format change detection.
 ///
 /// Monitors `media_info` changes and recreates decoder at segment boundaries.
@@ -379,7 +382,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         });
     }
 
-    fn seek_context(&self) -> (Option<usize>, Option<u32>, Option<u64>, Option<u64>) {
+    fn seek_context(&self) -> SeekContextTuple {
         let stream_ctx = self.shared_stream.build_stream_context();
         let segment_range = self.shared_stream.current_segment_range();
         (
@@ -1571,7 +1574,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return TrackStep::Failed;
         }
 
-        self.apply_recreate_next(recreate.next)
+        self.apply_recreate_next(&recreate.next)
     }
 
     /// Handle the "source not ready for boundary" branch of
@@ -1635,8 +1638,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Apply the `RecreateNext` action after a successful recreation.
-    fn apply_recreate_next(&mut self, next: RecreateNext) -> TrackStep<PcmChunk> {
-        match next {
+    fn apply_recreate_next(&mut self, next: &RecreateNext) -> TrackStep<PcmChunk> {
+        match *next {
             RecreateNext::Decode => {
                 reset_effects(&mut self.effects);
                 self.update_state(TrackState::Decoding);

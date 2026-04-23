@@ -94,7 +94,7 @@ fn from_media_info(
     };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_from_media_info(reader, info, &test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);

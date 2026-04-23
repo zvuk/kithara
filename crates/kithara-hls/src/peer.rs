@@ -397,8 +397,7 @@ fn reset_for_new_epoch(state: &mut HlsState, req: &crate::coord::SegmentRequest)
     if is_variant_switch {
         sched.download_variant = req.variant;
     }
-    let (cached_count, cached_end_offset) =
-        sched.populate_cached_segments_if_needed(req.variant);
+    let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(req.variant);
     sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
 }
 
@@ -435,7 +434,10 @@ fn maybe_rewind_for_demand(sched: &mut HlsScheduler, req: &crate::coord::Segment
         "{}",
         reason
     );
-    if matches!(reason, "poll_next: same-epoch demand behind cursor, rewinding") {
+    if matches!(
+        reason,
+        "poll_next: same-epoch demand behind cursor, rewinding"
+    ) {
         sched.rewind_current_segment_index(req.segment_index);
     }
 }
@@ -609,7 +611,7 @@ fn build_batch(
         if let Some(cached_len) = prepared.cached_len {
             commit_cached_segment(
                 state,
-                CachedCommit {
+                &CachedCommit {
                     variant,
                     seg_idx,
                     batch_i,
@@ -688,7 +690,7 @@ struct CachedCommit<'a> {
     plan_need_init: bool,
 }
 
-fn commit_cached_segment(state: &mut HlsState, c: CachedCommit<'_>) {
+fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
     let init_meta = if c.plan_need_init {
         state.loader.get_init_segment_cached(c.variant)
     } else {

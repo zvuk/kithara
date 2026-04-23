@@ -90,6 +90,8 @@ enum CacheEntry<R, I> {
 }
 
 type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
+type SharedCache<A> =
+    Arc<Cache<<A as Assets>::Res, <A as Assets>::Context, <A as Assets>::IndexRes>>;
 type CacheMap<A> = LruCache<
     CacheKey<<A as Assets>::Context>,
     CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
@@ -116,7 +118,7 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
+    cache: SharedCache<A>,
     pinned: Arc<Mutex<HashSet<ResourceKey>>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,

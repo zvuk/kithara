@@ -41,6 +41,12 @@ pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 /// Per-command completion handler. Called when the fetch completes.
 pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&NetError>) + Send>;
 
+/// Optional response-header validator for a single `FetchCmd`.
+///
+/// Invoked with the response headers after a successful HTTP response.
+/// Returning `Err` rejects the response before the body is consumed.
+pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
+
 /// A single download command.
 ///
 /// Built by protocol code via [`FetchCmd::get`] / [`FetchCmd::head`]
@@ -74,7 +80,7 @@ pub struct FetchCmd {
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.
     #[setters(skip)]
-    pub validator: Option<fn(&Headers) -> NetResult<()>>,
+    pub validator: Option<ResponseValidator>,
 }
 
 impl FetchCmd {

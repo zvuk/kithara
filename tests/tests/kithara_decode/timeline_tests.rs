@@ -152,7 +152,7 @@ mod hls_timeline {
         // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =
-                DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config).unwrap();
+                DecoderFactory::create_from_media_info(stream, &wav_info, &decoder_config).unwrap();
 
             let mut prev_frame_end = 0u64;
             let mut chunk_count = 0u64;

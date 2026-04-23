@@ -610,9 +610,7 @@ where
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
-            .map_err(|e| {
-                DecodeError::Io(IoError::other(format!("probe task panicked: {e}")))
-            })??;
+            .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
         Ok(result)
     }
@@ -649,7 +647,7 @@ where
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
-                DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
+                DecoderFactory::create_from_media_info(shared_stream, info, &decoder_config)
             } else {
                 DecoderFactory::create_with_probe(
                     shared_stream,

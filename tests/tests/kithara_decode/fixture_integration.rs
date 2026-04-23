@@ -473,7 +473,7 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     let mut direct_decoder = DecoderFactory::create_from_media_info(
         Cursor::new(mp4_bytes.clone()),
         &media_info,
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .unwrap_or_else(|error| panic!("create decoder from packaged {label} fmp4: {error}"));
 

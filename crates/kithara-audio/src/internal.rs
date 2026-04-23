@@ -278,6 +278,7 @@ pub mod source {
     /// Where a recreate state should land when placed on the FSM:
     /// either directly (active decoder recreation) or wrapped in a
     /// `WaitingForSource` context with a matching wait reason.
+    #[derive(Debug, Clone, Copy)]
     pub enum RecreateKind {
         Decoder,
         WaitingFor(WaitingReason),

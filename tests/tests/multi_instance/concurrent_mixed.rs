@@ -68,9 +68,7 @@ fn read_to_eof<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> 
 /// wasm where the audio pipeline is cooperative and may briefly starve;
 /// on native targets this collapses to `read_to_eof`.
 #[cfg(target_arch = "wasm32")]
-fn read_for_concurrency_check<S: kithara::stream::StreamType>(
-    audio: &mut Audio<Stream<S>>,
-) -> u64 {
+fn read_for_concurrency_check<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     let mut zero_reads = 0usize;
@@ -101,9 +99,7 @@ fn read_for_concurrency_check<S: kithara::stream::StreamType>(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_for_concurrency_check<S: kithara::stream::StreamType>(
-    audio: &mut Audio<Stream<S>>,
-) -> u64 {
+fn read_for_concurrency_check<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
     read_to_eof(audio)
 }
 

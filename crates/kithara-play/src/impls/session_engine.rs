@@ -46,6 +46,14 @@ use crate::{
 
 pub(crate) type PlayerId = u64;
 
+/// Wiring returned by `allocate_slot`: slot id plus producer/state/eq handles.
+type AllocatedSlot = (
+    SlotId,
+    HeapProd<PlayerCmd>,
+    Arc<SharedPlayerState>,
+    SharedEq,
+);
+
 /// Function pointer that starts a firewheel audio stream with the given
 /// sample-rate hint on a context parametrised over backend `B`. Each
 /// backend (cpal, web-audio, offline) provides its own implementation.
@@ -282,18 +290,7 @@ impl SessionClient {
         Ok(reply)
     }
 
-    pub(crate) fn allocate_slot(
-        &self,
-        player_id: PlayerId,
-    ) -> Result<
-        (
-            SlotId,
-            HeapProd<PlayerCmd>,
-            Arc<SharedPlayerState>,
-            SharedEq,
-        ),
-        PlayError,
-    > {
+    pub(crate) fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
         match self.call_ok(Cmd::AllocateSlot { player_id })? {
             Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
                 Ok((slot_id, cmd_tx, shared_state, eq))

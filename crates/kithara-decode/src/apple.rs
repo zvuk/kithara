@@ -970,8 +970,7 @@ impl AppleInner {
             reason = "output frame count fits in u32"
         )]
         let mut output_packets = output_frames as UInt32;
-        let input_ptr =
-            self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
+        let input_ptr = self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
 
         // SAFETY: `self.converter` is a valid handle; `input_ptr` points to a live `ConverterInputState`;
         // `buffer_list` is a valid output buffer on the stack.

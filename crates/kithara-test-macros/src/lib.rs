@@ -1138,10 +1138,26 @@ fn emit_native_only_one(
     let args = ctx.args;
 
     if native_is_async && args.timeout.is_some() {
-        return emit_async_timeout_test(name, vis, ret_type, remaining_attrs, full, args, serial_attr);
+        return emit_async_timeout_test(
+            name,
+            vis,
+            ret_type,
+            remaining_attrs,
+            full,
+            args,
+            serial_attr,
+        );
     }
     if native_is_async {
-        return emit_async_runtime_test(name, vis, ret_type, remaining_attrs, full, args, serial_attr);
+        return emit_async_runtime_test(
+            name,
+            vis,
+            ret_type,
+            remaining_attrs,
+            full,
+            args,
+            serial_attr,
+        );
     }
     let with_timeout = wrap_with_timeout(full, &args.timeout, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);

@@ -67,13 +67,9 @@ async fn estimate_variant_size_map(
         return;
     }
 
-    if let Some((source, size_map)) = run_offline_strategies(
-        loader,
-        media_playlists,
-        variant,
-        num_segments,
-        buf,
-    ) {
+    if let Some((source, size_map)) =
+        run_offline_strategies(loader, media_playlists, variant, num_segments, buf)
+    {
         debug!(variant, "size_map: from {source}");
         playlist_state.set_size_map(variant, size_map);
         return;

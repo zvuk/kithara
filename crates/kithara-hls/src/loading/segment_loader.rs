@@ -28,6 +28,9 @@ use crate::{
 /// AES-128 key length in bytes.
 const AES_KEY_LEN: usize = 16;
 
+/// Resolved DRM decryption inputs for a segment.
+type DecryptInputs<'a> = (&'a Arc<KeyManager>, [u8; AES_KEY_LEN], Url);
+
 // Public segment-data types
 
 /// Segment metadata (data is on disk, not in memory).
@@ -179,7 +182,7 @@ impl SegmentLoader {
         key: Option<&SegmentKey>,
         segment_url: &Url,
         sequence: u64,
-    ) -> HlsResult<Option<(&Arc<KeyManager>, [u8; AES_KEY_LEN], Url)>> {
+    ) -> HlsResult<Option<DecryptInputs<'_>>> {
         let Some(seg_key) = key else {
             return Ok(None);
         };

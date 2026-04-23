@@ -837,12 +837,7 @@ async fn test_key_request_headers_passthrough() {
 
 #[kithara::test(tokio)]
 #[case::missing_auth_header("/key-with-auth", None, 401, "missing auth header")]
-#[case::wrong_auth_header(
-    "/key-with-auth",
-    Some("wrong-token"),
-    401,
-    "wrong auth header"
-)]
+#[case::wrong_auth_header("/key-with-auth", Some("wrong-token"), 401, "wrong auth header")]
 #[case::missing_required_query(
     "/key-with-params?drm_id=test123",
     None,
