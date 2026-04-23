@@ -9,9 +9,13 @@ only describes how to drive the container.
 
 ## Files
 
-- `docker/ci.Dockerfile` — base image with Rust, cargo tools, FFmpeg dev libs.
-- `docker/docker-compose.yml` — `ci-full` service that bind-mounts the repo and
-  runs `just ci-full-run /ci-out`.
+- `docker/ci.Dockerfile` — base image with Rust, cargo tools, FFmpeg dev libs,
+  sccache.
+- `docker/docker-compose.yml` —
+  - `ci-full` service (default): bind-mounts the repo, no compile cache.
+  - `ci-full-fast` service (profile `fast`): same pipeline, `RUSTC_WRAPPER=sccache`
+    with a persistent `sccache_cache` volume, so per-mutant workspace rebuilds
+    become cache hits after the first run.
 - `justfile` → `mutants-ci OUTPUT` and `ci-full-run OUTPUT`.
 
 ## Local run
@@ -19,7 +23,7 @@ only describes how to drive the container.
 ```bash
 cd /path/to/kithara
 docker compose -f docker/docker-compose.yml build           # first build: ~15–30 min
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d           # ci-full (no cache)
 docker compose -f docker/docker-compose.yml logs -f ci-full # follow progress
 docker compose -f docker/docker-compose.yml down            # stop + remove container
 ```
@@ -27,6 +31,21 @@ docker compose -f docker/docker-compose.yml down            # stop + remove cont
 Results land in the host directory `/var/kithara-ci-results/` (create it first:
 `sudo mkdir -p /var/kithara-ci-results && sudo chown $USER /var/kithara-ci-results`).
 Build artifacts persist in the named volume `kithara_target` across runs.
+
+### Fast variant (sccache)
+
+```bash
+sudo mkdir -p /var/kithara-ci-results-fast
+docker compose -f docker/docker-compose.yml --profile fast up -d ci-full-fast
+docker compose -f docker/docker-compose.yml logs -f ci-full-fast
+```
+
+The fast service uses its own named volumes (`kithara_target_fast`,
+`sccache_cache`) and writes outputs to `/var/kithara-ci-results-fast`. First
+mutants are still a cold workspace build (~2000 s wall each, × parallel jobs);
+subsequent mutants hit sccache for unchanged crates, dropping per-mutant build
+time by 10–20×. Expected full cycle: single-digit days → ~12–24 h after the
+cache warms.
 
 Smoke test without launching the full pipeline:
 

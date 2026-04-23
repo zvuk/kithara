@@ -26,6 +26,7 @@ RUN cargo install \
     cargo-llvm-cov \
     wasm-bindgen-cli \
     similarity-rs \
+    sccache \
     --locked \
  && cargo install cargo-mutants --version 27.0.0 --locked \
  && (cargo install --git https://github.com/vitalratel/wasm-slim \

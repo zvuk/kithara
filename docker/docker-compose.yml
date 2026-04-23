@@ -16,5 +16,34 @@ services:
     command: just ci-full-run /ci-out
     restart: "no"
 
+  # Same pipeline, but every rustc invocation goes through sccache so per-mutant
+  # cold-workspace rebuilds become cache hits after the first run. Started via
+  # `docker compose --profile fast up -d`; writes to /var/kithara-ci-results-fast
+  # so it does not collide with the plain `ci-full` service output.
+  ci-full-fast:
+    image: kithara/ci:latest
+    build:
+      context: ..
+      dockerfile: docker/ci.Dockerfile
+    profiles: ["fast"]
+    volumes:
+      - ../:/repo:rw
+      - /var/kithara-ci-results-fast:/ci-out:rw
+      - kithara_target_fast:/repo/target
+      - sccache_cache:/sccache
+    working_dir: /repo
+    environment:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
+      RUSTC_WRAPPER: "sccache"
+      SCCACHE_DIR: "/sccache"
+      SCCACHE_CACHE_SIZE: "100G"
+      SCCACHE_IDLE_TIMEOUT: "0"
+    command: just ci-full-run /ci-out
+    restart: "no"
+
 volumes:
   kithara_target:
+  kithara_target_fast:
+  sccache_cache:
