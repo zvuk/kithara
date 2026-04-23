@@ -347,6 +347,29 @@ async fn test_stream_success(client: &HttpClient, url: Url) -> Result<Vec<u8>, N
     Ok(collected)
 }
 
+/// Build a single-pair `Authorization: Bearer <token>` header map.
+fn auth_bearer(token: &str) -> Headers {
+    let mut headers = HashMap::new();
+    headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+    headers.into()
+}
+
+/// Assert that `result` is `NetError::HttpError` with the expected status.
+fn assert_http_status<T: std::fmt::Debug>(
+    result: Result<T, NetError>,
+    expected_status: u16,
+    context: &str,
+) {
+    match result {
+        Ok(value) => panic!("expected HTTP error {expected_status} ({context}); got Ok({value:?})"),
+        Err(NetError::HttpError { status, .. }) => assert_eq!(
+            status, expected_status,
+            "wrong status for {context}: got {status}"
+        ),
+        Err(other) => panic!("expected HttpError({expected_status}) for {context}; got {other:?}"),
+    }
+}
+
 async fn test_get_range_success(
     client: &HttpClient,
     url: Url,
@@ -799,18 +822,13 @@ async fn test_key_request_headers_passthrough() {
     let client = HttpClient::new(NetOptions::default());
     let url = server.url("/key-with-auth");
 
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "Bearer secret-key-token".to_string(),
-    );
-
-    let mut stream = client.stream(url, Some(headers.into())).await.unwrap();
+    let mut stream = client
+        .stream(url, Some(auth_bearer("secret-key-token")))
+        .await
+        .unwrap();
     let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
+    while let Some(chunk) = stream.next().await {
+        collected.extend_from_slice(&chunk.unwrap());
     }
 
     assert_eq!(collected.len(), 16);
@@ -818,47 +836,38 @@ async fn test_key_request_headers_passthrough() {
 }
 
 #[kithara::test(tokio)]
-async fn test_key_request_missing_required_headers_fails() {
+#[case::missing_auth_header("/key-with-auth", None, 401, "missing auth header")]
+#[case::wrong_auth_header(
+    "/key-with-auth",
+    Some("wrong-token"),
+    401,
+    "wrong auth header"
+)]
+#[case::missing_required_query(
+    "/key-with-params?drm_id=test123",
+    None,
+    400,
+    "missing required query params"
+)]
+#[case::wrong_query_params(
+    "/key-with-params?drm_id=wrong&version=1.0",
+    None,
+    400,
+    "wrong query params"
+)]
+async fn test_key_request_rejects_bad_credentials(
+    #[case] path: &str,
+    #[case] bearer: Option<&str>,
+    #[case] expected_status: u16,
+    #[case] context: &str,
+) {
     let server = key_test_server().await;
     let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-auth");
+    let url = server.url(path);
+    let headers = bearer.map(auth_bearer);
 
-    let stream_result = client.stream(url, None).await;
-    assert!(
-        stream_result.is_err(),
-        "Stream creation should fail when auth header is missing"
-    );
-
-    match stream_result {
-        Ok(_) => panic!("Expected error but got success"),
-        Err(NetError::HttpError { status, .. }) => assert_eq!(status, 401),
-        Err(_) => panic!("Expected HTTP status error with 401 status"),
-    }
-}
-
-#[kithara::test(tokio)]
-async fn test_key_request_wrong_auth_header_fails() {
-    let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-auth");
-
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "Bearer wrong-token".to_string(),
-    );
-
-    let result = client.stream(url, Some(headers.into())).await;
-    assert!(
-        result.is_err(),
-        "Stream creation should fail when auth header is wrong"
-    );
-
-    match result {
-        Err(NetError::HttpError { status, .. }) => assert_eq!(status, 401),
-        Err(_) => panic!("Expected HTTP status error"),
-        Ok(_) => panic!("Expected error"),
-    }
+    let result = client.stream(url, headers).await;
+    assert_http_status(result.map(|_| "stream"), expected_status, context);
 }
 
 #[kithara::test(tokio)]
@@ -880,81 +889,17 @@ async fn test_key_request_query_params_passthrough() {
 }
 
 #[kithara::test(tokio)]
-async fn test_key_request_missing_required_query_params_fails() {
-    let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-params?drm_id=test123");
-
-    let stream_result = client.stream(url, None).await;
-    assert!(
-        stream_result.is_err(),
-        "Stream creation should fail when query params are missing"
-    );
-
-    match stream_result {
-        Ok(_) => panic!("Expected error but got success"),
-        Err(NetError::HttpError { status, .. }) => assert_eq!(status, 400),
-        Err(_) => panic!("Expected HTTP status error with 400 status"),
-    }
-}
-
-#[kithara::test(tokio)]
-async fn test_key_request_wrong_query_params_fails() {
-    let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-params?drm_id=wrong&version=1.0");
-
-    let stream_result = client.stream(url, None).await;
-    assert!(
-        stream_result.is_err(),
-        "Stream creation should fail when query params are wrong"
-    );
-
-    match stream_result {
-        Ok(_) => panic!("Expected error but got success"),
-        Err(NetError::HttpError { status, .. }) => assert_eq!(status, 400),
-        Err(_) => panic!("Expected HTTP status error with 400 status"),
-    }
-}
-
-#[kithara::test(tokio)]
-async fn test_key_request_stream_with_headers() {
-    let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-auth");
-
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "Bearer secret-key-token".to_string(),
-    );
-
-    let mut stream = client.stream(url, Some(headers.into())).await.unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected.len(), 16);
-    assert_eq!(collected[0], 0xab);
-}
-
-#[kithara::test(tokio)]
 async fn test_key_request_range_with_headers() {
     let server = key_test_server().await;
     let client = HttpClient::new(NetOptions::default());
     let url = server.url("/key-with-auth");
 
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "Bearer secret-key-token".to_string(),
-    );
-
     let mut stream = client
-        .get_range(url, RangeSpec::new(0, Some(7)), Some(headers.into()))
+        .get_range(
+            url,
+            RangeSpec::new(0, Some(7)),
+            Some(auth_bearer("secret-key-token")),
+        )
         .await
         .unwrap();
     let mut collected = Vec::new();
