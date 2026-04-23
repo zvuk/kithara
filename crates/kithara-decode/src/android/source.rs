@@ -14,6 +14,7 @@ use tracing::warn;
 
 use super::{error::AndroidBackendError, ffi};
 use crate::hardware::BoxedSource;
+use crate::{GaplessInfo, gapless::probe_mp4_gapless_dyn};
 
 pub(crate) struct SourceState {
     source: Mutex<BoxedSource>,
@@ -69,6 +70,50 @@ impl OwnedMediaDataSource {
 
     pub(crate) fn raw(&self) -> *mut ffi::AMediaDataSource {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    pub(crate) fn probe_mp4_gapless(&self) -> Result<Option<GaplessInfo>, AndroidBackendError> {
+        let state = self.state.ok_or_else(|| {
+            AndroidBackendError::operation(
+                "media-data-source-gapless-probe",
+                "media source state already taken",
+            )
+        })?;
+        let state = unsafe { state.as_ref() };
+        let mut source = state.source.lock().map_err(|_| {
+            AndroidBackendError::operation(
+                "media-data-source-gapless-probe",
+                "source mutex poisoned",
+            )
+        })?;
+        let current = source.seek(SeekFrom::Current(0)).map_err(|error| {
+            AndroidBackendError::operation(
+                "media-data-source-gapless-probe-current",
+                error.to_string(),
+            )
+        })?;
+        source.seek(SeekFrom::Start(0)).map_err(|error| {
+            AndroidBackendError::operation(
+                "media-data-source-gapless-probe-seek-start",
+                error.to_string(),
+            )
+        })?;
+
+        let probe = probe_mp4_gapless_dyn(&mut **source).map_err(|error| {
+            AndroidBackendError::operation("media-data-source-gapless-probe", error.to_string())
+        });
+        let restore = source.seek(SeekFrom::Start(current)).map_err(|error| {
+            AndroidBackendError::operation(
+                "media-data-source-gapless-probe-restore",
+                error.to_string(),
+            )
+        });
+
+        match (probe, restore) {
+            (Ok(gapless), Ok(_)) => Ok(gapless),
+            (Err(error), Ok(_)) => Err(error),
+            (_, Err(error)) => Err(error),
+        }
     }
 
     pub(crate) fn into_source(mut self) -> Result<BoxedSource, AndroidBackendError> {

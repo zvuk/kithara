@@ -296,6 +296,7 @@ impl HardwareBackend for AndroidBackend {
         let android_config = AndroidConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,
+            gapless: config.gapless,
             pcm_pool: config.pcm_pool.clone(),
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,

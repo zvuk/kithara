@@ -3,7 +3,7 @@ use std::time::Duration;
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use kithara_stream::{AudioCodec, ContainerFormat, StreamContext};
 
-use super::ffi::{api_level_allows_hardware, current_api_level};
+use super::ffi::{api_level_allows_hardware, capability_api_level};
 use crate::{
     DecodeError,
     types::{PcmMeta, PcmSpec},
@@ -26,7 +26,7 @@ pub(crate) enum SeekTrimOutcome {
 
 #[must_use]
 pub(crate) fn supports_codec(codec: AudioCodec) -> bool {
-    supports_codec_at_api(codec, current_api_level())
+    supports_codec_at_api(codec, capability_api_level())
 }
 
 #[must_use]
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn runtime_support_helper_defers_to_current_api_level() {
+    fn runtime_support_helper_uses_capability_api_level() {
         assert!(!supports_codec(AudioCodec::Mp3));
     }
 

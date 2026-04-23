@@ -116,11 +116,15 @@ impl<C: CodecType> Android<C> {
             }
         };
 
-        let extractor_bootstrap = match bootstrap_extractor(media_source, C::CODEC) {
-            Ok(bootstrap) => bootstrap,
-            Err((media_source, error)) => {
-                return Err(recover_extractor_failure(media_source, error));
-            }
+        let extractor_bootstrap =
+            match bootstrap_extractor(media_source, C::CODEC, config.container, config.gapless) {
+                Ok(bootstrap) => bootstrap,
+                Err((media_source, error)) => {
+                    return Err(recover_extractor_failure(media_source, error));
+                }
+            };
+        let track_info = DecoderTrackInfo {
+            gapless: extractor_bootstrap.selected_track.gapless,
         };
 
         // Bootstrap is staged so each step can hand ownership back to the
@@ -142,7 +146,7 @@ impl<C: CodecType> Android<C> {
                 spec: codec_bootstrap.spec,
                 duration: extractor_bootstrap.selected_track.duration,
                 metadata: TrackMetadata::default(),
-                track_info: DecoderTrackInfo::default(),
+                track_info,
                 byte_len_handle,
                 pool,
                 stream_ctx: config.stream_ctx,

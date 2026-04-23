@@ -3,6 +3,11 @@
 use std::ffi::CStr;
 #[cfg(target_os = "android")]
 use std::ffi::{c_char, c_void};
+#[cfg(target_os = "android")]
+use std::panic::catch_unwind;
+
+#[cfg(target_os = "android")]
+use jni::JavaVM;
 
 pub(crate) const MEDIA_STATUS_OK: i32 = 0;
 pub(crate) const MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM: u32 = 4;
@@ -19,6 +24,8 @@ pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";
 pub(crate) const KEY_DURATION_US: &CStr = c"durationUs";
 pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
+pub(crate) const KEY_ENCODER_DELAY: &CStr = c"encoder-delay";
+pub(crate) const KEY_ENCODER_PADDING: &CStr = c"encoder-padding";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -67,12 +74,6 @@ pub(crate) type AMediaDataSourceReadAt =
 pub(crate) type AMediaDataSourceGetSize = Option<unsafe extern "C" fn(*mut c_void) -> Off64>;
 #[cfg(target_os = "android")]
 pub(crate) type AMediaDataSourceClose = Option<unsafe extern "C" fn(*mut c_void)>;
-
-#[cfg(target_os = "android")]
-#[link(name = "android")]
-unsafe extern "C" {
-    fn android_get_device_api_level() -> i32;
-}
 
 #[cfg(target_os = "android")]
 #[link(name = "mediandk")]
@@ -194,14 +195,42 @@ unsafe extern "C" {
 
 #[cfg(target_os = "android")]
 pub(crate) fn current_api_level() -> Option<u32> {
-    let level = unsafe { android_get_device_api_level() };
-    (level >= 0).then_some(level as u32)
+    runtime_api_level().or_else(compile_time_api_level)
 }
 
 #[cfg(not(target_os = "android"))]
 pub(crate) fn current_api_level() -> Option<u32> {
     // Host builds still compile Android capability logic and its tests, but
     // they must never claim that MediaCodec is available at runtime.
+    None
+}
+
+#[cfg(target_os = "android")]
+fn runtime_api_level() -> Option<u32> {
+    let context = catch_unwind(ndk_context::android_context).ok()?;
+    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread_permanently().ok()?;
+    let build_version = env.find_class("android/os/Build$VERSION").ok()?;
+    let sdk_int = env
+        .get_static_field(build_version, "SDK_INT", "I")
+        .ok()?
+        .i()
+        .ok()?;
+    u32::try_from(sdk_int).ok()
+}
+
+#[cfg(target_os = "android")]
+fn compile_time_api_level() -> Option<u32> {
+    option_env!("CARGO_NDK_PLATFORM").and_then(|value| value.parse::<u32>().ok())
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn capability_api_level() -> Option<u32> {
+    compile_time_api_level()
+}
+
+#[cfg(not(target_os = "android"))]
+pub(crate) fn capability_api_level() -> Option<u32> {
     None
 }
 
@@ -231,6 +260,9 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
+        assert_eq!(KEY_ENCODER_DELAY.to_str().ok(), Some("encoder-delay"));
+        assert_eq!(KEY_ENCODER_PADDING.to_str().ok(), Some("encoder-padding"));
+        assert_eq!(current_api_level(), None);
         assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
         assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));
     }
