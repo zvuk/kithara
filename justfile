@@ -231,12 +231,17 @@ mutants-all *ARGS:
 
 # Workspace-wide mutants with CI flags (full cycle, hours on large servers).
 # --baseline=skip assumes baseline is verified out-of-band (e.g. prior `just test`
-# stage). Uses all cores minus one to leave headroom for the host.
+# stage). MUTANTS_JOBS controls parallelism: set it to cap cargo-mutants workers
+# (cargo-mutants itself recommends <= 8 because each worker spawns a full cargo
+# + nextest, and they contend for rustc threads, sccache daemon, and test-runner
+# CPU). Default = min(12, nproc-1).
 mutants-ci OUTPUT:
     #!/usr/bin/env bash
     set -uo pipefail
-    JOBS=$(( $(nproc) - 1 ))
-    if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
+    DEFAULT_JOBS=$(( $(nproc) - 1 ))
+    if [ "$DEFAULT_JOBS" -gt 12 ]; then DEFAULT_JOBS=12; fi
+    if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
+    JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
     mkdir -p "{{OUTPUT}}"
     cargo mutants --workspace --test-workspace=true --baseline=skip \
       --test-tool=nextest --profile test-release \
