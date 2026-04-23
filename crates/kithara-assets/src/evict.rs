@@ -210,20 +210,23 @@ where
             tracing::debug!(asset_root = %cand, "Skipping pinned asset");
             return;
         }
-
         tracing::debug!(asset_root = %cand, "Attempting to delete asset");
-        #[cfg(not(target_arch = "wasm32"))]
+        self.delete_and_forget(lru, cand);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn delete_and_forget(&self, lru: &LruIndex<A::IndexRes>, cand: &str) {
         if delete_asset_dir(self.inner.root_dir(), cand).is_ok() {
             tracing::debug!(asset_root = %cand, "Asset deleted successfully");
             let _ = lru.remove(cand);
         } else {
             tracing::debug!(asset_root = %cand, "Failed to delete asset");
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = lru;
-            tracing::debug!(asset_root = %cand, "WASM backend does not support delete_asset_dir");
-        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn delete_and_forget(&self, _lru: &LruIndex<A::IndexRes>, cand: &str) {
+        tracing::debug!(asset_root = %cand, "WASM backend does not support delete_asset_dir");
     }
 
     fn open_lru(&self) -> AssetsResult<LruIndex<A::IndexRes>> {
