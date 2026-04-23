@@ -110,6 +110,12 @@ pub(crate) enum WaitContext {
     ApplySeek(ApplySeekState),
     /// Init bytes unavailable for decoder recreation.
     Recreation(RecreateState),
+    /// `decoder.seek()` already succeeded and the FSM was in
+    /// `AwaitingResume` when the source stopped producing chunks.
+    /// Carries the `ResumeState` so the wait loop can demand the
+    /// anchor byte (instead of the stale pre-seek read head) and
+    /// then transition back to `AwaitingResume` once data arrives.
+    PostSeek(ResumeState),
 }
 
 /// Why the source is not ready, mirroring relevant `SourcePhase` variants.
@@ -258,6 +264,9 @@ impl TrackState {
                 WaitContext::Recreation(recreate) => {
                     SeekLocation::from_recreate_offset(recreate.offset)
                 }
+                WaitContext::PostSeek(resume) => resume
+                    .anchor_offset
+                    .map_or(SeekLocation::CurrentPosition, SeekLocation::from_estimate),
             },
         }
     }

@@ -1213,7 +1213,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
             WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
-            _ => self.shared_stream.phase(),
+            WaitContext::PostSeek(resume) => resume.anchor_offset.map_or_else(
+                || self.shared_stream.phase(),
+                |byte| self.source_phase_for_boundary(byte),
+            ),
+            WaitContext::Playback | WaitContext::Seek(_) => self.shared_stream.phase(),
         }
     }
 
@@ -1523,6 +1527,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             } => {
                 self.update_state(TrackState::RecreatingDecoder(recreate));
             }
+            TrackState::WaitingForSource {
+                context: WaitContext::PostSeek(resume),
+                ..
+            } => {
+                self.update_state(TrackState::AwaitingResume(resume));
+            }
             _ => {
                 // Already set to Decoding by mem::replace
             }
@@ -1680,12 +1690,24 @@ impl<T: StreamType> StreamAudioSource<T> {
         // Use anchor offset for readiness check when available. The decoder
         // may have landed at a different byte position than the anchor, but
         // StreamIndex layout is built around the anchor offset (from reset_to).
-        let anchor_offset = match &self.state {
-            TrackState::AwaitingResume(resume) => resume.anchor_offset,
+        let resume_state = match &self.state {
+            TrackState::AwaitingResume(resume) => Some(*resume),
             _ => None,
         };
-        if !self.source_is_ready() {
-            let phase = self.shared_stream.phase();
+        let anchor_offset = resume_state.and_then(|r| r.anchor_offset);
+        // Readiness gate: when the anchor is known, check it (that's the
+        // byte the decoder needs next). Falling back to current-read-head
+        // after a decoder.seek() leaks the stale pre-seek position and
+        // loops forever against the anchor-based wait path below.
+        let ready = anchor_offset.map_or_else(
+            || self.source_is_ready(),
+            |byte| self.source_is_ready_for_boundary(byte),
+        );
+        if !ready {
+            let phase = anchor_offset.map_or_else(
+                || self.shared_stream.phase(),
+                |byte| self.source_phase_for_boundary(byte),
+            );
             if let Some(reason) = map_source_phase(phase) {
                 trace!(
                     ?phase,
@@ -1695,14 +1717,15 @@ impl<T: StreamType> StreamAudioSource<T> {
                     epoch = self.epoch.load(Ordering::Acquire),
                     "step_awaiting_resume: source not ready"
                 );
-                // NOTE: anchor-based demand intentionally NOT sent here.
-                // It causes DRM regression where encrypted/decrypted sizes
-                // differ. Standard demand via submit_demand_for_current_state
-                // (in step_waiting_for_source) uses byte_position.
-                self.update_state(TrackState::WaitingForSource {
-                    context: WaitContext::Playback,
-                    reason,
-                });
+                // Carry the ResumeState into WaitingForSource so the wait
+                // loop's demand path targets the anchor byte instead of
+                // `shared_stream.position()` — which after a successful
+                // decoder.seek() still points at the pre-seek read head
+                // until the decoder actually reads new data, leaving the
+                // downloader with no demand signal for the post-seek
+                // segment.
+                let context = resume_state.map_or(WaitContext::Playback, WaitContext::PostSeek);
+                self.update_state(TrackState::WaitingForSource { context, reason });
                 return TrackStep::Blocked(reason);
             }
         }
