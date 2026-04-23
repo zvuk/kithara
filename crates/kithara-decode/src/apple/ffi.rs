@@ -54,17 +54,6 @@ pub(super) struct AudioBufferList {
     pub(super) mBuffers: [AudioBuffer; 1],
 }
 
-/// Priming information reported by `AudioConverter`.
-///
-/// `leading_frames` is the encoder delay (priming samples the decoder produces
-/// before real audio). `trailing_frames` is the padding at the end.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct AudioConverterPrimeInfo {
-    pub(super) leading_frames: u32,
-    pub(super) trailing_frames: u32,
-}
-
 // Callback types for AudioFileStream
 pub(super) type AudioFileStream_PropertyListenerProc = extern "C" fn(
     inClientData: *mut c_void,
@@ -143,13 +132,6 @@ unsafe extern "C" {
         ioOutputDataPacketSize: *mut UInt32,
         outOutputData: *mut AudioBufferList,
         outPacketDescription: *mut AudioStreamPacketDescription,
-    ) -> OSStatus;
-
-    pub(super) fn AudioConverterGetProperty(
-        inAudioConverter: AudioConverterRef,
-        inPropertyID: u32,
-        ioPropertyDataSize: *mut UInt32,
-        outPropertyData: *mut c_void,
     ) -> OSStatus;
 
     pub(super) fn AudioConverterDispose(inAudioConverter: AudioConverterRef) -> OSStatus;

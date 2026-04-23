@@ -11,10 +11,6 @@ impl Consts {
     pub(super) const kAudioFileStreamError_NotOptimized: OSStatus = 0x6f707469; // 'opti'
     pub(super) const kAudioConverterErr_NoDataNow: OSStatus = 0x21646174; // '!dat'
     pub(super) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d; // 'lpcm'
-    pub(super) const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320; // 'aac '
-    pub(super) const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d7033; // '.mp3'
-    pub(super) const kAudioFormatFLAC: AudioFormatID = 0x666c6163; // 'flac'
-    pub(super) const kAudioFormatAppleLossless: AudioFormatID = 0x616c6163; // 'alac'
     pub(super) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
     pub(super) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
     pub(super) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
@@ -38,7 +34,6 @@ impl Consts {
     pub(super) const MIN_PACKETS_FOR_DECODE: usize = 4;
     pub(super) const DEFAULT_SEEK_DURATION_SECS: f64 = 300.0;
     pub(super) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
-    pub(super) const kAudioConverterPrimeInfo: u32 = 0x7072696d; // 'prim'
 }
 
 /// Decode a `FourCC`-style `OSStatus` into an ASCII tag when possible.
