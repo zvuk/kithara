@@ -590,23 +590,40 @@ where
         stream_config: T::Config,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
+        let stream = Self::open_stream(stream_config).await?;
+        Self::spawn_probe(stream, byte_pool).await
+    }
+
+    async fn open_stream(stream_config: T::Config) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
             .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
         debug!("Audio::new — Stream created");
+        Ok(stream)
+    }
 
+    async fn spawn_probe(
+        stream: Stream<T>,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — spawning probe task...");
-        let stream = spawn_blocking(move || {
-            let mut stream = stream;
-            let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-            let _ = stream.read(&mut probe_buf);
-            stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
-            Ok::<_, DecodeError>(stream)
-        })
-        .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
+        let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
+            .await
+            .map_err(|e| {
+                DecodeError::Io(IoError::other(format!("probe task panicked: {e}")))
+            })??;
         debug!("Audio::new — probe task done");
+        Ok(result)
+    }
+
+    fn probe_stream_blocking(
+        mut stream: Stream<T>,
+        byte_pool: &kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
+        let _ = stream.read(&mut probe_buf);
+        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
         Ok(stream)
     }
 
@@ -662,6 +679,19 @@ where
         Box::new(move |event: AudioEvent| {
             emit_bus.publish(event);
         })
+    }
+
+    fn log_pipeline_ready(
+        initial_spec: PcmSpec,
+        output_spec: PcmSpec,
+        host_sample_rate: &Arc<AtomicU32>,
+    ) {
+        info!(
+            ?initial_spec,
+            ?output_spec,
+            host_sr = host_sample_rate.load(Ordering::Relaxed),
+            "Audio pipeline created"
+        );
     }
 
     fn create_decoder_factory(
@@ -791,12 +821,7 @@ where
             custom_effects,
         );
 
-        info!(
-            ?initial_spec,
-            ?output_spec,
-            host_sr = host_sample_rate.load(Ordering::Relaxed),
-            "Audio pipeline created"
-        );
+        Self::log_pipeline_ready(initial_spec, output_spec, &host_sample_rate);
 
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
