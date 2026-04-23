@@ -201,25 +201,28 @@ where
             if self.cancel.is_cancelled() {
                 break;
             }
+            self.evict_one(lru, pinned, &cand);
+        }
+    }
 
-            if pinned.contains(&cand) {
-                tracing::debug!(asset_root = %cand, "Skipping pinned asset");
-                continue;
-            }
+    fn evict_one(&self, lru: &LruIndex<A::IndexRes>, pinned: &HashSet<String>, cand: &str) {
+        if pinned.contains(cand) {
+            tracing::debug!(asset_root = %cand, "Skipping pinned asset");
+            return;
+        }
 
-            tracing::debug!(asset_root = %cand, "Attempting to delete asset");
-            #[cfg(not(target_arch = "wasm32"))]
-            if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
-                tracing::debug!(asset_root = %cand, "Asset deleted successfully");
-                let _ = lru.remove(&cand);
-            } else {
-                tracing::debug!(asset_root = %cand, "Failed to delete asset");
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = lru;
-                tracing::debug!(asset_root = %cand, "WASM backend does not support delete_asset_dir");
-            }
+        tracing::debug!(asset_root = %cand, "Attempting to delete asset");
+        #[cfg(not(target_arch = "wasm32"))]
+        if delete_asset_dir(self.inner.root_dir(), cand).is_ok() {
+            tracing::debug!(asset_root = %cand, "Asset deleted successfully");
+            let _ = lru.remove(cand);
+        } else {
+            tracing::debug!(asset_root = %cand, "Failed to delete asset");
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = lru;
+            tracing::debug!(asset_root = %cand, "WASM backend does not support delete_asset_dir");
         }
     }
 
