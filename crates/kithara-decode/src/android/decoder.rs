@@ -24,15 +24,16 @@ use super::{
     error::AndroidBackendError,
     extractor::{OwnedExtractor, bootstrap_extractor},
     ffi,
-    format::{
-        SeekTrimOutcome, copy_pcm_float_to_pool, decode_pcm16_to_f32, pcm_meta_from_timestamp,
-        seek_trim_for_buffer, supports_codec_at_api,
-    },
+    format::supports_codec_at_api,
     source::OwnedMediaDataSource,
 };
 use crate::{
     DecodeResult,
     hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
+    pcm::{
+        conversion::{copy_pcm_float_to_pool, decode_pcm16_to_f32},
+        timeline::{SeekTrimOutcome, pcm_meta_from_pts_us, seek_trim_for_buffer},
+    },
     traits::{Aac, CodecType, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
@@ -308,7 +309,7 @@ impl<C: CodecType> Android<C> {
             return Ok(None);
         }
 
-        let meta = pcm_meta_from_timestamp(
+        let meta = pcm_meta_from_pts_us(
             self.inner.spec,
             presentation_time_us,
             self.inner.stream_ctx.as_deref(),

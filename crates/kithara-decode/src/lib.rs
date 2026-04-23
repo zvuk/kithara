@@ -21,6 +21,7 @@
 
 mod error;
 mod factory;
+mod pcm;
 mod symphonia;
 mod traits;
 mod types;
