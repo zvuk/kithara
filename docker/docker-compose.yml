@@ -1,0 +1,20 @@
+services:
+  ci-full:
+    image: kithara/ci:latest
+    build:
+      context: ..
+      dockerfile: docker/ci.Dockerfile
+    volumes:
+      - ../:/repo:rw
+      - /var/kithara-ci-results:/ci-out:rw
+      - kithara_target:/repo/target
+    working_dir: /repo
+    environment:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
+    command: just ci-full-run /ci-out
+    restart: "no"
+
+volumes:
+  kithara_target:

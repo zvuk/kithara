@@ -147,6 +147,36 @@ lint-fast: fmt-check clippy ast-grep-blocking arch
 
 lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 
+# --- CI cycle ---
+
+# Full CI cycle: lint + test + e2e + workspace-mutants.
+# Each stage writes its own stage-<name>.log and stage-<name>.exit under OUTPUT;
+# the pipeline continues even if earlier stages fail so the remote run still
+# produces mutant results for inspection.
+ci-full-run OUTPUT:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+    mkdir -p "{{OUTPUT}}"
+    echo "$RUN_ID" > "{{OUTPUT}}/run-id"
+    echo "=== ci-full-run $RUN_ID starting at $(date -u -Iseconds) ==="
+
+    run_stage() {
+        local name=$1; shift
+        echo ">>> stage $name started at $(date -u -Iseconds)"
+        "$@" > "{{OUTPUT}}/stage-$name.log" 2>&1
+        local rc=$?
+        echo "$rc" > "{{OUTPUT}}/stage-$name.exit"
+        echo ">>> stage $name finished with exit=$rc at $(date -u -Iseconds)"
+    }
+
+    run_stage lint    just lint-fast
+    run_stage test    just test
+    run_stage e2e     just test-e2e
+    run_stage mutants just mutants-ci "{{OUTPUT}}/mutants"
+
+    echo "=== ci-full-run $RUN_ID done at $(date -u -Iseconds) ==="
+
 # --- coverage ---
 
 coverage:
@@ -198,6 +228,20 @@ mutants crate *ARGS:
 mutants-all *ARGS:
     cargo mutants --workspace --test-workspace=true --profile test-release \
       --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+
+# Workspace-wide mutants with CI flags (full cycle, hours on large servers).
+# --baseline=skip assumes baseline is verified out-of-band (e.g. prior `just test`
+# stage). Uses all cores minus one to leave headroom for the host.
+mutants-ci OUTPUT:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    JOBS=$(( $(nproc) - 1 ))
+    if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
+    mkdir -p "{{OUTPUT}}"
+    cargo mutants --workspace --test-workspace=true --baseline=skip \
+      --test-tool=nextest --profile test-release \
+      -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
+      --no-shuffle --output "{{OUTPUT}}"
 
 # --- perf & benchmarks ---
 
