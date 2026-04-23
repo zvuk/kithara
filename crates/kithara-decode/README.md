@@ -65,6 +65,27 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
 </table>
 
+## Module layout
+
+- `src/backend/` — `HardwareBackend` trait + `current::Current` alias (one `type` per platform, picked by `cfg`).
+- `src/apple/` — `AppleBackend` impl lives next to `AppleConfig`/`AppleInner`/FFI.
+- `src/android/` — `AndroidBackend` impl next to `MediaCodec` FFI and capability matrix. Whole module gated once in `lib.rs`; no internal `#[cfg(target_os = "android")]`.
+- `src/symphonia/` — `Symphonia<C>` generic + probe/direct paths + `ReadSeekAdapter`.
+- `src/pcm/` — host-agnostic PCM conversion helpers (`pcm16_to_f32`, `pcm_float_to_pool`) and timeline math (`pcm_meta_from_pts_us`, `seek_trim_for_buffer`) shared across backends.
+- `src/factory/` — public `DecoderConfig` + `DecoderFactory` plus orchestrator pieces: `probe.rs` (hint → codec), `hardware.rs` (attempt flow), `symphonia_entry.rs` (software fallback).
+
+## Cross-decoder protocol test
+
+`tests/decoder_protocol.rs` (integration test) decodes the same MP3 with
+every available backend and asserts agreement on `spec()`, `duration()`,
+total frame count, post-seek timestamp, EOF semantics, and — when the
+`apple` feature is enabled on macOS/iOS — the full-decode PCM L2 norm
+within 2 %. Run with:
+
+```
+cargo test -p kithara-decode --test decoder_protocol --features apple
+```
+
 ## Integration
 
 Consumed by `kithara-audio` which wraps it in a threaded pipeline with effects and resampling. Accepts any `R: Read + Seek + Send + Sync + 'static` -- works with `Stream<File>`, `Stream<Hls>`, `Cursor<Vec<u8>>`, or plain files.
