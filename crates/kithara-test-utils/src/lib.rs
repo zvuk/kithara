@@ -71,7 +71,9 @@ pub use log_filter::rust_log_filter;
 pub use rng::*;
 pub use server_url::join_server_url;
 pub use signal_source_utils::*;
-pub use signal_url::{SignalFormat, SignalKind, SignalSpec, SignalSpecLength, signal_path};
+pub use signal_url::{
+    SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::run_test_server;
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};

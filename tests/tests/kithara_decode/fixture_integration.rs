@@ -13,7 +13,7 @@ use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 use kithara_platform::time::Duration;
 use kithara_test_utils::{
     HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper, detect_direction,
+    SignalSpecLength, SweepMode, TestServerHelper, detect_direction,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
 use reqwest::Client;
@@ -132,6 +132,87 @@ async fn test_signal_server_encoded_formats_are_decodable(
 
     let chunk = decoder.next_chunk().unwrap().unwrap();
     assert!(!chunk.pcm.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case(SignalFormat::Mp3, "mp3", "audio/mpeg")]
+#[case(SignalFormat::Flac, "flac", "audio/flac")]
+#[case(SignalFormat::Aac, "aac", "audio/aac")]
+#[case(SignalFormat::M4a, "m4a", "audio/mp4")]
+async fn test_signal_server_sweep_encoded_formats_are_decodable(
+    #[case] format: SignalFormat,
+    #[case] ext: &str,
+    #[case] content_type: &str,
+) {
+    let server = TestServerHelper::new().await;
+    let client = Client::new();
+    let spec = SignalSpec {
+        sample_rate: 44_100,
+        channels: 2,
+        length: SignalSpecLength::Seconds(1.0),
+        format,
+    };
+
+    let response = client
+        .get(server.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("Failed to fetch /signal sweep encoded fixture: {error}"));
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        content_type
+    );
+
+    let bytes = response.bytes().await.unwrap();
+    assert!(!bytes.is_empty());
+
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes.to_vec()),
+        Some(ext),
+        DecoderConfig::default(),
+    )
+    .unwrap();
+
+    let chunk = decoder.next_chunk().unwrap().unwrap();
+    assert!(!chunk.pcm.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_signal_server_sweep_wav_roundtrip_hits_target_end_frequency() {
+    let server = TestServerHelper::new().await;
+    let client = Client::new();
+    let spec = wav_spec();
+    let response = client
+        .get(server.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("Failed to fetch /signal sweep wav fixture: {error}"));
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers().get("content-type").unwrap(), "audio/wav");
+
+    let bytes = response.bytes().await.unwrap();
+    let samples = decode_wav_channel_samples(&bytes, spec.channels as usize);
+    assert_eq!(samples.first().copied(), Some(0));
+
+    let tail_frequency =
+        estimate_frequency_i16(&samples[samples.len() - 2_048..], spec.sample_rate);
+    assert!(
+        (tail_frequency - 8_000.0).abs() < 300.0,
+        "tail frequency {tail_frequency} did not converge to the expected end frequency"
+    );
 }
 
 #[kithara::test(
@@ -582,6 +663,44 @@ fn wav_spec() -> SignalSpec {
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Wav,
     }
+}
+
+fn decode_wav_channel_samples(bytes: &[u8], channels: usize) -> Vec<i16> {
+    assert!(bytes.len() >= 44, "WAV fixture must include a header");
+    let frame_width = channels * 2;
+    bytes[44..]
+        .chunks_exact(frame_width)
+        .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
+        .collect()
+}
+
+fn estimate_frequency_i16(samples: &[i16], sample_rate: u32) -> f64 {
+    let mut zero_crossings = 0usize;
+    let mut prev_sign = 0i8;
+
+    for &sample in samples {
+        let sign = if sample > 0 {
+            1
+        } else if sample < 0 {
+            -1
+        } else {
+            0
+        };
+
+        if sign == 0 {
+            continue;
+        }
+
+        if prev_sign != 0 && sign != prev_sign {
+            zero_crossings += 1;
+        }
+        prev_sign = sign;
+    }
+
+    let zero_crossings = u32::try_from(zero_crossings).expect("zero crossings fit into u32");
+    let sample_count = u32::try_from(samples.len()).expect("sample count fits into u32");
+
+    f64::from(zero_crossings) / (2.0 * f64::from(sample_count) / f64::from(sample_rate))
 }
 
 fn assert_valid_pcm_samples(samples: &[f32], context: &str) {

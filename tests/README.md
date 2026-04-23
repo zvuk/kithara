@@ -75,7 +75,7 @@ Canonical fixture types (`kithara_test_utils::hls_fixture`):
 | `HlsTestServer` | Configurable variants, segments, delays, encryption, HEAD mismatch |
 | `AbrTestServer` | ABR bitrate switching scenarios |
 
-Synthetic HLS lives under `/stream/*`; procedural encoded audio lives under `/signal/*`; repository-owned regression assets remain under `/assets/*`.
+Synthetic HLS lives under `/stream/*`; procedural encoded audio lives under `/signal/*` (`sawtooth`, `sawtooth-desc`, `sine`, `sweep`, `silence`); repository-owned regression assets remain under `/assets/*`.
 
 ### Synthetic HLS Protocol
 

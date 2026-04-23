@@ -456,7 +456,7 @@ mod tests {
     use super::*;
     use crate::{
         fixture_protocol::{DataMode, InitMode},
-        signal_url::{SignalFormat, SignalSpec, SignalSpecLength},
+        signal_url::{SignalFormat, SignalSpec, SignalSpecLength, SweepMode},
     };
 
     #[tokio::test]
@@ -471,6 +471,21 @@ mod tests {
         let url = helper.sine(&spec, 440.0).await;
 
         assert!(url.path().starts_with("/signal/sine/"));
+        assert!(url.path().ends_with(".wav"));
+    }
+
+    #[tokio::test]
+    async fn sweep_helper_builds_expected_url() {
+        let spec = SignalSpec {
+            sample_rate: 44_100,
+            channels: 2,
+            length: SignalSpecLength::Seconds(1.0),
+            format: SignalFormat::Wav,
+        };
+        let helper = TestServerHelper::new().await;
+        let url = helper.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await;
+
+        assert!(url.path().starts_with("/signal/sweep/"));
         assert!(url.path().ends_with(".wav"));
     }
 

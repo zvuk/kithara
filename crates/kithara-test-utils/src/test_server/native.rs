@@ -65,6 +65,25 @@ impl TestServerHelper {
         self.signal_url(SignalKind::Sine { freq_hz }, spec)
     }
 
+    /// Build a URL for `/signal/sweep/...`.
+    #[must_use]
+    pub async fn sweep(
+        &self,
+        spec: &SignalSpec,
+        start_hz: f64,
+        end_hz: f64,
+        mode: crate::signal_url::SweepMode,
+    ) -> Url {
+        self.signal_url(
+            SignalKind::Sweep {
+                start_hz,
+                end_hz,
+                mode,
+            },
+            spec,
+        )
+    }
+
     /// Build a URL for `/signal/silence/...`.
     #[must_use]
     pub async fn silence(&self, spec: &SignalSpec) -> Url {
