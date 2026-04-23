@@ -146,7 +146,49 @@ fn mvhd_box(timescale: u32, total_duration: u64) -> Vec<u8> {
 fn trak_box(track: &EncodedTrack, descriptor: &CodecDescriptor, total_duration: u64) -> Vec<u8> {
     mp4_box(*b"trak", |buf| {
         buf.push_bytes(&tkhd_box(total_duration));
-        buf.push_bytes(&mdia_box(track, descriptor));
+        if let Some(edts) = edts_box(track, total_duration) {
+            buf.push_bytes(&edts);
+        }
+        buf.push_bytes(&mdia_box(track, descriptor, total_duration));
+    })
+}
+
+fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
+    let encoder_delay = u64::from(track.encoder_delay);
+    let trailing_delay = u64::from(track.trailing_delay);
+    if encoder_delay == 0 && trailing_delay == 0 {
+        return None;
+    }
+
+    let valid_duration = total_duration
+        .checked_sub(encoder_delay)?
+        .checked_sub(trailing_delay)?;
+    if valid_duration == 0 {
+        return None;
+    }
+
+    Some(mp4_box(*b"edts", |buf| {
+        buf.push_bytes(&elst_box(valid_duration, encoder_delay));
+    }))
+}
+
+fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
+    if u32::try_from(segment_duration).is_ok() && i32::try_from(media_time).is_ok() {
+        return full_box(*b"elst", 0, 0, |buf| {
+            buf.push_u32(1);
+            buf.push_u32(u32::try_from(segment_duration).unwrap_or(u32::MAX));
+            buf.push_i32(i32::try_from(media_time).unwrap_or(i32::MAX));
+            buf.push_u16(1);
+            buf.push_u16(0);
+        });
+    }
+
+    full_box(*b"elst", 1, 0, |buf| {
+        buf.push_u32(1);
+        buf.push_u64(segment_duration);
+        buf.push_i64(i64::try_from(media_time).unwrap_or(i64::MAX));
+        buf.push_u16(1);
+        buf.push_u16(0);
     })
 }
 
@@ -169,20 +211,21 @@ fn tkhd_box(total_duration: u64) -> Vec<u8> {
     })
 }
 
-fn mdia_box(track: &EncodedTrack, descriptor: &CodecDescriptor) -> Vec<u8> {
+fn mdia_box(track: &EncodedTrack, descriptor: &CodecDescriptor, total_duration: u64) -> Vec<u8> {
     mp4_box(*b"mdia", |buf| {
-        buf.push_bytes(&mdhd_box(track.timescale));
+        buf.push_bytes(&mdhd_box(track.timescale, total_duration));
         buf.push_bytes(&hdlr_box());
         buf.push_bytes(&minf_box(track, descriptor));
     })
 }
 
-fn mdhd_box(timescale: u32) -> Vec<u8> {
+fn mdhd_box(timescale: u32, total_duration: u64) -> Vec<u8> {
+    let duration = u32::try_from(total_duration).unwrap_or(u32::MAX);
     full_box(*b"mdhd", 0, 0, |buf| {
         buf.push_u32(0);
         buf.push_u32(0);
         buf.push_u32(timescale);
-        buf.push_u32(0);
+        buf.push_u32(duration);
         buf.push_u16(0x55C4);
         buf.push_u16(0);
     })
@@ -352,6 +395,8 @@ mod tests {
             bit_rate: 128_000,
             codec_config: Vec::new(),
             packets_per_segment: 2,
+            encoder_delay: 0,
+            trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {
                     bytes: vec![1, 2, 3],
@@ -400,6 +445,8 @@ mod tests {
                 0x60, 0x75, 0x8D, 0x3A, 0x77, 0x61,
             ],
             packets_per_segment: 2,
+            encoder_delay: 0,
+            trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {
                     bytes: vec![0xFF, 0xF8, 0x69],
@@ -462,5 +509,18 @@ mod tests {
         assert_eq!(packaged.rfc6381_codec.as_ref(), "flac");
         assert_eq!(packaged.media_segments.len(), 1);
         assert_eq!(packaged.segment_durations_secs, vec![9216.0 / 48_000.0]);
+    }
+
+    #[test]
+    fn init_segment_emits_gapless_edit_list_for_padded_track() {
+        let mut track = test_track();
+        track.encoder_delay = 2_112;
+        track.trailing_delay = 1_920;
+
+        let packaged = mux_audio_track(&track).unwrap();
+        let init = packaged.init_segment.as_slice();
+
+        assert!(init.windows(4).any(|window| window == b"edts"));
+        assert!(init.windows(4).any(|window| window == b"elst"));
     }
 }

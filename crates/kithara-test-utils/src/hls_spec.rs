@@ -80,6 +80,8 @@ pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
     pub(crate) timescale: u32,
+    pub(crate) encoder_delay: u32,
+    pub(crate) trailing_delay: u32,
     pub(crate) segments_per_variant: usize,
     pub(crate) segment_duration_secs: f64,
     pub(crate) variants: Vec<ResolvedPackagedVariant>,
@@ -409,6 +411,8 @@ fn resolve_packaged_audio(
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
         timescale,
+        encoder_delay: packaged.encoder_delay.map(Into::into).unwrap_or_default(),
+        trailing_delay: packaged.trailing_delay.map(Into::into).unwrap_or_default(),
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
         variants,
@@ -507,10 +511,9 @@ impl ResolvedEncryption {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara_stream::AudioCodec;
+    use std::collections::HashMap;
 
     use super::*;
     use crate::{
@@ -577,6 +580,8 @@ mod tests {
                 channels: 2,
                 timescale: None,
                 bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
                 variant_overrides: Vec::new(),
             }),

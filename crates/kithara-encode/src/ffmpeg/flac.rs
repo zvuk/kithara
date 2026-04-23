@@ -1,5 +1,5 @@
 use ffmpeg::{
-    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
+    ChannelLayout, Dictionary, Error as FfmpegError, Rational,
     codec::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
@@ -12,7 +12,7 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use super::{
     build_direct_filter,
     bytes::encode_bytes_audio,
-    ensure_ffmpeg_initialized,
+    collect_encoded_packets, ensure_ffmpeg_initialized,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
@@ -91,6 +91,8 @@ impl FlacFFmpegEncoder {
             bit_rate: request.bit_rate,
             codec_config,
             packets_per_segment: request.packets_per_segment,
+            encoder_delay: request.encoder_delay,
+            trailing_delay: request.trailing_delay,
             access_units,
         })
     }
@@ -266,41 +268,6 @@ fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
     Some(&raw[FLAC_METADATA_HEADER_LEN..FLAC_METADATA_HEADER_LEN + block_len])
 }
 
-fn collect_encoded_packets(
-    encoder: &mut AudioEncoder,
-    encoder_time_base: Rational,
-    target_time_base: Rational,
-    timestamp_origin: &mut Option<i64>,
-    units: &mut Vec<EncodedAccessUnit>,
-) {
-    let mut encoded = Packet::empty();
-    while encoder.receive_packet(&mut encoded).is_ok() {
-        if encoded.size() == 0 {
-            continue;
-        }
-        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
-        packet.set_pts(encoded.pts());
-        packet.set_dts(encoded.dts());
-        packet.set_duration(encoded.duration());
-        packet.rescale_ts(encoder_time_base, target_time_base);
-        let raw_pts = packet.pts().unwrap_or_default();
-        let raw_dts = packet.dts().unwrap_or_default();
-        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
-        units.push(EncodedAccessUnit {
-            bytes: packet.data().unwrap_or(&[]).to_vec(),
-            pts: normalize_timestamp(raw_pts, origin),
-            dts: normalize_timestamp(raw_dts, origin),
-            duration: u32::try_from(packet.duration().max(0)).unwrap_or(u32::MAX),
-            is_sync: encoded.is_key(),
-        });
-    }
-}
-
-fn normalize_timestamp(value: i64, origin: i64) -> u64 {
-    let normalized = i128::from(value) - i128::from(origin);
-    u64::try_from(normalized.max(0)).unwrap_or(u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
@@ -337,6 +304,8 @@ mod tests {
             timescale: SAMPLE_RATE,
             bit_rate: 512_000,
             packets_per_segment: 2,
+            encoder_delay: 0,
+            trailing_delay: 0,
         })
         .unwrap_or_else(|error| panic!("encode_packaged(Flac) failed: {error}"));
 
@@ -346,6 +315,8 @@ mod tests {
         assert_eq!(encoded.media_info.channels, Some(CHANNELS));
         assert_eq!(encoded.timescale, SAMPLE_RATE);
         assert_eq!(encoded.packets_per_segment, 2);
+        assert_eq!(encoded.encoder_delay, 0);
+        assert_eq!(encoded.trailing_delay, 0);
         assert_eq!(encoded.codec_config.len(), 34);
         assert!(
             encoded.access_units.len() >= 2,

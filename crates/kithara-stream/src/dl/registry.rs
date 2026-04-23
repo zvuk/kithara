@@ -235,14 +235,14 @@ impl Registry {
             }
         }
 
-        cancels.sort_by(|a, b| b.1.cmp(&a.1));
+        cancels.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for (slot_idx, i) in cancels {
             if let Some(cmd) = self.slots[slot_idx].remove(i) {
                 super::batch::deliver_cancelled(cmd.response, cmd.cmd);
             }
         }
 
-        moves.sort_by(|a, b| b.1.cmp(&a.1));
+        moves.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for (from_slot, i, to_slot) in moves {
             if let Some(cmd) = self.slots[from_slot].remove(i) {
                 self.slots[to_slot].push_back(cmd);

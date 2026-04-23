@@ -44,13 +44,13 @@ impl GaplessTrimmer {
         }
 
         if self.leading_remaining > 0 {
-            let chunk_frames = chunk.frames() as u64;
+            let chunk_frames = u64::try_from(chunk.frames()).unwrap_or(u64::MAX);
             if chunk_frames <= self.leading_remaining {
                 self.leading_remaining -= chunk_frames;
                 return SmallVec::new();
             }
 
-            let trim_frames = self.leading_remaining.min(chunk_frames) as usize;
+            let trim_frames = usize_from_u64_saturating(self.leading_remaining.min(chunk_frames));
             self.leading_remaining -= trim_frames as u64;
             trim_chunk_start(&mut chunk, trim_frames);
         }
@@ -99,7 +99,7 @@ impl GaplessTrimmer {
                 continue;
             }
 
-            let keep_frames = chunk_frames.saturating_sub(drop_frames) as usize;
+            let keep_frames = usize_from_u64_saturating(chunk_frames.saturating_sub(drop_frames));
             let keep_samples = keep_frames.saturating_mul(usize::from(back.spec().channels.max(1)));
             back.pcm.truncate(keep_samples);
             self.tail_buffered_frames = self.tail_buffered_frames.saturating_sub(drop_frames);
@@ -146,7 +146,11 @@ fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)
         .saturating_mul(1_000_000_000)
         .saturating_div(u128::from(spec.sample_rate));
-    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+    Duration::from_nanos(u64::try_from(nanos.min(u128::from(u64::MAX))).unwrap_or(u64::MAX))
+}
+
+fn usize_from_u64_saturating(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]

@@ -3,17 +3,18 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
-use std::{fs, io::Cursor, process::Command};
+use std::{fs, io::Cursor, num::NonZeroU32, process::Command};
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderConfig, DecoderFactory, probe_mp4_gapless},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 use kithara_platform::time::Duration;
 use kithara_test_utils::{
     HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper, detect_direction, fixture_protocol::PackagedSignal,
+    SignalSpecLength, TestServerHelper, detect_direction,
+    fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
 use reqwest::Client;
 
@@ -510,6 +511,52 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     );
     assert_eq!(chunk.spec().sample_rate, 44_100);
     assert_eq!(chunk.spec().channels, 2);
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_packaged_hls_init_segment_exposes_configured_gapless_delays() {
+    let server = TestServerHelper::new().await;
+    let encoder_delay = 2_112;
+    let trailing_delay = 960;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(4)
+                .segment_duration_secs(1.0)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    timescale: Some(48_000),
+                    bit_rate: Some(128_000),
+                    encoder_delay: NonZeroU32::new(encoder_delay),
+                    trailing_delay: NonZeroU32::new(trailing_delay),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sawtooth),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create delayed packaged HLS fixture");
+
+    let init = Client::new()
+        .get(created.init_url(0))
+        .send()
+        .await
+        .expect("fetch delayed init")
+        .bytes()
+        .await
+        .expect("read delayed init bytes");
+    let gapless = probe_mp4_gapless(&mut Cursor::new(init.to_vec())).expect("probe gapless");
+
+    let gapless = gapless.expect("expected gapless metadata");
+    assert_eq!(gapless.leading_frames, u64::from(encoder_delay));
+    assert_eq!(gapless.trailing_frames, u64::from(trailing_delay));
 }
 
 #[kithara::test]

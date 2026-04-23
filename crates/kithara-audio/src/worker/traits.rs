@@ -1,3 +1,6 @@
+// unimock macro generates code triggering ignored_unit_patterns
+#![allow(clippy::ignored_unit_patterns)]
+
 //! Audio worker traits and effect utilities.
 
 use kithara_decode::PcmChunk;

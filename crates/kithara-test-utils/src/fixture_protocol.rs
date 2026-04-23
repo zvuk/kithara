@@ -9,6 +9,8 @@
 //! both server (generates data) and client (computes `expected_byte_at`)
 //! share the exact same logic.
 
+use std::num::NonZeroU32;
+
 use kithara_stream::AudioCodec;
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +172,10 @@ pub struct PackagedAudioRequest {
     pub timescale: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder_delay: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_delay: Option<NonZeroU32>,
     pub source: PackagedAudioSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variant_overrides: Vec<PackagedAudioVariantOverride>,
@@ -296,6 +302,8 @@ mod tests {
         assert_eq!(req.codec, AudioCodec::AacLc);
         assert_eq!(req.sample_rate, 44100);
         assert_eq!(req.channels, 2);
+        assert_eq!(req.encoder_delay, None);
+        assert_eq!(req.trailing_delay, None);
     }
 
     #[test]
@@ -312,6 +320,25 @@ mod tests {
             req.source,
             PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 })
         ));
+    }
+
+    #[test]
+    fn packaged_audio_gapless_fields_roundtrip() {
+        let value = serde_json::json!({
+            "codec": "aac_lc",
+            "sample_rate": 48000,
+            "channels": 2,
+            "encoder_delay": 2112,
+            "trailing_delay": 960,
+            "source": { "Signal": "Sawtooth" }
+        });
+        let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(req.encoder_delay, NonZeroU32::new(2_112));
+        assert_eq!(req.trailing_delay, NonZeroU32::new(960));
+
+        let encoded = serde_json::to_value(&req).unwrap();
+        assert_eq!(encoded["encoder_delay"], 2_112);
+        assert_eq!(encoded["trailing_delay"], 960);
     }
 
     #[test]

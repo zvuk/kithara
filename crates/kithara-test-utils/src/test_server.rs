@@ -276,6 +276,8 @@ impl HlsFixtureBuilder {
             channels,
             timescale: Some(sample_rate),
             bit_rate: Some(128_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
         });
@@ -295,6 +297,8 @@ impl HlsFixtureBuilder {
             channels,
             timescale: Some(sample_rate),
             bit_rate: Some(128_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
         });
@@ -324,6 +328,8 @@ impl HlsFixtureBuilder {
             channels,
             timescale: Some(sample_rate),
             bit_rate: Some(512_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
         });
@@ -343,6 +349,8 @@ impl HlsFixtureBuilder {
             channels,
             timescale: Some(sample_rate),
             bit_rate: Some(512_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
         });

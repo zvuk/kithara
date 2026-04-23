@@ -99,6 +99,8 @@ pub struct PackagedEncodeRequest<'a> {
     pub timescale: u32,
     pub bit_rate: u64,
     pub packets_per_segment: usize,
+    pub encoder_delay: u32,
+    pub trailing_delay: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +126,8 @@ pub struct EncodedTrack {
     pub bit_rate: u64,
     pub codec_config: Vec<u8>,
     pub packets_per_segment: usize,
+    pub encoder_delay: u32,
+    pub trailing_delay: u32,
     pub access_units: Vec<EncodedAccessUnit>,
 }
 
