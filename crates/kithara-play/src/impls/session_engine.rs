@@ -868,6 +868,13 @@ fn start_stream_offline(
 /// calls `ctx.active_backend_mut().render(OFFLINE_BLOCK_FRAMES)` to
 /// pull samples through the firewheel graph — without which the decoder
 /// and `PlayerNode` stay idle and integration tests see `position=0`.
+///
+/// Pacing is best-effort via `park_timeout` at roughly one block at
+/// 44.1kHz. The loop does not strictly cap rendering to wall clock, so
+/// audio position may advance slightly faster than realtime when the
+/// decoder has no network stalls (common for fully-buffered progressive
+/// files). Callers that need a tight upper bound should derive their
+/// expectations from the block cadence, not from `sleep(wall)`.
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
     /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.

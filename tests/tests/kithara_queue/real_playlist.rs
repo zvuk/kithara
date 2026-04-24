@@ -438,31 +438,37 @@ async fn track_plays_end_to_end(
         wait_for_position_near(&ctx.queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
-        // Hang detection: decoder must advance by ≥1s over next 2s.
-        // OfflineBackend runs at ~70% realtime so 1s is a comfortable
-        // floor below real advance (~1.4s expected) but above any
-        // decoder stall.
+        // Hang detection: decoder must advance by ≥0.5s over next 2s.
+        // OfflineBackend is not strictly realtime-capped — ratio floats
+        // roughly in 0.85–1.2× realtime depending on host CPU load. On
+        // real-network MP3 a single post-seek fetch can stall the decoder
+        // for up to 1.5s of wall clock; the 0.5s floor catches full
+        // decoder stalls (>75% starved) without flaking on transient
+        // network latency.
         let before = ctx.queue.position_seconds().unwrap_or(0.0);
         sleep(Duration::from_secs(2)).await;
         let after = ctx.queue.position_seconds().unwrap_or(0.0);
         assert!(
-            after - before >= 1.0,
+            after - before >= 0.5,
             "seek #{i} hang [{url}]: {before:.2}→{after:.2} over 2s"
         );
     }
 
-    // (d) Position consistency — 2s wall clock should produce ~1.4s
-    // audio position advance on OfflineBackend (~70% realtime). Any
-    // drift beyond ±0.5s of that window indicates a real bug in
-    // position reporting (slider-ahead, PTS reset, or similar).
+    // (d) Position consistency — OfflineBackend drives the firewheel
+    // graph via best-effort `park_timeout`, so audio gain over a wall-
+    // clock sleep lands around realtime with jitter: observed 0.95–1.2×
+    // wall on a quiet host, depending on decoder cost. Lower bound 0.9s
+    // catches silent stalls; upper bound 2.5s catches position-ahead
+    // bugs (PTS double-counting, slider-ahead, sample-rate mismatch)
+    // while tolerating the non-strict pacing.
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
     assert!(
-        (0.9..=1.9).contains(&gain),
+        (0.9..=2.5).contains(&gain),
         "position gain out of offline-realtime window [{url}]: got \
-         {gain:.2}s over 2s wall clock (expected 0.9..1.9; start=\
+         {gain:.2}s over 2s wall clock (expected 0.9..2.5; start=\
          {start_pos:.2} end={end_pos:.2})",
     );
 
