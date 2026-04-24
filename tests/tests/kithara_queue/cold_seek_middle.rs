@@ -91,6 +91,70 @@ async fn wait_for_position_at_least(
     ))
 }
 
+fn build_queue_with_tick(
+    temp_dir: &TestTempDir,
+) -> (
+    Arc<Queue>,
+    Downloader,
+    StoreOptions,
+    tokio::task::JoinHandle<()>,
+) {
+    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue_for_tick = Arc::clone(&queue);
+    let tick_handle = tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if queue_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
+    let downloader = Downloader::new(DownloaderConfig::default());
+    let store = StoreOptions::new(temp_dir.path());
+    (queue, downloader, store, tick_handle)
+}
+
+async fn observe_seek_advance_or_panic(
+    queue: &Queue,
+    tick_handle: tokio::task::JoinHandle<()>,
+    seek_target: f64,
+    observation_window: Duration,
+    pos_before: f64,
+    label: &str,
+) {
+    let observation_deadline = Instant::now() + observation_window;
+    let mut confirmed = false;
+    while Instant::now() < observation_deadline {
+        if let Some(pos) = queue.position_seconds()
+            && pos > seek_target + 0.5
+        {
+            confirmed = true;
+            break;
+        }
+        if tick_handle.is_finished() {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    if tick_handle.is_finished() {
+        match tick_handle.await {
+            Ok(()) => panic!("[{label}] tick task exited unexpectedly"),
+            Err(e) => panic!("[{label}] seek watchdog panicked — hang reproduced: {e}"),
+        }
+    }
+
+    assert!(
+        confirmed,
+        "[{label}] cold seek to {seek_target:.2}s never advanced past target \
+         (pos_before={pos_before:.2}, last={:?}) — hang without watchdog panic",
+        queue.position_seconds(),
+    );
+
+    tick_handle.abort();
+}
+
 async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
     install_tracing();
     INIT_OFFLINE.call_once(init_offline_backend);
@@ -272,28 +336,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         .expect("create long HLS fixture");
     let master = created.master_url();
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
-
-    // Mirror the production pattern: one shared `Downloader` across
-    // every track (see `kithara-app/src/sources.rs:21`). If the hang
-    // is caused by shared HTTP pool / runtime contention, this is
-    // where it would show up.
-    let downloader = Downloader::new(DownloaderConfig::default());
-    // `temp_dir` is the shared `temp_dir` fixture — auto-deleted when
-    // the test returns. Keeps the shared app cache at
-    // `env::temp_dir()/kithara` untouched.
-    let store = StoreOptions::new(temp_dir.path());
+    // Mirror the production pattern: one shared `Downloader` across every
+    // track (see `kithara-app/src/sources.rs:21`). If the hang is caused
+    // by shared HTTP pool / runtime contention, this is where it would
+    // show up.
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
         let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
@@ -325,36 +372,15 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     queue.seek(seek_target).expect("seek accepted");
     eprintln!("[long-cold] seek issued target={seek_target:.1}s");
 
-    let observation_deadline = Instant::now() + Duration::from_secs(20);
-    let mut confirmed = false;
-    while Instant::now() < observation_deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos > seek_target + 0.5
-        {
-            confirmed = true;
-            break;
-        }
-        if tick_handle.is_finished() {
-            break;
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-
-    if tick_handle.is_finished() {
-        match tick_handle.await {
-            Ok(()) => panic!("tick task exited unexpectedly"),
-            Err(e) => panic!("seek watchdog panicked — hang reproduced: {e}"),
-        }
-    }
-
-    assert!(
-        confirmed,
-        "long-cold seek to {seek_target:.2}s never advanced past target \
-         (pos_before={pos_before:.2}, last={:?}) — hang without watchdog panic",
-        queue.position_seconds(),
-    );
-
-    tick_handle.abort();
+    observe_seek_advance_or_panic(
+        &queue,
+        tick_handle,
+        seek_target,
+        Duration::from_secs(20),
+        pos_before,
+        "long-cold",
+    )
+    .await;
     drop(queue);
 }
 
@@ -407,24 +433,7 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         .expect("create multi-variant HLS fixture");
     let master = created.master_url();
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
-
-    let downloader = Downloader::new(DownloaderConfig::default());
-    // `temp_dir` is the shared `temp_dir` fixture — auto-deleted when
-    // the test returns. Keeps the shared app cache at
-    // `env::temp_dir()/kithara` untouched.
-    let store = StoreOptions::new(temp_dir.path());
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
         let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
@@ -458,35 +467,14 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     queue.seek(seek_target).expect("seek accepted");
     eprintln!("[multi-variant-cold] seek issued target={seek_target:.1}s");
 
-    let observation_deadline = Instant::now() + Duration::from_secs(25);
-    let mut confirmed = false;
-    while Instant::now() < observation_deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos > seek_target + 0.5
-        {
-            confirmed = true;
-            break;
-        }
-        if tick_handle.is_finished() {
-            break;
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-
-    if tick_handle.is_finished() {
-        match tick_handle.await {
-            Ok(()) => panic!("tick task exited unexpectedly"),
-            Err(e) => panic!("seek watchdog panicked — hang reproduced: {e}"),
-        }
-    }
-
-    assert!(
-        confirmed,
-        "multi-variant cold seek to {seek_target:.2}s never advanced past target \
-         (pos_before={pos_before:.2}, last={:?}) — hang without watchdog panic",
-        queue.position_seconds(),
-    );
-
-    tick_handle.abort();
+    observe_seek_advance_or_panic(
+        &queue,
+        tick_handle,
+        seek_target,
+        Duration::from_secs(25),
+        pos_before,
+        "multi-variant-cold",
+    )
+    .await;
     drop(queue);
 }
