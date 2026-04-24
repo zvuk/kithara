@@ -602,9 +602,18 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Shared recovery path for a failed `decoder.seek()`.
     ///
-    /// Tries to recreate the decoder at `recreate_offset` using the newest
-    /// available `MediaInfo`; falls back to `fail_seek` when no info is
-    /// available. Always returns `false` so callers can `return` directly.
+    /// Tries to recreate the decoder using the newest available
+    /// `MediaInfo`. The recreate offset is chosen by container class:
+    /// init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must land on the
+    /// source's init segment range — `fallback_offset` would be a
+    /// mid-segment byte with no ftyp/RIFF/EBML header, producing a
+    /// silent "missing ftyp atom" hang the second the factory runs.
+    /// Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS)
+    /// or unknown containers use `fallback_offset` directly.
+    ///
+    /// Calls `fail_seek` when either the `MediaInfo` is missing or the
+    /// container needs an init range that the source cannot yet
+    /// locate. Always returns `false` so callers can `return` directly.
     #[expect(clippy::too_many_arguments, reason = "seek recovery context")]
     fn recover_from_decoder_seek_error(
         &mut self,
@@ -612,7 +621,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         err: DecodeError,
         position: Duration,
         epoch: u64,
-        recreate_offset: u64,
+        fallback_offset: u64,
         warn_msg: &'static str,
         fail_ctx: &'static str,
     ) -> bool {
@@ -621,17 +630,36 @@ impl<T: StreamType> StreamAudioSource<T> {
             .shared_stream
             .media_info()
             .or_else(|| self.session.media_info.clone());
-        if let Some(info) = info {
-            self.start_recreating_decoder(
-                RecreateCause::VariantSwitch,
-                info,
-                RecreateNext::Seek(request),
-                recreate_offset,
-                request.attempt,
+        let Some(info) = info else {
+            self.fail_seek(request, err, fail_ctx);
+            return false;
+        };
+        let Some(recreate_offset) = resolve_recreate_offset(
+            &self.shared_stream,
+            info.container,
+            // Recovery after a decoder.seek() failure stays within the
+            // current codec — no cross-codec transition happens here —
+            // so the codec-change fallback to the anchor byte is off.
+            false,
+            fallback_offset,
+        ) else {
+            self.fail_seek(
+                request,
+                DecodeError::InvalidData(format!(
+                    "{fail_ctx}: {:?} requires init segment range, none available",
+                    info.container
+                )),
+                fail_ctx,
             );
             return false;
-        }
-        self.fail_seek(request, err, fail_ctx);
+        };
+        self.start_recreating_decoder(
+            RecreateCause::VariantSwitch,
+            info,
+            RecreateNext::Seek(request),
+            recreate_offset,
+            request.attempt,
+        );
         false
     }
 
