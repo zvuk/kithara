@@ -87,6 +87,18 @@ pub(crate) enum RecreateNext {
     Seek(SeekRequest),
     /// Finish seek application by seeking the recreated decoder.
     ApplySeek(SeekRequest),
+    /// Apply the time-anchor seek directly on the recreated decoder.
+    ///
+    /// Used when an init-bearing container (fMP4/MP4/WAV/MKV/CAF) was
+    /// rebuilt at its init segment range to recover the authoritative
+    /// byte for a same-variant seek. Re-entering `SeekRequested` would
+    /// loop through `align_decoder_with_seek_anchor` again and trigger
+    /// another recreate, so this variant bypasses that path and drives
+    /// `apply_time_anchor_seek` on the freshly built decoder instead.
+    AnchorSeek {
+        request: SeekRequest,
+        anchor: SourceSeekAnchor,
+    },
 }
 
 /// Decoder recreation task tracked by the FSM.

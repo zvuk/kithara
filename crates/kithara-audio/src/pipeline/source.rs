@@ -500,6 +500,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => {
                     Some(request.seek.epoch)
                 }
+                RecreateNext::AnchorSeek { request, .. } => Some(request.seek.epoch),
             },
             TrackState::AwaitingResume(state) => Some(state.seek.epoch),
             TrackState::RecreatingDecoder(state) => match &state.next {
@@ -507,6 +508,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => {
                     Some(request.seek.epoch)
                 }
+                RecreateNext::AnchorSeek { request, .. } => Some(request.seek.epoch),
             },
             _ => None,
         }
@@ -819,7 +821,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         // decoder's seek tables are not valid for the new variant (a seek
         // aimed at the new variant's offset lands in stale bytes and the
         // decoder stalls — silvercomet post-seek hang).
-        let needs_recreation = codec_changed || variant_changed;
         let target_container = stream_info
             .as_ref()
             .and_then(|info| info.container)
@@ -829,6 +830,24 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .as_ref()
                     .and_then(|info| info.container)
             });
+        // Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) carry demuxer state
+        // (e.g. Symphonia's moof fragment table) that is populated lazily by
+        // linear reads. A time-based seek past the indexed range extrapolates
+        // to a best-effort byte that rarely matches a real moof boundary, so
+        // `decoder.seek(target)` returns Ok but subsequent reads stall. Force
+        // a recreate at the init segment range to rebuild demuxer state from
+        // a known-good anchor byte, then re-apply the time seek on the fresh
+        // decoder. Gate on `format_change_segment_range().is_some()` so local
+        // (non-HLS) fMP4 files with complete `moov` tables keep the in-place
+        // path, and on `base_offset != init_range.start` so the re-entry after
+        // the recreate does not loop.
+        let init_range = self.shared_stream.format_change_segment_range();
+        let init_offset = init_range.as_ref().map(|range| range.start);
+        let is_init_bearing = target_container.is_some_and(container_needs_init_range);
+        let already_at_init = init_offset.is_some_and(|o| o == self.session.base_offset);
+        let container_needs_init_resync =
+            is_init_bearing && init_offset.is_some() && !already_at_init;
+        let needs_recreation = codec_changed || variant_changed || container_needs_init_resync;
         let recreate_offset = resolve_recreate_offset(
             &self.shared_stream,
             target_container,
@@ -843,9 +862,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             anchor_variant = ?anchor.variant_index,
             codec_changed,
             variant_changed,
+            container_needs_init_resync,
+            already_at_init,
             needs_recreation,
             ?target_container,
             ?recreate_offset,
+            ?init_offset,
             base_offset = self.session.base_offset,
             "seek anchor alignment: compare format"
         );
@@ -892,10 +914,21 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_info.variant_index = Some(v);
         }
 
+        // Same-variant init-bearing resync: bypass the SeekRequested round-trip
+        // so the freshly built decoder runs the time anchor seek directly with
+        // the authoritative byte, without re-entering `align_decoder_with_seek_anchor`
+        // (which would still see `container_needs_init_resync = true` and loop
+        // until the re-entry guard fires).
+        let next = if container_needs_init_resync && !codec_changed && !variant_changed {
+            RecreateNext::AnchorSeek { request, anchor }
+        } else {
+            RecreateNext::Seek(request)
+        };
+
         self.start_recreating_decoder(
             RecreateCause::VariantSwitch,
             target_info,
-            RecreateNext::Seek(request),
+            next,
             recreate_offset,
             request.attempt,
         );
@@ -1702,6 +1735,18 @@ impl<T: StreamType> StreamAudioSource<T> {
                 TrackStep::StateChanged
             }
             RecreateNext::ApplySeek(request) => self.finish_apply_seek_after_recreate(request),
+            RecreateNext::AnchorSeek { request, anchor } => {
+                reset_effects(&mut self.effects);
+                self.update_state(TrackState::ApplyingSeek(ApplySeekState {
+                    mode: SeekMode::Anchor(anchor),
+                    request,
+                }));
+                if self.apply_time_anchor_seek(request, anchor) {
+                    TrackStep::StateChanged
+                } else {
+                    TrackStep::Failed
+                }
+            }
         }
     }
 
