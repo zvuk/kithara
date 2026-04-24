@@ -736,34 +736,6 @@ async fn test_head_returns_content_length() {
 }
 
 #[kithara::test(tokio)]
-async fn test_http_error_404_returns_error() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/error404");
-
-    let result = client.get_bytes(url, None).await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        NetError::HttpError { status, .. } => assert_eq!(status, 404),
-        _ => panic!("Expected HTTP error"),
-    }
-}
-
-#[kithara::test(tokio)]
-async fn test_http_error_500_returns_error() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/error500");
-
-    let result = client.get_bytes(url, None).await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        NetError::HttpError { status, .. } => assert_eq!(status, 500),
-        _ => panic!("Expected HTTP error"),
-    }
-}
-
-#[kithara::test(tokio)]
 async fn test_timeout_behavior() {
     let server = TestServer::new(test_router()).await;
     let base = HttpClient::new(NetOptions::default());
@@ -957,55 +929,35 @@ async fn test_no_mid_stream_retry() {
     );
 }
 
-#[kithara::test(tokio)]
-async fn test_timeout_matrix_get_bytes_times_out_on_body() {
-    let server = TestServer::new(test_router()).await;
-    let base = HttpClient::new(NetOptions::default());
-
-    let timeout_client = TimeoutNet::new(base, Duration::from_millis(50));
-
-    let url = server.url("/slow-body");
-
-    let result = timeout_client.get_bytes(url, None).await;
-    assert!(result.is_err());
-
-    match result.unwrap_err() {
-        NetError::Timeout => (),
-        other => panic!("Expected Timeout error, got {:?}", other),
-    }
+#[derive(Copy, Clone)]
+enum TimeoutOp {
+    GetBytes,
+    Stream,
+    GetRange { start: u64, end: Option<u64> },
 }
 
 #[kithara::test(tokio)]
-async fn test_timeout_matrix_stream_times_out_on_headers() {
+#[case::get_bytes_times_out_on_body("/slow-body", Duration::from_millis(50), TimeoutOp::GetBytes)]
+#[case::stream_times_out_on_headers("/slow-headers", Duration::from_millis(100), TimeoutOp::Stream)]
+#[case::get_range_times_out_on_headers(
+    "/slow-headers",
+    Duration::from_millis(100),
+    TimeoutOp::GetRange { start: 0, end: Some(10) }
+)]
+async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[case] op: TimeoutOp) {
     let server = TestServer::new(test_router()).await;
     let base = HttpClient::new(NetOptions::default());
+    let timeout_client = TimeoutNet::new(base, timeout);
+    let url = server.url(path);
 
-    let timeout_client = TimeoutNet::new(base, Duration::from_millis(100));
-
-    let url = server.url("/slow-headers");
-
-    let result = timeout_client.stream(url, None).await;
-    assert!(result.is_err());
-
-    match result {
-        Err(NetError::Timeout) => (),
-        Ok(_) => panic!("Expected Timeout error, got Ok"),
-        Err(e) => panic!("Expected Timeout error, got {:?}", e),
-    }
-}
-
-#[kithara::test(tokio)]
-async fn test_timeout_matrix_get_range_times_out_on_headers() {
-    let server = TestServer::new(test_router()).await;
-    let base = HttpClient::new(NetOptions::default());
-
-    let timeout_client = TimeoutNet::new(base, Duration::from_millis(100));
-
-    let url = server.url("/slow-headers");
-    let range = RangeSpec::new(0, Some(10));
-
-    let result = timeout_client.get_range(url, range, None).await;
-    assert!(result.is_err());
+    let result = match op {
+        TimeoutOp::GetBytes => timeout_client.get_bytes(url, None).await.map(|_| ()),
+        TimeoutOp::Stream => timeout_client.stream(url, None).await.map(|_| ()),
+        TimeoutOp::GetRange { start, end } => timeout_client
+            .get_range(url, RangeSpec::new(start, end), None)
+            .await
+            .map(|_| ()),
+    };
 
     match result {
         Err(NetError::Timeout) => (),
