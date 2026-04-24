@@ -393,7 +393,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 
     // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
 
     // Simulate: reader passed first V3 segment (964431..1732515)
     // and is now in segment 20 (1732515..2476302).
@@ -411,7 +411,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     // Decode remaining V0 chunks + trigger EOF → apply_format_change
     loop {
         let fetch = fetch_next(&mut source);
-        if fetch.is_eof {
+        if fetch.is_eof() {
             break;
         }
     }
@@ -440,12 +440,12 @@ fn basic_decode_to_eof() {
 
     for _ in 0..3 {
         let fetch = fetch_next(&mut source);
-        assert!(!fetch.is_eof);
+        assert!(!fetch.is_eof());
         assert!(!fetch.data.pcm.is_empty());
     }
 
     let fetch = fetch_next(&mut source);
-    assert!(fetch.is_eof);
+    assert!(fetch.is_eof());
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -462,7 +462,7 @@ fn format_change_recreates_decoder() {
 
     // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
 
     // Trigger format change
     {
@@ -473,11 +473,11 @@ fn format_change_recreates_decoder() {
 
     // Decode remaining V0 chunk — the next EOF should trigger boundary recreation
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
 
     // V0 decoder exhausted → EOF → apply_format_change → V3 decoder
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof, "Should get V3 data after format change");
+    assert!(!fetch.is_eof(), "Should get V3 data after format change");
     assert_eq!(fetch.data.spec(), v3_spec());
 }
 
@@ -592,7 +592,7 @@ fn seek_uses_exact_target_after_anchor_preparation_without_decoder_recreate() {
     );
 
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
     assert_eq!(track_state(&source), TrackPhaseTag::Decoding);
     assert_eq!(
         fetch.data.pcm.len(),
@@ -799,7 +799,10 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
     );
 
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof, "ideal recreated decoder must produce output");
+    assert!(
+        !fetch.is_eof(),
+        "ideal recreated decoder must produce output"
+    );
     assert_eq!(
         track_state(&source),
         TrackPhaseTag::Decoding,
@@ -1713,7 +1716,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
 
     // Trigger format change (ABR switch V0→V3)
     {
@@ -1724,7 +1727,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // Decode another V0 chunk — next seek recovery should rebuild on V3 boundary
     let fetch = fetch_next(&mut source);
-    assert!(!fetch.is_eof);
+    assert!(!fetch.is_eof());
 
     // Seek arrives BEFORE format change is applied.
     // Old V0 decoder seek fails. base_offset=0.
@@ -1816,13 +1819,13 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
             for _ in 0..3 {
                 let fetch = fetch_next(&mut source);
                 if v0_stopped {
-                    if fetch.is_eof {
+                    if fetch.is_eof() {
                         eof_after_v0_stop += 1;
                     } else {
                         chunks_after_v0_stop += 1;
                     }
                 }
-                if fetch.is_eof {
+                if fetch.is_eof() {
                     break;
                 }
             }
@@ -2358,7 +2361,7 @@ fn abr_switch_must_not_lose_samples() {
         if !fetch.data.pcm.is_empty() {
             all_pcm.extend_from_slice(&fetch.data.pcm);
         }
-        if fetch.is_eof {
+        if fetch.is_eof() {
             break;
         }
     }
@@ -2410,7 +2413,7 @@ fn seek_during_active_decode_completes_without_hang() {
     let mut decoded_before_seek = 0;
     for _ in 0..3 {
         let fetch = fetch_next(&mut source);
-        if !fetch.is_eof {
+        if !fetch.is_eof() {
             decoded_before_seek += 1;
         }
     }
@@ -2434,7 +2437,7 @@ fn seek_during_active_decode_completes_without_hang() {
     let mut decoded_after_seek = 0;
     for _ in 0..3 {
         let fetch = fetch_next(&mut source);
-        if !fetch.is_eof {
+        if !fetch.is_eof() {
             decoded_after_seek += 1;
         }
     }
@@ -2495,7 +2498,7 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
 
     let fetch = fetch_next(&mut source);
     assert!(
-        fetch.is_eof,
+        fetch.is_eof(),
         "decoder panic should surface as EOF fetch error"
     );
     assert!(

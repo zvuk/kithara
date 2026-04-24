@@ -18,6 +18,7 @@ use kithara_platform::Mutex;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
+use crate::PlayError;
 
 /// Minimum number of channels required for stereo processing.
 const MIN_STEREO_CHANNELS: usize = 2;
@@ -157,28 +158,52 @@ impl PlayerTrack {
         };
 
         // Process outcome outside the lock
-        if let Ok((position, duration)) = read_outcome {
-            self.observed_position = position;
-            self.observed_duration = duration;
+        match read_outcome {
+            Ok((position, duration)) => {
+                self.observed_position = position;
+                self.observed_duration = duration;
 
-            if scratch_bufs.len() >= MIN_STEREO_CHANNELS && mix_bufs.len() >= MIN_STEREO_CHANNELS {
-                let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
-                let output_l = &mut output_l_slice[0];
-                let output_r = &mut output_r_slice[0];
+                if scratch_bufs.len() >= MIN_STEREO_CHANNELS
+                    && mix_bufs.len() >= MIN_STEREO_CHANNELS
+                {
+                    let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
+                    let output_l = &mut output_l_slice[0];
+                    let output_r = &mut output_r_slice[0];
 
-                self.mix.mix_dry_into_wet_stereo(
-                    scratch_bufs[0],
-                    scratch_bufs[1],
-                    output_l,
-                    output_r,
-                    range.len(),
-                );
+                    self.mix.mix_dry_into_wet_stereo(
+                        scratch_bufs[0],
+                        scratch_bufs[1],
+                        output_l,
+                        output_r,
+                        range.len(),
+                    );
+                }
+
+                self.check_notifications(notification_tx);
             }
-
-            self.check_notifications(notification_tx);
-        } else {
-            self.handle_eof(notification_tx);
-            return;
+            Err(PlayError::Internal(msg)) if msg == "eof" => {
+                self.handle_eof(notification_tx);
+                return;
+            }
+            Err(err) => {
+                // Non-natural EOF (e.g. "unexpected eof" from a reader
+                // that violates the `PcmReader::is_eof` contract, or a
+                // transient decoder failure leaking into the player
+                // layer). Don't finalise the track — zero-fill this
+                // cycle and let the pipeline recover.
+                tracing::warn!(
+                    src = %self.src,
+                    error = %err,
+                    "PlayerTrack: unexpected read error — keeping track alive"
+                );
+                if mix_bufs.len() >= MIN_STEREO_CHANNELS {
+                    let range_len = range.len();
+                    for ch in mix_bufs.iter_mut() {
+                        ch[..range_len].fill(0.0);
+                    }
+                }
+                return;
+            }
         }
 
         // Post-processing: check if fade settled

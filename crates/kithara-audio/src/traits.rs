@@ -71,6 +71,14 @@ pub trait PcmReader: Send {
     fn spec(&self) -> PcmSpec;
 
     /// Check if end of stream has been reached.
+    ///
+    /// **Contract:** `is_eof()` returns `true` **only** for a natural
+    /// end-of-stream — the reader has produced samples up to
+    /// `duration()`. A transient failure (channel close, decoder error,
+    /// post-seek stall) must **not** be reported as EOF; return `false`
+    /// and let the caller retry. Implementors that violate this
+    /// contract will cause the player layer to finalise the track
+    /// mid-clip and empty the track arena.
     fn is_eof(&self) -> bool;
 
     /// Get current playback position.

@@ -154,7 +154,18 @@ impl PlayerResource {
 
             Ok(())
         } else if eof_reached {
-            Err(PlayError::Internal("eof".into()))
+            // Distinguish natural EOF (position reached duration) from
+            // an unexpected EOF (reader claims EOF below duration — a
+            // contract violation from a misbehaving `PcmReader`). Only
+            // natural EOF should cause the player layer to finalise
+            // the track; unexpected EOF surfaces as a distinct error
+            // so the caller can react (log / retry / keep track alive)
+            // instead of collapsing into `TrackState::Finished`.
+            if Self::reached_natural_end(&self.resource) {
+                Err(PlayError::Internal("eof".into()))
+            } else {
+                Err(PlayError::Internal("unexpected eof".into()))
+            }
         } else {
             // Reader returned 0 frames but is not at EOF (e.g. async seek
             // in progress). Zero-fill output so the audio thread outputs
@@ -166,6 +177,15 @@ impl PlayerResource {
             }
             Ok(())
         }
+    }
+
+    /// True iff the reader's position has reached (or exceeded) its
+    /// known duration. Unknown duration is treated as reached — we
+    /// cannot second-guess the reader in that case.
+    fn reached_natural_end(resource: &Resource) -> bool {
+        resource
+            .duration()
+            .is_none_or(|duration| resource.position() >= duration)
     }
 
     /// Seek to the given position in seconds.
@@ -436,5 +456,161 @@ mod tests {
                 Err(_) => return,
             }
         }
+    }
+
+    /// Reader whose `is_eof()` violates the `PcmReader` contract — it
+    /// claims EOF while `position < duration`. This simulates either a
+    /// buggy reader or a transient failure that leaked through the
+    /// lower-layer `is_eof()`. The player layer must surface that as a
+    /// distinct `"unexpected eof"` error rather than conflating it
+    /// with natural end-of-stream.
+    struct ContractViolatingReader {
+        bus: EventBus,
+        meta: TrackMetadata,
+        spec: PcmSpec,
+    }
+
+    impl ContractViolatingReader {
+        fn new() -> Self {
+            Self {
+                bus: EventBus::default(),
+                meta: TrackMetadata::default(),
+                spec: mock_spec(),
+            }
+        }
+    }
+
+    impl PcmReader for ContractViolatingReader {
+        fn read(&mut self, _buf: &mut [f32]) -> usize {
+            0
+        }
+
+        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
+            0
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            // Contract violation — EOF while mid-clip.
+            true
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+    }
+
+    struct NaturalEndReader {
+        bus: EventBus,
+        meta: TrackMetadata,
+        spec: PcmSpec,
+    }
+
+    impl NaturalEndReader {
+        fn new() -> Self {
+            Self {
+                bus: EventBus::default(),
+                meta: TrackMetadata::default(),
+                spec: mock_spec(),
+            }
+        }
+    }
+
+    impl PcmReader for NaturalEndReader {
+        fn read(&mut self, _buf: &mut [f32]) -> usize {
+            0
+        }
+
+        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
+            0
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            true
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(60)
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+    }
+
+    #[kithara::test]
+    fn unexpected_eof_reported_distinctly_from_natural_eof() {
+        // Contract-violating reader — EOF at position=10s, duration=60s.
+        let reader = ContractViolatingReader::new();
+        let resource = Resource::from_reader(reader);
+        let mut pr =
+            PlayerResource::new(resource, Arc::from("bad.mp3"), kithara_bufpool::pcm_pool());
+
+        let mut l = vec![0.0f32; 128];
+        let mut r = vec![0.0f32; 128];
+        let mut out: Vec<&mut [f32]> = vec![&mut l, &mut r];
+        let err = pr
+            .read(&mut out, 0..128)
+            .expect_err("contract-violating EOF must surface as an error");
+        let PlayError::Internal(msg) = &err else {
+            panic!("expected PlayError::Internal, got {err:?}");
+        };
+        assert_eq!(
+            msg, "unexpected eof",
+            "EOF reported below duration must surface as `unexpected eof`, \
+             not `eof` — the player finalises tracks only on natural EOF"
+        );
+
+        // Natural-end reader — position == duration, EOF → "eof".
+        let reader = NaturalEndReader::new();
+        let resource = Resource::from_reader(reader);
+        let mut pr =
+            PlayerResource::new(resource, Arc::from("good.mp3"), kithara_bufpool::pcm_pool());
+
+        let mut l = vec![0.0f32; 128];
+        let mut r = vec![0.0f32; 128];
+        let mut out: Vec<&mut [f32]> = vec![&mut l, &mut r];
+        let err = pr
+            .read(&mut out, 0..128)
+            .expect_err("natural EOF returns error");
+        let PlayError::Internal(msg) = &err else {
+            panic!("expected PlayError::Internal, got {err:?}");
+        };
+        assert_eq!(msg, "eof", "natural EOF must surface as `eof`");
     }
 }

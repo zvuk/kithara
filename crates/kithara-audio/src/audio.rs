@@ -28,7 +28,7 @@ use tracing::{debug, info, trace, warn};
 use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
-        fetch::{EpochValidator, Fetch},
+        fetch::{EpochValidator, Fetch, FetchKind},
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -262,9 +262,13 @@ impl<S> Audio<S> {
     }
 
     /// Check if end of stream has been reached.
+    ///
+    /// Returns `true` **only** for natural end-of-stream (`AtEof`). A
+    /// transient failure (`ConsumerPhase::Failed`) does not count as
+    /// EOF — see `pipeline/fetch.rs` for the `FetchKind` contract.
     #[must_use]
     pub fn is_eof(&self) -> bool {
-        self.consumer_phase.is_terminal()
+        self.consumer_phase == ConsumerPhase::AtEof
     }
 
     /// Get current playback position.
@@ -520,18 +524,26 @@ impl<S> Audio<S> {
             return ChunkOutcome::Continue;
         }
 
-        if fetch.is_eof() {
-            self.consumer_phase = ConsumerPhase::AtEof;
-            return ChunkOutcome::Return(None);
+        match fetch.kind {
+            FetchKind::NaturalEof => {
+                self.consumer_phase = ConsumerPhase::AtEof;
+                ChunkOutcome::Return(None)
+            }
+            FetchKind::Failure => {
+                trace!("Audio: received failure marker — entering Failed phase");
+                self.consumer_phase = ConsumerPhase::Failed;
+                ChunkOutcome::Return(None)
+            }
+            FetchKind::Data => {
+                let chunk = fetch.into_inner();
+                trace!(
+                    samples = chunk.pcm.len(),
+                    spec = ?chunk.spec(),
+                    "Audio: received chunk"
+                );
+                ChunkOutcome::Return(Some(chunk))
+            }
         }
-
-        let chunk = fetch.into_inner();
-        trace!(
-            samples = chunk.pcm.len(),
-            spec = ?chunk.spec(),
-            "Audio: received chunk"
-        );
-        ChunkOutcome::Return(Some(chunk))
     }
 
     fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
@@ -1301,7 +1313,11 @@ mod tests {
         let result = audio.recv_valid_chunk();
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
-        assert!(audio.is_eof());
+        // `Failed` is terminal for the consumer's read loop but is NOT
+        // a natural EOF. `is_eof()` must report false so that the
+        // player layer does not finalise the track mid-clip on a
+        // transient channel close (e.g. during seek recovery).
+        assert!(!audio.is_eof());
     }
 
     // Red test: pins the *correct* contract for `is_eof()`. The existing
@@ -1382,25 +1398,29 @@ mod tests {
         let _ = audio_eof.recv_valid_chunk();
         assert_eq!(audio_eof.consumer_phase, ConsumerPhase::AtEof);
 
-        // Scenario B: transient failure — producer squeezes it through
-        // the same wire shape. With the current contract, the consumer
-        // ends up in AtEof just like scenario A. With the fixed
-        // contract, it must land in a non-natural-eof terminal (or a
-        // recoverable wait state) so the higher layers can retry.
+        // Scenario B: transient failure — producer publishes a
+        // `FetchKind::Failure` marker via `Fetch::failure`. The
+        // consumer must land in a non-natural-eof state so the
+        // pipeline can recover instead of finalising the track.
         let (mut audio_failure, mut tx_failure) = audio_with_channel();
         tx_failure
-            .try_push(Fetch::new(PcmChunk::default(), true, 0))
-            .expect("push failure marker (same shape as eof today)");
+            .try_push(Fetch::failure(PcmChunk::default(), 0))
+            .expect("push failure marker");
         let _ = audio_failure.recv_valid_chunk();
 
         assert_ne!(
             audio_failure.consumer_phase,
             ConsumerPhase::AtEof,
-            "process_fetch must not collapse TrackStep::Failed into \
+            "process_fetch must not collapse FetchKind::Failure into \
              ConsumerPhase::AtEof — AtEof means 'clip finished' and is \
              used by PlayerTrack to finalize; a transient failure must \
              land in a distinct non-natural-eof state so the pipeline \
              can recover instead of removing the track from the arena"
+        );
+        assert_eq!(
+            audio_failure.consumer_phase,
+            ConsumerPhase::Failed,
+            "failure marker must route to ConsumerPhase::Failed"
         );
     }
 

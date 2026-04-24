@@ -140,7 +140,7 @@ impl Node for DecoderNode {
 
             TrackStep::Failed => {
                 let epoch = self.source.timeline().seek_epoch();
-                let marker = Fetch::new(PcmChunk::default(), true, epoch);
+                let marker = Fetch::failure(PcmChunk::default(), epoch);
                 // We just called `flush()` above, so the overflow slot is guaranteed to be empty.
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
@@ -258,22 +258,22 @@ mod tests {
     fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
         use std::fmt::Debug;
 
-        /// Drains one marker off the outlet and describes its terminal
-        /// kind. Today the wire only carries a boolean `is_eof`, so this
-        /// helper returns that boolean — which is precisely why the test
-        /// below fails: two distinct producer states produce the same
-        /// boolean.
+        use crate::pipeline::fetch::FetchKind;
+
+        /// Drains one marker off the outlet and returns its `FetchKind`.
+        /// The two producer terminal steps (`TrackStep::Eof` /
+        /// `TrackStep::Failed`) must materialise as distinct kinds on
+        /// the wire so the consumer can finalise the track only on
+        /// natural EOF.
         fn drain_marker_kind<T: Debug>(
             outlet: &mut Outlet<Fetch<T>>,
             inlet: &mut Inlet<Fetch<T>>,
-        ) -> &'static str {
+        ) -> FetchKind {
             outlet.flush();
-            let fetch = inlet.try_pop().expect("producer pushed a terminal marker");
-            if fetch.is_eof() {
-                "eof-or-failure"
-            } else {
-                "data"
-            }
+            inlet
+                .try_pop()
+                .expect("producer pushed a terminal marker")
+                .kind
         }
 
         let notify = Arc::new(Notify::new());
