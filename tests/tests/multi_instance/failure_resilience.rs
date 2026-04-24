@@ -19,7 +19,7 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestTempDir, wav::create_test_wav};
+use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -37,15 +37,7 @@ impl Consts {
 }
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = Consts::SEGMENT_COUNT * Consts::D.segment_size;
-    let bytes_per_frame = Consts::D.channels as usize * 2;
-    let header_size = 44;
-    let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(
-        sample_count,
-        Consts::D.sample_rate,
-        Consts::D.channels,
-    ))
+    Consts::D.build_wav(Consts::SEGMENT_COUNT)
 }
 
 /// Outcome of one instance.
@@ -59,7 +51,8 @@ struct Outcome {
 }
 
 /// Read HLS audio until EOF or the stream stops producing data.
-/// Returns total samples read.
+/// Returns total samples read. Unlike `read_to_eof`, this tolerates
+/// early termination because some instances are intentionally cancelled.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
@@ -100,12 +93,10 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 
 /// Create a healthy HLS server (no delays).
 async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
         segment_size: Consts::D.segment_size,
-        segment_duration_secs: segment_duration,
+        segment_duration_secs: Consts::D.segment_duration_secs(),
         custom_data: Some(Arc::clone(wav_data)),
         ..Default::default()
     })
@@ -133,72 +124,58 @@ async fn create_hls_audio(
         .expect("create Audio<Stream<Hls>>")
 }
 
-/// 2 healthy + 2 cancelled HLS instances.
-///
-/// The cancelled instances have their `CancellationToken` fired after a
-/// short delay (simulating a network failure / user abort). The test verifies
-/// that the healthy instances still read to EOF, unaffected by the cancelled ones.
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn healthy_instances_survive_cancelled_peers() {
-    let wav_data = generate_wav_data();
+/// Spawn a reader instance that optionally has its cancel fired after `delay_ms`.
+async fn spawn_instance(
+    id: usize,
+    wav_data: &Arc<Vec<u8>>,
+    cancel_after: Option<u64>,
+) -> JoinHandle<Outcome> {
+    let server = create_server(wav_data).await;
+    let temp = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let healthy = cancel_after.is_none();
 
-    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
-
-    // Healthy instances (0, 1)
-    for i in 0..2 {
-        let server = create_server(&wav_data).await;
-        let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
-        let audio = create_hls_audio(&server, temp.path(), cancel).await;
-
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_hls_best_effort(&mut audio);
-            info!(instance = i, total_samples = total, "healthy done");
-            Outcome {
-                id: i,
-                healthy: true,
-                total_samples: total,
-            }
-        }));
-    }
-
-    // Cancelled instances (2, 3)
-    // These get a cancel token that fires after 500ms, killing the download
-    // mid-stream. The audio pipeline should terminate cleanly.
-    for i in 2..4 {
-        let server = create_server(&wav_data).await;
-        let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
+    if let Some(delay_ms) = cancel_after {
         let cancel_clone = cancel.clone();
-        let audio = create_hls_audio(&server, temp.path(), cancel).await;
-
-        // Fire the cancel after a short delay.
         spawn(async move {
-            sleep(Duration::from_millis(500)).await;
+            sleep(Duration::from_millis(delay_ms)).await;
             cancel_clone.cancel();
         });
+    }
 
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_hls_best_effort(&mut audio);
-            info!(instance = i, total_samples = total, "cancelled done");
-            Outcome {
-                id: i,
-                healthy: false,
-                total_samples: total,
-            }
-        }));
+    let audio = create_hls_audio(&server, temp.path(), cancel).await;
+
+    spawn_blocking(move || {
+        let _server = server;
+        let _temp = temp;
+        let mut audio = audio;
+        let total = read_hls_best_effort(&mut audio);
+        info!(
+            instance = id,
+            total_samples = total,
+            healthy,
+            "instance done",
+        );
+        Outcome {
+            id,
+            healthy,
+            total_samples: total,
+        }
+    })
+}
+
+async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
+    let wav_data = generate_wav_data();
+    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
+
+    for i in 0..healthy_count {
+        handles.push(spawn_instance(i, &wav_data, None).await);
+    }
+
+    // Stagger cancellation slightly to make it more realistic.
+    for (offset, i) in (healthy_count..(healthy_count + cancelled_count)).enumerate() {
+        let delay_ms = 200 + offset as u64 * 100;
+        handles.push(spawn_instance(i, &wav_data, Some(delay_ms)).await);
     }
 
     let mut results = Vec::new();
@@ -208,7 +185,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 
     info!(?results, "all instances done");
 
-    // Verify healthy instances completed with significant data.
+    // Healthy instances must have completed with data.
     for r in results.iter().filter(|r| r.healthy) {
         assert!(
             r.total_samples > 0,
@@ -222,8 +199,6 @@ async fn healthy_instances_survive_cancelled_peers() {
         );
     }
 
-    // Cancelled instances should have produced fewer samples than healthy ones
-    // (they were killed partway through).
     let healthy_min = results
         .iter()
         .filter(|r| r.healthy)
@@ -238,12 +213,11 @@ async fn healthy_instances_survive_cancelled_peers() {
             healthy_min,
             "cancelled instance outcome"
         );
-        // Cancelled instances should have read fewer samples (or same if cancel
-        // happened after they finished — which is fine).
     }
 }
 
-/// 4 healthy + 4 cancelled HLS instances (8 total). Healthy ones must complete.
+/// Healthy + cancelled HLS instance mixes. Cancelled peers must not harm
+/// healthy ones (which must still reach EOF).
 #[kithara::test(
     tokio,
     browser,
@@ -251,74 +225,11 @@ async fn healthy_instances_survive_cancelled_peers() {
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-async fn eight_instances_half_cancelled() {
-    let wav_data = generate_wav_data();
-
-    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
-
-    // 4 healthy instances
-    for i in 0..4 {
-        let server = create_server(&wav_data).await;
-        let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
-        let audio = create_hls_audio(&server, temp.path(), cancel).await;
-
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_hls_best_effort(&mut audio);
-            info!(instance = i, total_samples = total, "healthy done");
-            Outcome {
-                id: i,
-                healthy: true,
-                total_samples: total,
-            }
-        }));
-    }
-
-    // 4 cancelled instances
-    for i in 4..8 {
-        let server = create_server(&wav_data).await;
-        let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
-        let cancel_clone = cancel.clone();
-        let audio = create_hls_audio(&server, temp.path(), cancel).await;
-
-        // Stagger cancellation slightly to make it more realistic.
-        let delay_ms = 200 + ((i - 4) as u64 * 100);
-        spawn(async move {
-            sleep(Duration::from_millis(delay_ms)).await;
-            cancel_clone.cancel();
-        });
-
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_hls_best_effort(&mut audio);
-            info!(instance = i, total_samples = total, "cancelled done");
-            Outcome {
-                id: i,
-                healthy: false,
-                total_samples: total,
-            }
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-
-    info!(?results, "all 8 instances done");
-
-    // All healthy instances must have completed with data.
-    for r in results.iter().filter(|r| r.healthy) {
-        assert!(
-            r.total_samples > 0,
-            "healthy instance {} read 0 samples",
-            r.id
-        );
-    }
+#[case::h2_c2(2, 2)]
+#[case::h4_c4(4, 4)]
+async fn healthy_instances_survive_cancelled_peers(
+    #[case] healthy: usize,
+    #[case] cancelled: usize,
+) {
+    run_failure_resilience(healthy, cancelled).await;
 }

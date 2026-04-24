@@ -13,17 +13,18 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
 use kithara_platform::{
     time::Duration,
     tokio::task::{JoinHandle, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, wav::create_test_wav};
+use kithara_test_utils::{TestServerHelper, TestTempDir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::{
+    reader_helpers::{ReadLimit, read_for_concurrency_check},
+    test_defaults::SawWav,
+};
 
 struct Consts;
 impl Consts {
@@ -32,10 +33,7 @@ impl Consts {
     const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4;
-    #[cfg(target_arch = "wasm32")]
-    const MAX_ZERO_READS: usize = 200;
-    #[cfg(target_arch = "wasm32")]
-    const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
+    const READ_LIMIT: ReadLimit = ReadLimit::wasm_default();
 }
 
 /// Result of one instance completing.
@@ -46,156 +44,95 @@ struct InstanceResult {
     total_samples: u64,
 }
 
-/// Read any `Audio<Stream<S>>` to EOF, asserting every sample is finite.
-fn read_to_eof<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    loop {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            break;
-        }
-        for &s in &buf[..n] {
-            assert!(s.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-    assert!(audio.is_eof(), "expected EOF");
-    total
-}
-
-/// Read until `MIN_SAMPLES_PER_INSTANCE` is reached or we stall. Used on
-/// wasm where the audio pipeline is cooperative and may briefly starve;
-/// on native targets this collapses to `read_to_eof`.
-#[cfg(target_arch = "wasm32")]
-fn read_for_concurrency_check<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    let mut zero_reads = 0usize;
-
-    while total < Consts::MIN_SAMPLES_PER_INSTANCE && zero_reads < Consts::MAX_ZERO_READS {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
-            zero_reads += 1;
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        zero_reads = 0;
-        for &sample in &buf[..n] {
-            assert!(sample.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-
-    assert!(
-        total >= Consts::MIN_SAMPLES_PER_INSTANCE,
-        "expected at least {Consts::MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
-    );
-    total
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_for_concurrency_check<S: kithara::stream::StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
-    read_to_eof(audio)
-}
-
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = Consts::SEGMENT_COUNT * Consts::D.segment_size;
-    let bytes_per_frame = Consts::D.channels as usize * 2;
-    let header_size = 44;
-    let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(
-        sample_count,
-        Consts::D.sample_rate,
-        Consts::D.channels,
-    ))
+    Consts::D.build_wav(Consts::SEGMENT_COUNT)
 }
 
-/// 2 File + 2 HLS instances running concurrently.
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn mixed_two_file_two_hls() {
+async fn spawn_file_instance(
+    id: usize,
+    url: url::Url,
+    temp_path: &std::path::Path,
+) -> JoinHandle<InstanceResult> {
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_path));
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut audio = Audio::<Stream<File>>::new(config)
+        .await
+        .expect("create File audio");
+
+    spawn_blocking(move || {
+        let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+        info!(instance = id, kind = "file", total_samples = total, "done");
+        InstanceResult {
+            id,
+            kind: "file",
+            total_samples: total,
+        }
+    })
+}
+
+async fn spawn_hls_instance(
+    id: usize,
+    wav_data: Arc<Vec<u8>>,
+    temp_path: &std::path::Path,
+) -> (HlsTestServer, JoinHandle<InstanceResult>) {
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: Consts::D.segment_size,
+        segment_duration_secs: Consts::D.segment_duration_secs(),
+        custom_data: Some(wav_data),
+        ..Default::default()
+    })
+    .await;
+
+    let url = server.url("/master.m3u8");
+    let cancel = CancellationToken::new();
+
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_path))
+        .with_cancel(cancel)
+        .with_initial_abr_mode(AbrMode::Manual(0));
+
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create HLS audio");
+
+    let handle = spawn_blocking(move || {
+        let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+        info!(instance = id, kind = "hls", total_samples = total, "done");
+        InstanceResult {
+            id,
+            kind: "hls",
+            total_samples: total,
+        }
+    });
+
+    (server, handle)
+}
+
+async fn run_mixed(file_count: usize, hls_count: usize) {
     let wav_data = generate_wav_data();
     let file_server = TestServerHelper::new().await;
-
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
     let mut servers = Vec::new();
 
-    // Spawn 2 File instances
-    for i in 0..2 {
-        let url = file_server.asset("test.mp3");
+    for i in 0..file_count {
         let temp = TestTempDir::new();
-
-        let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp.path()));
-        let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-
-        let mut audio = Audio::<Stream<File>>::new(config)
-            .await
-            .expect("create File audio");
-
+        let h = spawn_file_instance(i, file_server.asset("test.mp3"), temp.path()).await;
         temps.push(temp);
-        handles.push(spawn_blocking(move || {
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, kind = "file", total_samples = total, "done");
-            InstanceResult {
-                id: i,
-                kind: "file",
-                total_samples: total,
-            }
-        }));
+        handles.push(h);
     }
 
-    // Spawn 2 HLS instances
-    for i in 2..4 {
-        let server = HlsTestServer::new(HlsTestServerConfig {
-            segments_per_variant: Consts::SEGMENT_COUNT,
-            segment_size: Consts::D.segment_size,
-            segment_duration_secs: segment_duration,
-            custom_data: Some(Arc::clone(&wav_data)),
-            ..Default::default()
-        })
-        .await;
-
-        let url = server.url("/master.m3u8");
+    for i in file_count..(file_count + hls_count) {
         let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
-
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp.path()))
-            .with_cancel(cancel)
-            .with_initial_abr_mode(AbrMode::Manual(0));
-
-        let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
-
-        let mut audio = Audio::<Stream<Hls>>::new(config)
-            .await
-            .expect("create HLS audio");
-
+        let (server, h) = spawn_hls_instance(i, Arc::clone(&wav_data), temp.path()).await;
         temps.push(temp);
         servers.push(server);
-        handles.push(spawn_blocking(move || {
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, kind = "hls", total_samples = total, "done");
-            InstanceResult {
-                id: i,
-                kind: "hls",
-                total_samples: total,
-            }
-        }));
+        handles.push(h);
     }
 
     let mut results = Vec::new();
@@ -216,7 +153,7 @@ async fn mixed_two_file_two_hls() {
     }
 }
 
-/// 4 File + 4 HLS instances (8 total) running concurrently.
+/// Mixed File + HLS instances running concurrently.
 #[kithara::test(
     tokio,
     browser,
@@ -224,95 +161,8 @@ async fn mixed_two_file_two_hls() {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-async fn mixed_four_file_four_hls() {
-    let wav_data = generate_wav_data();
-    let file_server = TestServerHelper::new().await;
-
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
-
-    let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
-    let mut temps = Vec::new();
-    let mut servers = Vec::new();
-
-    // Spawn 4 File instances
-    for i in 0..4 {
-        let url = file_server.asset("test.mp3");
-        let temp = TestTempDir::new();
-
-        let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp.path()));
-        let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-
-        let mut audio = Audio::<Stream<File>>::new(config)
-            .await
-            .expect("create File audio");
-
-        temps.push(temp);
-        handles.push(spawn_blocking(move || {
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, kind = "file", total_samples = total, "done");
-            InstanceResult {
-                id: i,
-                kind: "file",
-                total_samples: total,
-            }
-        }));
-    }
-
-    // Spawn 4 HLS instances
-    for i in 4..8 {
-        let server = HlsTestServer::new(HlsTestServerConfig {
-            segments_per_variant: Consts::SEGMENT_COUNT,
-            segment_size: Consts::D.segment_size,
-            segment_duration_secs: segment_duration,
-            custom_data: Some(Arc::clone(&wav_data)),
-            ..Default::default()
-        })
-        .await;
-
-        let url = server.url("/master.m3u8");
-        let temp = TestTempDir::new();
-        let cancel = CancellationToken::new();
-
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp.path()))
-            .with_cancel(cancel)
-            .with_initial_abr_mode(AbrMode::Manual(0));
-
-        let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
-
-        let mut audio = Audio::<Stream<Hls>>::new(config)
-            .await
-            .expect("create HLS audio");
-
-        temps.push(temp);
-        servers.push(server);
-        handles.push(spawn_blocking(move || {
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, kind = "hls", total_samples = total, "done");
-            InstanceResult {
-                id: i,
-                kind: "hls",
-                total_samples: total,
-            }
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-    drop(temps);
-    drop(servers);
-
-    info!(?results, "all mixed instances done");
-    for r in &results {
-        assert!(
-            r.total_samples > 0,
-            "instance {} ({}) read 0 samples",
-            r.id,
-            r.kind
-        );
-    }
+#[case::two_file_two_hls(2, 2)]
+#[case::four_file_four_hls(4, 4)]
+async fn concurrent_mixed_instances(#[case] file_count: usize, #[case] hls_count: usize) {
+    run_mixed(file_count, hls_count).await;
 }
