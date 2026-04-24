@@ -53,8 +53,12 @@ impl BatchGroup {
     }
 
     /// Process all epoch groups. Skip cancelled groups entirely.
-    /// Respects `max_concurrent` — waits when at capacity.
-    pub(super) async fn process(self, inner: &DownloaderInner) {
+    /// Respects `max_concurrent` — waits when at capacity. Returns the
+    /// number of fetches actually spawned (cancelled cmds don't count),
+    /// so [`Registry::tick`](super::registry::Registry::tick) can treat
+    /// a non-zero dispatch as forward progress for the hang watchdog.
+    pub(super) async fn process(self, inner: &DownloaderInner) -> usize {
+        let mut dispatched: usize = 0;
         for group in self.epochs {
             if group.cancel.is_cancelled() {
                 for cmd in group.cmds {
@@ -72,9 +76,11 @@ impl BatchGroup {
                     task::yield_now().await;
                 }
                 spawn_fetch(inner, cmd);
+                dispatched += 1;
                 task::yield_now().await;
             }
         }
+        dispatched
     }
 }
 

@@ -4448,7 +4448,6 @@ dependencies = [
  "derivative",
  "hotpath",
  "kithara-bufpool",
- "kithara-hang-detector",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",

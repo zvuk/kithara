@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     peer::{Peer, PeerHandle},
-    registry::Registry,
+    registry::{FetchProgress, Registry},
 };
 
 /// Capacity of the per-peer bounded command channel.
@@ -171,14 +171,36 @@ impl Downloader {
     /// never dropped mid-batch by a competing `select!` arm (cancellation-
     /// safety: dropping `process()` loses unspawned `FetchCmd`s whose
     /// `on_complete` callbacks will never fire).
+    ///
+    /// # Deadlock detection
+    ///
+    /// `tick` reports a [`FetchProgress`](super::registry::FetchProgress):
+    /// - `Advanced` — something moved (cmd drained, peer yielded a batch,
+    ///   urgent/demand batch processed, or inflight changed). Reset.
+    /// - `Idle` — nothing to do: no queued cmds, no in-flight, peers
+    ///   pending. Watchdog left as-is; legitimate quiet period.
+    /// - `Stalled` — work exists (queued cmds or inflight > 0) but no
+    ///   forward motion this tick. Tick the watchdog; N consecutive
+    ///   stalls across the timeout window → panic.
+    #[kithara_hang_detector::hang_watchdog(timeout = Duration::from_secs(60))]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut registry = Registry::new();
 
         loop {
-            tokio::select! {
+            let progress = tokio::select! {
                 biased;
                 () = self.inner.cancel.cancelled() => return,
-                () = registry.tick(&self.inner, &mut register_rx) => {},
+                p = registry.tick(&self.inner, &mut register_rx) => p,
+            };
+
+            match progress {
+                FetchProgress::Advanced => {
+                    hang_reset!();
+                }
+                FetchProgress::Stalled => {
+                    hang_tick!();
+                }
+                FetchProgress::Idle => {}
             }
 
             registry.reschedule();
