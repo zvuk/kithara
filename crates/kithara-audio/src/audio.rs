@@ -1304,6 +1304,49 @@ mod tests {
         assert!(audio.is_eof());
     }
 
+    // Red test: pins the *correct* contract for `is_eof()`. The existing
+    // `consumer_phase_failed_on_channel_close` above documents the
+    // current (buggy) behavior where `Failed` collapses into `is_eof()`.
+    //
+    // Root cause of Bug B: during a seek, the previous epoch's cancel
+    // token fires, `recv_outcome_blocking` returns `Closed`,
+    // `close_channel_and_mark_eof` sets `ConsumerPhase::Failed`, and
+    // `is_eof()` starts returning `true`. That `true` cascades up:
+    //
+    //   Audio::is_eof()=true
+    //     → PlayerResource::read() returns Err("eof")
+    //     → PlayerTrack::handle_eof() sets TrackState::Finished
+    //     → cleanup_finished_tracks() removes the track
+    //     → PlayerNodeProcessor::render_audio sees an empty arena
+    //     → Queue position freezes at the seek target
+    //
+    // `is_eof()` must report *only* natural end-of-stream (AtEof). A
+    // cancelled channel or other failure is not EOF — it means "no more
+    // data via this channel"; during seek recovery it is transient (a
+    // new channel will be set up for the new epoch).
+    //
+    // When this test goes green, the assertion on line 1304 of the
+    // sibling test must flip from `assert!(is_eof())` to
+    // `assert!(!is_eof())`.
+    #[kithara::test]
+    fn is_eof_reports_only_natural_end_not_channel_failure() {
+        let (mut audio, _tx) = audio_with_channel();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        audio.cancel = Some(cancel);
+        audio.preloaded = false;
+
+        let _ = audio.recv_valid_chunk();
+        assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
+
+        assert!(
+            !audio.is_eof(),
+            "Audio::is_eof() must distinguish natural EOF (AtEof) from \
+             channel failure (Failed) — otherwise a cancelled seek makes \
+             PlayerTrack finalize mid-clip and empties the arena"
+        );
+    }
+
     #[kithara::test]
     fn consumer_does_not_park_in_terminal_phase() {
         let (mut audio, _tx) = audio_with_channel();
@@ -1312,5 +1355,82 @@ mod tests {
         // read() should return 0 immediately
         let mut buf = [0.0f32; 16];
         assert_eq!(audio.read(&mut buf), 0);
+    }
+
+    // Red test: `process_fetch` conflates the two kinds of terminal
+    // markers that arrive on the pcm channel:
+    //   - natural EOF: producer saw `TrackStep::Eof`, pushed
+    //     `Fetch::new(default, true, epoch)`
+    //   - transient failure: producer saw `TrackStep::Failed`
+    //     (SourceCancelled / RecreateFailed), pushed the *same* shape:
+    //     `Fetch::new(default, true, epoch)`
+    //
+    // Both land in `process_fetch`, which only looks at `fetch.is_eof()`
+    // and writes `ConsumerPhase::AtEof`. The consumer then cannot tell
+    // "clip finished, finalize track" from "post-seek decoder hiccup,
+    // retry soon". The fix requires a richer wire marker (e.g. a
+    // `FetchKind { Data | NaturalEof | Failure }` field) and a
+    // `process_fetch` that writes `AtEof` only for `NaturalEof` and
+    // `Failed` (or a recoverable state) for `Failure`.
+    #[kithara::test]
+    fn process_fetch_must_distinguish_failure_from_natural_eof() {
+        // Scenario A: natural EOF → AtEof.
+        let (mut audio_eof, mut tx_eof) = audio_with_channel();
+        tx_eof
+            .try_push(Fetch::new(PcmChunk::default(), true, 0))
+            .expect("push natural-eof marker");
+        let _ = audio_eof.recv_valid_chunk();
+        assert_eq!(audio_eof.consumer_phase, ConsumerPhase::AtEof);
+
+        // Scenario B: transient failure — producer squeezes it through
+        // the same wire shape. With the current contract, the consumer
+        // ends up in AtEof just like scenario A. With the fixed
+        // contract, it must land in a non-natural-eof terminal (or a
+        // recoverable wait state) so the higher layers can retry.
+        let (mut audio_failure, mut tx_failure) = audio_with_channel();
+        tx_failure
+            .try_push(Fetch::new(PcmChunk::default(), true, 0))
+            .expect("push failure marker (same shape as eof today)");
+        let _ = audio_failure.recv_valid_chunk();
+
+        assert_ne!(
+            audio_failure.consumer_phase,
+            ConsumerPhase::AtEof,
+            "process_fetch must not collapse TrackStep::Failed into \
+             ConsumerPhase::AtEof — AtEof means 'clip finished' and is \
+             used by PlayerTrack to finalize; a transient failure must \
+             land in a distinct non-natural-eof state so the pipeline \
+             can recover instead of removing the track from the arena"
+        );
+    }
+
+    // Red test: contract of `PcmReader::is_eof`. If a reader reports
+    // `is_eof() == true` while `position()` is well below `duration()`,
+    // that is not EOF — it is a failure or an internal state leak. The
+    // Audio implementor, which is `PcmReader`, must only raise `is_eof`
+    // once the consumed position has reached the end of the clip.
+    #[kithara::test]
+    fn pcm_reader_is_eof_only_when_position_reaches_duration() {
+        let (mut audio, _tx) = audio_with_channel();
+        // Decoded duration = 60s; no samples consumed yet (position=0).
+        audio
+            .timeline
+            .set_total_duration(Some(Duration::from_secs(60)));
+        // Simulate a transient failure arriving on the wire mid-clip.
+        audio.consumer_phase = ConsumerPhase::Failed;
+
+        let pos = <Audio<()> as PcmReader>::position(&audio);
+        let duration = <Audio<()> as PcmReader>::duration(&audio).expect("duration known");
+        assert!(
+            pos < duration,
+            "precondition: reader is mid-clip (pos={pos:?} < dur={duration:?})"
+        );
+
+        assert!(
+            !<Audio<()> as PcmReader>::is_eof(&audio),
+            "PcmReader::is_eof() must only be true when position has \
+             reached the clip's duration — not when the downstream \
+             pipeline transiently fails"
+        );
     }
 }

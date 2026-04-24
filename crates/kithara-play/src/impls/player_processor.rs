@@ -510,7 +510,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 mod tests {
     use std::sync::{
         Arc as TestArc, Mutex,
-        atomic::{AtomicU32, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering},
     };
 
     use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
@@ -888,6 +888,236 @@ mod tests {
             Arc::from(src),
             kithara_bufpool::pcm_pool(),
         )))
+    }
+
+    /// `PcmReader` that toggles `is_eof()` on demand. Simulates a decoder
+    /// that transiently reports EOF while its FSM is in a failure state
+    /// (e.g. `TrackState::Failed(RecreateFailed)` after a failed seek).
+    struct ToggleEofReader {
+        spec: PcmSpec,
+        meta: TrackMetadata,
+        bus: EventBus,
+        eof_flag: TestArc<AtomicBool>,
+    }
+
+    impl ToggleEofReader {
+        fn new() -> (Self, TestArc<AtomicBool>) {
+            let flag = TestArc::new(AtomicBool::new(false));
+            let reader = Self {
+                spec: PcmSpec {
+                    channels: 2,
+                    sample_rate: 44_100,
+                },
+                meta: TrackMetadata::default(),
+                bus: EventBus::default(),
+                eof_flag: TestArc::clone(&flag),
+            };
+            (reader, flag)
+        }
+    }
+
+    impl PcmReader for ToggleEofReader {
+        fn read(&mut self, buf: &mut [f32]) -> usize {
+            // Return zeros so `PlayerResource.read` falls through to the
+            // `resource.is_eof()` branch and, if the flag is set, returns
+            // `Err(PlayError::Internal("eof"))`.
+            for sample in buf.iter_mut() {
+                *sample = 0.0;
+            }
+            0
+        }
+
+        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+            for ch in output.iter_mut() {
+                for sample in ch.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+            0
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            self.eof_flag.load(AtomicOrdering::Acquire)
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+    }
+
+    // Regression: tracks arena must not be emptied when the decoder
+    // transiently reports EOF during a seek-recovery window. Observed
+    // in `silvercomet_hls_symphonia_locked_high`: after a seek the HLS
+    // pipeline stalls waiting for bytes, `Audio::consumer_phase` flips
+    // through `Failed` → `is_eof()=true` → `PlayerResource.read` returns
+    // `Err`, `PlayerTrack::handle_eof` immediately marks the track
+    // `Finished`, `cleanup_finished_tracks` removes it, and the
+    // `PlayerNodeProcessor::render_audio` arena is empty — the Queue
+    // freezes at the seek target. The track should survive transient
+    // EOF reports at least until the player explicitly unloads it or
+    // the position actually reached the end of the clip.
+    #[kithara::test(tokio)]
+    async fn track_arena_survives_transient_eof_mid_clip() {
+        let (reader, eof_flag) = ToggleEofReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            kithara_bufpool::pcm_pool(),
+        )));
+
+        let (mut processor, mut tx) = make_processor();
+        let src: Arc<str> = Arc::from("track.mp3");
+
+        // Load + fade-in so the track is in `Playing`/`FadingIn`.
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            src: Arc::clone(&src),
+        })
+        .ok();
+        processor.drain_commands();
+        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
+        processor.drain_commands();
+        processor.shared_state.playing.store(true, Ordering::SeqCst);
+        assert_eq!(processor.tracks.len(), 1, "track loaded");
+
+        // Simulate seek in progress: issue seek + flip the reader's
+        // `is_eof()` flag to simulate the decoder pipeline's transient
+        // EOF during post-seek recovery.
+        let seek_epoch = processor.shared_state.next_seek_epoch();
+        processor
+            .shared_state
+            .seek_epoch
+            .store(seek_epoch, Ordering::SeqCst);
+        tx.try_push(PlayerCmd::Seek {
+            seconds: 30.0,
+            seek_epoch,
+        })
+        .ok();
+        processor.drain_commands();
+        eof_flag.store(true, AtomicOrdering::Release);
+
+        // Drive the render path a few times — enough for `track.read()`
+        // to see the transient EOF, followed by
+        // `cleanup_finished_tracks()` on the next `process()` cycle.
+        let mut scratch_bufs: [Vec<f32>; 4] = [
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+        ];
+        for _ in 0..4 {
+            // Manually invoke the read+cleanup cycle without needing the
+            // full firewheel `process()` harness.
+            let [ref mut s0, ref mut s1, ref mut m0, ref mut m1] = scratch_bufs;
+            let mut read_bufs: [&mut [f32]; 2] = [s0, s1];
+            let mut mix_bufs: [&mut [f32]; 2] = [m0, m1];
+            for (_, track) in processor.tracks.iter_mut() {
+                if track.state().is_playing() {
+                    track.read(
+                        &mut read_bufs,
+                        &mut mix_bufs,
+                        0..128,
+                        &processor.shared_state.notification_tx,
+                    );
+                }
+            }
+            processor.cleanup_finished_tracks();
+        }
+
+        // Position (10s) is well below duration (60s), so the "EOF" is
+        // transient, not real. The track must still be in the arena so
+        // the player can resume after the recovery completes.
+        assert!(
+            processor.tracks.len() > 0,
+            "track arena should not be emptied by a transient EOF report \
+             mid-clip during seek recovery"
+        );
+    }
+
+    // Narrow red test — catches Bug B at its exact origin:
+    // `PlayerTrack::read` calls `PlayerResource::read`, gets back
+    // `Err(PlayError::Internal("eof"))` because `is_eof()==true`, and
+    // unconditionally routes it through `handle_eof`, which flips the
+    // state to `Finished` — even though the reader's `position=10s` is
+    // well below its `duration=60s`, so the EOF cannot be natural.
+    //
+    // The upstream symptom (arena empty when render_audio runs) is
+    // already covered by `track_arena_survives_transient_eof_mid_clip`.
+    // This test pins the state transition itself, so the fix can be
+    // verified without spinning up the full processor.
+    #[kithara::test(tokio)]
+    async fn player_track_does_not_finalize_on_transient_eof_mid_clip() {
+        use firewheel::dsp::fade::FadeCurve;
+
+        let (reader, eof_flag) = ToggleEofReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            kithara_bufpool::pcm_pool(),
+        )));
+
+        let sample_rate = NonZeroU32::new(44_100).expect("non-zero");
+        let mut track = PlayerTrack::new(
+            Arc::clone(&player_resource),
+            Arc::from("track.mp3"),
+            0.0,
+            sample_rate,
+            FadeCurve::Linear,
+        );
+        track.play();
+        assert!(
+            track.state().is_playing(),
+            "precondition: track is actively playing before transient EOF"
+        );
+
+        // Flip EOF — simulates the post-seek recovery window where the
+        // HLS source hasn't yet delivered bytes for the seeked-to range
+        // and the decoder briefly reports EOF instead of producing PCM.
+        eof_flag.store(true, AtomicOrdering::Release);
+
+        let (_notification_tx, _notification_rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let notification_tx = PlatformMutex::new(_notification_tx);
+
+        let mut scratch0 = vec![0.0f32; 128];
+        let mut scratch1 = vec![0.0f32; 128];
+        let mut mix0 = vec![0.0f32; 128];
+        let mut mix1 = vec![0.0f32; 128];
+        let mut scratch: [&mut [f32]; 2] = [&mut scratch0, &mut scratch1];
+        let mut mix: [&mut [f32]; 2] = [&mut mix0, &mut mix1];
+        track.read(&mut scratch, &mut mix, 0..128, &notification_tx);
+
+        assert_ne!(
+            track.state(),
+            TrackState::Finished,
+            "PlayerTrack must not transition to Finished on a transient EOF \
+             while position (10s) is well below duration (60s) — the EOF \
+             report must be treated as recoverable, not as end-of-clip"
+        );
     }
 
     #[kithara::test(tokio)]

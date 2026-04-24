@@ -179,7 +179,10 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::{runtime::connect, worker::MockAudioWorkerSource};
+    use crate::{
+        runtime::{Inlet, Outlet, connect},
+        worker::MockAudioWorkerSource,
+    };
 
     #[kithara::test]
     fn decoder_node_eof_under_backpressure() {
@@ -229,6 +232,111 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.eof_sent);
         assert!(node.outlet.has_pending()); // EOF marker is now in overflow
+    }
+
+    // Red test — pins the broken contract at the root of Bug B.
+    //
+    // The producer has two semantically distinct terminal states:
+    //   - `TrackStep::Eof`    → natural end of clip, finalize the track
+    //   - `TrackStep::Failed` → decoder/source error, transient in seek
+    //                           recovery; caller may want to retry, wait,
+    //                           or surface a user-visible error
+    //
+    // But on the wire the producer squeezes both into the same marker:
+    // `Fetch::new(PcmChunk::default(), is_eof=true, epoch)`. The consumer
+    // (`Audio::process_fetch`) sees only `fetch.is_eof()` — it cannot
+    // tell the two apart. This cascades into `ConsumerPhase::AtEof` (or
+    // `Failed`, both terminal for `is_eof()`), then into
+    // `PlayerResource::read → Err("eof") → PlayerTrack::Finished`, and
+    // the track arena goes empty mid-clip.
+    //
+    // The correct contract: the marker itself must carry the kind
+    // (`Data | NaturalEof | Failure`) so the consumer can choose
+    // different behavior — e.g. keep the track alive on Failure and
+    // flip only on NaturalEof.
+    #[kithara::test]
+    fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
+        use std::fmt::Debug;
+
+        /// Drains one marker off the outlet and describes its terminal
+        /// kind. Today the wire only carries a boolean `is_eof`, so this
+        /// helper returns that boolean — which is precisely why the test
+        /// below fails: two distinct producer states produce the same
+        /// boolean.
+        fn drain_marker_kind<T: Debug>(
+            outlet: &mut Outlet<Fetch<T>>,
+            inlet: &mut Inlet<Fetch<T>>,
+        ) -> &'static str {
+            outlet.flush();
+            let fetch = inlet.try_pop().expect("producer pushed a terminal marker");
+            if fetch.is_eof() {
+                "eof-or-failure"
+            } else {
+                "data"
+            }
+        }
+
+        let notify = Arc::new(Notify::new());
+
+        // Scenario A: natural EOF.
+        let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let eof_timeline = Timeline::new();
+        let eof_source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Eof),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(eof_timeline.clone());
+            }),
+        )));
+        let mut eof_node = DecoderNode {
+            source: eof_source,
+            outlet: eof_outlet,
+            service_class: ServiceClass::default(),
+            preload_notify: Arc::clone(&notify),
+            preload_chunks: 1,
+            chunks_sent: 0,
+            preloaded: false,
+            seek_epoch: 0,
+            eof_sent: false,
+        };
+        assert_eq!(eof_node.tick(), TickResult::Progress);
+        let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
+
+        // Scenario B: transient failure (e.g. SourceCancelled or
+        // RecreateFailed during seek recovery).
+        let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let failed_timeline = Timeline::new();
+        let failed_source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Failed),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(failed_timeline.clone());
+            }),
+        )));
+        let mut failed_node = DecoderNode {
+            source: failed_source,
+            outlet: failed_outlet,
+            service_class: ServiceClass::default(),
+            preload_notify: notify,
+            preload_chunks: 1,
+            chunks_sent: 0,
+            preloaded: false,
+            seek_epoch: 0,
+            eof_sent: false,
+        };
+        let _ = failed_node.tick();
+        let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
+
+        assert_ne!(
+            eof_kind, failed_kind,
+            "TrackStep::Eof and TrackStep::Failed must not collapse into \
+             the same wire marker — the consumer has to distinguish \
+             natural end-of-clip from a transient decoder/source failure, \
+             otherwise a post-seek failure cascades into PlayerTrack::\
+             Finished and empties the track arena mid-clip"
+        );
     }
 
     #[kithara::test]
