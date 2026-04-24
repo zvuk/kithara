@@ -170,38 +170,42 @@ fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
     store
 }
 
-fn resource_config(url: &url::Url, store: StoreOptions, backend: DecoderBackend) -> ResourceConfig {
-    let mut cfg = ResourceConfig::new(url.as_str())
-        .unwrap()
-        .with_hint("mp3")
-        .with_store(store);
-    cfg.prefer_hardware = backend.prefer_hardware();
-    cfg
-}
-
-fn resource_config_no_hint(
+/// Build a `ResourceConfig` with the common shape used throughout this
+/// file: backend-preferred hardware flag, optional MP3 hint, optional
+/// shared audio worker handle.
+fn resource_config(
     url: &url::Url,
     store: StoreOptions,
     backend: DecoderBackend,
+    hint: Option<&str>,
+    worker: Option<AudioWorkerHandle>,
 ) -> ResourceConfig {
     let mut cfg = ResourceConfig::new(url.as_str()).unwrap().with_store(store);
+    if let Some(h) = hint {
+        cfg = cfg.with_hint(h);
+    }
+    if let Some(w) = worker {
+        cfg = cfg.with_worker(w);
+    }
     cfg.prefer_hardware = backend.prefer_hardware();
     cfg
 }
 
-fn resource_config_with_worker(
+/// Open a resource with [`resource_config`] options; panics on error.
+async fn open_resource_full(
     url: &url::Url,
     store: StoreOptions,
-    worker: AudioWorkerHandle,
     backend: DecoderBackend,
-) -> ResourceConfig {
-    resource_config(url, store, backend).with_worker(worker)
+    hint: Option<&str>,
+    worker: Option<AudioWorkerHandle>,
+) -> Resource {
+    Resource::new(resource_config(url, store, backend, hint, worker))
+        .await
+        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
 async fn open_resource(url: &url::Url, store: StoreOptions, backend: DecoderBackend) -> Resource {
-    Resource::new(resource_config(url, store, backend))
-        .await
-        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
+    open_resource_full(url, store, backend, Some("mp3"), None).await
 }
 
 async fn open_resource_with_worker(
@@ -210,9 +214,24 @@ async fn open_resource_with_worker(
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> Resource {
-    Resource::new(resource_config_with_worker(url, store, worker, backend))
-        .await
-        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
+    open_resource_full(url, store, backend, Some("mp3"), Some(worker)).await
+}
+
+fn resource_config_with_worker(
+    url: &url::Url,
+    store: StoreOptions,
+    worker: AudioWorkerHandle,
+    backend: DecoderBackend,
+) -> ResourceConfig {
+    resource_config(url, store, backend, Some("mp3"), Some(worker))
+}
+
+fn resource_config_no_hint(
+    url: &url::Url,
+    store: StoreOptions,
+    backend: DecoderBackend,
+) -> ResourceConfig {
+    resource_config(url, store, backend, None, None)
 }
 
 async fn warm_hls_worker(
@@ -451,7 +470,14 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(&bad_url, store.clone(), backend)).await;
+        let result = Resource::new(resource_config(
+            &bad_url,
+            store.clone(),
+            backend,
+            Some("mp3"),
+            None,
+        ))
+        .await;
         assert!(
             result.is_err(),
             "unavailable resource attempt {attempt} must return error"
@@ -692,16 +718,36 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     worker.shutdown();
 }
 
+/// How the first warmup session ends before the second begins.
+#[derive(Debug, Clone, Copy)]
+enum WarmupTeardown {
+    /// Explicit `worker_a.shutdown()` call.
+    Shutdown,
+    /// Drop `worker_a` without shutdown.
+    DropOnly,
+    /// First session is a read-only warmup (no seek), then drop.
+    ReadOnlyThenDrop,
+}
+
+/// Sequential HLS warmups from two isolated sessions must not poison each
+/// other. Covers three teardown modes for the first session.
 #[kithara::test(
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[case::shutdown_symphonia(WarmupTeardown::Shutdown, DecoderBackend::Symphonia)]
+#[case::shutdown_apple(WarmupTeardown::Shutdown, DecoderBackend::Apple)]
+#[case::shutdown_android(WarmupTeardown::Shutdown, DecoderBackend::Android)]
+#[case::drop_only_symphonia(WarmupTeardown::DropOnly, DecoderBackend::Symphonia)]
+#[case::drop_only_apple(WarmupTeardown::DropOnly, DecoderBackend::Apple)]
+#[case::drop_only_android(WarmupTeardown::DropOnly, DecoderBackend::Android)]
+#[case::read_only_symphonia(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Symphonia)]
+#[case::read_only_apple(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Apple)]
+#[case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)]
 async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
+    #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
     if backend.skip_if_unavailable() {
@@ -718,100 +764,40 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await;
-    assert!(
-        first_pos > 1.0,
-        "first HLS warmup must advance playback position, got {first_pos}"
-    );
-    worker_a.shutdown();
+    // First session: perform the requested warmup + teardown.
+    let first_pos = match teardown {
+        WarmupTeardown::Shutdown | WarmupTeardown::DropOnly => {
+            warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await
+        }
+        WarmupTeardown::ReadOnlyThenDrop => {
+            warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone(), backend).await
+        }
+    };
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
-    assert!(
-        second_pos > 1.0,
-        "second HLS warmup after a prior session must still advance playback position, got {second_pos}"
-    );
-    worker_b.shutdown();
-}
-
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
-async fn sequential_hls_warmup_drop_only_does_not_poison_next_ephemeral_session(
-    #[case] backend: DecoderBackend,
-) {
-    if backend.skip_if_unavailable() {
-        return;
+    let expect_advance = !matches!(teardown, WarmupTeardown::ReadOnlyThenDrop);
+    if expect_advance {
+        assert!(
+            first_pos > 1.0,
+            "first HLS warmup must advance playback position, got {first_pos} \
+             (teardown={teardown:?})",
+        );
+    } else {
+        assert!(
+            first_pos >= 0.0,
+            "first HLS read-only warmup must produce samples, got {first_pos}",
+        );
     }
-    let server_a = open_audio_hls_server().await;
-    let server_b = open_audio_hls_server().await;
-    let temp_a = TestTempDir::new();
-    let temp_b = TestTempDir::new();
-    let worker_a = AudioWorkerHandle::new();
-    let worker_b = AudioWorkerHandle::new();
-    let store_a = store_options(&temp_a, false);
-    let store_b = store_options(&temp_b, true);
-    let hls_url_a = server_a.url("/master.m3u8");
-    let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_pos = warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await;
-    assert!(
-        first_pos > 1.0,
-        "first HLS warmup must advance playback position, got {first_pos}"
-    );
-    drop(worker_a);
-
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
-    assert!(
-        second_pos > 1.0,
-        "second HLS warmup after only dropping the first worker must still advance playback position, got {second_pos}"
-    );
-    worker_b.shutdown();
-}
-
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
-async fn sequential_hls_read_only_session_does_not_poison_next_ephemeral_session(
-    #[case] backend: DecoderBackend,
-) {
-    if backend.skip_if_unavailable() {
-        return;
+    match teardown {
+        WarmupTeardown::Shutdown => worker_a.shutdown(),
+        WarmupTeardown::DropOnly | WarmupTeardown::ReadOnlyThenDrop => drop(worker_a),
     }
-    let server_a = open_audio_hls_server().await;
-    let server_b = open_audio_hls_server().await;
-    let temp_a = TestTempDir::new();
-    let temp_b = TestTempDir::new();
-    let worker_a = AudioWorkerHandle::new();
-    let worker_b = AudioWorkerHandle::new();
-    let store_a = store_options(&temp_a, false);
-    let store_b = store_options(&temp_b, true);
-    let hls_url_a = server_a.url("/master.m3u8");
-    let hls_url_b = server_b.url("/master.m3u8");
-
-    let first_pos =
-        warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone(), backend).await;
-    assert!(
-        first_pos >= 0.0,
-        "first HLS read-only warmup must produce samples, got {first_pos}"
-    );
-    drop(worker_a);
 
     let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
     assert!(
         second_pos > 1.0,
-        "second HLS warmup after a read-only first session must still advance playback position, got {second_pos}"
+        "second HLS warmup after a prior session ({teardown:?}) must still \
+         advance playback position, got {second_pos}",
     );
     worker_b.shutdown();
 }
