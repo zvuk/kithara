@@ -90,7 +90,12 @@ fn read_archived_lru_keys(path: &Path) -> Vec<String> {
         .collect()
 }
 
-fn read_archived_availability_ranges(path: &Path, asset_root: &str, key: &str) -> Vec<(u64, u64)> {
+struct ArchivedResourceEntry {
+    ranges: Vec<(u64, u64)>,
+    final_len: Option<u64>,
+}
+
+fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> ArchivedResourceEntry {
     let bytes = fs::read(path).expect("read availability.bin");
     let archived = rkyv::access::<ArchivedAvailabilityFile, rkyv::rancor::Error>(&bytes)
         .expect("availability.bin must be a valid rkyv payload");
@@ -102,21 +107,16 @@ fn read_archived_availability_ranges(path: &Path, asset_root: &str, key: &str) -
         .resources
         .get(key)
         .expect("resource entry must be persisted");
-    res.ranges
-        .iter()
-        .map(|r| (r.0.to_native(), r.1.to_native()))
-        .collect()
-}
-
-fn read_archived_availability_final_len(path: &Path, asset_root: &str, key: &str) -> Option<u64> {
-    let bytes = fs::read(path).expect("read availability.bin");
-    let archived = rkyv::access::<ArchivedAvailabilityFile, rkyv::rancor::Error>(&bytes)
-        .expect("availability.bin must be a valid rkyv payload");
-    let asset = archived.assets.get(asset_root).expect("asset entry");
-    let res = asset.resources.get(key).expect("resource entry");
-    match res.final_len {
-        ArchivedOption::Some(ref l) => Some(l.to_native()),
-        ArchivedOption::None => None,
+    ArchivedResourceEntry {
+        ranges: res
+            .ranges
+            .iter()
+            .map(|r| (r.0.to_native(), r.1.to_native()))
+            .collect(),
+        final_len: match res.final_len {
+            ArchivedOption::Some(ref l) => Some(l.to_native()),
+            ArchivedOption::None => None,
+        },
     }
 }
 
@@ -236,14 +236,11 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
     );
 
     // Availability payload: both committed ranges must round-trip.
-    let ranges_a = read_archived_availability_ranges(&availability, asset_root, "segment-a.bin");
-    assert_eq!(ranges_a, vec![(0, payload.len() as u64)]);
-    assert_eq!(
-        read_archived_availability_final_len(&availability, asset_root, "segment-a.bin"),
-        Some(payload.len() as u64),
-    );
-    let ranges_b = read_archived_availability_ranges(&availability, asset_root, "segment-b.bin");
-    assert_eq!(ranges_b, vec![(0, 9)]);
+    let entry_a = read_archived_availability(&availability, asset_root, "segment-a.bin");
+    assert_eq!(entry_a.ranges, vec![(0, payload.len() as u64)]);
+    assert_eq!(entry_a.final_len, Some(payload.len() as u64));
+    let entry_b = read_archived_availability(&availability, asset_root, "segment-b.bin");
+    assert_eq!(entry_b.ranges, vec![(0, 9)]);
 
     // 6) Release resources: pins.bin must shrink back to empty.
     drop(res_a);
