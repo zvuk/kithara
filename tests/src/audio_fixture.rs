@@ -14,10 +14,10 @@ pub struct EmbeddedAudio {
 impl EmbeddedAudio {
     /// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
     /// This is a minimal valid WAV file for testing.
-    const TINY_WAV_BYTES: &'static [u8] = include_bytes!("../../assets/silence_1s.wav");
+    pub const TINY_WAV_BYTES: &'static [u8] = include_bytes!("../../assets/silence_1s.wav");
 
     /// A test MP3 file (short audio clip)
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
+    pub const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
 
     /// Nominal playback duration of [`Self::mp3`] in seconds.
     ///

@@ -36,13 +36,13 @@ use kithara_platform::{
 };
 use kithara_test_utils::temp_dir;
 
-use crate::common::decoder_backend::DecoderBackend;
+use crate::common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared};
 
 struct Consts;
 impl Consts {
-    const SAMPLE_RATE: u32 = 44_100;
-    const CHANNELS: u16 = 2;
-    const BLOCK_FRAMES: usize = 512;
+    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
+    const CHANNELS: u16 = Shared::CHANNELS;
+    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
     const PLAY_WINDOW_SECS: f64 = 3.0;
     /// Render warmup burned before the first measurement window so
     /// decoder startup silence (the few hundred ms between `load_and_fadein`

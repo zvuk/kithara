@@ -19,12 +19,7 @@ use kithara::{
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-struct Consts;
-impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../../assets/test.mp3");
-    /// Expected duration of test.mp3 (ffprobe: 187.102041s).
-    const EXPECTED_DURATION_SECS: f64 = 187.0;
-}
+use crate::common::test_defaults::Consts;
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -184,9 +179,9 @@ async fn audio_file_mp3_decodes_with_duration(
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "path={path} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
-        Consts::EXPECTED_DURATION_SECS
+        Consts::TEST_MP3_DURATION_SECS
     );
 
     // Decode at least 2 seconds of real PCM.
@@ -249,9 +244,9 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "path={path} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
-        Consts::EXPECTED_DURATION_SECS
+        Consts::TEST_MP3_DURATION_SECS
     );
 }
 

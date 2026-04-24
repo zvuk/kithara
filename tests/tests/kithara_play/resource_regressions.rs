@@ -36,7 +36,7 @@ use tokio::time::timeout;
 use tracing::{debug, info};
 
 use crate::{
-    common::decoder_backend::DecoderBackend,
+    common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared},
     continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
         render_offline_window,
@@ -45,15 +45,15 @@ use crate::{
 
 struct Consts;
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../../assets/test.mp3");
-    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+    const TEST_MP3_BYTES: &'static [u8] = Shared::TEST_MP3_BYTES;
+    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
     const HLS_SEGMENT_COUNT: usize = 3;
-    const HLS_SEGMENT_SIZE: usize = 200_000;
+    const HLS_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
     const HLS_TOTAL_BYTES: usize = Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE;
-    const HLS_SAMPLE_RATE: f64 = 44_100.0;
-    const HLS_CHANNELS: f64 = 2.0;
+    const HLS_SAMPLE_RATE: f64 = Shared::SAMPLE_RATE as f64;
+    const HLS_CHANNELS: f64 = Shared::CHANNELS as f64;
     /// Expected duration of test.mp3 (ffprobe: 187.102041s).
-    const EXPECTED_DURATION_SECS: f64 = 187.0;
+    const EXPECTED_DURATION_SECS: f64 = Shared::TEST_MP3_DURATION_SECS;
 }
 
 fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {

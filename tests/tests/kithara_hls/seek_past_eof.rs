@@ -24,10 +24,12 @@ use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
+use crate::common::test_defaults::Consts as Shared;
+
 struct Consts;
 impl Consts {
     /// Actual segment body size returned by GET.
-    const ACTUAL_SEGMENT_SIZE: usize = 200_000;
+    const ACTUAL_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
 
     /// Content-Length reported by HEAD (smaller, simulating compressed size).
     /// ~800 bytes less per segment — matches real-world gzip/brotli overhead.

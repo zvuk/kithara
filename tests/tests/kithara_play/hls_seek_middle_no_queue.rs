@@ -24,12 +24,14 @@ use kithara::{
 use kithara_test_utils::{PackagedTestServer, temp_dir};
 use tokio::time::sleep;
 
+use crate::common::test_defaults::Consts as Shared;
+
 static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
-    const SAMPLE_RATE: u32 = 44_100;
-    const BLOCK_FRAMES: usize = 512;
+    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
+    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     const POST_SEEK_RENDER_SECS: f64 = 6.0;
     const SEEK_TARGET_SECS: f64 = 6.0;

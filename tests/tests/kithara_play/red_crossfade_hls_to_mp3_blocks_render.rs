@@ -45,13 +45,13 @@ use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
 use tracing::info;
 
-use crate::continuity::render_offline_window;
+use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
 
 struct Consts;
 impl Consts {
-    const READ_TIMEOUT: Duration = Duration::from_secs(5);
-    const BLOCK: usize = 512;
-    const SR: u32 = 44_100;
+    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
+    const BLOCK: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const SR: u32 = Shared::SAMPLE_RATE;
 }
 
 #[kithara::test(
