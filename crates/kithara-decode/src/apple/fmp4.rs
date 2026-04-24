@@ -15,7 +15,14 @@
 
 #![allow(unsafe_code)]
 
-use std::{io, time::Duration};
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use kithara_bufpool::BytePool;
 use symphonia_core::{
@@ -46,13 +53,22 @@ use crate::{
 /// Adapter turning a `BoxedSource` into a `symphonia_core::MediaSource`.
 ///
 /// The underlying source is a kithara Stream (HLS / File), which is
-/// randomly seekable but may block for not-yet-downloaded bytes. We
-/// declare it as seekable so Symphonia can random-access moof/mdat
-/// atoms, and report the externally-known byte length so the demuxer
+/// randomly seekable but may block for not-yet-downloaded bytes. The
+/// externally-known byte length is reported up front so the demuxer
 /// never has to probe the tail.
+///
+/// `seek_enabled` is toggled externally: it starts as `false` during
+/// `IsoMp4Reader::try_new` so the demuxer cannot seek to the tail to
+/// validate file size (on cold-cache HLS the tail is not yet downloaded,
+/// and `Stream::read` eventually returns `Interrupted("data not ready")`
+/// which `IsoMp4Reader::try_new` propagates as a terminal error). After
+/// the reader is built the flag is flipped to `true` so subsequent
+/// `reader.seek(...)` calls work normally. Mirrors
+/// `symphonia::adapter::ReadSeekAdapter`.
 struct BoxedMediaSource {
     inner: BoxedSource,
     byte_len: Option<u64>,
+    seek_enabled: Arc<AtomicBool>,
 }
 
 impl io::Read for BoxedMediaSource {
@@ -69,7 +85,7 @@ impl io::Seek for BoxedMediaSource {
 
 impl MediaSource for BoxedMediaSource {
     fn is_seekable(&self) -> bool {
-        true
+        self.seek_enabled.load(Ordering::Acquire)
     }
 
     fn byte_len(&self) -> Option<u64> {
@@ -99,14 +115,23 @@ impl Fmp4Reader {
         byte_len: u64,
         _byte_pool: Option<&BytePool>,
     ) -> DecodeResult<Self> {
+        // Start with seek disabled so `IsoMp4Reader::try_new` cannot probe the
+        // tail (cold-cache HLS has the tail not yet downloaded — `Stream::read`
+        // returns `Interrupted("data not ready")` after 500ms which would fail
+        // decoder creation terminally). After the reader is built we flip the
+        // flag to re-enable seeks for subsequent packet/seek operations.
+        let seek_enabled = Arc::new(AtomicBool::new(false));
         let media_source: Box<dyn MediaSource> = Box::new(BoxedMediaSource {
             inner: source,
             byte_len: (byte_len > 0).then_some(byte_len),
+            seek_enabled: Arc::clone(&seek_enabled),
         });
         let mss = MediaSourceStream::new(media_source, MediaSourceStreamOptions::default());
 
         let reader = IsoMp4Reader::try_new(mss, FormatOptions::default())
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        seek_enabled.store(true, Ordering::Release);
 
         let audio = reader
             .tracks()
