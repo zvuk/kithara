@@ -30,36 +30,30 @@ fn view<'a>(bps: Option<u64>, variants: &'a [AbrVariant], s: &'a AbrSettings) ->
     }
 }
 
+/// A locked `AbrState` must never change variant, regardless of bandwidth
+/// samples. Parametrized to cover both directions:
+/// * locked-at-0 under very-high bandwidth → up-switch rejected
+/// * locked-at-2 under very-low bandwidth → down-switch rejected
 #[kithara::test]
-fn locked_state_rejects_up_switch_under_high_bandwidth() {
+#[case::rejects_up_switch(0, 20_000_000, 100_000)]
+#[case::rejects_down_switch(2, 10_000, 1)]
+fn locked_state_rejects_switch(
+    #[case] locked_variant: usize,
+    #[case] base_bps: u64,
+    #[case] step_bps: u64,
+) {
     let variants = test_variants_3();
     let settings = settings_fast();
-    let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(locked_variant)));
     state.lock();
 
     let now = Instant::now();
     for i in 0..50u64 {
-        let v = view(Some(20_000_000 + i * 100_000), &variants, &settings);
+        let v = view(Some(base_bps + i * step_bps), &variants, &settings);
         let d = state.decide(&v, now + StdDuration::from_millis(i));
         assert!(!d.changed, "locked state decided to switch at iter {i}");
     }
-    assert_eq!(state.current_variant_index(), 0);
-}
-
-#[kithara::test]
-fn locked_state_rejects_down_switch_under_low_bandwidth() {
-    let variants = test_variants_3();
-    let settings = settings_fast();
-    let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(2)));
-    state.lock();
-
-    let now = Instant::now();
-    for i in 0..50u64 {
-        let v = view(Some(10_000 + i), &variants, &settings);
-        let d = state.decide(&v, now + StdDuration::from_millis(i));
-        assert!(!d.changed, "locked state decided to switch at iter {i}");
-    }
-    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(state.current_variant_index(), locked_variant);
 }
 
 #[kithara::test(tokio)]
