@@ -40,7 +40,6 @@ impl Consts {
     const SEGMENT_COUNT: usize = 50;
     const SEEK_ITERATIONS: usize = 200;
     const WARMUP_TIMEOUT_SECS: u64 = 30;
-    const TEST_TIMEOUT_SECS: u64 = 60;
     const POST_SWITCH_CHUNKS: usize = 50;
     const CHUNKS_PER_SEEK: usize = 5;
     const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
