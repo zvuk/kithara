@@ -19,7 +19,13 @@ use std::{io, time::Duration};
 
 use kithara_bufpool::BytePool;
 use symphonia_core::{
-    codecs::CodecParameters,
+    codecs::{
+        CodecParameters,
+        audio::{
+            AudioCodecParameters,
+            well_known::{CODEC_ID_AAC, CODEC_ID_FLAC},
+        },
+    },
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
     io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     units::{Time, Timestamp},
@@ -28,7 +34,7 @@ use symphonia_format_isomp4::IsoMp4Reader;
 use tracing::{debug, warn};
 
 use super::{
-    consts::Consts,
+    consts::{Consts, os_status_to_string},
     ffi::{AudioStreamBasicDescription, AudioStreamPacketDescription},
     reader::{PacketReader, PacketRef},
 };
@@ -131,19 +137,7 @@ impl Fmp4Reader {
             c
         });
 
-        // The raw `esds` / ASC bytes from the sample description.
-        // Apple's `AudioConverter` expects the AudioSpecificConfig
-        // bytes as its `kAudioConverterDecompressionMagicCookie` for
-        // `kAudioFormatMPEG4AAC`. Symphonia parses the `esds` atom and
-        // exposes that payload as `extra_data`.
-        let magic_cookie = audio_params
-            .extra_data
-            .as_ref()
-            .map(|b| b.as_ref().to_vec())
-            .unwrap_or_default();
-        if magic_cookie.is_empty() {
-            warn!("fmp4: audio track has no extra_data (no AAC ASC cookie)");
-        }
+        let (format, magic_cookie) = build_input_format(audio_params, sample_rate, channel_count)?;
 
         let (timebase_numer, timebase_denom) = audio.time_base.map_or_else(
             || (1u32, sample_rate.max(1)),
@@ -171,22 +165,12 @@ impl Fmp4Reader {
             })
         });
 
-        let format = AudioStreamBasicDescription {
-            mSampleRate: f64::from(sample_rate),
-            mFormatID: Consts::kAudioFormatMPEG4AAC,
-            mFormatFlags: 0,
-            mBytesPerPacket: 0,
-            mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
-            mBytesPerFrame: 0,
-            mChannelsPerFrame: u32::from(channel_count),
-            mBitsPerChannel: 0,
-            mReserved: 0,
-        };
-
         debug!(
             audio_track_id,
             sample_rate,
             channel_count,
+            format_id = %os_status_to_string(format.mFormatID.cast_signed()),
+            frames_per_packet = format.mFramesPerPacket,
             cookie_len = magic_cookie.len(),
             ?duration,
             "Fmp4Reader opened"
@@ -205,6 +189,93 @@ impl Fmp4Reader {
             last_packet_desc: AudioStreamPacketDescription::default(),
             eof: false,
         })
+    }
+}
+
+/// Build the Apple `AudioStreamBasicDescription` and magic cookie for the
+/// codec discovered inside the fMP4 sample entry.
+///
+/// fMP4 can carry multiple codecs; Apple's `AudioConverter` only decodes
+/// correctly when the ASBD advertises the real format and the cookie matches
+/// what that codec's decoder expects. Dispatching off
+/// `AudioCodecParameters::codec` (the Symphonia-parsed sample-entry fourcc)
+/// is the authoritative source — more reliable than the upstream
+/// `MediaInfo` hint which can be stale or absent.
+fn build_input_format(
+    audio_params: &AudioCodecParameters,
+    sample_rate: u32,
+    channels: u16,
+) -> DecodeResult<(AudioStreamBasicDescription, Vec<u8>)> {
+    let extra: &[u8] = audio_params.extra_data.as_deref().unwrap_or_default();
+
+    match audio_params.codec {
+        CODEC_ID_AAC => {
+            if extra.is_empty() {
+                warn!("fmp4 aac: extra_data missing (no AudioSpecificConfig cookie)");
+            }
+            let asbd = AudioStreamBasicDescription {
+                mSampleRate: f64::from(sample_rate),
+                mFormatID: Consts::kAudioFormatMPEG4AAC,
+                mFormatFlags: 0,
+                mBytesPerPacket: 0,
+                mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
+                mBytesPerFrame: 0,
+                mChannelsPerFrame: u32::from(channels),
+                mBitsPerChannel: 0,
+                mReserved: 0,
+            };
+            Ok((asbd, extra.to_vec()))
+        }
+        CODEC_ID_FLAC => {
+            if extra.len() < Consts::FLAC_STREAMINFO_LEN {
+                return Err(DecodeError::InvalidData(format!(
+                    "flac fmp4: STREAMINFO too short ({} bytes, need {})",
+                    extra.len(),
+                    Consts::FLAC_STREAMINFO_LEN,
+                )));
+            }
+            let streaminfo = &extra[..Consts::FLAC_STREAMINFO_LEN];
+            // max_block_size is u16 BE at bytes [2..4] of STREAMINFO.
+            let max_block = u32::from(u16::from_be_bytes([streaminfo[2], streaminfo[3]]))
+                .max(Consts::AAC_FRAMES_PER_PACKET);
+
+            // Apple's FLAC decoder expects the magic cookie in native-FLAC
+            // header form:
+            //   "fLaC" + METADATA_BLOCK_HEADER(last=1, type=STREAMINFO, len=34)
+            //         + STREAMINFO body.
+            // Symphonia surfaces only the STREAMINFO body, so we rebuild the
+            // prefix here.
+            let mut cookie =
+                Vec::with_capacity(Consts::FLAC_COOKIE_PREFIX_LEN + Consts::FLAC_STREAMINFO_LEN);
+            cookie.extend_from_slice(b"fLaC");
+            cookie.push(0x80); // last=1, type=0 (STREAMINFO)
+            cookie.push(0x00);
+            cookie.push(0x00);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Consts::FLAC_STREAMINFO_LEN is 34, fits in u8"
+            )]
+            {
+                cookie.push(Consts::FLAC_STREAMINFO_LEN as u8);
+            }
+            cookie.extend_from_slice(streaminfo);
+
+            let asbd = AudioStreamBasicDescription {
+                mSampleRate: f64::from(sample_rate),
+                mFormatID: Consts::kAudioFormatFLAC,
+                mFormatFlags: 0,
+                mBytesPerPacket: 0,
+                mFramesPerPacket: max_block,
+                mBytesPerFrame: 0,
+                mChannelsPerFrame: u32::from(channels),
+                mBitsPerChannel: 0,
+                mReserved: 0,
+            };
+            Ok((asbd, cookie))
+        }
+        other => Err(DecodeError::InvalidData(format!(
+            "fmp4: unsupported codec id {other} in Apple fmp4 reader"
+        ))),
     }
 }
 

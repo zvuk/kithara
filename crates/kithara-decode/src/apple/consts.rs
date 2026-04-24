@@ -15,6 +15,7 @@ impl Consts {
 
     pub(super) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d; // 'lpcm'
     pub(super) const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320; // 'aac '
+    pub(super) const kAudioFormatFLAC: AudioFormatID = 0x666c6163; // 'flac'
     /// AAC always decodes 1024 samples per packet (SBR spectral bands
     /// use the same packet boundary).
     pub(super) const AAC_FRAMES_PER_PACKET: u32 = 1024;
@@ -44,6 +45,12 @@ impl Consts {
     pub(super) const BYTES_PER_F32_SAMPLE: u32 = 4;
     pub(super) const BITS_PER_F32_SAMPLE: u32 = 32;
     pub(super) const DEFAULT_BUFFER_FRAMES: usize = 1024;
+
+    /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
+    pub(super) const FLAC_STREAMINFO_LEN: usize = 34;
+    /// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:
+    /// 4 bytes `"fLaC"` marker + 4 bytes `METADATA_BLOCK_HEADER`.
+    pub(super) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
 }
 
 /// Decode a `FourCC`-style `OSStatus` into an ASCII tag when possible.
