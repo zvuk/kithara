@@ -182,8 +182,10 @@ impl Source for HlsSource {
         let (segment_ready, past_eof) = {
             let segments = self.segments.lock_sync();
             let ready = segments.find_at_offset(pos).is_some_and(|seg_ref| {
-                let seg_range = seg_ref.byte_offset..seg_ref.byte_offset + seg_ref.data.total_len();
-                self.range_ready_from_segments(&segments, &seg_range)
+                seg_ref.data.is_some_and(|data| {
+                    let seg_range = seg_ref.byte_offset..seg_ref.byte_offset + data.total_len();
+                    self.range_ready_from_segments(&segments, &seg_range)
+                })
             });
             let eof = self.is_past_eof(&segments, &(pos..pos.saturating_add(1)));
             drop(segments);
@@ -209,7 +211,7 @@ impl Source for HlsSource {
             let segments = self.segments.lock_sync();
             let found = segments
                 .visible_segment_at(offset)
-                .map(|r| ReadSegment::from_ref(&r));
+                .and_then(|r| ReadSegment::try_from_ref(&r));
             (
                 found,
                 segments.effective_total(self.playlist_state.as_ref()),
