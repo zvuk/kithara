@@ -106,32 +106,39 @@ fn from_media_info(
 
 // Spec Tests
 
-#[kithara::test]
-fn spec_wav_properties(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.wav());
-
-    let decoder = DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
-    let spec = decoder.spec();
-
-    // Our test WAV is 44.1kHz stereo
-    assert_eq!(spec.sample_rate, 44100);
-    assert_eq!(spec.channels, 2);
+/// Acceptable spec for a probed `test.{wav,mp3}` fixture.
+fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
+    match ext {
+        "wav" => {
+            // Our test WAV is 44.1kHz stereo
+            assert_eq!(spec.sample_rate, 44100);
+            assert_eq!(spec.channels, 2);
+        }
+        "mp3" => {
+            assert!(
+                [44100, 48000, 22050].contains(&spec.sample_rate),
+                "Unexpected MP3 sample rate: {}",
+                spec.sample_rate
+            );
+            assert!(spec.channels == 1 || spec.channels == 2);
+        }
+        other => panic!("unhandled format: {other}"),
+    }
 }
 
 #[kithara::test]
-fn spec_mp3_properties(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.mp3());
+#[case::wav("wav")]
+#[case::mp3("mp3")]
+fn spec_properties(audio: EmbeddedAudio, #[case] ext: &str) {
+    let data = if ext == "wav" {
+        audio.wav()
+    } else {
+        audio.mp3()
+    };
+    let reader = Cursor::new(data);
 
-    let decoder = DecoderFactory::create_with_probe(reader, Some("mp3"), test_config()).unwrap();
-    let spec = decoder.spec();
-
-    // MP3 should have standard sample rate
-    assert!(
-        spec.sample_rate == 44100 || spec.sample_rate == 48000 || spec.sample_rate == 22050,
-        "Unexpected sample rate: {}",
-        spec.sample_rate
-    );
-    assert!(spec.channels == 1 || spec.channels == 2);
+    let decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
+    assert_spec(&decoder.spec(), ext);
 }
 
 // Error Handling Tests
