@@ -197,7 +197,7 @@ impl HlsSource {
         self.segments
             .lock_sync()
             .find_at_offset(range_start)
-            .filter(|seg_ref| seg_ref.variant == variant)
+            .filter(|seg_ref| seg_ref.variant == variant && seg_ref.data.is_some())
             .map(|seg_ref| seg_ref.segment_index)
     }
 }

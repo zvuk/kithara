@@ -122,6 +122,7 @@ impl HlsScheduler {
         self.segments
             .lock_sync()
             .find_at_offset_in(layout, byte_pos)
+            .filter(|seg| seg.data.is_some())
             .map_or(0, |seg| seg.segment_index)
     }
 

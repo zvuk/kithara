@@ -104,13 +104,14 @@ impl HlsSource {
     pub(super) fn current_layout_variant(&self) -> Option<VariantIndex> {
         let pos = self.coord.timeline().byte_position();
         let segments = self.segments.lock_sync();
-        if let Some(seg_ref) = segments.find_at_offset(pos) {
+        if let Some(seg_ref) = segments.find_at_offset(pos).filter(|s| s.data.is_some()) {
             return Some(seg_ref.variant);
         }
         // Fallback: check the last committed segment across all variants
         if segments.max_end_offset() > 0
-            && let Some(seg_ref) =
-                segments.find_at_offset(segments.max_end_offset().saturating_sub(1))
+            && let Some(seg_ref) = segments
+                .find_at_offset(segments.max_end_offset().saturating_sub(1))
+                .filter(|s| s.data.is_some())
         {
             return Some(seg_ref.variant);
         }
@@ -125,10 +126,15 @@ impl HlsSource {
         let segments = self.segments.lock_sync();
         let result = segments
             .find_at_offset(reader_offset)
+            .filter(|s| s.data.is_some())
             .or_else(|| {
                 let max = segments.max_end_offset();
                 (max > 0)
-                    .then(|| segments.find_at_offset(max.saturating_sub(1)))
+                    .then(|| {
+                        segments
+                            .find_at_offset(max.saturating_sub(1))
+                            .filter(|s| s.data.is_some())
+                    })
                     .flatten()
             })
             .map(|seg_ref| (seg_ref.variant, seg_ref.segment_index));

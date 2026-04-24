@@ -372,6 +372,7 @@ impl Source for HlsSource {
             let reader_offset = self.coord.timeline().byte_position();
             segments
                 .find_at_offset(reader_offset)
+                .filter(|s| s.data.is_some())
                 .map(|seg_ref| seg_ref.variant)
                 .or_else(|| {
                     // Fallback: last committed segment
@@ -379,6 +380,7 @@ impl Source for HlsSource {
                     if max > 0 {
                         segments
                             .find_at_offset(max.saturating_sub(1))
+                            .filter(|s| s.data.is_some())
                             .map(|seg_ref| seg_ref.variant)
                     } else {
                         None
