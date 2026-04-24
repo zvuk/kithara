@@ -19,7 +19,7 @@ use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
 
-use crate::pipeline::fetch::Fetch;
+use crate::pipeline::{fetch::Fetch, gapless::GaplessStage};
 
 /// Nanoseconds per second for frame/duration conversion.
 const NANOS_PER_SEC: u128 = 1_000_000_000;
@@ -203,6 +203,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     /// Cached timeline for lock-free flushing checks.
     pub(crate) timeline: Timeline,
+    /// Per-track gapless stage; rebuilt whenever the decoder is recreated.
+    gapless: GaplessStage,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -215,6 +217,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let timeline = shared_stream.timeline();
+        let gapless = GaplessStage::from_decoder(decoder.as_ref());
         let session = DecoderSession {
             base_offset: 0,
             decoder,
@@ -232,6 +235,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             effects,
             timeline,
+            gapless,
         }
     }
 
@@ -418,6 +422,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             let new_duration = new_decoder.duration();
             let variant = new_info.variant_index;
+            self.gapless = GaplessStage::from_decoder(new_decoder.as_ref());
             // Atomic session update — only on success
             self.session = DecoderSession {
                 base_offset,
@@ -532,6 +537,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
+        self.gapless.notify_seek();
         self.emit_seek_lifecycle(
             SeekLifecycleStage::SeekApplied,
             epoch,
@@ -862,6 +868,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
         Some(chunk)
     }
+
+    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.gapless.next() {
+            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
+                return Some(processed);
+            }
+        }
+        None
+    }
 }
 
 /// Whether the decode loop should continue or return.
@@ -973,6 +988,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return Err(DecodeError::Interrupted);
             }
 
+            if let Some(ready) = self.next_gapless_output() {
+                return Ok(Some(ready));
+            }
+
             match self.decoder_next_chunk_safe() {
                 Ok(Some(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -998,27 +1017,36 @@ impl<T: StreamType> StreamAudioSource<T> {
                         );
                     }
 
-                    match apply_effects(&mut self.effects, chunk) {
-                        Some(processed) => return Ok(Some(processed)),
-                        None => continue,
-                    }
+                    self.gapless.push(chunk);
+                    continue;
                 }
-                Ok(None) => match self.handle_decode_eof() {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
-                Err(e) if e.is_variant_change() => match self.handle_variant_change(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
+                Ok(None) => {
+                    self.gapless.flush();
+                    if let Some(ready) = self.next_gapless_output() {
+                        return Ok(Some(ready));
+                    }
+
+                    return match self.handle_decode_eof() {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
+                Err(e) if e.is_variant_change() => {
+                    return match self.handle_variant_change(e) {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
                 Err(e) if e.is_interrupted() => {
                     trace!("decode interrupted by seek, retrying");
                     continue;
                 }
-                Err(e) => match Self::handle_decode_error(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
+                Err(e) => {
+                    return match Self::handle_decode_error(e) {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
             }
         }
     }
@@ -1597,6 +1625,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 },
             });
             reset_effects(&mut self.effects);
+            self.gapless.notify_seek();
             return TrackStep::StateChanged;
         }
 
