@@ -781,10 +781,10 @@ where
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
-        let stream_media_info = stream.media_info();
         let initial_byte_len = stream.len().unwrap_or(0);
         let timeline = stream.timeline();
-        let initial_media_info = user_media_info.or_else(|| stream_media_info.clone());
+        let initial_media_info =
+            merge_user_and_stream_media_info(user_media_info, stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         let shared_stream = SharedStream::new(stream);
@@ -835,13 +835,13 @@ where
         );
         let notify_waiting = shared_stream.make_notify_fn();
 
-        let initial_variant = stream_media_info.as_ref().and_then(|i| i.variant_index);
+        let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
             decoder_factory,
-            stream_media_info,
+            initial_media_info,
             Arc::clone(&epoch),
             effects,
         )
@@ -909,6 +909,45 @@ where
     #[must_use]
     pub fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+/// Merge user-supplied `MediaInfo` over the stream's declarative info.
+///
+/// Keeps user's specific fields and fills `None` fields from the stream.
+/// The result is the single source of truth for what kind of decoder is
+/// being run: the initial-decoder factory probes with it AND the FSM's
+/// `session.media_info` is seeded with it. Without the merge, user's
+/// container override (e.g. Wav) would be silently dropped at session
+/// seeding, and `detect_format_change` would later treat the stream's
+/// declarative container (e.g. Fmp4 inferred from EXT-X-MAP URL
+/// extension) as authoritative.
+fn merge_user_and_stream_media_info(
+    user: Option<MediaInfo>,
+    stream: Option<MediaInfo>,
+) -> Option<MediaInfo> {
+    match (user, stream) {
+        (Some(user), Some(stream)) => {
+            let mut merged = user;
+            if merged.codec.is_none() {
+                merged.codec = stream.codec;
+            }
+            if merged.container.is_none() {
+                merged.container = stream.container;
+            }
+            if merged.channels.is_none() {
+                merged.channels = stream.channels;
+            }
+            if merged.sample_rate.is_none() {
+                merged.sample_rate = stream.sample_rate;
+            }
+            if merged.variant_index.is_none() {
+                merged.variant_index = stream.variant_index;
+            }
+            Some(merged)
+        }
+        (Some(user), None) => Some(user),
+        (None, stream) => stream,
     }
 }
 

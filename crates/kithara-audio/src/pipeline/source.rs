@@ -273,21 +273,19 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// The variant fence in `Source::read_at()` prevents the old decoder
     /// from reading data from a new variant. This causes Symphonia to hit
     /// EOF naturally, after which `fetch_next` recreates the decoder.
+    ///
+    /// Triggers on variant-index change. Codec/container are NOT
+    /// re-derived from `current_info`: the source's `media_info()` may
+    /// return a declarative container (e.g. `Fmp4` inferred from an
+    /// `EXT-X-MAP` URL extension) that disagrees with the bytes the
+    /// decoder is actually reading. The cached `session.media_info`
+    /// reflects what was probed and built successfully — that's the
+    /// authoritative decoder type. True codec/container transitions
+    /// (rare in real HLS) are surfaced through decode errors and
+    /// recovered via `recover_from_decoder_seek_error`.
     fn detect_format_change(&self) -> Option<(MediaInfo, u64)> {
         let current_info = self.shared_stream.media_info()?;
-        let codec_changed = self
-            .session
-            .media_info
-            .as_ref()
-            .is_some_and(|cached| cached.codec != current_info.codec);
-        let variant_changed = self
-            .session
-            .media_info
-            .as_ref()
-            .is_some_and(|cached| cached.variant_index != current_info.variant_index);
-        if !codec_changed && !variant_changed {
-            return None;
-        }
+        let target = resolve_format_change_target(self.session.media_info.as_ref(), &current_info)?;
 
         // Prefer format_change_segment_range() which returns the FIRST segment
         // of the new format (where init data lives). Fall back to current_segment_range()
@@ -297,7 +295,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             .format_change_segment_range()
             .or_else(|| self.shared_stream.current_segment_range());
 
-        seg_range.map(|range| (current_info, range.start))
+        seg_range.map(|range| (target, range.start))
     }
 
     /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
@@ -1877,6 +1875,58 @@ fn log_source_cancelled() {
     warn!("track failed: source cancelled");
 }
 
+/// Build the recreate target `MediaInfo` for a format boundary.
+///
+/// Returns `None` when there is no boundary to act on. A boundary
+/// triggers on either:
+/// - variant-index change (ABR switched to a different variant), or
+/// - explicit codec change with both sides specified (rare cross-codec
+///   transitions where the source has actually probed a new codec).
+///
+/// The returned target preserves cached `container` (the decoder's
+/// truth — see below) and updates `variant_index` from `current`.
+/// `codec` is taken from `current` only on an explicit codec change;
+/// otherwise cached `codec` is preserved.
+///
+/// Why preserve cached `container`: `Source::media_info()` may report
+/// a declarative container (e.g. `Fmp4` inferred from an `EXT-X-MAP`
+/// URL extension) that disagrees with the bytes actually being read.
+/// The cached value reflects what was probed and built successfully —
+/// that's the authoritative decoder type. True container transitions
+/// (very rare in real HLS) are surfaced through decode errors and
+/// recovered via the seek-error recovery path.
+fn resolve_format_change_target(
+    cached: Option<&MediaInfo>,
+    current: &MediaInfo,
+) -> Option<MediaInfo> {
+    let variant_changed = cached.map_or_else(
+        || current.variant_index.is_some(),
+        |c| c.variant_index != current.variant_index,
+    );
+    let codec_changed = matches!(
+        (cached.and_then(|c| c.codec), current.codec),
+        (Some(a), Some(b)) if a != b
+    );
+    if !variant_changed && !codec_changed {
+        return None;
+    }
+    let target = cached.map_or_else(
+        || current.clone(),
+        |c| {
+            let mut t = c.clone();
+            t.variant_index = current.variant_index;
+            if codec_changed || t.codec.is_none() {
+                t.codec = current.codec;
+            }
+            if t.container.is_none() {
+                t.container = current.container;
+            }
+            t
+        },
+    );
+    Some(target)
+}
+
 /// Whether the container requires an init header (ftyp/moov/RIFF/EBML…)
 /// at byte 0 of the decoder input. Such containers cannot be parsed
 /// from a mid-stream offset, so a variant-switch recreate must land on
@@ -2104,5 +2154,115 @@ mod playing_flag_tests {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_format_change_target_tests {
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_utils::kithara;
+
+    use super::resolve_format_change_target;
+
+    fn info(
+        codec: Option<AudioCodec>,
+        container: Option<ContainerFormat>,
+        variant: Option<u32>,
+    ) -> MediaInfo {
+        let mut info = MediaInfo::new(codec, container);
+        info.variant_index = variant;
+        info
+    }
+
+    #[kithara::test]
+    fn no_change_when_variant_index_matches() {
+        let cached = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(0),
+        );
+        let current = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(0),
+        );
+        assert!(resolve_format_change_target(Some(&cached), &current).is_none());
+    }
+
+    #[kithara::test]
+    fn variant_change_keeps_cached_codec_and_container_when_current_disagrees() {
+        // Repro of the failing-test scenario: user supplied (Pcm, Wav) via
+        // AudioConfig::with_media_info, but the HLS playlist parser inferred
+        // Fmp4 from the EXT-X-MAP URL extension. The cached info is the
+        // truth (the decoder built from it works); the current's container
+        // hint must NOT override it on an ABR variant boundary.
+        let cached = info(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), Some(0));
+        let current = info(None, Some(ContainerFormat::Fmp4), Some(1));
+        let target = resolve_format_change_target(Some(&cached), &current)
+            .expect("variant change must trigger");
+        assert_eq!(target.codec, Some(AudioCodec::Pcm));
+        assert_eq!(target.container, Some(ContainerFormat::Wav));
+        assert_eq!(target.variant_index, Some(1));
+    }
+
+    #[kithara::test]
+    fn variant_change_falls_back_to_current_when_cached_lacks_codec_or_container() {
+        let cached = info(None, None, Some(0));
+        let current = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(2),
+        );
+        let target = resolve_format_change_target(Some(&cached), &current)
+            .expect("variant change must trigger");
+        assert_eq!(target.codec, Some(AudioCodec::AacLc));
+        assert_eq!(target.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(target.variant_index, Some(2));
+    }
+
+    #[kithara::test]
+    fn no_cached_uses_current_directly() {
+        let current = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(1),
+        );
+        let target = resolve_format_change_target(None, &current)
+            .expect("None cached + Some(variant) must trigger");
+        assert_eq!(target, current);
+    }
+
+    #[kithara::test]
+    fn explicit_codec_change_takes_current_codec() {
+        // Cross-codec transition (rare) inside the same variant: cached
+        // says AacLc, current explicitly says Flac. Both Some + different
+        // → the boundary must trigger and the new decoder gets Flac.
+        let cached = info(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), None);
+        let current = info(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4), None);
+        let target = resolve_format_change_target(Some(&cached), &current)
+            .expect("codec change must trigger");
+        assert_eq!(target.codec, Some(AudioCodec::Flac));
+        assert_eq!(target.container, Some(ContainerFormat::Fmp4));
+    }
+
+    #[kithara::test]
+    fn current_codec_none_is_not_a_codec_change() {
+        // Cached has codec, current dropped it (playlist returned no codec
+        // hint). This is "no info", not "different codec" — must not
+        // trigger a recreate by itself.
+        let cached = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(0),
+        );
+        let current = info(None, Some(ContainerFormat::Fmp4), Some(0));
+        assert!(resolve_format_change_target(Some(&cached), &current).is_none());
+    }
+
+    #[kithara::test]
+    fn no_change_when_neither_side_has_variant() {
+        let cached = info(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), None);
+        let current = info(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), None);
+        assert!(resolve_format_change_target(Some(&cached), &current).is_none());
     }
 }
