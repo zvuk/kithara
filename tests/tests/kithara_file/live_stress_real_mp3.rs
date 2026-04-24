@@ -8,7 +8,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
     events::{Event, FileEvent},
     file::{File, FileConfig},
@@ -97,16 +97,15 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(chunk) = PcmReader::next_chunk(audio) {
-            return Some(chunk);
-        }
-        if audio.is_eof() {
-            return None;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
             Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}' (is_eof={})",
-            audio.is_eof()
+            "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(500)).await;
     }
@@ -170,7 +169,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
             }
         }
     });
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     info!(ephemeral, "Phase 1: warmup");
     let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
@@ -207,7 +206,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("seek must not fail");
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         random_ops_done = random_ops_done.saturating_add(1);
 
         for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
@@ -239,14 +238,14 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("fast seek must not fail");
     }
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
     let final_seek = rng.range_f64(1.0, sequential_seek_max);
     audio
         .seek(Duration::from_secs_f64(final_seek))
         .expect("final seek before sequential read must not fail");
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     info!(
         sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
@@ -295,7 +294,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         audio
             .seek(Duration::from_secs_f64(*pos_secs))
             .expect("revisit seek must not fail");
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         let stage = format!("revisit_{idx}");
         let _ = next_chunk_with_timeout(
             &mut audio,

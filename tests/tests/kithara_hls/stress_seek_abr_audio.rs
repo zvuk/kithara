@@ -14,7 +14,7 @@ use std::{sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -171,16 +171,17 @@ async fn stress_seek_abr_audio() {
                 );
             }
 
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                if audio.is_eof() {
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Eof { .. }) => {
                     panic!(
                         "Hit EOF before ABR switch (ascending={}, unknown={})",
                         warmup_ascending_chunks, warmup_unknown_chunks
                     );
                 }
-                continue;
-            }
+                Err(e) => panic!("warmup decode error: {e}"),
+            };
 
             let dir = detect_direction(&buf[..n], channels);
             match dir {
@@ -216,13 +217,16 @@ async fn stress_seek_abr_audio() {
 
         let mut post_switch_ok = 0u64;
         for chunk_idx in 0..10 {
-            let n = audio.read(&mut buf);
-            assert!(
-                n > 0,
-                "read returned 0 in post-switch chunk {} (is_eof={})",
-                chunk_idx,
-                audio.is_eof()
-            );
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) if count > 0 => count,
+                Ok(ReadOutcome::Frames { .. }) => {
+                    panic!("read returned 0 in post-switch chunk {}", chunk_idx);
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    panic!("unexpected EOF in post-switch chunk {}", chunk_idx);
+                }
+                Err(e) => panic!("post-switch decode error at chunk {}: {}", chunk_idx, e),
+            };
 
             let frames = n / channels;
 
@@ -326,11 +330,12 @@ async fn stress_seek_abr_audio() {
                 panic!("seek #{} to {:.4}s failed: {}", i, pos_secs, e);
             });
 
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                // After seek, a zero-read can happen if we're at the exact EOF boundary
-                continue;
-            }
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Eof { .. }) => continue,
+                Err(e) => panic!("seek read error at iteration {}: {}", i, e),
+            };
 
             let frames = n / channels;
 
@@ -449,24 +454,28 @@ async fn stress_seek_abr_audio() {
             });
 
         let mut remaining_samples = 0u64;
+        let mut saw_eof = false;
         loop {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            remaining_samples += n as u64;
-            for &sample in &buf[..n] {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample in final tail read",
-                );
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    remaining_samples += count as u64;
+                    for &sample in &buf[..count] {
+                        assert!(
+                            sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                            "invalid sample in final tail read",
+                        );
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("final drain error: {e}"),
             }
         }
 
-        assert!(
-            audio.is_eof(),
-            "expected EOF after reading all remaining data"
-        );
+        assert!(saw_eof, "expected EOF after reading all remaining data");
 
         info!(remaining_samples, "Phase 4 complete: EOF confirmed");
     })

@@ -47,8 +47,12 @@ pub(crate) enum TrackState {
     FadingIn,
     /// Track is fading out (volume ramping down).
     FadingOut,
-    /// Track has finished playback (EOF or stopped).
+    /// Track finished naturally (decoder reached end-of-stream).
     Finished,
+    /// Track was aborted by an unrecoverable producer failure
+    /// (pcm channel closed, decoder backend error). Semantically distinct
+    /// from `Finished`: the track did NOT reach its duration.
+    Failed,
 }
 
 impl TrackState {
@@ -60,6 +64,12 @@ impl TrackState {
     /// Whether the track is the "leading" track (playing or fading in).
     pub(crate) fn is_leading(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn)
+    }
+
+    /// Whether the track has reached a terminal state and should be evicted
+    /// from the arena. Terminal = `Finished` (natural EOF) or `Failed`.
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Finished | Self::Failed)
     }
 }
 
@@ -186,22 +196,20 @@ impl PlayerTrack {
                 return;
             }
             Err(err) => {
-                // Non-natural EOF (e.g. "unexpected eof" from a reader
-                // that violates the `PcmReader::is_eof` contract, or a
-                // transient decoder failure leaking into the player
-                // layer). Don't finalise the track — zero-fill this
-                // cycle and let the pipeline recover.
-                tracing::warn!(
-                    src = %self.src,
-                    error = %err,
-                    "PlayerTrack: unexpected read error — keeping track alive"
-                );
+                // Terminal producer failure (ConsumerPhase::Failed is a
+                // one-way latch — pcm channel closed / decoder backend
+                // fault). Route through `handle_failure` so the track enters
+                // `TrackState::Failed` and a distinct `TrackError`
+                // notification is emitted. Zero-fill this render cycle so
+                // the audio callback does not read stale buffer data before
+                // the arena evicts the track.
                 if mix_bufs.len() >= MIN_STEREO_CHANNELS {
                     let range_len = range.len();
                     for ch in mix_bufs.iter_mut() {
                         ch[..range_len].fill(0.0);
                     }
                 }
+                self.handle_failure(err, notification_tx);
                 return;
             }
         }
@@ -216,9 +224,9 @@ impl PlayerTrack {
         }
     }
 
-    /// Handle EOF or read error.
+    /// Handle natural end-of-stream (decoder reached duration).
     fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state == TrackState::Finished {
+        if self.state.is_terminal() {
             return;
         }
         self.set_state(TrackState::Finished);
@@ -227,6 +235,31 @@ impl PlayerTrack {
             .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
                 &self.src,
             )))
+            .ok();
+    }
+
+    /// Handle unrecoverable producer failure (pcm channel closed, decoder fault).
+    ///
+    /// Sets state to `Failed` and emits `TrackError`. Distinct from natural
+    /// EOF so the queue can differentiate "track played to end" from "track
+    /// aborted due to failure".
+    fn handle_failure(
+        &mut self,
+        err: PlayError,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+    ) {
+        if self.state.is_terminal() {
+            return;
+        }
+        tracing::warn!(
+            src = %self.src,
+            error = %err,
+            "PlayerTrack: terminal producer failure — aborting track"
+        );
+        self.set_state(TrackState::Failed);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackError(Arc::clone(&self.src), err))
             .ok();
     }
 
@@ -306,6 +339,10 @@ impl PlayerTrack {
             TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
             TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
             TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
+            // `Failed` notifications are emitted by `handle_failure` directly
+            // (carrying the `PlayError`); `notify_state_change` has no error
+            // value to forward, so skip the dirty flag reset for this branch.
+            TrackState::Failed => return,
         };
 
         if notification_tx.lock_sync().try_push(notification).is_ok() {
@@ -337,7 +374,7 @@ impl PlayerTrack {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Paused | TrackState::Finished | TrackState::Failed => ServiceClass::Idle,
         };
         if let Ok(resource) = self.resource.try_lock() {
             resource.set_service_class(class);
@@ -544,6 +581,7 @@ mod tests {
     #[case(TrackState::Preloading, ServiceClass::Warm)]
     #[case(TrackState::Paused, ServiceClass::Idle)]
     #[case(TrackState::Finished, ServiceClass::Idle)]
+    #[case(TrackState::Failed, ServiceClass::Idle)]
     fn track_state_maps_to_service_class(
         #[case] state: TrackState,
         #[case] expected: ServiceClass,
@@ -553,7 +591,7 @@ mod tests {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Paused | TrackState::Finished | TrackState::Failed => ServiceClass::Idle,
         };
         assert_eq!(class, expected);
     }

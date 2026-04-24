@@ -15,7 +15,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{PcmChunk, PcmMeta},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -88,16 +88,15 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(chunk) = PcmReader::next_chunk(audio) {
-            return Some(chunk);
-        }
-        if audio.is_eof() {
-            return None;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
             Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}' (is_eof={})",
-            audio.is_eof()
+            "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(500)).await;
     }
@@ -212,7 +211,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         "Audio pipeline created"
     );
 
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     // Phase 1: Warmup + ABR switch detection
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
@@ -294,10 +293,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         )
         .await
         else {
-            panic!(
-                "next_chunk returned None at post-switch chunk {chunk_idx} (is_eof={})",
-                audio.is_eof()
-            );
+            panic!("next_chunk returned None at post-switch chunk {chunk_idx}",);
         };
 
         let frames = chunk.frames();
@@ -395,7 +391,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         audio.seek(position).unwrap_or_else(|e| {
             panic!("seek #{i} to {pos_secs:.4}s failed: {e}");
         });
-        audio.preload();
+        audio.preload().expect("preload must succeed");
 
         let mut prev_chunk_meta: Option<(PcmMeta, usize)> = None;
         let mut prev_last_sample: Option<f32> = None;
@@ -579,7 +575,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .unwrap_or_else(|e| {
             panic!("final seek to {final_seek_secs:.4}s failed: {e}");
         });
-    audio.preload();
+    audio
+        .preload()
+        .expect("preload after final seek must succeed");
 
     let mut remaining_chunks = 0u64;
     let mut remaining_samples = 0u64;
@@ -603,10 +601,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         }
     }
 
-    assert!(
-        audio.is_eof(),
-        "expected EOF after draining all remaining chunks"
-    );
+    // Loop exits on None from next_chunk_with_timeout, which corresponds to
+    // `ChunkOutcome::Eof` — so EOF is already confirmed by the break above.
 
     info!(
         remaining_chunks,

@@ -25,7 +25,6 @@ audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 tokio-util = { workspace = true }
 ringbuf = { workspace = true }
-rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
@@ -38,8 +37,6 @@ unimock = { workspace = true, optional = true }
 default = ["symphonia"]
 test-utils = ["unimock"]
 internal = []
-# Enable rodio::Source adapter for playback
-rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
@@ -93,5 +90,4 @@ kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
-rodio = { workspace = true, features = ["playback"] }
 hotpath = { workspace = true }

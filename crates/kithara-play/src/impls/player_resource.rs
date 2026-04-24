@@ -88,15 +88,11 @@ impl PlayerResource {
         range: Range<usize>,
     ) -> Result<(), PlayError> {
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = false;
+        let mut natural_eof = false;
+        let mut decode_err: Option<kithara_audio::DecodeError> = None;
 
         // Fill scratch buffers until we have enough data
         while frames_to_read > self.write_len {
-            if self.resource.is_eof() {
-                eof_reached = true;
-                break;
-            }
-
             let avail = self.channel_buffers[0].len() - self.write_pos;
             if avail == 0 {
                 break;
@@ -108,15 +104,21 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let n = self.resource.read_planar(&mut planar);
-            if n == 0 {
-                if self.resource.is_eof() {
-                    eof_reached = true;
+            match self.resource.read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                    self.write_len += count;
+                    self.write_pos += count;
                 }
-                break;
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    natural_eof = true;
+                    break;
+                }
+                Err(e) => {
+                    decode_err = Some(e);
+                    break;
+                }
             }
-            self.write_len += n;
-            self.write_pos += n;
         }
 
         // Copy from scratch buffers to output
@@ -153,19 +155,15 @@ impl PlayerResource {
             self.write_pos = tail_size;
 
             Ok(())
-        } else if eof_reached {
-            // Distinguish natural EOF (position reached duration) from
-            // an unexpected EOF (reader claims EOF below duration — a
-            // contract violation from a misbehaving `PcmReader`). Only
-            // natural EOF should cause the player layer to finalise
-            // the track; unexpected EOF surfaces as a distinct error
-            // so the caller can react (log / retry / keep track alive)
-            // instead of collapsing into `TrackState::Finished`.
-            if Self::reached_natural_end(&self.resource) {
-                Err(PlayError::Internal("eof".into()))
-            } else {
-                Err(PlayError::Internal("unexpected eof".into()))
-            }
+        } else if natural_eof {
+            Err(PlayError::Internal("eof".into()))
+        } else if let Some(err) = decode_err {
+            tracing::warn!(
+                src = %self.src,
+                error = %err,
+                "PlayerResource: transient decode error"
+            );
+            Err(PlayError::Internal(format!("decode error: {err}")))
         } else {
             // Reader returned 0 frames but is not at EOF (e.g. async seek
             // in progress). Zero-fill output so the audio thread outputs
@@ -179,22 +177,13 @@ impl PlayerResource {
         }
     }
 
-    /// True iff the reader's position has reached (or exceeded) its
-    /// known duration. Unknown duration is treated as reached — we
-    /// cannot second-guess the reader in that case.
-    fn reached_natural_end(resource: &Resource) -> bool {
-        resource
-            .duration()
-            .is_none_or(|duration| resource.position() >= duration)
-    }
-
     /// Seek to the given position in seconds.
     ///
     /// Clears the internal scratch buffers on success.
     pub(crate) fn seek(&mut self, seconds: f64) {
         let position = Duration::from_secs_f64(seconds);
         match self.resource.seek(position) {
-            Ok(()) => {
+            Ok(_) => {
                 self.write_len = 0;
                 self.write_pos = 0;
             }
@@ -245,8 +234,8 @@ impl PlayerResource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
-    use kithara_audio::{PcmReader, mock::TestPcmReader};
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_audio::{DecodeError, PcmReader, ReadOutcome, SeekOutcome, mock::TestPcmReader};
+    use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -283,24 +272,29 @@ mod tests {
     }
 
     impl PcmReader for PendingReader {
-        fn read(&mut self, _buf: &mut [f32]) -> usize {
-            0
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Frames {
+                count: 0,
+                position: Duration::ZERO,
+            })
         }
 
-        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
-            0
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Frames {
+                count: 0,
+                position: Duration::ZERO,
+            })
         }
 
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed { position })
         }
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            false
         }
 
         fn position(&self) -> Duration {
@@ -438,179 +432,17 @@ mod tests {
             kithara_bufpool::pcm_pool(),
         );
 
-        // Read all data
+        // Read until natural EOF surfaces as `PlayError::Internal("eof")`.
         let mut left = vec![0.0f32; 4096];
         let mut right = vec![0.0f32; 4096];
-        loop {
+        for _ in 0..1024 {
             let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
             match pr.read(&mut output, 0..4096) {
-                Ok(()) => {
-                    if pr.write_len == 0 && pr.resource.is_eof() {
-                        // Next read should return eof error
-                        let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
-                        let result = pr.read(&mut output2, 0..4096);
-                        assert!(result.is_err());
-                        return;
-                    }
-                }
-                Err(_) => return,
+                Ok(()) => continue,
+                Err(PlayError::Internal(msg)) if &*msg == "eof" => return,
+                Err(e) => panic!("unexpected error: {e}"),
             }
         }
-    }
-
-    /// Reader whose `is_eof()` violates the `PcmReader` contract — it
-    /// claims EOF while `position < duration`. This simulates either a
-    /// buggy reader or a transient failure that leaked through the
-    /// lower-layer `is_eof()`. The player layer must surface that as a
-    /// distinct `"unexpected eof"` error rather than conflating it
-    /// with natural end-of-stream.
-    struct ContractViolatingReader {
-        bus: EventBus,
-        meta: TrackMetadata,
-        spec: PcmSpec,
-    }
-
-    impl ContractViolatingReader {
-        fn new() -> Self {
-            Self {
-                bus: EventBus::default(),
-                meta: TrackMetadata::default(),
-                spec: mock_spec(),
-            }
-        }
-    }
-
-    impl PcmReader for ContractViolatingReader {
-        fn read(&mut self, _buf: &mut [f32]) -> usize {
-            0
-        }
-
-        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
-            0
-        }
-
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            // Contract violation — EOF while mid-clip.
-            true
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs(10)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-    }
-
-    struct NaturalEndReader {
-        bus: EventBus,
-        meta: TrackMetadata,
-        spec: PcmSpec,
-    }
-
-    impl NaturalEndReader {
-        fn new() -> Self {
-            Self {
-                bus: EventBus::default(),
-                meta: TrackMetadata::default(),
-                spec: mock_spec(),
-            }
-        }
-    }
-
-    impl PcmReader for NaturalEndReader {
-        fn read(&mut self, _buf: &mut [f32]) -> usize {
-            0
-        }
-
-        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
-            0
-        }
-
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            true
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs(60)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-    }
-
-    #[kithara::test]
-    fn unexpected_eof_reported_distinctly_from_natural_eof() {
-        // Contract-violating reader — EOF at position=10s, duration=60s.
-        let reader = ContractViolatingReader::new();
-        let resource = Resource::from_reader(reader);
-        let mut pr =
-            PlayerResource::new(resource, Arc::from("bad.mp3"), kithara_bufpool::pcm_pool());
-
-        let mut l = vec![0.0f32; 128];
-        let mut r = vec![0.0f32; 128];
-        let mut out: Vec<&mut [f32]> = vec![&mut l, &mut r];
-        let err = pr
-            .read(&mut out, 0..128)
-            .expect_err("contract-violating EOF must surface as an error");
-        let PlayError::Internal(msg) = &err else {
-            panic!("expected PlayError::Internal, got {err:?}");
-        };
-        assert_eq!(
-            msg, "unexpected eof",
-            "EOF reported below duration must surface as `unexpected eof`, \
-             not `eof` — the player finalises tracks only on natural EOF"
-        );
-
-        // Natural-end reader — position == duration, EOF → "eof".
-        let reader = NaturalEndReader::new();
-        let resource = Resource::from_reader(reader);
-        let mut pr =
-            PlayerResource::new(resource, Arc::from("good.mp3"), kithara_bufpool::pcm_pool());
-
-        let mut l = vec![0.0f32; 128];
-        let mut r = vec![0.0f32; 128];
-        let mut out: Vec<&mut [f32]> = vec![&mut l, &mut r];
-        let err = pr
-            .read(&mut out, 0..128)
-            .expect_err("natural EOF returns error");
-        let PlayError::Internal(msg) = &err else {
-            panic!("expected PlayError::Internal, got {err:?}");
-        };
-        assert_eq!(msg, "eof", "natural EOF must surface as `eof`");
+        panic!("reader never reached natural EOF within iteration budget");
     }
 }

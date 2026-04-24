@@ -160,7 +160,8 @@ async fn build_resource(
     // silence and can't distinguish "loading" from "hanged".
     tokio::time::timeout(Duration::from_secs(15), resource.preload())
         .await
-        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"));
+        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
+        .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
     resource
 }
 

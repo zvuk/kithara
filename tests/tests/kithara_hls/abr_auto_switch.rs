@@ -15,7 +15,7 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -156,14 +156,14 @@ async fn abr_auto_switch_during_playback(
         let timeout = Duration::from_secs(5);
 
         while start.elapsed() < timeout {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                if audio.is_eof() {
-                    break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count as u64;
                 }
-                continue;
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
-            total_samples += n as u64;
         }
 
         info!(total_samples, "playback finished");

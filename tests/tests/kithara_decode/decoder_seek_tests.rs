@@ -4,7 +4,7 @@
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
     stream::Stream,
@@ -40,17 +40,20 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
 
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) => return,
+            Ok(ChunkOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for {stage}");
+            }
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("decode error at {stage}: {e}"),
         }
-
-        assert!(!audio.is_eof(), "unexpected EOF while waiting for {stage}");
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for decoded PCM at stage={stage}",
         );
 
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         sleep(Duration::from_millis(10)).await;
     }
 }
@@ -113,13 +116,8 @@ async fn decoder_file_single_seek(
     assert!(spec.sample_rate > 0 && spec.channels > 0);
 
     next_chunk(&mut decoder, "before seek").await;
-    assert!(!decoder.is_eof());
 
     decoder.seek(target).unwrap();
-    assert!(
-        !decoder.is_eof(),
-        "should not be EOF after seek to {target:?}"
-    );
 
     next_chunk(&mut decoder, "after seek").await;
 
@@ -147,7 +145,6 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
     next_chunk(&mut decoder, "after seek forward").await;
 
     decoder.seek(Duration::from_secs(0)).unwrap();
-    assert!(!decoder.is_eof(), "should not be EOF after seek to start");
     next_chunk(&mut decoder, "after seek backward").await;
 }
 
@@ -220,14 +217,17 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
             "timed out waiting for FormatDetected/SeekComplete events",
         );
 
-        let read = decoder.read(&mut buf);
-        if read == 0 {
-            assert!(
-                !decoder.is_eof(),
-                "unexpected EOF while waiting for seek events",
-            );
-            decoder.preload();
-            sleep(Duration::from_millis(10)).await;
+        use kithara::audio::ReadOutcome;
+        match decoder.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                decoder.preload().expect("preload must succeed");
+                sleep(Duration::from_millis(10)).await;
+            }
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for seek events");
+            }
+            Err(e) => panic!("decode error: {e}"),
         }
     }
 

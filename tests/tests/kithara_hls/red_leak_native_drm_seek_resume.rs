@@ -46,7 +46,7 @@ use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioWorkerHandle, PcmReader},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -66,11 +66,10 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
-        }
-        if audio.is_eof() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
             std::time::Instant::now() <= deadline,

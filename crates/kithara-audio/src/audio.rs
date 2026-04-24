@@ -32,7 +32,7 @@ use crate::{
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
-    traits::{DecodeError, DecodeResult, PcmReader},
+    traits::{ChunkOutcome, DecodeError, PcmReader, ReadOutcome, SeekOutcome},
     worker::{
         handle::{AudioWorkerHandle, TrackRegistration},
         thread_wake::ThreadWake,
@@ -40,7 +40,7 @@ use crate::{
     },
 };
 
-enum ChunkOutcome {
+enum FetchOutcome {
     Continue,
     Return(Option<PcmChunk>),
 }
@@ -73,9 +73,11 @@ enum RecvOutcome {
 ///
 /// // Read PCM samples
 /// let mut buf = [0.0f32; 1024];
-/// while !audio.is_eof() {
-///     let n = audio.read(&mut buf);
-///     play_samples(&buf[..n]);
+/// loop {
+///     match audio.read(&mut buf)? {
+///         ReadOutcome::Frames { count, .. } => play_samples(&buf[..count]),
+///         ReadOutcome::Eof { .. } => break,
+///     }
 /// }
 /// ```
 pub struct Audio<S> {
@@ -184,16 +186,33 @@ impl<S> Audio<S> {
         &mut self.pcm_rx
     }
 
-    /// Enable non-blocking mode for `read()`.
+    /// Enable non-blocking mode for `read()` and prime the first chunk.
     ///
-    /// After calling this, `read()` returns immediately from buffered data
-    /// without blocking. Must be called after construction so that
-    /// `fill_buffer()` calls from JS (via `requestAnimationFrame`) don't hang.
-    pub fn preload(&mut self) {
+    /// After calling this, `read()` returns immediately from buffered
+    /// data without blocking. Must be called after construction so
+    /// that `fill_buffer()` calls from JS (via `requestAnimationFrame`)
+    /// don't hang.
+    ///
+    /// Returns `Err(DecodeError)` if the producer channel closed
+    /// during the initial `fill_buffer` (e.g. upstream decoder
+    /// reported `TrackStep::Failed` before any data). Natural EOF
+    /// encountered during preload is **not** surfaced here — the
+    /// subsequent `read()` / `next_chunk()` call will report
+    /// `ReadOutcome::Eof`.
+    ///
+    /// # Errors
+    /// Returns `DecodeError::Io` if the producer channel closed during preload.
+    pub fn preload(&mut self) -> Result<(), DecodeError> {
         self.preloaded = true;
-        if self.current_chunk.is_none() && !self.consumer_phase.is_terminal() {
+        if self.current_chunk.is_none() && self.consumer_phase != ConsumerPhase::AtEof {
             self.fill_buffer();
+            if self.consumer_phase == ConsumerPhase::Failed {
+                return Err(DecodeError::Io(IoError::other(
+                    "pcm channel closed during preload",
+                )));
+            }
         }
+        Ok(())
     }
 
     /// Subscribe to audio events.
@@ -261,16 +280,6 @@ impl<S> Audio<S> {
         let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
     }
 
-    /// Check if end of stream has been reached.
-    ///
-    /// Returns `true` **only** for natural end-of-stream (`AtEof`). A
-    /// transient failure (`ConsumerPhase::Failed`) does not count as
-    /// EOF — see `pipeline/fetch.rs` for the `FetchKind` contract.
-    #[must_use]
-    pub fn is_eof(&self) -> bool {
-        self.consumer_phase == ConsumerPhase::AtEof
-    }
-
     /// Get current playback position.
     ///
     /// Calculated from samples read since last seek plus the seek base.
@@ -315,15 +324,38 @@ impl<S> Audio<S> {
 
     /// Read decoded PCM samples into buffer.
     ///
-    /// Returns number of samples written (may be less than buffer size).
-    /// Returns 0 when EOF is reached.
-    ///
     /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
+    ///
+    /// Returns [`ReadOutcome::Frames`] — possibly with `count == 0`
+    /// when the reader is alive but has no data this tick — or
+    /// [`ReadOutcome::Eof`] on natural end-of-stream. Decoder /
+    /// channel failures surface as [`DecodeError`] via the `Err` arm.
+    ///
+    /// # Errors
+    /// Returns `DecodeError::Io` when the producer channel closed /
+    /// reported a failure (`ConsumerPhase::Failed`) before any frames
+    /// could be flushed.
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
-    pub fn read(&mut self, buf: &mut [f32]) -> usize {
-        if self.consumer_phase.is_terminal() || buf.is_empty() {
-            return 0;
+    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        if buf.is_empty() {
+            return Ok(ReadOutcome::Frames {
+                count: 0,
+                position: self.position(),
+            });
+        }
+        match self.consumer_phase {
+            ConsumerPhase::AtEof if self.current_chunk.is_none() => {
+                return Ok(ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            ConsumerPhase::Failed => {
+                return Err(DecodeError::Io(IoError::other(
+                    "pcm channel closed / producer failed",
+                )));
+            }
+            _ => {}
         }
 
         let mut written = 0;
@@ -367,8 +399,28 @@ impl<S> Audio<S> {
             self.advance_timeline(written as u64);
             self.emit_post_seek_output_commit(last_output_meta);
             self.emit_playback_progress();
+            return Ok(ReadOutcome::Frames {
+                count: written,
+                position: self.position(),
+            });
         }
-        written
+
+        // `written == 0` — map terminal states:
+        //   - AtEof (no buffered chunk): natural EOF
+        //   - Failed: decoder/channel failure
+        //   - everything else: alive but no data this tick
+        match self.consumer_phase {
+            ConsumerPhase::AtEof => Ok(ReadOutcome::Eof {
+                position: self.position(),
+            }),
+            ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
+                "pcm channel closed / producer failed",
+            ))),
+            _ => Ok(ReadOutcome::Frames {
+                count: 0,
+                position: self.position(),
+            }),
+        }
     }
 
     /// Seek to position in the audio stream.
@@ -377,12 +429,18 @@ impl<S> Audio<S> {
     /// Timeline atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The worker thread reads
     /// the seek target and epoch from Timeline and applies the seek.
     ///
-    /// # Errors
+    /// Returns [`SeekOutcome::Landed`] when the reader is now parked
+    /// at `position`; [`SeekOutcome::PastEof`] when the target is
+    /// beyond a known `duration()` (the subsequent read returns
+    /// `ReadOutcome::Eof`).
     ///
-    /// This method is infallible in practice but returns `DecodeResult` for
-    /// API compatibility.
+    /// # Errors
+    /// Propagated from the underlying stream (currently infallible at
+    /// this layer — the worker thread surfaces errors lazily via
+    /// `FetchKind::Failure`, which becomes `Err` from a subsequent
+    /// `read()` / `next_chunk()`).
     #[kithara_hang_detector::hang_watchdog]
-    pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+    pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         // 1. Atomic write to Timeline — FLUSH_START
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
@@ -414,7 +472,10 @@ impl<S> Audio<S> {
         // sets it to true, it stays true for the lifetime of this Audio.
 
         trace!(?position, epoch, "seek initiated via Timeline");
-        Ok(())
+        match self.timeline.total_duration() {
+            Some(duration) if position >= duration => Ok(SeekOutcome::PastEof { duration }),
+            _ => Ok(SeekOutcome::Landed { position }),
+        }
     }
 
     /// Receive next valid chunk from channel, filtering stale chunks.
@@ -437,11 +498,11 @@ impl<S> Audio<S> {
         loop {
             match self.recv_outcome() {
                 RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                    ChunkOutcome::Continue => {
+                    FetchOutcome::Continue => {
                         hang_tick!();
                         continue;
                     }
-                    ChunkOutcome::Return(chunk) => {
+                    FetchOutcome::Return(chunk) => {
                         hang_reset!();
                         return chunk;
                     }
@@ -519,20 +580,20 @@ impl<S> Audio<S> {
         }
     }
 
-    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> ChunkOutcome {
+    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
-            return ChunkOutcome::Continue;
+            return FetchOutcome::Continue;
         }
 
         match fetch.kind {
             FetchKind::NaturalEof => {
                 self.consumer_phase = ConsumerPhase::AtEof;
-                ChunkOutcome::Return(None)
+                FetchOutcome::Return(None)
             }
             FetchKind::Failure => {
                 trace!("Audio: received failure marker — entering Failed phase");
                 self.consumer_phase = ConsumerPhase::Failed;
-                ChunkOutcome::Return(None)
+                FetchOutcome::Return(None)
             }
             FetchKind::Data => {
                 let chunk = fetch.into_inner();
@@ -541,7 +602,7 @@ impl<S> Audio<S> {
                     spec = ?chunk.spec(),
                     "Audio: received chunk"
                 );
-                ChunkOutcome::Return(Some(chunk))
+                FetchOutcome::Return(Some(chunk))
             }
         }
     }
@@ -981,15 +1042,21 @@ impl<S> Drop for Audio<S> {
 
 // PcmReader implementation for Audio
 impl<S: Send> PcmReader for Audio<S> {
-    fn read(&mut self, buf: &mut [f32]) -> usize {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Self::read(self, buf)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
         let channels = output.len();
         if channels == 0 {
-            return 0;
+            return Ok(ReadOutcome::Frames {
+                count: 0,
+                position: self.position(),
+            });
         }
         let frames = output[0].len();
         let total_samples = frames * channels;
@@ -997,26 +1064,29 @@ impl<S: Send> PcmReader for Audio<S> {
             b.clear();
             b.resize(total_samples, 0.0);
         });
-        let n = self.read(&mut interleaved);
-        let actual_frames = n / channels;
-        for frame in 0..actual_frames {
-            for (ch, out_ch) in output.iter_mut().enumerate() {
-                out_ch[frame] = interleaved[frame * channels + ch];
+        match self.read(&mut interleaved)? {
+            ReadOutcome::Eof { position } => Ok(ReadOutcome::Eof { position }),
+            ReadOutcome::Frames { count, position } => {
+                let actual_frames = count / channels;
+                for frame in 0..actual_frames {
+                    for (ch, out_ch) in output.iter_mut().enumerate() {
+                        out_ch[frame] = interleaved[frame * channels + ch];
+                    }
+                }
+                Ok(ReadOutcome::Frames {
+                    count: actual_frames,
+                    position,
+                })
             }
         }
-        actual_frames
     }
 
-    fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Self::seek(self, position)
     }
 
     fn spec(&self) -> PcmSpec {
         Self::spec(self)
-    }
-
-    fn is_eof(&self) -> bool {
-        Self::is_eof(self)
     }
 
     fn position(&self) -> Duration {
@@ -1057,11 +1127,11 @@ impl<S: Send> PcmReader for Audio<S> {
         Some(self.preload_notify.clone())
     }
 
-    fn preload(&mut self) {
-        Self::preload(self);
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        Self::preload(self)
     }
 
-    fn next_chunk(&mut self) -> Option<PcmChunk> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         // Reuse preloaded chunk if it hasn't been partially consumed
         let chunk = if self.chunk_offset == 0 {
             self.current_chunk.take()
@@ -1071,7 +1141,25 @@ impl<S: Send> PcmReader for Audio<S> {
         };
         self.chunk_offset = 0;
 
-        let chunk = chunk.or_else(|| self.recv_valid_chunk())?;
+        let chunk = match chunk {
+            Some(c) => c,
+            None => match self.recv_valid_chunk() {
+                Some(c) => c,
+                None => {
+                    return match self.consumer_phase {
+                        ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof {
+                            position: self.position(),
+                        }),
+                        ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
+                            "pcm channel closed / producer failed",
+                        ))),
+                        _ => Ok(ChunkOutcome::Pending {
+                            position: self.position(),
+                        }),
+                    };
+                }
+            },
+        };
         self.spec = chunk.spec();
 
         // Transition to Playing on first chunk (same as fill_buffer)
@@ -1083,7 +1171,7 @@ impl<S: Send> PcmReader for Audio<S> {
         }
 
         self.advance_timeline(chunk.pcm.len() as u64);
-        Some(chunk)
+        Ok(ChunkOutcome::Chunk(chunk))
     }
 }
 
@@ -1153,7 +1241,7 @@ mod tests {
     #[kithara::test]
     fn preloaded_recv_is_nonblocking() {
         let mut audio = empty_audio();
-        audio.preload();
+        audio.preload().expect("preload");
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
     }
@@ -1245,9 +1333,15 @@ mod tests {
         let mut buf_a = vec![0.0; 4410];
         let mut buf_b = vec![0.0; 4410];
 
-        let n_a = audio.read(&mut buf_a);
-        let n_b = audio.read(&mut buf_b);
+        let outcome_a = audio.read(&mut buf_a).expect("read A");
+        let outcome_b = audio.read(&mut buf_b).expect("read B");
 
+        let ReadOutcome::Frames { count: n_a, .. } = outcome_a else {
+            panic!("expected Frames for read A, got {outcome_a:?}");
+        };
+        let ReadOutcome::Frames { count: n_b, .. } = outcome_b else {
+            panic!("expected Frames for read B, got {outcome_b:?}");
+        };
         assert_eq!(n_a, 4410);
         assert_eq!(n_b, 4410);
         assert_eq!(buf_a, first[..4410]);
@@ -1298,7 +1392,8 @@ mod tests {
         let result = audio.recv_valid_chunk();
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::AtEof);
-        assert!(audio.is_eof());
+        let mut buf = [0.0f32; 16];
+        assert!(matches!(audio.read(&mut buf), Ok(ReadOutcome::Eof { .. })));
     }
 
     #[kithara::test]
@@ -1314,53 +1409,11 @@ mod tests {
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
         // `Failed` is terminal for the consumer's read loop but is NOT
-        // a natural EOF. `is_eof()` must report false so that the
-        // player layer does not finalise the track mid-clip on a
-        // transient channel close (e.g. during seek recovery).
-        assert!(!audio.is_eof());
-    }
-
-    // Red test: pins the *correct* contract for `is_eof()`. The existing
-    // `consumer_phase_failed_on_channel_close` above documents the
-    // current (buggy) behavior where `Failed` collapses into `is_eof()`.
-    //
-    // Root cause of Bug B: during a seek, the previous epoch's cancel
-    // token fires, `recv_outcome_blocking` returns `Closed`,
-    // `close_channel_and_mark_eof` sets `ConsumerPhase::Failed`, and
-    // `is_eof()` starts returning `true`. That `true` cascades up:
-    //
-    //   Audio::is_eof()=true
-    //     → PlayerResource::read() returns Err("eof")
-    //     → PlayerTrack::handle_eof() sets TrackState::Finished
-    //     → cleanup_finished_tracks() removes the track
-    //     → PlayerNodeProcessor::render_audio sees an empty arena
-    //     → Queue position freezes at the seek target
-    //
-    // `is_eof()` must report *only* natural end-of-stream (AtEof). A
-    // cancelled channel or other failure is not EOF — it means "no more
-    // data via this channel"; during seek recovery it is transient (a
-    // new channel will be set up for the new epoch).
-    //
-    // When this test goes green, the assertion on line 1304 of the
-    // sibling test must flip from `assert!(is_eof())` to
-    // `assert!(!is_eof())`.
-    #[kithara::test]
-    fn is_eof_reports_only_natural_end_not_channel_failure() {
-        let (mut audio, _tx) = audio_with_channel();
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        audio.cancel = Some(cancel);
-        audio.preloaded = false;
-
-        let _ = audio.recv_valid_chunk();
-        assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
-
-        assert!(
-            !audio.is_eof(),
-            "Audio::is_eof() must distinguish natural EOF (AtEof) from \
-             channel failure (Failed) — otherwise a cancelled seek makes \
-             PlayerTrack finalize mid-clip and empties the arena"
-        );
+        // a natural EOF — `Audio::read` surfaces it as `Err`, not
+        // `Ok(ReadOutcome::Eof)`, so player layers do not finalise the
+        // track on a transient channel close.
+        let mut buf = [0.0f32; 16];
+        assert!(matches!(audio.read(&mut buf), Err(DecodeError::Io(_))));
     }
 
     #[kithara::test]
@@ -1368,9 +1421,9 @@ mod tests {
         let (mut audio, _tx) = audio_with_channel();
         audio.consumer_phase = ConsumerPhase::AtEof;
 
-        // read() should return 0 immediately
+        // read() returns Eof immediately, not a hang.
         let mut buf = [0.0f32; 16];
-        assert_eq!(audio.read(&mut buf), 0);
+        assert!(matches!(audio.read(&mut buf), Ok(ReadOutcome::Eof { .. })));
     }
 
     // Red test: `process_fetch` conflates the two kinds of terminal
@@ -1421,36 +1474,6 @@ mod tests {
             audio_failure.consumer_phase,
             ConsumerPhase::Failed,
             "failure marker must route to ConsumerPhase::Failed"
-        );
-    }
-
-    // Red test: contract of `PcmReader::is_eof`. If a reader reports
-    // `is_eof() == true` while `position()` is well below `duration()`,
-    // that is not EOF — it is a failure or an internal state leak. The
-    // Audio implementor, which is `PcmReader`, must only raise `is_eof`
-    // once the consumed position has reached the end of the clip.
-    #[kithara::test]
-    fn pcm_reader_is_eof_only_when_position_reaches_duration() {
-        let (mut audio, _tx) = audio_with_channel();
-        // Decoded duration = 60s; no samples consumed yet (position=0).
-        audio
-            .timeline
-            .set_total_duration(Some(Duration::from_secs(60)));
-        // Simulate a transient failure arriving on the wire mid-clip.
-        audio.consumer_phase = ConsumerPhase::Failed;
-
-        let pos = <Audio<()> as PcmReader>::position(&audio);
-        let duration = <Audio<()> as PcmReader>::duration(&audio).expect("duration known");
-        assert!(
-            pos < duration,
-            "precondition: reader is mid-clip (pos={pos:?} < dur={duration:?})"
-        );
-
-        assert!(
-            !<Audio<()> as PcmReader>::is_eof(&audio),
-            "PcmReader::is_eof() must only be true when position has \
-             reached the clip's duration — not when the downstream \
-             pipeline transiently fails"
         );
     }
 }

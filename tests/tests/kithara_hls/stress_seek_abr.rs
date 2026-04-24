@@ -10,7 +10,7 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -81,11 +81,12 @@ async fn stress_seek_during_abr_switch_real_decoder(
         info!("Phase 1: warmup — reading PCM samples");
         let mut warmup_samples = 0u64;
         while start.elapsed() < Duration::from_secs(2) {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count as u64,
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("warmup decode error: {e}"),
             }
-            warmup_samples += n as u64;
         }
         info!(
             warmup_samples,
@@ -111,14 +112,20 @@ async fn stress_seek_during_abr_switch_real_decoder(
             let pos = positions_secs[i % positions_secs.len()];
             let position = Duration::from_secs_f64(pos);
             match audio.seek(position) {
-                Ok(()) => {
+                Ok(_) => {
                     seek_count += 1;
                     // Try to read some samples after seek
-                    let n = audio.read(&mut buf);
-                    if n > 0 {
-                        samples_after_seek += n as u64;
-                    } else {
-                        dead_seeks += 1;
+                    match audio.read(&mut buf) {
+                        Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
+                            samples_after_seek += count as u64;
+                        }
+                        Ok(_) => {
+                            dead_seeks += 1;
+                        }
+                        Err(e) => {
+                            seek_errors += 1;
+                            info!(?e, pos, "read error after seek");
+                        }
                     }
                 }
                 Err(e) => {
@@ -204,10 +211,15 @@ async fn seek_sequence_from_log_real_stream(
             let mut samples_after_seek = 0usize;
             let read_deadline = Instant::now() + Duration::from_secs(8);
             while Instant::now() < read_deadline && samples_after_seek < 16_384 {
-                let n = audio.read(&mut buf);
-                samples_after_seek += n;
-                if n == 0 {
-                    thread::sleep(Duration::from_millis(15));
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples_after_seek += count;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("post-seek read error: {e}"),
                 }
             }
 

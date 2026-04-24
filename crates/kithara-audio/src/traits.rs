@@ -31,55 +31,123 @@ pub trait AudioEffect: Send + 'static {
     fn reset(&mut self);
 }
 
+/// Result of a PCM read — either frames were produced or the stream
+/// ended naturally. Failures surface as `Err(DecodeError)`, never as an
+/// enum variant; there is no way to report EOF without it actually
+/// being a natural end-of-stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOutcome {
+    /// `count` frames were written into the output buffer. `count == 0`
+    /// means the reader is alive but has no data this tick (mid-stream
+    /// async pause, e.g. post-seek refill). `position` is the reader's
+    /// position **after** the read.
+    Frames { count: usize, position: Duration },
+    /// Natural end of stream — the reader played up to `duration()`.
+    /// No more frames will be produced. `position` is the final
+    /// position (usually `duration()`).
+    Eof { position: Duration },
+}
+
+/// Result of a seek — either the reader landed at the requested
+/// position or the target was past the known duration. Failures
+/// surface as `Err(DecodeError)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekOutcome {
+    /// Seek completed; reader is now at `position`.
+    Landed { position: Duration },
+    /// Seek target was past the reader's `duration()`. Reader is
+    /// parked at the end; the next `read()` / `next_chunk()` call will
+    /// return `Eof`.
+    PastEof { duration: Duration },
+}
+
+/// Result of `next_chunk` — either a decoded chunk (with embedded
+/// spec/timing metadata), "alive but no chunk right now", or natural
+/// EOF. Failures surface as `Err(DecodeError)`.
+#[derive(Debug)]
+pub enum ChunkOutcome {
+    /// Next decoded chunk.
+    Chunk(PcmChunk),
+    /// Reader is alive but has no chunk ready this tick (async refill,
+    /// mid-buffering, etc.). Callers should sleep or yield and retry.
+    Pending { position: Duration },
+    /// Natural end of stream. `position` is the reader's final position.
+    Eof { position: Duration },
+}
+
 /// Primary PCM interface for reading decoded audio.
 ///
-/// This is the main consumer-facing trait, replacing interleaved and planar
-/// read patterns under a single interface.
+/// **Terminal-state contract.** Three failure-mode-agnostic outcomes
+/// are distinguishable by the caller:
+///
+/// - `Ok(ReadOutcome::Frames { .. })` — reader is alive, produced N
+///   frames (possibly 0 if waiting for data).
+/// - `Ok(ReadOutcome::Eof { .. })` — natural end of stream; no more
+///   frames will ever come.
+/// - `Err(DecodeError)` — decoder or channel failure. The reader may
+///   or may not recover; callers that finalise tracks MUST NOT treat
+///   this as EOF.
 ///
 /// **Usage pattern:**
 /// ```ignore
 /// // Async preload before audio callback
-/// resource.preload().await;
+/// resource.preload()?;
 ///
 /// // In audio callback (non-blocking after preload)
-/// let frames = resource.read_planar(&mut buffers);
+/// match resource.read_planar(&mut buffers)? {
+///     ReadOutcome::Frames { count, .. } if count > 0 => play_samples(count),
+///     ReadOutcome::Frames { .. } => { /* silence this tick */ }
+///     ReadOutcome::Eof { .. } => finalise_track(),
+/// }
 /// ```
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = PcmReaderMock))]
 pub trait PcmReader: Send {
     /// Read interleaved PCM samples.
     ///
-    /// After `preload()`, returns immediately from buffered data without blocking.
-    /// Returns the number of samples written (may be less than `buf.len()`).
-    /// Returns 0 when no data is available or EOF is reached.
-    fn read(&mut self, buf: &mut [f32]) -> usize;
-
-    /// Read deinterleaved (planar) PCM samples.
-    ///
-    /// After `preload()`, returns immediately from buffered data without blocking.
-    /// Each slice in `output` corresponds to one channel.
-    /// Returns the number of frames written per channel.
-    fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize;
-
-    /// Seek to the given position.
+    /// After `preload()`, returns immediately from buffered data
+    /// without blocking. The returned [`ReadOutcome`] distinguishes
+    /// "produced N frames" (including `count == 0` for transient
+    /// stalls) from natural EOF. Decoder / channel failures surface as
+    /// `Err(DecodeError)`.
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError`] if the seek operation fails.
-    fn seek(&mut self, position: Duration) -> DecodeResult<()>;
+    /// Returns `Err(DecodeError)` for terminal producer failures:
+    /// closed PCM channel, decoder fault, or backend error. The error
+    /// is one-way — once returned, subsequent reads continue to fail.
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+
+    /// Read deinterleaved (planar) PCM samples.
+    ///
+    /// After `preload()`, returns immediately from buffered data
+    /// without blocking. Each slice in `output` corresponds to one
+    /// channel. The returned [`ReadOutcome`] has the same semantics as
+    /// [`Self::read`]; `count` is frames-per-channel.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::read`] — terminal producer failures are surfaced
+    /// as `Err(DecodeError)`.
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError>;
+
+    /// Seek to the given position.
+    ///
+    /// Returns [`SeekOutcome::Landed`] when the reader is now parked
+    /// at the requested position, [`SeekOutcome::PastEof`] when the
+    /// target was beyond `duration()`. Seek failures (stream I/O,
+    /// decoder recreate) surface as `Err(DecodeError)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
+    /// failure, decoder recreate failure, or terminal producer error.
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
 
     /// Get the current PCM specification.
     fn spec(&self) -> PcmSpec;
-
-    /// Check if end of stream has been reached.
-    ///
-    /// **Contract:** `is_eof()` returns `true` **only** for a natural
-    /// end-of-stream — the reader has produced samples up to
-    /// `duration()`. A transient failure (channel close, decoder error,
-    /// post-seek stall) must **not** be reported as EOF; return `false`
-    /// and let the caller retry. Implementors that violate this
-    /// contract will cause the player layer to finalise the track
-    /// mid-clip and empty the track arena.
-    fn is_eof(&self) -> bool;
 
     /// Get current playback position.
     fn position(&self) -> Duration;
@@ -119,6 +187,7 @@ pub trait PcmReader: Send {
     /// Maps track playback state to worker priority: `Audible` tracks
     /// are decoded first, then `Warm`, then `Idle`.
     fn set_service_class(&self, _class: ServiceClass) {}
+
     /// Get notify for async preload (first chunk available).
     fn preload_notify(&self) -> Option<Arc<Notify>> {
         None
@@ -126,17 +195,39 @@ pub trait PcmReader: Send {
 
     /// Preload initial chunks into internal buffers.
     ///
-    /// After calling this, subsequent `read_available()` / `read_planar_available()`
-    /// will return immediately from buffered data without blocking.
-    fn preload(&mut self) {}
+    /// After calling this, subsequent `read()` / `read_planar()` /
+    /// `next_chunk()` return immediately from buffered data without
+    /// blocking. `Err(DecodeError)` is reserved for setup failures
+    /// (e.g. the producer channel closed during preload). Natural EOF
+    /// encountered during preload is **not** surfaced here — the
+    /// subsequent `read` / `next_chunk` will return `Eof`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` only on terminal setup failure
+    /// (closed PCM channel, backend error). Successful preload always
+    /// returns `Ok(())` even if the stream contains no data.
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        Ok(())
+    }
 
     /// Read the next decoded chunk with full metadata.
     ///
-    /// Returns `None` on EOF or channel close.
-    /// Discards any partially-consumed chunk from previous [`PcmReader::read`] calls.
+    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
+    /// Decoder / channel failures surface as `Err(DecodeError)`.
+    /// Discards any partially-consumed chunk from previous
+    /// [`PcmReader::read`] calls.
     ///
-    /// Use this for chunk-level inspection and stream integrity verification.
-    fn next_chunk(&mut self) -> Option<PcmChunk> {
-        None
+    /// Default implementation reports immediate natural EOF — readers
+    /// without chunk-level support shouldn't be polled this way.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` for terminal producer failures, same
+    /// semantics as [`Self::read`].
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        Ok(ChunkOutcome::Eof {
+            position: self.position(),
+        })
     }
 }

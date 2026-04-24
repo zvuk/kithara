@@ -10,7 +10,7 @@
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
@@ -119,14 +119,21 @@ async fn stress_random_seek_read_synthetic_wav() {
             });
 
             // Read
-            let mut n = audio.read(&mut buf);
+            let read_count = |outcome: Result<ReadOutcome, _>| -> usize {
+                match outcome {
+                    Ok(ReadOutcome::Frames { count, .. }) => count,
+                    Ok(ReadOutcome::Eof { .. }) => 0,
+                    Err(e) => panic!("decode error during seek read: {e}"),
+                }
+            };
+            let mut n = read_count(audio.read(&mut buf));
             if n == 0 {
                 // Under concurrent load, decoder may transiently report EOF after seek.
                 // Retry once: re-seek to the same position and re-read.
                 audio.seek(position).unwrap_or_else(|e| {
                     panic!("re-seek #{i} to {pos_secs:.4}s failed: {e}");
                 });
-                n = audio.read(&mut buf);
+                n = read_count(audio.read(&mut buf));
                 if n == 0 {
                     zero_reads += 1;
                     if zero_reads <= 3 {
@@ -212,23 +219,29 @@ async fn stress_random_seek_read_synthetic_wav() {
             });
 
         let mut remaining_samples = 0u64;
+        let mut saw_final_eof = false;
         loop {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            remaining_samples += n as u64;
-
-            for &sample in &buf[..n] {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample in final tail read",
-                );
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    remaining_samples += count as u64;
+                    for &sample in &buf[..count] {
+                        assert!(
+                            sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                            "invalid sample in final tail read",
+                        );
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_final_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error in final tail read: {e}"),
             }
         }
 
         assert!(
-            audio.is_eof(),
+            saw_final_eof,
             "expected EOF after reading all remaining data from {final_seek_secs:.4}s"
         );
 

@@ -8,7 +8,7 @@ use std::{path::Path, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -55,11 +55,12 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     loop {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+            Ok(ReadOutcome::Frames { count, .. }) => total += count as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(_) => break,
         }
-        total += n as u64;
     }
     total
 }

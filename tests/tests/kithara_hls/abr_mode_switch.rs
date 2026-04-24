@@ -20,7 +20,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -128,11 +128,12 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     let mut total = 0u64;
     let start = Instant::now();
     while start.elapsed() < timeout {
-        let n = audio.read(&mut buf);
-        if n == 0 && audio.is_eof() {
-            break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count: 0, .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => total += count as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
-        total += n as u64;
     }
     total
 }

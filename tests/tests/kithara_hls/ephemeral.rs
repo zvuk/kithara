@@ -15,7 +15,7 @@ use std::{fs, path::Path};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -151,10 +151,12 @@ async fn ephemeral_pipeline_no_disk_writes() {
         let mut total_samples = 0usize;
 
         for _ in 0..100 {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
-            }
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
+            };
             total_samples += n;
 
             // Verify sample integrity

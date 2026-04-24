@@ -105,7 +105,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create hls audio");
-    audio.preload();
+    audio.preload().expect("preload must succeed");
     settle();
 
     let after = active_named_thread_count();
@@ -171,15 +171,15 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     let mut audios: Vec<Box<dyn std::any::Any>> = Vec::new();
     if let Ok(mut a) = a1 {
-        a.preload();
+        a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
     if let Ok(mut a) = a2 {
-        a.preload();
+        a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
     if let Ok(mut a) = a3 {
-        a.preload();
+        a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
     settle();

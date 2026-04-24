@@ -126,7 +126,8 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             let mut r: Resource = resource_from_reader(audio);
             timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
-                .expect("HLS preload");
+                .expect("HLS preload")
+                .expect("HLS preload result");
             r
         }
     };

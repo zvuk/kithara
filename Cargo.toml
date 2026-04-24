@@ -207,7 +207,6 @@ symphonia-format-isomp4 = "0.6.0-alpha.1"
 symphonia-core = "0.6.0-alpha.1"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-rodio = { version = "0.22.2", default-features = false }
 ratatui = "0.30.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"

@@ -14,7 +14,7 @@ use axum::{
 use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioWorkerHandle},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     hls::{Hls, HlsConfig},
     net::NetOptions,
     play::{
@@ -253,16 +253,15 @@ async fn warm_hls_worker(
     let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
-        audio.preload();
-        let read = audio.read(&mut buf);
-        if read > 0 {
-            break;
+        audio.preload().expect("preload must succeed");
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => break,
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while warming HLS worker for {url}")
+            }
+            Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
-
-        assert!(
-            !audio.is_eof(),
-            "unexpected EOF while warming HLS worker for {url}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for HLS warmup data at {url}"
@@ -275,16 +274,17 @@ async fn warm_hls_worker(
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
-        audio.preload();
-        let read = audio.read(&mut buf);
-        if read > 0 {
-            return audio.position().as_secs_f64();
+        audio.preload().expect("preload must succeed");
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
+                return audio.position().as_secs_f64();
+            }
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF after HLS warmup seek for {url}")
+            }
+            Err(e) => panic!("decode error after HLS warmup seek for {url}: {e}"),
         }
-
-        assert!(
-            !audio.is_eof(),
-            "unexpected EOF after HLS warmup seek for {url}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for HLS post-seek data at {url}"
@@ -312,16 +312,17 @@ async fn warm_hls_worker_without_seek(
     let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
-        audio.preload();
-        let read = audio.read(&mut buf);
-        if read > 0 {
-            return audio.position().as_secs_f64();
+        audio.preload().expect("preload must succeed");
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
+                return audio.position().as_secs_f64();
+            }
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while warming HLS worker without seek for {url}")
+            }
+            Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
-
-        assert!(
-            !audio.is_eof(),
-            "unexpected EOF while warming HLS worker without seek for {url}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for HLS warmup data without seek at {url}"
@@ -379,7 +380,7 @@ async fn open_packaged_hls_audio(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
-    audio.preload();
+    audio.preload().expect("packaged HLS preload must succeed");
     audio
 }
 
@@ -388,15 +389,15 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        audio.preload();
-        let read = audio.read(&mut buf);
-        if read > 0 {
-            return read;
+        audio.preload().expect("preload must succeed");
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return count,
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for packaged audio at stage={stage}")
+            }
+            Err(e) => panic!("decode error while waiting for packaged audio at stage={stage}: {e}"),
         }
-        assert!(
-            !audio.is_eof(),
-            "unexpected EOF while waiting for packaged audio at stage={stage}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for packaged audio at stage={stage}"
@@ -412,16 +413,16 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
     loop {
         timeout(Consts::READ_TIMEOUT, resource.preload())
             .await
-            .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"));
-        let read = resource.read(&mut buf);
-        if read > 0 {
-            return read;
+            .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"))
+            .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
+        match resource.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return count,
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for stage={stage}")
+            }
+            Err(e) => panic!("decode error while waiting for stage={stage}: {e}"),
         }
-
-        assert!(
-            !resource.is_eof(),
-            "unexpected EOF while waiting for stage={stage}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for decoded PCM at stage={stage}"
@@ -495,10 +496,6 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
         replay_pos > 0.5,
         "reopened valid resource should remain seekable after failed transitions, got {replay_pos}"
     );
-    assert!(
-        !ok_again.is_eof(),
-        "reopened valid resource must not be EOF after successful replay seek"
-    );
 }
 
 #[kithara::test(
@@ -553,10 +550,6 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     assert!(
         second_backward < second_forward,
         "reopened session backward seek should still move position back (forward={second_forward}, backward={second_backward})"
-    );
-    assert!(
-        !second.is_eof(),
-        "reopened session must not be EOF after backward seek"
     );
 }
 
@@ -636,10 +629,6 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
         backward < forward,
         "mp3 recovery path must keep backward seek after HLS transition (forward={forward}, backward={backward})"
     );
-    assert!(
-        !ok.is_eof(),
-        "recovered mp3 session must not be EOF after backward seek"
-    );
 }
 
 #[kithara::test(
@@ -709,10 +698,6 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     assert!(
         second_backward < second_forward,
         "reopened shared-worker mp3 session after HLS must keep backward seek (forward={second_forward}, backward={second_backward})"
-    );
-    assert!(
-        !second.is_eof(),
-        "reopened shared-worker mp3 session must not be EOF after backward seek"
     );
 
     worker.shutdown();
@@ -865,18 +850,22 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     progress_probe.drain(&mut progress_rx);
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline && progress_probe.progress_events < 10 {
-        progress_audio.preload();
-        let read = progress_audio.read(&mut buf);
-        progress_probe.drain(&mut progress_rx);
-        if read == 0 {
-            if progress_audio.is_eof() {
+        progress_audio.preload().expect("preload must succeed");
+        let read_count = match progress_audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count,
+            Ok(ReadOutcome::Eof { .. }) => {
+                progress_probe.drain(&mut progress_rx);
                 break;
             }
+            Err(e) => panic!("decode error during progress tracking: {e}"),
+        };
+        progress_probe.drain(&mut progress_rx);
+        if read_count == 0 {
             sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
         }
-        total_samples += read as u64;
+        total_samples += read_count as u64;
     }
     progress_probe.drain(&mut progress_rx);
     progress_probe.observe_idle();
@@ -903,7 +892,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let mut resource = resource_from_reader(decode_audio);
     timeout(Consts::READ_TIMEOUT, resource.preload())
         .await
-        .expect("packaged HLS preload must complete");
+        .expect("packaged HLS preload must complete")
+        .expect("packaged HLS preload must succeed");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
     player.load_and_fadein(resource, "packaged_single_variant");
     let _warmup = render_offline_window(
@@ -1014,10 +1004,6 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
         second_backward < second_forward,
         "reopened mp3 session after HLS must keep backward seek (forward={second_forward}, backward={second_backward})"
     );
-    assert!(
-        !second.is_eof(),
-        "reopened mp3 session must not be EOF after backward seek"
-    );
 }
 
 /// Stress test: multiple crossfade transitions on shared worker.
@@ -1079,7 +1065,8 @@ async fn stress_offline_crossfade_no_gaps() {
             let mut r = resource_from_reader(audio);
             timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
-                .expect("HLS preload");
+                .expect("HLS preload")
+                .expect("HLS preload result");
             r
         }
     };
@@ -1231,15 +1218,21 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
         let deadline = Instant::now() + Consts::READ_TIMEOUT;
+        let mut saw_eof = false;
         loop {
-            let n = resource.read(&mut buf);
-            if n > 0 {
-                total += n;
+            match resource.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    if count > 0 {
+                        total += count;
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("path={path}: decode error: {e}"),
             }
             if resource.position() >= Duration::from_secs(2) {
-                break;
-            }
-            if resource.is_eof() {
                 break;
             }
             assert!(
@@ -1248,6 +1241,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
             );
             sleep(Duration::from_millis(5)).await;
         }
+        let _ = saw_eof;
         (total, resource.position())
     };
 
@@ -1372,14 +1366,16 @@ async fn live_remote_resource_decodes_with_duration(
     let mut samples = 0usize;
     let mut buf = [0.0f32; 4096];
     loop {
-        let n = resource.read(&mut buf);
-        if n > 0 {
-            samples += n;
+        match resource.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                if count > 0 {
+                    samples += count;
+                }
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("{url}: decode error: {e}"),
         }
         if resource.position() >= Duration::from_secs(2) {
-            break;
-        }
-        if resource.is_eof() {
             break;
         }
         assert!(

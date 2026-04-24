@@ -11,7 +11,7 @@ use std::{
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
     events::{AbrEvent, Event, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
@@ -269,16 +269,15 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(chunk) = PcmReader::next_chunk(audio) {
-            return Some(chunk);
-        }
-        if audio.is_eof() {
-            return None;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
             Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}' (is_eof={})",
-            audio.is_eof()
+            "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(100)).await;
     }

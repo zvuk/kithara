@@ -46,7 +46,7 @@ use std::{num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -111,12 +111,14 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Consts::WARMUP_CHUNKS
             );
         }
-        if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-            chunks_read += 1;
-            continue;
-        }
-        if audio.is_eof() {
-            break;
+        match PcmReader::next_chunk(&mut audio) {
+            Ok(ChunkOutcome::Chunk(_)) => {
+                chunks_read += 1;
+                continue;
+            }
+            Ok(ChunkOutcome::Eof { .. }) => break,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("warmup decode error: {e}"),
         }
         sleep(Duration::from_micros(100)).await;
     }
@@ -129,30 +131,39 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let mut drained = 0usize;
     let mut stall_at: Option<Duration> = None;
     let started = Instant::now();
+    let mut reached_eof = false;
     while Instant::now() < deadline {
         let chunk_deadline = Instant::now() + Consts::NEXT_CHUNK_TIMEOUT;
         let mut got_chunk = false;
+        let mut inner_eof = false;
         while Instant::now() < chunk_deadline {
-            if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-                drained += 1;
-                got_chunk = true;
-                // Rate-limit the reader.
-                sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
-                break;
-            }
-            if audio.is_eof() {
-                break;
+            match PcmReader::next_chunk(&mut audio) {
+                Ok(ChunkOutcome::Chunk(_)) => {
+                    drained += 1;
+                    got_chunk = true;
+                    // Rate-limit the reader.
+                    sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
+                    break;
+                }
+                Ok(ChunkOutcome::Eof { .. }) => {
+                    inner_eof = true;
+                    break;
+                }
+                Ok(ChunkOutcome::Pending { .. }) => {}
+                Err(e) => panic!("drain decode error: {e}"),
             }
             sleep(Duration::from_micros(100)).await;
         }
-        if !got_chunk && !audio.is_eof() {
+        if inner_eof {
+            reached_eof = true;
+            break;
+        }
+        if !got_chunk {
             stall_at = Some(started.elapsed());
             break;
         }
-        if audio.is_eof() {
-            break;
-        }
     }
+    let _ = reached_eof;
 
     let elapsed = started.elapsed();
     info!(drained, ?elapsed, ?stall_at, "drain done");

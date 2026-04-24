@@ -6,7 +6,7 @@
 //! generalize instead of duplicating.
 
 use kithara::{
-    audio::Audio,
+    audio::{Audio, ReadOutcome},
     stream::{Stream, StreamType},
 };
 #[cfg(target_arch = "wasm32")]
@@ -16,25 +16,32 @@ use kithara_platform::{thread, time::Duration};
 /// small enough to exercise the pipeline in short bursts.
 const READ_BUF_SAMPLES: usize = 4096;
 
-/// Read any `Audio<Stream<S>>` to EOF, asserting every sample is finite.
+/// Read any `Audio<Stream<S>>` to natural EOF, asserting every sample is finite.
 ///
-/// Panics if the reader does not reach EOF after returning zero bytes.
-/// Returns total samples read.
+/// Panics if a decode error surfaces or the reader never returns
+/// `ReadOutcome::Eof`. Returns total samples read.
 pub(crate) fn read_to_eof<S: StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     loop {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                // Alive but no data this tick — on native this shouldn't
+                // stall indefinitely since the underlying source is
+                // fully buffered. Break to avoid a tight loop.
+                break;
+            }
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                for &s in &buf[..count] {
+                    assert!(s.is_finite(), "non-finite sample at offset {total}");
+                }
+                total += count as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => return total,
+            Err(e) => panic!("decode error at offset {total}: {e}"),
         }
-        for &s in &buf[..n] {
-            assert!(s.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
     }
-    assert!(audio.is_eof(), "expected EOF after reading all data");
-    total
+    panic!("reader stalled at {total} samples without reaching EOF");
 }
 
 /// Bounds for cooperative wasm reads: cap the zero-read retries and
@@ -72,21 +79,22 @@ pub(crate) fn read_for_concurrency_check<S: StreamType>(
     let mut zero_reads = 0usize;
 
     while total < limit.min_samples && zero_reads < limit.max_zero_reads {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            if audio.is_eof() {
-                break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                zero_reads += 1;
+                thread::sleep(Duration::from_millis(10));
+                continue;
             }
-            zero_reads += 1;
-            thread::sleep(Duration::from_millis(10));
-            continue;
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                zero_reads = 0;
+                for &sample in &buf[..count] {
+                    assert!(sample.is_finite(), "non-finite sample at offset {total}");
+                }
+                total += count as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error at offset {total}: {e}"),
         }
-
-        zero_reads = 0;
-        for &sample in &buf[..n] {
-            assert!(sample.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
     }
 
     assert!(

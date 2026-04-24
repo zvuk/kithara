@@ -44,8 +44,6 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod resampler;
-#[cfg(feature = "rodio")]
-mod rodio;
 mod runtime;
 mod traits;
 pub(crate) mod worker;
@@ -62,5 +60,7 @@ pub use pipeline::{
     track_fsm::TrackPhaseTag,
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
-pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};
+pub use traits::{
+    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, ReadOutcome, SeekOutcome,
+};
 pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};

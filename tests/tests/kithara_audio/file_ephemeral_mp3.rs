@@ -12,7 +12,7 @@ use axum::{
 use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -188,19 +188,26 @@ async fn audio_file_mp3_decodes_with_duration(
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
 
         for _ in 0..600 {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total += count;
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            total += n;
             if audio.position() >= Duration::from_secs(2) {
                 break;
             }
         }
 
-        (total, audio.position(), audio.is_eof())
+        (total, audio.position(), saw_eof)
     })
     .await
     .unwrap();
@@ -263,19 +270,26 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
 
         for _ in 0..600 {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total += count;
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            total += n;
             if audio.position() >= Duration::from_secs(2) {
                 break;
             }
         }
 
-        (total, audio.position(), audio.is_eof())
+        (total, audio.position(), saw_eof)
     })
     .await
     .unwrap();
