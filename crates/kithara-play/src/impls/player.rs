@@ -190,7 +190,15 @@ impl PlayerImpl {
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
         #[cfg(feature = "hls")]
         {
-            config.initial_abr_mode = self.config.initial_abr_mode;
+            // Apply the player's initial ABR mode only when the caller left
+            // the config at the default. An explicit override on the
+            // `ResourceConfig` (e.g. the test harness selecting
+            // `AbrMode::Manual(idx)` for a given track) must survive —
+            // otherwise per-track ABR locking can never work through the
+            // Queue/PlayerImpl pipeline.
+            if config.initial_abr_mode == AbrMode::default() {
+                config.initial_abr_mode = self.config.initial_abr_mode;
+            }
         }
         if config.bus.is_none() {
             config.bus = Some(self.bus.scoped());
