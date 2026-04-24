@@ -16,7 +16,9 @@ use delegate::delegate;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
-use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
+use kithara_stream::{
+    ContainerFormat, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
+};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -792,13 +794,21 @@ impl<T: StreamType> StreamAudioSource<T> {
         // aimed at the new variant's offset lands in stale bytes and the
         // decoder stalls — silvercomet post-seek hang).
         let needs_recreation = codec_changed || variant_changed;
-        let recreate_offset = if variant_changed && !codec_changed {
-            anchor.byte_offset
-        } else {
-            self.shared_stream
-                .format_change_segment_range()
-                .map_or(anchor.byte_offset, |range| range.start)
-        };
+        let target_container = stream_info
+            .as_ref()
+            .and_then(|info| info.container)
+            .or_else(|| {
+                self.session
+                    .media_info
+                    .as_ref()
+                    .and_then(|info| info.container)
+            });
+        let recreate_offset = resolve_recreate_offset(
+            &self.shared_stream,
+            target_container,
+            codec_changed,
+            anchor.byte_offset,
+        );
         trace!(
             ?current_codec,
             ?target_codec,
@@ -808,13 +818,26 @@ impl<T: StreamType> StreamAudioSource<T> {
             codec_changed,
             variant_changed,
             needs_recreation,
-            recreate_offset,
+            ?target_container,
+            ?recreate_offset,
             base_offset = self.session.base_offset,
             "seek anchor alignment: compare format"
         );
         if !needs_recreation {
             return true;
         }
+
+        let Some(recreate_offset) = recreate_offset else {
+            self.fail_seek(
+                request,
+                DecodeError::InvalidData(format!(
+                    "seek anchor alignment: {target_container:?} variant switch has \
+                     no init segment range"
+                )),
+                "seek anchor alignment: no init segment range",
+            );
+            return false;
+        };
 
         #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
         let target_variant_u32 = target_variant.map(|v| v as u32);
@@ -1824,6 +1847,63 @@ fn log_recreate_failure(offset: u64) {
 
 fn log_source_cancelled() {
     warn!("track failed: source cancelled");
+}
+
+/// Whether the container requires an init header (ftyp/moov/RIFF/EBML…)
+/// at byte 0 of the decoder input. Such containers cannot be parsed
+/// from a mid-stream offset, so a variant-switch recreate must land on
+/// the init segment range rather than on a seek anchor's byte target.
+/// Mid-stream-decodable containers (MPEG-ES, ADTS, native FLAC, Ogg,
+/// MPEG-TS) accept any valid packet start.
+fn container_needs_init_range(container: ContainerFormat) -> bool {
+    match container {
+        ContainerFormat::Fmp4
+        | ContainerFormat::Mp4
+        | ContainerFormat::Wav
+        | ContainerFormat::Mkv
+        | ContainerFormat::Caf => true,
+        ContainerFormat::MpegAudio
+        | ContainerFormat::Adts
+        | ContainerFormat::Flac
+        | ContainerFormat::Ogg
+        | ContainerFormat::MpegTs => false,
+    }
+}
+
+/// Pick the byte offset to hand the decoder factory on a variant/codec
+/// boundary.
+///
+/// - Init-bearing containers (fMP4, MP4, WAV, MKV, CAF): the decoder
+///   must start at the init header, so return
+///   `format_change_segment_range().start` — or `None` when the source
+///   cannot yet locate it, so the caller fails the seek instead of
+///   handing the decoder a mid-segment offset (produces
+///   `"missing ftyp atom"`).
+/// - Codec change with a non-init-bearing (or unknown) container:
+///   prefer `format_change_segment_range()` when available — the new
+///   codec's first packet is the cleanest resync point — but fall back
+///   to `anchor_byte_offset` so legacy flows (no `format_change_range`
+///   yet committed) keep working.
+/// - Variant-only change with a non-init-bearing container: return
+///   `anchor_byte_offset` — mid-stream resync is valid for
+///   MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS.
+fn resolve_recreate_offset<T: StreamType>(
+    shared: &SharedStream<T>,
+    target_container: Option<ContainerFormat>,
+    codec_changed: bool,
+    anchor_byte_offset: u64,
+) -> Option<u64> {
+    let needs_init = target_container.is_some_and(container_needs_init_range);
+    let init_offset = shared
+        .format_change_segment_range()
+        .map(|range| range.start);
+    if needs_init {
+        init_offset
+    } else if codec_changed {
+        Some(init_offset.unwrap_or(anchor_byte_offset))
+    } else {
+        Some(anchor_byte_offset)
+    }
 }
 
 #[cfg(test)]

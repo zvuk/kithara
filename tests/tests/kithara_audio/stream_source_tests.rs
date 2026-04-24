@@ -21,8 +21,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
-    Stream, StreamError, StreamResult, StreamType, Timeline,
+    AudioCodec, ContainerFormat, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
+    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -339,6 +339,15 @@ fn v3_info() -> MediaInfo {
 fn aac_variant_info(variant_index: u32) -> MediaInfo {
     MediaInfo::default()
         .with_codec(AudioCodec::AacLc)
+        .with_sample_rate(44100)
+        .with_channels(2)
+        .with_variant_index(variant_index)
+}
+
+fn aac_fmp4_variant_info(variant_index: u32) -> MediaInfo {
+    MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
+        .with_container(ContainerFormat::Fmp4)
         .with_sample_rate(44100)
         .with_channels(2)
         .with_variant_index(variant_index)
@@ -920,6 +929,130 @@ fn seek_anchor_recreates_decoder_when_variant_changes_with_same_codec() {
         recreated_seeks.as_slice(),
         &[Duration::from_millis(8_250)],
         "recreated decoder should seek to the exact target position"
+    );
+}
+
+/// Cross-variant seek on an init-bearing container (fMP4) must recreate
+/// the decoder at the init segment's start, NOT at the anchor's
+/// mid-segment byte offset. Production repro: silvercomet seek to 110s
+/// crosses into variant 2; anchor resolves to `byte_offset=3684934`
+/// (mid-segment), nowhere near `ftyp`. The old decoder path used
+/// `anchor.byte_offset`, so `IsoMp4Reader::try_new` failed with
+/// `"isomp4: missing ftyp atom"`. With the fix, the factory is called
+/// at `format_change_segment_range().start`, which points at the init
+/// segment of the new variant.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_uses_init_range_for_fmp4_variant_switch() {
+    const INIT_RANGE_START: u64 = 100;
+    const INIT_RANGE_END: u64 = 200;
+    const ANCHOR_BYTE_OFFSET: u64 = 3000;
+
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+
+    let (recreated_decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(aac_fmp4_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(aac_fmp4_variant_info(2));
+        s.format_change_range = Some(INIT_RANGE_START..INIT_RANGE_END);
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(ANCHOR_BYTE_OFFSET, Duration::from_secs(110))
+                .with_segment_end(Duration::from_secs(120))
+                .with_segment_index(30)
+                .with_variant_index(2),
+        );
+    }
+
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(110_000));
+    apply_pending_seek(&mut source);
+
+    let created_offsets = offsets.lock_sync();
+    assert_eq!(
+        created_offsets.as_slice(),
+        &[INIT_RANGE_START],
+        "fMP4 variant switch must recreate at init-segment start, not at \
+             the anchor's mid-segment byte offset"
+    );
+    assert_eq!(
+        current_base_offset(&source),
+        INIT_RANGE_START,
+        "session base_offset must track the init-segment start so the new \
+             IsoMp4Reader can locate ftyp"
+    );
+}
+
+/// When `format_change_segment_range()` returns `None` for an init-bearing
+/// container (fMP4), the seek must fail with a typed error instead of
+/// silently falling back to the anchor's mid-segment byte offset — there
+/// is no valid entry point into an fMP4 stream without the init block, so
+/// papering over missing init state would just produce a broken decoder.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_fails_when_fmp4_variant_switch_has_no_init_range() {
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(aac_fmp4_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(aac_fmp4_variant_info(2));
+        s.format_change_range = None;
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(3000, Duration::from_secs(110))
+                .with_segment_end(Duration::from_secs(120))
+                .with_segment_index(30)
+                .with_variant_index(2),
+        );
+    }
+
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(110_000));
+    apply_pending_seek(&mut source);
+
+    assert_eq!(
+        track_state(&source),
+        TrackPhaseTag::Failed,
+        "fMP4 variant switch with no init-range must fail the seek, \
+             not silently recreate at the anchor's mid-segment offset"
+    );
+    let created_offsets = offsets.lock_sync();
+    assert!(
+        created_offsets.is_empty(),
+        "factory must not be called when the init-segment range is missing"
     );
 }
 
