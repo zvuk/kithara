@@ -24,12 +24,10 @@ use crate::common::{
 
 struct Consts;
 impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
     #[cfg(not(target_arch = "wasm32"))]
     const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
-    const READ_LIMIT: ReadLimit = ReadLimit::wasm_default();
 }
 
 /// Create an HLS server; `abr_variants == 1` → single variant, otherwise ABR.
@@ -37,8 +35,8 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> HlsTe
     let config = HlsTestServerConfig {
         variant_count: abr_variants,
         segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: Consts::D.segment_duration_secs(),
+        segment_size: SawWav::DEFAULT.segment_size,
+        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(wav_data),
         variant_bandwidths: (abr_variants > 1).then(|| vec![5_000_000, 1_000_000]),
         ..Default::default()
@@ -69,7 +67,7 @@ async fn create_hls_audio(
 }
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    Consts::D.build_wav(Consts::SEGMENT_COUNT)
+    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
 }
 
 /// Spawn `n` concurrent HLS readers and assert each reads non-zero samples.
@@ -86,7 +84,7 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+            let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));

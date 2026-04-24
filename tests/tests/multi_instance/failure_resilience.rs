@@ -27,17 +27,14 @@ use crate::common::test_defaults::SawWav;
 
 struct Consts;
 impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
     #[cfg(not(target_arch = "wasm32"))]
     const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4;
-    #[cfg(target_arch = "wasm32")]
-    const MAX_ZERO_READS: usize = 200;
 }
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    Consts::D.build_wav(Consts::SEGMENT_COUNT)
+    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
 }
 
 /// Outcome of one instance.
@@ -69,11 +66,13 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 
 #[cfg(target_arch = "wasm32")]
 fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    const MAX_ZERO_READS: usize = 200;
+
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     let mut zero_reads = 0usize;
 
-    while zero_reads < Consts::MAX_ZERO_READS {
+    while zero_reads < MAX_ZERO_READS {
         let n = audio.read(&mut buf);
         if n == 0 {
             if audio.is_eof() {
@@ -95,8 +94,8 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
     HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: Consts::D.segment_duration_secs(),
+        segment_size: SawWav::DEFAULT.segment_size,
+        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(Arc::clone(wav_data)),
         ..Default::default()
     })

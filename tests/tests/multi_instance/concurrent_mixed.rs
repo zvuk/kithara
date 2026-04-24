@@ -28,12 +28,10 @@ use crate::common::{
 
 struct Consts;
 impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
     #[cfg(not(target_arch = "wasm32"))]
     const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4;
-    const READ_LIMIT: ReadLimit = ReadLimit::wasm_default();
 }
 
 /// Result of one instance completing.
@@ -45,7 +43,7 @@ struct InstanceResult {
 }
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    Consts::D.build_wav(Consts::SEGMENT_COUNT)
+    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
 }
 
 async fn spawn_file_instance(
@@ -60,7 +58,7 @@ async fn spawn_file_instance(
         .expect("create File audio");
 
     spawn_blocking(move || {
-        let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+        let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
         info!(instance = id, kind = "file", total_samples = total, "done");
         InstanceResult {
             id,
@@ -77,8 +75,8 @@ async fn spawn_hls_instance(
 ) -> (HlsTestServer, JoinHandle<InstanceResult>) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: Consts::D.segment_duration_secs(),
+        segment_size: SawWav::DEFAULT.segment_size,
+        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(wav_data),
         ..Default::default()
     })
@@ -100,7 +98,7 @@ async fn spawn_hls_instance(
         .expect("create HLS audio");
 
     let handle = spawn_blocking(move || {
-        let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+        let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
         info!(instance = id, kind = "hls", total_samples = total, "done");
         InstanceResult {
             id,

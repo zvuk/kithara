@@ -17,11 +17,6 @@ use tracing::info;
 
 use crate::common::reader_helpers::{ReadLimit, read_for_concurrency_check};
 
-struct Consts;
-impl Consts {
-    const READ_LIMIT: ReadLimit = ReadLimit::wasm_default();
-}
-
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
     let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(cache_dir));
@@ -57,7 +52,7 @@ async fn run_concurrent_file(n: usize) {
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio, Consts::READ_LIMIT);
+            let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
