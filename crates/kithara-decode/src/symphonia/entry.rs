@@ -49,21 +49,3 @@ pub(crate) fn create_from_boxed(
         &symphonia_config_from(container, config),
     )?))
 }
-
-/// Create a Symphonia decoder by letting it probe the bitstream directly.
-///
-/// Used as recreation-time robustness: when the metadata-driven path fails
-/// (typically at ABR variant hops where the cached `MediaInfo` no longer
-/// matches the bytes at `base_offset`), Symphonia's native probe reads the
-/// bitstream and picks the format itself.
-pub(crate) fn create_probed_from_boxed(
-    source: BoxedSource,
-    config: &DecoderConfig,
-) -> DecodeResult<Box<dyn InnerDecoder>> {
-    tracing::debug!(hint = ?config.hint, "Using Symphonia native probe");
-
-    Ok(Box::new(Symphonia::new(
-        source,
-        &symphonia_config_from(None, config),
-    )?))
-}

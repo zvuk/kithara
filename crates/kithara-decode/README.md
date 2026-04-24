@@ -51,9 +51,15 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 ## Decoder recreate strategy
 
 - `create_for_recreate` is used for seek-time decoder rebuild.
-- First attempt: create from `MediaInfo` hints (codec/container from stream metadata).
-- Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
-- If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
+- It is a thin wrapper over `create_from_media_info`: callers must
+  supply a `base_offset` that lines up with the container's init
+  region (for fMP4/MP4/WAV/MKV/CAF the `ftyp`/RIFF/EBML header; for
+  MPEG-ES / ADTS / FLAC / Ogg / MPEG-TS any valid packet start).
+- **No fallback**: when the metadata-driven path fails the error is
+  propagated verbatim. Probing mid-segment bytes at a mismatched
+  offset can silently match an unrelated codec (e.g. MP3 frame sync
+  in raw AAC-in-fMP4 bytes) and drive the rest of the pipeline off a
+  `session.media_info` the decoder never actually realised.
 
 ## Feature Flags
 

@@ -178,17 +178,22 @@ impl DecoderFactory {
 
     /// Recreate a decoder on HLS variant switch / format change.
     ///
-    /// Tries the metadata-driven path first (`create_from_media_info`).
-    /// When the new segment's actual layout disagrees with the stored
-    /// `MediaInfo` (for instance a WAV header rewritten at an unexpected
-    /// offset after an ABR hop), the probe path parses the bitstream and
-    /// resolves the codec/container from scratch. This is recreation-only
-    /// robustness; backend selection (hardware vs software) stays strict.
+    /// Thin wrapper over `create_from_media_info`: the caller (audio
+    /// pipeline) is responsible for handing in a `base_offset` that
+    /// aligns with the container's init region, so the metadata-driven
+    /// path is the only correct answer. Failures are propagated
+    /// verbatim — no native-probe fallback, since probing mid-segment
+    /// bytes at a mismatched offset would silently pick an unrelated
+    /// codec (e.g. match MP3 frame sync in raw AAC-in-fMP4 bytes) and
+    /// drift `session.media_info` out of sync with the decoder it
+    /// actually got.
     ///
     /// # Errors
     ///
-    /// Returns error when both the metadata-first and the probe attempts
-    /// fail.
+    /// Returns the decoder-creation error verbatim when the metadata-
+    /// driven path cannot build a decoder (unsupported codec, mismatch
+    /// between the declared container and the bytes at `base_offset`,
+    /// etc.).
     pub fn create_for_recreate<R, F>(
         make_source: F,
         media_info: &MediaInfo,
@@ -198,26 +203,13 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
         F: Fn() -> R,
     {
-        match Self::create_from_media_info(make_source(), media_info, config) {
-            Ok(decoder) => Ok(decoder),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    ?media_info,
-                    "create_from_media_info failed during recreate; retrying with native probe"
-                );
-                #[cfg(feature = "symphonia")]
-                {
-                    let boxed: BoxedSource = Box::new(make_source());
-                    crate::symphonia::create_probed_from_boxed(boxed, config)
-                }
-                #[cfg(not(feature = "symphonia"))]
-                {
-                    let _ = make_source;
-                    Err(error)
-                }
-            }
-        }
+        Self::create_from_media_info(make_source(), media_info, config).inspect_err(|error| {
+            tracing::warn!(
+                ?error,
+                ?media_info,
+                "create_from_media_info failed during recreate"
+            );
+        })
     }
 
     /// Create decoder from a file-extension hint.
@@ -376,6 +368,31 @@ mod tests {
         let spec = decoder.spec();
         assert!(spec.channels > 0);
         assert!(spec.sample_rate > 0);
+    }
+
+    /// `create_for_recreate` must propagate the metadata-driven error
+    /// verbatim. Before the fix, any failure from `create_from_media_info`
+    /// was silently retried via a native Symphonia probe on a fresh
+    /// source — which happily matched MP3 frame sync in mid-fMP4 bytes,
+    /// returning an `MpaReader` while `session.media_info` still claimed
+    /// fMP4/AAC (see silvercomet seek RCA §3.2). The contract is: one
+    /// decoder path per call, no fallback.
+    #[cfg(feature = "symphonia")]
+    #[kithara::test]
+    fn create_for_recreate_surfaces_error_without_native_probe_fallback() {
+        let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
+        let make_source = || Cursor::new(TEST_MP3_BYTES.to_vec());
+        let result = DecoderFactory::create_for_recreate(
+            make_source,
+            &media_info,
+            &DecoderConfig::default(),
+        );
+        assert!(
+            result.is_err(),
+            "create_for_recreate must propagate the typed error from the \
+             metadata-driven path — no native-probe fallback to mask a \
+             codec/container mismatch"
+        );
     }
 
     #[kithara::test]

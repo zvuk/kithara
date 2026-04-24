@@ -25,10 +25,7 @@ pub(crate) mod error_chain;
 pub(crate) mod inner;
 pub(crate) mod probe;
 
-pub(crate) use self::{
-    config::SymphoniaConfig,
-    entry::{create_from_boxed, create_probed_from_boxed},
-};
+pub(crate) use self::{config::SymphoniaConfig, entry::create_from_boxed};
 
 /// Symphonia-backed decoder. Codec selection happens inside
 /// `SymphoniaInner` from the config's `container` (direct reader) or
