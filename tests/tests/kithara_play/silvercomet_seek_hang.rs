@@ -26,6 +26,7 @@ use std::{fs::File, io::Write, path::Path};
 
 use kithara::{
     assets::StoreOptions,
+    events::AbrMode,
     net::NetOptions,
     play::{Resource, ResourceConfig, internal::offline::OfflinePlayer},
     stream::dl::{Downloader, DownloaderConfig},
@@ -140,6 +141,7 @@ async fn build_resource(
     iter_label: &str,
     store: StoreOptions,
     backend: DecoderBackend,
+    abr: AbrMode,
 ) -> Resource {
     let mut cfg =
         ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
@@ -148,6 +150,7 @@ async fn build_resource(
         .with_name(format!("{iter_label}|{url}"));
     cfg.store = store;
     cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.initial_abr_mode = abr;
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
@@ -221,11 +224,21 @@ fn rms(samples: &[f32]) -> f32 {
 // decoder observes a full window of silence even when the HLS logic itself
 // is correct.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+// Параметризовано по ABR режиму: auto / locked_low / locked_high.
+// Если locked_* PASS а auto FAIL — виноват ABR flip во время seek
+// (cross-variant seek → init сегмент нового варианта не готов вовремя).
+#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
+#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
+#[case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))]
+#[case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))]
+#[case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))]
+#[case::android(DecoderBackend::Android, AbrMode::Auto(None))]
 #[ignore = "real network to silvercomet.top; run with --run-ignored only"]
-async fn silvercomet_3tracks_seek_middle_hang_10x(#[case] backend: DecoderBackend) {
+async fn silvercomet_3tracks_seek_middle_hang_10x(
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+) {
     if backend.skip_if_unavailable() {
         return;
     }
@@ -272,7 +285,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(#[case] backend: DecoderBacken
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
             eprintln!("[iter {iter}][t{track_idx}] building resource: {url}");
             let resource =
-                build_resource(url, &downloader, &iter_label, store.clone(), backend).await;
+                build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
             player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
 
