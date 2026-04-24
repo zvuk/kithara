@@ -1742,6 +1742,15 @@ impl<T: StreamType> StreamAudioSource<T> {
                     request,
                 }));
                 if self.apply_time_anchor_seek(request, anchor) {
+                    // Mirror what `step_applying_seek` does on `applied = true`
+                    // so the consumer-side epoch advances and the seek-pending
+                    // flag clears for the recreate-at-init path. Without this
+                    // the FSM lands in AwaitingResume with `self.epoch == 0`,
+                    // which looks like "seek not yet applied" to downstream
+                    // consumers and to integration tests that assert on the
+                    // advanced epoch after `apply_pending_seek`.
+                    self.epoch.store(request.seek.epoch, Ordering::Release);
+                    self.timeline.clear_seek_pending(request.seek.epoch);
                     TrackStep::StateChanged
                 } else {
                     TrackStep::Failed

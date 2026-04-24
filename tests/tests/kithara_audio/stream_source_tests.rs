@@ -1056,6 +1056,218 @@ fn seek_anchor_fails_when_fmp4_variant_switch_has_no_init_range() {
     );
 }
 
+/// Same-variant seek on an init-bearing container (fMP4) must recreate
+/// the decoder at the init segment's start and then apply the time
+/// anchor on the freshly built decoder. `IsoMp4Reader`'s moof fragment
+/// index is populated lazily during linear reads; a time-based seek
+/// past the indexed region extrapolates to a byte that rarely matches
+/// a real moof boundary, so `decoder.seek(Accurate, Time)` returns Ok
+/// but subsequent reads stall. Silvercomet post-seek hang repro:
+/// variant 0 AAC-LC fMP4, seek to 35 s past the warmup window. After
+/// the fix the recreate runs at `format_change_segment_range().start`
+/// and the recreated decoder receives exactly one `decoder.seek(target)`
+/// via `RecreateNext::AnchorSeek`.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_same_variant_init_bearing_forces_recreate_at_init_range() {
+    const INIT_RANGE_START: u64 = 100;
+    const INIT_RANGE_END: u64 = 200;
+    const ANCHOR_BYTE_OFFSET: u64 = 3000;
+
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+
+    let (recreated_decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let recreated_seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(aac_fmp4_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        // SAME variant 0: variant_changed=false, codec_changed=false.
+        // The fix relies on `container_needs_init_resync` to force the
+        // recreate path despite no variant/codec boundary.
+        s.media_info = Some(aac_fmp4_variant_info(0));
+        s.format_change_range = Some(INIT_RANGE_START..INIT_RANGE_END);
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(ANCHOR_BYTE_OFFSET, Duration::from_secs(35))
+                .with_segment_end(Duration::from_secs(40))
+                .with_segment_index(6)
+                .with_variant_index(0),
+        );
+    }
+
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(35_000));
+    apply_pending_seek(&mut source);
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(
+        current_base_offset(&source),
+        INIT_RANGE_START,
+        "same-variant fMP4 seek must recreate the decoder at the \
+             init-segment start so `IsoMp4Reader` rebuilds its moof \
+             fragment index from a known-good anchor",
+    );
+
+    let created_offsets = offsets.lock_sync();
+    assert_eq!(
+        created_offsets.as_slice(),
+        &[INIT_RANGE_START],
+        "factory must be called exactly once at the init-segment start \
+             (RecreateNext::AnchorSeek must not re-enter `align_decoder_\
+              with_seek_anchor` and loop the recreate)",
+    );
+
+    let recreated_seeks = recreated_seek_log.lock();
+    assert_eq!(
+        recreated_seeks.as_slice(),
+        &[Duration::from_millis(35_000)],
+        "the freshly built decoder must receive the time anchor seek \
+             exactly once (via `apply_time_anchor_seek`)",
+    );
+}
+
+/// Same-variant seek on a mid-stream-decodable container (MPEG-ES, ADTS,
+/// native FLAC, Ogg, MPEG-TS) must NOT force a recreate — a direct
+/// `decoder.seek()` on the existing decoder is valid because any valid
+/// packet start is a resync point. Regression guard: the init-bearing
+/// fix must not spill into containers whose demuxers self-sync.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_same_variant_mpeg_audio_stays_in_place() {
+    const INIT_RANGE_START: u64 = 100;
+    const INIT_RANGE_END: u64 = 200;
+    const ANCHOR_BYTE_OFFSET: u64 = 3000;
+
+    let info = MediaInfo::default()
+        .with_codec(AudioCodec::Mp3)
+        .with_container(ContainerFormat::MpegAudio)
+        .with_variant_index(0);
+
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let decoder_seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(info.clone()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(info);
+        s.format_change_range = Some(INIT_RANGE_START..INIT_RANGE_END);
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(ANCHOR_BYTE_OFFSET, Duration::from_secs(35))
+                .with_segment_end(Duration::from_secs(40))
+                .with_segment_index(6)
+                .with_variant_index(0),
+        );
+    }
+
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(35_000));
+    apply_pending_seek(&mut source);
+
+    let created_offsets = offsets.lock_sync();
+    assert!(
+        created_offsets.is_empty(),
+        "mid-stream-decodable container (MpegAudio) same-variant seek \
+             must NOT recreate — decoder.seek() is sufficient",
+    );
+    let decoder_seeks = decoder_seek_log.lock();
+    assert_eq!(
+        decoder_seeks.as_slice(),
+        &[Duration::from_millis(35_000)],
+        "the existing decoder must receive the time seek in place",
+    );
+}
+
+/// Same-variant fMP4 seek when `format_change_segment_range()` is `None`
+/// (e.g. local files with complete `moov` tables, or HLS before the
+/// first segment commits) must NOT force a recreate. The in-place
+/// `decoder.seek()` is valid because `IsoMp4Reader` has the full sample
+/// table at its disposal. This gate keeps the fix scoped to HLS-style
+/// segmented fMP4 where the init-range signal is authoritative.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_anchor_same_variant_fmp4_no_init_range_stays_in_place() {
+    const ANCHOR_BYTE_OFFSET: u64 = 3000;
+
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let decoder_seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(aac_fmp4_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(aac_fmp4_variant_info(0));
+        s.format_change_range = None;
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(ANCHOR_BYTE_OFFSET, Duration::from_secs(35))
+                .with_segment_end(Duration::from_secs(40))
+                .with_segment_index(6)
+                .with_variant_index(0),
+        );
+    }
+
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(35_000));
+    apply_pending_seek(&mut source);
+
+    let created_offsets = offsets.lock_sync();
+    assert!(
+        created_offsets.is_empty(),
+        "fMP4 same-variant seek with no init-range must short-circuit \
+             through the `init_offset.is_some()` gate and stay in place",
+    );
+    let decoder_seeks = decoder_seek_log.lock();
+    assert_eq!(
+        decoder_seeks.as_slice(),
+        &[Duration::from_millis(35_000)],
+        "the existing decoder must receive the time seek in place",
+    );
+}
+
 /// Container classification matrix for the variant-switch recreate
 /// offset: init-bearing containers (fMP4, MP4, WAV, MKV, CAF) must
 /// recreate at `format_change_segment_range().start`; mid-stream-
