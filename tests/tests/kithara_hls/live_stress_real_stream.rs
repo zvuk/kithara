@@ -178,6 +178,90 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 
+async fn build_live_audio(
+    server: &TestServerHelper,
+    path: &str,
+    cache_capacity: usize,
+    temp_dir: &TestTempDir,
+) -> Audio<Stream<Hls>> {
+    let url = server.asset(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"));
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+    audio
+}
+
+fn spawn_live_stats_task(
+    audio: &mut Audio<Stream<Hls>>,
+) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
+    let stats = Arc::new(Mutex::new(LiveStats::default()));
+    let stats_bg = Arc::clone(&stats);
+    let mut events = audio.events();
+    let events_task = spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            let mut locked = stats_bg.lock().expect("stats lock poisoned");
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                    if locked.initial_variant.is_none() {
+                        locked.initial_variant = Some(initial);
+                    }
+                    if locked.current_variant.is_none() {
+                        locked.current_variant = Some(initial);
+                    }
+                }
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
+                    locked.variant_switches = locked.variant_switches.saturating_add(1);
+                }
+                Event::Hls(HlsEvent::SegmentComplete {
+                    cached,
+                    segment_index,
+                    variant,
+                    ..
+                }) => {
+                    let key = (variant, segment_index);
+                    let map = if cached {
+                        &mut locked.cache_hits
+                    } else {
+                        &mut locked.network_hits
+                    };
+                    let entry = map.entry(key).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    });
+    (stats, events_task)
+}
+
+async fn warmup_until_variant_switch(
+    audio: &mut Audio<Stream<Hls>>,
+    stats: &Arc<Mutex<LiveStats>>,
+    stage_prefix: &str,
+) {
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
+    let stage = format!("{stage_prefix}_warmup");
+    while Instant::now() < warmup_deadline {
+        let _ = next_chunk_with_timeout(audio, Consts::next_chunk_timeout(), &stage).await;
+        if snapshot(stats).variant_switches > 0 {
+            break;
+        }
+    }
+}
+
 async fn next_chunk_with_timeout(
     audio: &mut Audio<Stream<Hls>>,
     timeout: Duration,
@@ -422,76 +506,10 @@ async fn live_real_stream_fixed_seek_window_regression(
     abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
-        .await
-        .expect("audio creation");
-    audio.preload();
-
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial);
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial);
-                    }
-                }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to);
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                Event::Hls(HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
-                    variant,
-                    ..
-                }) => {
-                    let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
-    while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Consts::next_chunk_timeout(),
-            "fixed_window_warmup",
-        )
-        .await;
-        if snapshot(&stats).variant_switches > 0 {
-            break;
-        }
-    }
+    warmup_until_variant_switch(&mut audio, &stats, "fixed_window").await;
 
     let seek_positions = [
         29.928_167_827,
@@ -537,76 +555,10 @@ async fn live_real_stream_random_seek_prefix_regression(
     abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
-        .await
-        .expect("audio creation");
-    audio.preload();
-
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial);
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial);
-                    }
-                }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to);
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                Event::Hls(HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
-                    variant,
-                    ..
-                }) => {
-                    let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
-    while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Consts::next_chunk_timeout(),
-            "rng_prefix_warmup",
-        )
-        .await;
-        if snapshot(&stats).variant_switches > 0 {
-            break;
-        }
-    }
+    warmup_until_variant_switch(&mut audio, &stats, "rng_prefix").await;
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
     let max_seek_secs =
