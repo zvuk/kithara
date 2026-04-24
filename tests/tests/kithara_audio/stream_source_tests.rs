@@ -1056,6 +1056,99 @@ fn seek_anchor_fails_when_fmp4_variant_switch_has_no_init_range() {
     );
 }
 
+/// Container classification matrix for the variant-switch recreate
+/// offset: init-bearing containers (fMP4, MP4, WAV, MKV, CAF) must
+/// recreate at `format_change_segment_range().start`; mid-stream-
+/// decodable containers (MPEG-ES / ADTS / FLAC / Ogg / MPEG-TS) may
+/// recreate at the seek anchor's byte offset because any valid packet
+/// start is a resync point. `use_init_range=false` variants keep the
+/// legacy anchor-based behaviour so existing MPEG-TS / ADTS / native
+/// FLAC streams do not regress.
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+#[case::fmp4(ContainerFormat::Fmp4, true)]
+#[case::mp4(ContainerFormat::Mp4, true)]
+#[case::wav(ContainerFormat::Wav, true)]
+#[case::mkv(ContainerFormat::Mkv, true)]
+#[case::caf(ContainerFormat::Caf, true)]
+#[case::mpeg_audio(ContainerFormat::MpegAudio, false)]
+#[case::adts(ContainerFormat::Adts, false)]
+#[case::flac(ContainerFormat::Flac, false)]
+#[case::ogg(ContainerFormat::Ogg, false)]
+#[case::mpeg_ts(ContainerFormat::MpegTs, false)]
+fn variant_switch_recreate_offset_matches_container_class(
+    #[case] container: ContainerFormat,
+    #[case] use_init_range: bool,
+) {
+    const INIT_RANGE_START: u64 = 100;
+    const INIT_RANGE_END: u64 = 200;
+    const ANCHOR_BYTE_OFFSET: u64 = 3000;
+
+    let expected_offset = if use_init_range {
+        INIT_RANGE_START
+    } else {
+        ANCHOR_BYTE_OFFSET
+    };
+
+    let info_from = MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
+        .with_container(container)
+        .with_variant_index(0);
+    let info_to = MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
+        .with_container(container)
+        .with_variant_index(2);
+
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let (recreated_decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(info_from),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(info_to);
+        s.format_change_range = Some(INIT_RANGE_START..INIT_RANGE_END);
+        s.seek_anchor = Some(
+            SourceSeekAnchor::new(ANCHOR_BYTE_OFFSET, Duration::from_secs(110))
+                .with_segment_end(Duration::from_secs(120))
+                .with_segment_index(30)
+                .with_variant_index(2),
+        );
+    }
+
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(110_000));
+    apply_pending_seek(&mut source);
+
+    let created_offsets = offsets.lock_sync();
+    assert_eq!(
+        created_offsets.as_slice(),
+        &[expected_offset],
+        "container {container:?} variant switch must recreate at {} \
+             (init-bearing={use_init_range})",
+        if use_init_range {
+            "init-segment start"
+        } else {
+            "anchor byte offset"
+        }
+    );
+}
+
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
