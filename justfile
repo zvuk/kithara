@@ -243,6 +243,15 @@ mutants-ci OUTPUT:
     if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
     JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
     mkdir -p "{{OUTPUT}}"
+    # Resume from a prior incomplete run if outcomes.json is present
+    # (e.g. previous invocation crashed or the host rebooted).
+    # OUTPUT is passed by ci-full-run as "$CI_OUT/mutants"; cargo-mutants
+    # writes its state into "$OUTPUT/mutants.out/".
+    RESUME_FLAG=""
+    if [ -f "{{OUTPUT}}/mutants.out/outcomes.json" ]; then
+        RESUME_FLAG="--resume"
+        echo "==> resuming from previous run at {{OUTPUT}}/mutants.out"
+    fi
     # Only mutate production library code. Excluded crates (by file glob —
     # cargo-mutants 27 has no --exclude-package flag):
     #   - kithara-test-utils / kithara-test-macros: test-only helpers
@@ -270,7 +279,7 @@ mutants-ci OUTPUT:
       --exclude 'xtask/**' \
       --exclude-re 'src/.*test.*\.rs' \
       -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
-      --no-shuffle --output "{{OUTPUT}}"
+      --no-shuffle $RESUME_FLAG --output "{{OUTPUT}}"
 
 # --- perf & benchmarks ---
 
