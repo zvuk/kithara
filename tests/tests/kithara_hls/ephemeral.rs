@@ -38,41 +38,36 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
-#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn ephemeral_backend_creates_mem_resource() {
-    let backend = AssetStoreBuilder::new()
-        .ephemeral(true)
-        .asset_root(Some("test"))
-        .build();
-
-    let key = ResourceKey::new("seg_0.m4s");
-    let res = backend
-        .acquire_resource(&key)
-        .expect("open ephemeral resource");
-    assert!(
-        res.path().is_none(),
-        "ephemeral resource must not have file path (MemResource)"
-    );
-}
-
+/// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
+/// (has a file path). The disk case is native-only because wasm targets do
+/// not expose a real filesystem.
 #[kithara::test(
     native,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn disk_backend_creates_mmap_resource() {
+#[case::ephemeral_mem(true, false)]
+#[case::disk_mmap(false, true)]
+fn backend_resource_path_follows_ephemeral_flag(
+    #[case] ephemeral: bool,
+    #[case] expect_path: bool,
+) {
     let temp = TestTempDir::new();
-    let backend = AssetStoreBuilder::new()
-        .root_dir(temp.path())
+    let mut builder = AssetStoreBuilder::new()
         .asset_root(Some("test"))
-        .ephemeral(false)
-        .build();
+        .ephemeral(ephemeral);
+    if !ephemeral {
+        builder = builder.root_dir(temp.path());
+    }
+    let backend = builder.build();
 
     let key = ResourceKey::new("seg_0.m4s");
-    let res = backend.acquire_resource(&key).expect("open disk resource");
-    assert!(
+    let res = backend.acquire_resource(&key).expect("open resource");
+
+    assert_eq!(
         res.path().is_some(),
-        "disk resource must have file path (MmapResource)"
+        expect_path,
+        "resource path presence must match ephemeral flag: ephemeral={ephemeral}",
     );
 }
 

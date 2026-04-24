@@ -52,17 +52,10 @@ fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<
 
 // Test Cases
 
-#[kithara::test]
-fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<AbrVariant>) {
-    // AbrController no longer owns the mode; it's seeded per-peer via
-    // HlsConfig::initial_abr_mode. Verify controller constructs and holds
-    // settings; actual decisions are covered in the scheduler / integration tests.
-    let controller = AbrController::new(AbrSettings::default());
-    let _ = controller.settings().warmup_min_bytes;
-    assert_eq!(variants_from_parsed_playlist.len(), 3);
-    let _ = AbrMode::Manual(2);
-}
-
+/// `AbrMode::Manual(idx)` is just a stateless enum payload — AbrController
+/// constructs and holds settings; actual decisions are covered in the
+/// scheduler / integration tests. We only verify the controller builds
+/// successfully for a range of selector indices (including out-of-bounds).
 #[kithara::test]
 #[case(0)]
 #[case(1)]
