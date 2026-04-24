@@ -162,40 +162,17 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 // Error cases
 
 #[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_past_eof_fails(test_data: Vec<u8>) {
-    let data_len = test_data.len() as u64;
+#[case::past_eof_from_start(SeekFrom::Start(36))]
+#[case::negative_from_current(SeekFrom::Current(-100))]
+#[case::positive_offset_from_end(SeekFrom::End(10))]
+fn seek_invalid_input_errors(test_data: Vec<u8>, #[case] seek_from: SeekFrom) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
-    let result = stream.seek(SeekFrom::Start(data_len + 10));
+    let result = stream.seek(seek_from);
 
     assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_negative_position_fails(test_data: Vec<u8>) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let result = stream.seek(SeekFrom::Current(-100));
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let result = stream.seek(SeekFrom::End(10));
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
 }
 
 // Multiple seeks
