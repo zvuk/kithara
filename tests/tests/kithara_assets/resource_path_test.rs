@@ -23,36 +23,11 @@ fn asset_store_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetStore
 
 // AssetResource Path Tests
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-fn asset_resource_path_method(temp_dir: TestTempDir) {
-    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
-    let key = ResourceKey::new("metadata.json");
-    let asset_resource = asset_store
-        .acquire_resource(&key)
-        .expect("Failed to open resource");
-
-    // Write some data to ensure the resource is properly initialized
-    asset_resource
-        .write_all(b"test data")
-        .expect("Write should succeed");
-
-    // Get the path from AssetResource
-    let asset_path = asset_resource.path().unwrap();
-
-    // Get the root directory from the store
-    let root_dir = asset_store.root_dir();
-
-    // Check that AssetResource's path is under the store's root directory
-    assert!(asset_path.starts_with(root_dir));
-    assert!(asset_path.ends_with("test-asset/metadata.json"));
-
-    // Verify the path components
-    assert!(asset_path.parent().unwrap().ends_with("test-asset"));
-    assert!(asset_path.file_name().unwrap() == "metadata.json");
+/// Writes to `asset_resource` via either `write_all` (atomic) or
+/// `write_at` + `commit` (streaming) depending on the case.
+enum WriteMode {
+    Atomic,
+    Streaming,
 }
 
 #[kithara::test(
@@ -60,34 +35,47 @@ fn asset_resource_path_method(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn asset_resource_streaming_path_method(temp_dir: TestTempDir) {
+#[case::atomic("metadata.json", WriteMode::Atomic)]
+#[case::streaming("media.bin", WriteMode::Streaming)]
+fn asset_resource_path_method(
+    temp_dir: TestTempDir,
+    #[case] resource_name: &str,
+    #[case] write_mode: WriteMode,
+) {
     let asset_store = asset_store_with_root(&temp_dir, "test-asset");
-    let key = ResourceKey::new("media.bin");
+    let key = ResourceKey::new(resource_name);
     let asset_resource = asset_store
         .acquire_resource(&key)
         .expect("Failed to open resource");
 
     // Write some data to ensure the resource is properly initialized
-    asset_resource
-        .write_at(0, b"test data")
-        .expect("Write should succeed");
-    asset_resource
-        .commit(Some(b"test data".len() as u64))
-        .expect("Commit should succeed");
+    match write_mode {
+        WriteMode::Atomic => {
+            asset_resource
+                .write_all(b"test data")
+                .expect("Write should succeed");
+        }
+        WriteMode::Streaming => {
+            asset_resource
+                .write_at(0, b"test data")
+                .expect("Write should succeed");
+            asset_resource
+                .commit(Some(b"test data".len() as u64))
+                .expect("Commit should succeed");
+        }
+    }
 
-    // Get the path from AssetResource
     let asset_path = asset_resource.path().unwrap();
-
-    // Get the root directory from the store
     let root_dir = asset_store.root_dir();
 
     // Check that AssetResource's path is under the store's root directory
     assert!(asset_path.starts_with(root_dir));
-    assert!(asset_path.ends_with("test-asset/media.bin"));
+    let expected_suffix = format!("test-asset/{resource_name}");
+    assert!(asset_path.ends_with(&expected_suffix));
 
     // Verify the path components
     assert!(asset_path.parent().unwrap().ends_with("test-asset"));
-    assert!(asset_path.file_name().unwrap() == "media.bin");
+    assert!(asset_path.file_name().unwrap() == resource_name);
 }
 
 #[kithara::test(

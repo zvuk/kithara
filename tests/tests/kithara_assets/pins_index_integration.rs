@@ -42,51 +42,35 @@ fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn pins_index_missing_returns_default(
+#[case::missing_file(None)]
+#[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
+fn pins_index_bad_state_returns_default(
     temp_dir: kithara_test_utils::TestTempDir,
     disk_asset_store: DiskAssetStore,
+    #[case] prewrite_contents: Option<&[u8]>,
 ) {
     let dir = temp_dir.path();
     let base = disk_asset_store;
-
     let path = pins_path(dir);
-    assert!(!path.exists(), "pins.bin must not exist initially");
+
+    match prewrite_contents {
+        None => {
+            assert!(!path.exists(), "pins.bin must not exist initially");
+        }
+        Some(bytes) => {
+            // Write a corrupted blob directly on disk to simulate index damage.
+            fs::create_dir_all(dir.join("_index")).unwrap();
+            fs::write(&path, bytes).unwrap();
+            assert!(path.exists(), "pins.bin must exist for this test");
+        }
+    }
 
     let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
     let pins = idx.load().unwrap();
 
     assert!(
         pins.is_empty(),
-        "missing pins index must be treated as empty (best-effort default)"
-    );
-}
-
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-fn pins_index_invalid_json_returns_default(
-    temp_dir: kithara_test_utils::TestTempDir,
-    disk_asset_store: DiskAssetStore,
-) {
-    let dir = temp_dir.path();
-    let base = disk_asset_store;
-
-    // Write a corrupted JSON file directly on disk to simulate index damage.
-    let index_dir = dir.join("_index");
-    fs::create_dir_all(&index_dir).unwrap();
-
-    let path = pins_path(dir);
-    fs::write(&path, b"{ this is not valid json").unwrap();
-    assert!(path.exists(), "pins.bin must exist for this test");
-
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
-    let pins = idx.load().unwrap();
-
-    assert!(
-        pins.is_empty(),
-        "invalid JSON pins index must be treated as empty (best-effort default)"
+        "bad pins index must be treated as empty (best-effort default)"
     );
 }
 
