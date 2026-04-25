@@ -75,8 +75,14 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             let mut last_sample = start;
 
             while start.elapsed() < Duration::from_secs(Consts::BUDGET_PLAYBACK_SECS) {
-                let n = audio.read(&mut buf);
-                if n == 0 {
+                let outcome = audio.read(&mut buf);
+                let stop = matches!(
+                    outcome,
+                    Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
+                        | Ok(kithara::audio::ReadOutcome::Eof { .. })
+                        | Err(_)
+                );
+                if stop {
                     break;
                 }
 
@@ -159,8 +165,14 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         let mut final_rss = 0usize;
 
         while start.elapsed() < Duration::from_secs(Consts::LEAK_PLAYBACK_SECS) {
-            let n = audio.read(&mut buf);
-            if n == 0 {
+            let outcome = audio.read(&mut buf);
+            let stop = matches!(
+                outcome,
+                Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
+                    | Ok(kithara::audio::ReadOutcome::Eof { .. })
+                    | Err(_)
+            );
+            if stop {
                 break;
             }
 

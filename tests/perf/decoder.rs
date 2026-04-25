@@ -50,7 +50,6 @@ enum PerfScenario {
 #[case("decoder_probe", PerfScenario::ProbeLatency)]
 #[case("decoder_f32_conversion", PerfScenario::F32Conversion)]
 #[case("decoder_throughput", PerfScenario::Throughput)]
-#[ignore]
 fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

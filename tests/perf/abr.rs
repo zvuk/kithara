@@ -42,7 +42,6 @@ enum PerfScenario {
 #[case("abr_creation", PerfScenario::ControllerCreation)]
 #[case("abr_pure_decision", PerfScenario::PureDecision)]
 #[case("abr_estimator_loop", PerfScenario::EstimatorHotLoop)]
-#[ignore]
 fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     let bitrates = [500_000u64, 1_000_000, 2_000_000, 5_000_000];
