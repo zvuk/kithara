@@ -325,13 +325,11 @@ fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-/// Generate extra attributes for selenium tests (`#[ignore]`).
-fn make_selenium_attrs(args: &TestArgs) -> TokenStream2 {
-    if args.is_selenium {
-        quote! { #[ignore = "requires selenium"] }
-    } else {
-        quote! {}
-    }
+/// Selenium tests no longer auto-inject `#[ignore]` — the suite runs only
+/// when the wasm-target test driver picks them up (`just test-selenium`),
+/// so plain `cargo test` already skips them by virtue of platform gating.
+fn make_selenium_attrs(_args: &TestArgs) -> TokenStream2 {
+    quote! {}
 }
 
 /// Emit a native async test with a **manual tokio runtime** (no timeout).

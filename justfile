@@ -70,13 +70,18 @@ test-e2e *ARGS:
 
 test-all: test test-doc
 
+# Selenium WebDriver tests (trunk + chromedriver, native target). Gated by the
+# `selenium` feature so plain `just test` doesn't try to spin them up.
+test-selenium *ARGS:
+    cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
+
 # Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
 test-ultimate:
     just lint-fast
     cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
     just test-doc
     just wasm-test
-    cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
+    just test-selenium
     just bench-build
     cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
     echo "==> all checks passed"
