@@ -324,3 +324,248 @@ async fn local_track_plays_end_to_end(
     queue.remove(track_id).expect("remove");
     tick_handle.abort();
 }
+
+async fn wait_for_queue_event<F>(
+    rx: &mut EventReceiver,
+    mut pred: F,
+    deadline: Duration,
+) -> Option<QueueEvent>
+where
+    F: FnMut(&QueueEvent) -> bool,
+{
+    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    let res = timeout(deadline, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
+                Ok(_) => continue,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await;
+    res.unwrap_or(None)
+}
+
+/// Mirror of `real_playlist::queue_playlist_behavior` against local fixtures.
+///
+/// Five-track playlist (mp3 → hls aac → hls aes → hls aac → mp3) drives
+/// the production pipeline through pause/resume, seek, manual crossfade,
+/// auto-advance and `QueueEnded`. Per-track failures are collected so DRM
+/// or loader regressions surface as a structured panic instead of the
+/// first bad entry killing the whole test.
+///
+/// Currently `#[ignore]` because the test exposes a real bug under the
+/// synthetic-fixture cadence: tracks 2–4 emit `loader: track load ok` in
+/// the first ~100 ms (loader marks them Loaded), but the post-crossfade
+/// `wait_for_status(ids[i], Loaded)` snapshot still sees them in
+/// pre-Loaded status and blocks for 30 s. The mid-track seek on track 0
+/// also stalls 50 s (`source error: processed resource is not readable
+/// before commit`) before the decoder recreates. Both look like
+/// loader/Queue event-dispatch bugs that real silvercomet hides because
+/// CDN latency serializes per-track work. Captured here for future
+/// debugging — should be re-enabled together with the fix.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+#[ignore = "captures real bug: loader→Queue status dispatch + mid-track seek stall \
+            on multi-fixture playlist; un-ignore once the underlying bug is fixed"]
+async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
+    INIT_OFFLINE.call_once(init_offline_backend);
+
+    let helper = TestServerHelper::new().await;
+    let kinds = [
+        LocalSource::Mp3,
+        LocalSource::HlsAac,
+        LocalSource::HlsAacAes128,
+        LocalSource::HlsAac,
+        LocalSource::Mp3,
+    ];
+    let mut urls: Vec<Url> = Vec::with_capacity(kinds.len());
+    for &k in &kinds {
+        urls.push(build_fixture_url(k, &helper).await);
+    }
+
+    let temp = temp_dir();
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+
+    queue.set_crossfade_duration(2.0);
+
+    let mut rx = queue.subscribe();
+    let ids: Vec<TrackId> = urls
+        .iter()
+        .map(|u| {
+            let mut cfg = ResourceConfig::new(u.as_str()).expect("valid fixture URL");
+            cfg = cfg.with_downloader(downloader.clone());
+            cfg.store = store.clone();
+            cfg.prefer_hardware = backend.prefer_hardware();
+            cfg.initial_abr_mode = AbrMode::Auto(None);
+            queue.append(TrackSource::Config(Box::new(cfg)))
+        })
+        .collect();
+
+    // (1) First track starts
+    queue
+        .select(ids[0], Transition::None)
+        .expect("select first");
+    wait_for_status(
+        &mut rx,
+        &queue,
+        ids[0],
+        TrackStatus::Loaded,
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
+    wait_for_position_at_least(&queue, 2.0, Duration::from_secs(15))
+        .await
+        .expect("first track position");
+
+    // (2) Pause / resume — position must hold then advance.
+    let before_pause = queue.position_seconds().unwrap_or(0.0);
+    queue.pause();
+    sleep(Duration::from_secs(2)).await;
+    let during_pause = queue.position_seconds().unwrap_or(0.0);
+    assert!(
+        (during_pause - before_pause).abs() < 0.5,
+        "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
+    );
+    queue.play();
+    sleep(Duration::from_millis(500)).await;
+    let after_resume = queue.position_seconds().unwrap_or(0.0);
+    assert!(
+        after_resume >= during_pause - 0.1,
+        "resume reset position: {during_pause:.2} → {after_resume:.2}"
+    );
+    assert!(
+        after_resume > during_pause,
+        "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
+    );
+
+    // (3) Seek mid-track
+    let duration_0 = queue.duration_seconds().expect("duration for first track");
+    let seek_target = duration_0 * 0.4;
+    queue.seek(seek_target).expect("seek");
+    wait_for_position_near(&queue, seek_target, 1.0, Duration::from_secs(5))
+        .await
+        .expect("seek landed near target");
+
+    // (4) Manual crossfade to track 1
+    wait_for_status(
+        &mut rx,
+        &queue,
+        ids[1],
+        TrackStatus::Loaded,
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
+    let xf_duration = queue.crossfade_duration();
+    queue.advance_to_next(Transition::Crossfade);
+    let started = wait_for_queue_event(
+        &mut rx,
+        |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("CrossfadeStarted event");
+    if let QueueEvent::CrossfadeStarted { duration_seconds } = started {
+        assert!(
+            (duration_seconds - xf_duration).abs() < 0.01,
+            "crossfade duration mismatch: event={duration_seconds:.2} vs config={xf_duration:.2}"
+        );
+    }
+    wait_for_queue_event(
+        &mut rx,
+        |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[1]),
+        Duration::from_millis((f64::from(xf_duration) * 1000.0) as u64 + 5_000),
+    )
+    .await
+    .expect("CurrentTrackChanged to track 1 after crossfade");
+
+    // (5..N-1) Auto-advance through remaining tracks
+    let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
+    for i in 1..urls.len() {
+        let url = urls[i].clone();
+        let result: Result<(), String> =
+            async {
+                wait_for_status(
+                    &mut rx,
+                    &queue,
+                    ids[i],
+                    TrackStatus::Loaded,
+                    Duration::from_secs(30),
+                )
+                .await
+                .map_err(|e| format!("load: {e}"))?;
+                wait_for_position_at_least(&queue, 2.0, Duration::from_secs(15))
+                    .await
+                    .map_err(|e| format!("play: {e}"))?;
+
+                if i + 1 < urls.len() {
+                    let dur = queue
+                        .duration_seconds()
+                        .ok_or_else(|| "duration unknown".to_string())?;
+                    let near_end = (dur - f64::from(xf_duration) - 2.0).max(0.0);
+                    queue.seek(near_end).map_err(|e| format!("seek: {e}"))?;
+                    wait_for_queue_event(
+                    &mut rx,
+                    |ev| matches!(
+                        ev,
+                        QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[i + 1]
+                    ),
+                    Duration::from_secs(20),
+                )
+                .await
+                .ok_or_else(|| "timeout on auto-advance".to_string())?;
+                }
+                Ok(())
+            }
+            .await;
+        per_track.push((url.to_string(), result));
+    }
+
+    // (N) Last track → seek near end → QueueEnded
+    let last_result: Result<(), String> = async {
+        let dur = queue
+            .duration_seconds()
+            .ok_or_else(|| "duration unknown".to_string())?;
+        queue
+            .seek((dur - 3.0).max(0.0))
+            .map_err(|e| format!("seek: {e}"))?;
+        wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(ev, QueueEvent::QueueEnded),
+            Duration::from_secs(15),
+        )
+        .await
+        .ok_or_else(|| "timeout on QueueEnded".to_string())?;
+        Ok(())
+    }
+    .await;
+
+    let mut fails: Vec<String> = per_track
+        .iter()
+        .filter_map(|(u, r)| r.as_ref().err().map(|e| format!("  - {u}: {e}")))
+        .collect();
+    if let Err(e) = &last_result {
+        fails.push(format!(
+            "  - [last:{}] QueueEnded: {e}",
+            urls[urls.len() - 1]
+        ));
+    }
+    if !fails.is_empty() {
+        panic!(
+            "local_queue_playlist_behavior: {} track(s) failed:\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
+    }
+
+    tick_handle.abort();
+}
