@@ -195,8 +195,17 @@ where
 
     /// Whether further waiting is pointless because the inner
     /// resource will never produce processed bytes.
+    ///
+    /// Both `Failed` and `Cancelled` are terminal: failure means a
+    /// data error, cancellation means the routine shutdown signal
+    /// (e.g. track switch, app exit) reached the resource. Either
+    /// way the gate will never flip Ready, so a waiter must abort
+    /// instead of polling indefinitely.
     fn inner_terminal(&self) -> bool {
-        matches!(self.inner.status(), ResourceStatus::Failed(_))
+        matches!(
+            self.inner.status(),
+            ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+        )
     }
 
     /// Process content chunk-by-chunk and write back to disk.
