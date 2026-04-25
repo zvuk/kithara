@@ -85,46 +85,45 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
     }
 }
 
-async fn wait_for_status(
-    rx: &mut EventReceiver,
+/// Poll-based "loader is done with this track" check.
+///
+/// We don't subscribe to the broadcast: `wait_for_queue_event` (used in
+/// the playlist scenario for crossfade / `CurrentTrackChanged`) consumes
+/// events as it scans, so any `TrackStatusChanged{Loaded}` that arrived
+/// before its predicate match is dropped from the receiver. Polling
+/// `Queue::track()` side-steps that ordering hazard — production code is
+/// fine, the race lives only in the helpers.
+///
+/// Treat both `Loaded` and `Consumed` as success, because
+/// `Queue::spawn_apply_after_load` flips the status straight from
+/// `Loaded` to `Consumed` when a `pending_select` was queued for the
+/// same track (via `select_item_with_crossfade` → `mark_consumed`).
+/// On real silvercomet that transition is rare per-test; on synthetic
+/// fixtures it always happens for the first track and any auto-advanced
+/// neighbour.
+async fn wait_for_loader_done(
     queue: &Queue,
     track_id: TrackId,
-    target: TrackStatus,
     deadline: Duration,
 ) -> Result<(), String> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        if entry.status == target {
-            return Ok(());
-        }
-        if let TrackStatus::Failed(err) = &entry.status {
-            return Err(format!("track entered Failed: {err}"));
-        }
-    }
-    let res = timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(ev) => ev,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match &status {
-                    s if *s == target => return Ok(()),
-                    TrackStatus::Failed(err) => {
-                        return Err(format!("track entered Failed: {err}"));
-                    }
-                    _ => continue,
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(entry) = queue.track(track_id) {
+            match &entry.status {
+                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
+                TrackStatus::Failed(err) => {
+                    return Err(format!("track entered Failed: {err}"));
                 }
+                _ => {}
             }
         }
-    })
-    .await;
-    match res {
-        Ok(r) => r,
-        Err(_) => Err(format!("timeout waiting for {target:?} after {deadline:?}")),
+        if start.elapsed() >= deadline {
+            return Err(format!(
+                "timeout after {deadline:?} (last status: {:?})",
+                queue.track(track_id).map(|e| e.status)
+            ));
+        }
+        sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -268,19 +267,12 @@ async fn local_track_plays_end_to_end(
     cfg.initial_abr_mode = abr;
     let source = TrackSource::Config(Box::new(cfg));
 
-    let mut rx = queue.subscribe();
     let track_id = queue.append(source);
 
     // (a) load
-    wait_for_status(
-        &mut rx,
-        &queue,
-        track_id,
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
+    wait_for_loader_done(&queue, track_id, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
 
     // (b) play + monotonic progress
     queue.select(track_id, Transition::None).expect("select");
@@ -356,22 +348,24 @@ where
 /// or loader regressions surface as a structured panic instead of the
 /// first bad entry killing the whole test.
 ///
-/// Currently `#[ignore]` because the test exposes a real bug under the
-/// synthetic-fixture cadence: tracks 2–4 emit `loader: track load ok` in
-/// the first ~100 ms (loader marks them Loaded), but the post-crossfade
-/// `wait_for_status(ids[i], Loaded)` snapshot still sees them in
-/// pre-Loaded status and blocks for 30 s. The mid-track seek on track 0
-/// also stalls 50 s (`source error: processed resource is not readable
-/// before commit`) before the decoder recreates. Both look like
-/// loader/Queue event-dispatch bugs that real silvercomet hides because
-/// CDN latency serializes per-track work. Captured here for future
-/// debugging — should be re-enabled together with the fix.
+/// Currently `#[ignore]` because the test exposes a real production hang:
+/// after the first crossfade, `kithara_stream::stream::read` panics with
+/// `no progress for 10s` when the next HLS+AES track tries to emit PCM,
+/// auto-advance to the following track times out, and `QueueEnded` never
+/// fires. Real silvercomet hides this because CDN latency serializes
+/// per-track work; the synthetic fixture loads everything in <100 ms and
+/// races the stream-side back-pressure / DRM cache contention.
+///
+/// The test-helper race (`wait_for_status` losing events to
+/// `wait_for_queue_event`) is fixed (`wait_for_loader_done` polls
+/// `Queue::track()` directly and accepts `Loaded | Consumed`); what
+/// remains is the underlying engine bug.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[case::apple(DecoderBackend::Apple)]
 #[case::android(DecoderBackend::Android)]
-#[ignore = "captures real bug: loader→Queue status dispatch + mid-track seek stall \
-            on multi-fixture playlist; un-ignore once the underlying bug is fixed"]
+#[ignore = "captures real bug: kithara_stream::stream::read 10s hang panic + auto-advance \
+            timeout on multi-fixture playlist after first crossfade; un-ignore once fixed"]
 async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     if backend.skip_if_unavailable() {
         return;
@@ -413,15 +407,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     queue
         .select(ids[0], Transition::None)
         .expect("select first");
-    wait_for_status(
-        &mut rx,
-        &queue,
-        ids[0],
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
+    wait_for_loader_done(&queue, ids[0], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
     wait_for_position_at_least(&queue, 2.0, Duration::from_secs(15))
         .await
         .expect("first track position");
@@ -456,15 +444,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .expect("seek landed near target");
 
     // (4) Manual crossfade to track 1
-    wait_for_status(
-        &mut rx,
-        &queue,
-        ids[1],
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
+    wait_for_loader_done(&queue, ids[1], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
     queue.advance_to_next(Transition::Crossfade);
     let started = wait_for_queue_event(
@@ -494,15 +476,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         let url = urls[i].clone();
         let result: Result<(), String> =
             async {
-                wait_for_status(
-                    &mut rx,
-                    &queue,
-                    ids[i],
-                    TrackStatus::Loaded,
-                    Duration::from_secs(30),
-                )
-                .await
-                .map_err(|e| format!("load: {e}"))?;
+                wait_for_loader_done(&queue, ids[i], Duration::from_secs(30))
+                    .await
+                    .map_err(|e| format!("load: {e}"))?;
                 wait_for_position_at_least(&queue, 2.0, Duration::from_secs(15))
                     .await
                     .map_err(|e| format!("play: {e}"))?;
