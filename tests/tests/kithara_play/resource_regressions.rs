@@ -1466,3 +1466,104 @@ async fn player_mp3_duration_matches_app_flow(
 
     player.worker().shutdown();
 }
+
+/// Local fixture (`assets/track.mp3` ~162s, packaged AAC HLS ~64s) through
+/// `ResourceConfig` — same code path as kithara-app. Mirrors
+/// `live_remote_resource_decodes_with_duration` but against `TestServerHelper`
+/// so it stays in the regular suite (no `#[ignore]`, no VPN, no internet).
+#[derive(Clone, Copy, Debug)]
+enum LocalKind {
+    Mp3,
+    HlsAac,
+}
+
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+)]
+#[case::mp3_symphonia(LocalKind::Mp3, DecoderBackend::Symphonia)]
+#[case::mp3_apple(LocalKind::Mp3, DecoderBackend::Apple)]
+#[case::mp3_android(LocalKind::Mp3, DecoderBackend::Android)]
+#[case::hls_aac_symphonia(LocalKind::HlsAac, DecoderBackend::Symphonia)]
+#[case::hls_aac_apple(LocalKind::HlsAac, DecoderBackend::Apple)]
+#[case::hls_aac_android(LocalKind::HlsAac, DecoderBackend::Android)]
+async fn local_resource_decodes_with_duration(
+    #[case] kind: LocalKind,
+    #[case] backend: DecoderBackend,
+    temp_dir: TestTempDir,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
+    let helper = TestServerHelper::new().await;
+    let url = match kind {
+        LocalKind::Mp3 => helper.asset("track.mp3"),
+        LocalKind::HlsAac => {
+            let builder = HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2);
+            helper
+                .create_hls(builder)
+                .await
+                .expect("create local HLS fixture")
+                .master_url()
+        }
+    };
+    let store = store_options(&temp_dir, true);
+    let mut config = ResourceConfig::new(url.as_str())
+        .expect("valid URL")
+        .with_store(store);
+    config.prefer_hardware = backend.prefer_hardware();
+
+    let mut resource = Resource::new(config)
+        .await
+        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+
+    let duration = resource.duration();
+    assert!(duration.is_some(), "{url}: duration must be reported");
+    let dur_secs = duration.expect("checked").as_secs_f64();
+    assert!(
+        dur_secs > 30.0,
+        "{url}: expected duration > 30s, got {dur_secs:.1}s"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut samples = 0usize;
+    let mut buf = [0.0f32; 4096];
+    loop {
+        match resource.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                if count > 0 {
+                    samples += count;
+                }
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("{url}: decode error: {e}"),
+        }
+        if resource.position() >= Duration::from_secs(2) {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "{url}: timed out waiting for PCM (pos={:?}, samples={samples})",
+            resource.position()
+        );
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    assert!(samples > 0, "{url}: must decode PCM samples");
+    assert!(
+        resource.position() >= Duration::from_secs(2),
+        "{url}: must decode at least 2s, got {:?}",
+        resource.position()
+    );
+}
+
+// Note: the remote-only sibling `player_mp3_duration_matches_app_flow` exercises
+// `PlayerImpl::duration_seconds()`, which is updated by the running processor
+// (`player_processor::update_position_duration`). That path needs `play()` and
+// therefore a real cpal device — it can't be reproduced offline without
+// audio hardware, so we don't add a local equivalent here.
