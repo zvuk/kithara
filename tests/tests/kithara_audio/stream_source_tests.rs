@@ -22,7 +22,7 @@ use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
-    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
+    SourceSeekAnchor, Stream, StreamError, StreamReadError, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -1945,12 +1945,12 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let mut buf = vec![0u8; 16];
 
     let result = stream
-        .read(&mut buf)
+        .try_read(&mut buf)
         .expect_err("read should be interrupted by flushing");
-    // Uses `Other` (not `Interrupted`) so that Symphonia propagates
-    // the error instead of silently retrying.
-    assert_eq!(result.kind(), io::ErrorKind::Other);
-    assert_eq!(result.to_string(), "seek pending");
+    // Typed `StreamReadError::SeekPending` distinguishes seek-induced
+    // aborts from transient backpressure (`NotReady`) — no string
+    // matching, no `ErrorKind` overload.
+    assert!(matches!(result, StreamReadError::SeekPending));
 }
 
 // Encoded ABR switch test — verify no samples lost during decoder recreation

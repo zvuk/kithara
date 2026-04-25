@@ -9,6 +9,7 @@
 
 use std::{
     error::Error as StdError,
+    fmt,
     future::Future,
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     ops::Range,
@@ -17,6 +18,49 @@ use std::{
 
 use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
+
+/// Typed error from [`Stream::try_read`].
+///
+/// Each variant has distinct caller semantics — there is no string
+/// matching or downcast required. The `Read for Stream` adapter maps
+/// these onto `io::Error` for consumers that go through `std::io::Read`
+/// (Symphonia's `MediaSourceStream`); decoders that want precise
+/// classification call `try_read` directly via [`DecoderInput`] in
+/// `kithara-decode`.
+#[derive(Debug)]
+pub enum StreamReadError {
+    /// A seek is pending (consumer flagged the timeline). The current
+    /// read must be aborted; do **not** retry — instead drain pending
+    /// state and let the seek apply.
+    SeekPending,
+    /// No data ready yet at the requested position. Transient — caller
+    /// may retry after backoff.
+    NotReady,
+    /// Source crossed a variant boundary mid-read.
+    VariantChange,
+    /// Anything else surfaced by the underlying `Source`.
+    Source(IoError),
+}
+
+impl fmt::Display for StreamReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SeekPending => f.write_str("seek pending"),
+            Self::NotReady => f.write_str("data not ready"),
+            Self::VariantChange => f.write_str("variant change"),
+            Self::Source(e) => write!(f, "source error: {e}"),
+        }
+    }
+}
+
+impl StdError for StreamReadError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Source(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
@@ -160,21 +204,26 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-impl<T: StreamType> Read for Stream<T> {
+impl<T: StreamType> Stream<T> {
+    /// Typed read — returns one of the [`StreamReadError`] variants
+    /// instead of an opaque `io::Error`. Decoders that can act on the
+    /// distinction between `SeekPending`, `NotReady`, and source errors
+    /// should use this directly; `impl Read for Stream` wraps the
+    /// result for `std::io::Read` consumers.
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, StreamReadError> {
         /// Short timeout keeps the audio worker responsive for round-robin
         /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
         /// lasts ~46ms. A 10ms budget gives the worker time to serve other
         /// tracks and still refill the ringbuf before the audio callback drains it.
         const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
-        /// Maximum `wait_range` retries before returning `Interrupted` to the caller.
-        /// Each retry takes `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
-        /// This prevents the hang detector (typically 1–10s) from firing when data
-        /// is legitimately not yet available (e.g. encrypted HLS startup). Symphonia
-        /// retries `Interrupted` automatically, resetting the per-call detector.
+        /// Maximum `wait_range` retries before returning `NotReady` to
+        /// the caller. Each retry takes `WAIT_RANGE_TIMEOUT` (10ms), so
+        /// 50 iterations ≈ 500ms. Prevents the hang detector from
+        /// firing when data is legitimately not yet available
+        /// (e.g. encrypted HLS startup).
         const MAX_WAIT_SPINS: u32 = 50;
 
         if buf.is_empty() {
@@ -196,17 +245,17 @@ impl<T: StreamType> Read for Stream<T> {
                     let msg = e.to_string();
                     if msg.contains("budget exceeded") {
                         if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
-                            return Err(IoError::other("seek pending"));
+                            return Err(StreamReadError::SeekPending);
                         }
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
+                            return Err(StreamReadError::NotReady);
                         }
                         hang_tick!();
                         yield_now();
                         continue;
                     }
-                    return Err(IoError::other(msg));
+                    return Err(StreamReadError::Source(IoError::other(msg)));
                 }
             };
             match wait_outcome {
@@ -216,30 +265,30 @@ impl<T: StreamType> Read for Stream<T> {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(IoError::new(ErrorKind::Interrupted, "data not ready"));
+                            return Err(StreamReadError::NotReady);
                         }
                         hang_tick!();
                         yield_now();
                         continue;
                     }
-                    return Err(IoError::other("seek pending"));
+                    return Err(StreamReadError::SeekPending);
                 }
             }
 
             wait_spins = 0;
 
             if timeline.seek_epoch() != read_epoch {
-                return Err(IoError::other("seek pending"));
+                return Err(StreamReadError::SeekPending);
             }
 
             match self
                 .source
                 .read_at(pos, buf)
-                .map_err(|e| IoError::other(e.to_string()))?
+                .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Data(n) => {
                     if timeline.seek_epoch() != read_epoch {
-                        return Err(IoError::other("seek pending"));
+                        return Err(StreamReadError::SeekPending);
                     }
                     hang_reset!();
                     timeline.set_segment_position(pos);
@@ -247,7 +296,7 @@ impl<T: StreamType> Read for Stream<T> {
                     return Ok(n);
                 }
                 ReadOutcome::VariantChange => {
-                    return Err(IoError::other(VariantChangeError));
+                    return Err(StreamReadError::VariantChange);
                 }
                 ReadOutcome::Retry => {
                     hang_tick!();
@@ -255,6 +304,24 @@ impl<T: StreamType> Read for Stream<T> {
                     continue;
                 }
             }
+        }
+    }
+}
+
+impl<T: StreamType> Read for Stream<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.try_read(buf) {
+            Ok(n) => Ok(n),
+            // Place `SeekPending` as the typed inner error of `Other`
+            // so consumers of the `io::Read` surface (Symphonia chain
+            // walker in `kithara-decode`) can `downcast_ref` it
+            // without matching on strings.
+            Err(e @ StreamReadError::SeekPending) => Err(IoError::other(e)),
+            Err(StreamReadError::NotReady) => {
+                Err(IoError::new(ErrorKind::Interrupted, "data not ready"))
+            }
+            Err(StreamReadError::VariantChange) => Err(IoError::other(VariantChangeError)),
+            Err(StreamReadError::Source(e)) => Err(e),
         }
     }
 }
@@ -489,7 +556,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn read_propagates_interrupted_when_flushing() {
+    fn try_read_returns_seek_pending_when_flushing() {
         let timeline = Timeline::new();
         let _ = timeline.initiate_seek(Duration::from_millis(10));
         let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
@@ -497,15 +564,13 @@ mod tests {
         let mut buf = [0u8; 4];
 
         let err = stream
-            .read(&mut buf)
+            .try_read(&mut buf)
             .expect_err("flushing read must return error");
-        // Uses `Other` (not `Interrupted`) so that Symphonia propagates
-        // the error instead of silently retrying.
-        assert_eq!(err.kind(), ErrorKind::Other);
+        assert!(matches!(err, StreamReadError::SeekPending));
     }
 
     #[kithara::test]
-    fn read_aborts_when_seek_epoch_changes_after_wait() {
+    fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
             timeline: timeline.clone(),
@@ -515,10 +580,10 @@ mod tests {
         let mut buf = [0u8; 4];
 
         let err = stream
-            .read(&mut buf)
+            .try_read(&mut buf)
             .expect_err("seek epoch change must abort stale read");
 
-        assert_eq!(err.kind(), ErrorKind::Other);
+        assert!(matches!(err, StreamReadError::SeekPending));
         assert_eq!(stream.source.read_calls, 0);
         assert_eq!(stream.position(), 0);
     }

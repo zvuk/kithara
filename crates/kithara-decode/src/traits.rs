@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use kithara_stream::StreamReadError;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
@@ -15,13 +16,48 @@ use crate::{
 
 /// Combined trait for decoder input sources.
 ///
-/// This supertrait combines `Read + Seek + Send + Sync` into a single trait
-/// that can be used as a trait object (`Box<dyn DecoderInput>`).
-///
-/// A blanket implementation is provided for all types satisfying the bounds.
-pub(crate) trait DecoderInput: Read + Seek + Send + Sync {}
+/// Supertrait combining `Read + Seek + Send + Sync`. Adds typed
+/// [`try_read`] which lets decoders classify the read outcome
+/// (`SeekPending`, `NotReady`, `VariantChange`, `Source`) without
+/// matching `io::Error` strings. `kithara_stream::Stream` overrides
+/// `try_read` to forward to its own typed `try_read`; arbitrary
+/// `Read + Seek` sources (test cursors, fixtures) get the default
+/// impl which wraps every `io::Error` as [`StreamReadError::Source`].
+pub trait DecoderInput: Read + Seek + Send + Sync {
+    /// Typed read. Forwards to [`Read::read`]; if the resulting
+    /// [`io::Error`] carries a typed [`StreamReadError`] payload (set
+    /// by `Stream`'s `impl Read`), we recover the precise variant via
+    /// `downcast` instead of collapsing every error into
+    /// [`StreamReadError::Source`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed [`StreamReadError`] variant — `SeekPending` /
+    /// `VariantChange` recovered from the wrapped [`io::Error`], or
+    /// [`StreamReadError::Source`] for unrelated I/O failures.
+    fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, StreamReadError> {
+        match Read::read(self, buf) {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                if let Some(inner) = e
+                    .get_ref()
+                    .and_then(|src| src.downcast_ref::<StreamReadError>())
+                {
+                    match inner {
+                        StreamReadError::SeekPending => return Err(StreamReadError::SeekPending),
+                        StreamReadError::VariantChange => {
+                            return Err(StreamReadError::VariantChange);
+                        }
+                        StreamReadError::NotReady | StreamReadError::Source(_) => {}
+                    }
+                }
+                Err(StreamReadError::Source(e))
+            }
+        }
+    }
+}
 
-impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
+impl<T: Read + Seek + Send + Sync + ?Sized> DecoderInput for T {}
 
 /// Trait for runtime-polymorphic audio decoders.
 ///

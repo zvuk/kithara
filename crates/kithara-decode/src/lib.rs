@@ -45,6 +45,6 @@ pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderConfig, DecoderFactory};
 // Public traits
-pub use traits::InnerDecoder;
+pub use traits::{DecoderInput, InnerDecoder};
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

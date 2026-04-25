@@ -43,7 +43,17 @@ pub enum DecodeError {
 }
 
 fn is_seek_pending_io(err: &io::Error) -> bool {
-    err.kind() == ErrorKind::Interrupted || err.to_string() == "seek pending"
+    // `Stream`'s `impl Read` maps `StreamReadError::NotReady` →
+    // `ErrorKind::Interrupted` and `StreamReadError::SeekPending` →
+    // a non-Interrupted `Other` error. From the pipeline's POV both
+    // mean "abort and retry through the seek/data gate", so both are
+    // classified as interrupted here. Symphonia's chain may wrap the
+    // original `io::Error` deeper — `walk_error_chain` digs through it.
+    err.kind() == ErrorKind::Interrupted
+        || err
+            .get_ref()
+            .and_then(|src| src.downcast_ref::<kithara_stream::StreamReadError>())
+            .is_some_and(|e| matches!(e, kithara_stream::StreamReadError::SeekPending))
 }
 
 fn is_variant_change_io(err: &io::Error) -> bool {
@@ -76,7 +86,8 @@ where
 
 fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
     walk_error_chain(err, &is_seek_pending_io, &|leaf| {
-        leaf.to_string().contains("seek pending")
+        leaf.downcast_ref::<kithara_stream::StreamReadError>()
+            .is_some_and(|e| matches!(e, kithara_stream::StreamReadError::SeekPending))
     })
 }
 
@@ -183,7 +194,11 @@ mod tests {
 
     #[kithara::test]
     fn test_backend_seek_pending_counts_as_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(IoError::other("seek pending")));
+        // Typed `StreamReadError::SeekPending` payload threaded through
+        // `IoError::other` is the canonical signal for an in-flight seek.
+        let decode_err = DecodeError::Backend(Box::new(IoError::other(
+            kithara_stream::StreamReadError::SeekPending,
+        )));
         assert!(decode_err.is_interrupted());
     }
 

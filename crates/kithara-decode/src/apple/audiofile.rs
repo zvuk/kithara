@@ -8,16 +8,17 @@
 
 use std::{
     ffi::c_void,
-    io::{Read, Seek, SeekFrom},
+    io::{Seek, SeekFrom},
     mem::size_of,
     ptr, slice,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
+use kithara_stream::StreamReadError;
 use tracing::{debug, warn};
 
 use super::{
@@ -40,6 +41,12 @@ use crate::{
 struct SourceCtx {
     source: BoxedSource,
     byte_len: Arc<AtomicU64>,
+    /// Set by `read_callback` when the underlying `Stream::read` returns
+    /// `ErrorKind::Interrupted` (e.g. concurrent seek-pending flush).
+    /// Consumed by `read_next_packet` to surface as `DecodeError::Interrupted`
+    /// rather than letting the caller misinterpret the resulting
+    /// `kAudioFilePositionError` as a permanent decode failure.
+    interrupted: Arc<AtomicBool>,
 }
 
 impl SourceCtx {
@@ -87,15 +94,31 @@ extern "C" fn read_callback(
                 Consts::noErr
             };
         }
-        match ctx.source.read(&mut buf[filled..]) {
+        match ctx.source.try_read(&mut buf[filled..]) {
             Ok(n) if n > 0 => filled += n,
-            _ => break,
+            Err(StreamReadError::SeekPending) => {
+                // The only case where we must surface as
+                // `DecodeError::Interrupted` rather than letting
+                // AudioFile mislabel the partial read as EOF.
+                ctx.interrupted.store(true, Ordering::Release);
+                break;
+            }
+            Ok(_) | Err(_) => break,
         }
     }
     // SAFETY: out-param.
     unsafe { *actual_count = UInt32::try_from(filled).unwrap_or(UInt32::MAX) };
     if filled == 0 {
-        Consts::kAudioFileEndOfFileError
+        if ctx.interrupted.load(Ordering::Acquire) {
+            // Non-EOF, non-noErr status: `AudioFileReadPacketData` surfaces
+            // this as a generic failure, which `read_next_packet` then
+            // reinterprets via the `interrupted` flag as
+            // `DecodeError::Interrupted`. This avoids a permanent EOF
+            // misclassification when a concurrent seek aborts the read.
+            Consts::kAudioFilePositionError
+        } else {
+            Consts::kAudioFileEndOfFileError
+        }
     } else {
         Consts::noErr
     }
@@ -112,6 +135,11 @@ pub(super) struct AudioFileReader {
     /// Boxed so the pointer fed into `AudioFileOpenWithCallbacks` stays
     /// stable for the lifetime of the `AudioFileID`.
     _ctx: Box<SourceCtx>,
+    /// Cloned from `SourceCtx::interrupted`. Read by `read_next_packet`
+    /// to translate `AudioFile` errors that originated from a transient
+    /// `Stream::read` interruption (concurrent seek) into
+    /// `DecodeError::Interrupted`.
+    interrupted: Arc<AtomicBool>,
     format: AudioStreamBasicDescription,
     magic_cookie: Option<Vec<u8>>,
     packet_upper_bound: u32,
@@ -128,7 +156,12 @@ impl AudioFileReader {
         byte_len: Arc<AtomicU64>,
         file_type: AudioFileTypeID,
     ) -> DecodeResult<Self> {
-        let mut ctx = Box::new(SourceCtx { source, byte_len });
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let mut ctx = Box::new(SourceCtx {
+            source,
+            byte_len,
+            interrupted: Arc::clone(&interrupted),
+        });
         let ctx_ptr = ctx.as_mut() as *mut SourceCtx as *mut c_void;
 
         let mut file: AudioFileID = ptr::null_mut();
@@ -180,6 +213,7 @@ impl AudioFileReader {
         Ok(Self {
             file,
             _ctx: ctx,
+            interrupted,
             format,
             magic_cookie,
             packet_upper_bound,
@@ -307,6 +341,10 @@ impl PacketReader for AudioFileReader {
         let mut desc = AudioStreamPacketDescription::default();
         let packet_index = self.next_packet as SInt64;
 
+        // Clear before the call so only failures observed during this
+        // invocation are surfaced as `Interrupted`.
+        self.interrupted.store(false, Ordering::Release);
+
         // SAFETY: `self.file` is live; buffer has `capacity` writable bytes;
         // out-params are writable stack values.
         let status = unsafe {
@@ -320,6 +358,30 @@ impl PacketReader for AudioFileReader {
                 self.packet_buf.as_mut_ptr() as *mut c_void,
             )
         };
+
+        let was_interrupted = self.interrupted.swap(false, Ordering::AcqRel);
+
+        // The read callback sets `interrupted` when `Stream::read` returned
+        // `ErrorKind::Interrupted` (e.g. concurrent seek-pending flush).
+        // When that coincides with AudioFile reporting EOF / no packets /
+        // a generic error, surface it as `DecodeError::Interrupted` so the
+        // pipeline retries through the seek gate instead of misclassifying
+        // the read as a permanent EOF or failure. If AudioFile produced a
+        // packet despite an interrupt earlier in the call, treat the read
+        // as successful — we got real data.
+        if num_packets > 0 && status == Consts::noErr {
+            self.next_packet += u64::from(num_packets);
+            self.last_num_bytes = num_bytes;
+            self.last_desc = desc;
+            return Ok(Some(PacketRef {
+                data: &self.packet_buf[..num_bytes as usize],
+                description: desc,
+            }));
+        }
+
+        if was_interrupted {
+            return Err(DecodeError::Interrupted);
+        }
 
         if status == Consts::kAudioFileEndOfFileError || num_packets == 0 {
             return Ok(None);
@@ -337,13 +399,10 @@ impl PacketReader for AudioFileReader {
             ))));
         }
 
-        self.next_packet += u64::from(num_packets);
-        self.last_num_bytes = num_bytes;
-        self.last_desc = desc;
-        Ok(Some(PacketRef {
-            data: &self.packet_buf[..num_bytes as usize],
-            description: desc,
-        }))
+        // Unreachable: noErr + num_packets > 0 returned above; other status
+        // paths above return explicitly. Keep the panic to surface a logic
+        // bug instead of silently producing a stale packet.
+        unreachable!("AudioFileReadPacketData status/num_packets unhandled")
     }
 
     fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64> {
