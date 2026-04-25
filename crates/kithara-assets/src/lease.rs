@@ -329,7 +329,7 @@ where
 
         if !matches!(
             self.inner.status(),
-            ResourceStatus::Active | ResourceStatus::Failed(_)
+            ResourceStatus::Active | ResourceStatus::Cancelled | ResourceStatus::Failed(_)
         ) {
             return;
         }

@@ -472,11 +472,22 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     fn status(&self) -> ResourceStatus {
         let state = self.inner.state.lock_sync();
         if let Some(ref reason) = state.failed {
+            // `Failed` keeps priority over `Cancelled` — a data error
+            // is more informative than a routine shutdown signal.
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {
+            // `Committed` keeps priority too: bytes are still
+            // readable for observers that opened a fresh handle on
+            // top of an already-committed file.
             ResourceStatus::Committed {
                 final_len: state.final_len,
             }
+        } else if self.inner.cancel.is_cancelled() {
+            // Token-fired before the data lifecycle progressed.
+            // Surface as `Cancelled` so blocking observers (e.g.
+            // `kithara_assets::ProcessedResource`'s readiness gate)
+            // can wake immediately instead of polling on a watchdog.
+            ResourceStatus::Cancelled
         } else {
             ResourceStatus::Active
         }

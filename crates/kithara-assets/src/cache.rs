@@ -218,7 +218,14 @@ where
                     ResourceStatus::Failed(reason) => {
                         return Some(AssetResourceState::Failed(reason));
                     }
-                    ResourceStatus::Active => has_active = true,
+                    // Cancelled folds into Active for the same reason
+                    // `AssetResourceState::From` does — a cancelled
+                    // handle still represents a live cache entry
+                    // whose partial bytes are valid for a Phase-2
+                    // reopen. The cancellation signal is consumed by
+                    // `ProcessedResource::inner_terminal` via
+                    // `ResourceStatus::Cancelled` directly.
+                    ResourceStatus::Active | ResourceStatus::Cancelled => has_active = true,
                     ResourceStatus::Committed { final_len } => {
                         if committed.is_none() {
                             committed = Some(AssetResourceState::Committed { final_len });

@@ -195,8 +195,17 @@ where
 
     /// Whether further waiting is pointless because the inner
     /// resource will never produce processed bytes.
+    ///
+    /// Both `Failed` and `Cancelled` are terminal here: failure
+    /// means a data error, cancellation means the routine shutdown
+    /// signal (e.g. track switch, app exit) reached the resource.
+    /// Either way the gate will never flip Ready, so a waiter must
+    /// abort instead of polling indefinitely.
     fn inner_terminal(&self) -> bool {
-        matches!(self.inner.status(), ResourceStatus::Failed(_))
+        matches!(
+            self.inner.status(),
+            ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+        )
     }
 
     /// Process content chunk-by-chunk and write back to disk.
@@ -963,5 +972,107 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Concurrent contract pinning the post-commit readiness gate.
+    ///
+    /// Reader spawns first, parks in `wait_range` while bytes-on-disk
+    /// are already `Ready` but processing has not yet run. The writer
+    /// thread fires `commit()` after a short delay; `wait_range` must
+    /// wake only after `process_and_write` has finished and `read_at`
+    /// must return the *processed* bytes (not the raw on-disk bytes).
+    ///
+    /// Before the gate fix this race collapsed to `wait_range = Ready`
+    /// + `read_at = NotReadable`, the production hang surfaced by
+    /// `local_queue_playlist_behavior_symphonia`.
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    fn wait_range_blocks_until_commit_processes() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
+        let raw: Vec<u8> = (0..32u8).collect();
+
+        let (resource, _dir) = mock_resource(&raw);
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+        let processed_for_writer = processed.clone();
+        let raw_len = raw.len() as u64;
+
+        let reader = std::thread::spawn(move || {
+            let outcome = processed.wait_range(0..raw_len).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+            assert!(
+                processed.is_readable(),
+                "wait_range must not return Ready before processing has run"
+            );
+            let mut buf = vec![0u8; raw.len()];
+            processed.read_at(0, &mut buf).unwrap();
+            buf
+        });
+
+        // Give the reader long enough to enter the gate's wait loop.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "process must not have run before commit"
+        );
+        processed_for_writer.commit(Some(raw_len)).unwrap();
+
+        let read = reader.join().unwrap();
+        let expected: Vec<u8> = (0..32u8).map(|b| b ^ 0x55).collect();
+        assert_eq!(
+            read, expected,
+            "reader must observe the processed (XOR'd) bytes, not raw"
+        );
+    }
+
+    /// Cancellation contract: a reader parked in the readiness gate
+    /// must wake when the underlying resource's cancel token fires —
+    /// not poll on the watchdog tick until something else nudges it.
+    /// Surfacing the cancel through `ResourceStatus::Cancelled` is
+    /// what closes that observation gap.
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    fn wait_range_aborts_on_cancellation() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
+
+        // Build a resource with an explicit cancel token we can fire
+        // from the test thread; the standard `mock_resource` helper
+        // immediately drops its token, which would race the assert.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cancel.bin");
+        let cancel = CancellationToken::new();
+        let resource: MmapResource = Resource::open(
+            cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
+        .unwrap();
+        resource.write_at(0, &[1u8; 16]).unwrap();
+
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+        let processed_for_reader = processed.clone();
+
+        let reader = std::thread::spawn(move || processed_for_reader.wait_range(0..16));
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cancel.cancel();
+
+        let outcome = reader
+            .join()
+            .expect("reader thread panicked")
+            .expect("wait_range must not surface a hard error on cancel");
+        assert_eq!(
+            outcome,
+            WaitOutcome::Interrupted,
+            "cancellation must wake the gate as Interrupted, not block on the 100ms tick"
+        );
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "processor must not have run after cancellation"
+        );
     }
 }
