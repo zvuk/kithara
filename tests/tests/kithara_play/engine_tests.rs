@@ -176,48 +176,7 @@ fn engine_instances_share_session_ducking() {
     EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
 }
 
-// Tests that require actual audio hardware should be marked #[ignore].
-// They are run explicitly during local development or on hardware-capable CI.
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_start_stop_roundtrip() {
-    let engine = make_engine();
-    engine.start().unwrap();
-    assert!(engine.is_running());
-    engine.stop().unwrap();
-    assert!(!engine.is_running());
-}
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_allocate_and_release_slot() {
-    let engine = make_engine();
-    engine.start().unwrap();
-
-    let slot_id = engine.allocate_slot().unwrap();
-    assert_eq!(engine.slot_count(), 1);
-    assert!(engine.active_slots().contains(&slot_id));
-
-    engine.release_slot(slot_id).unwrap();
-    assert_eq!(engine.slot_count(), 0);
-
-    engine.stop().unwrap();
-}
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_arena_full_error() {
-    let config = EngineConfig {
-        max_slots: 1,
-        ..Default::default()
-    };
-    let engine = EngineImpl::new(config, EventBus::default());
-    engine.start().unwrap();
-
-    let _slot1 = engine.allocate_slot().unwrap();
-    let result = engine.allocate_slot();
-    assert!(matches!(result, Err(PlayError::ArenaFull)));
-
-    engine.stop().unwrap();
-}
+// engine_start_stop_roundtrip / engine_allocate_and_release_slot /
+// engine_arena_full_error переехали в `engine_cpal_tests.rs` и
+// параметризованы по backend (cpal | offline). cpal-вариант остаётся
+// гейтнутым через suite_e2e, offline — самодостаточный.

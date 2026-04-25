@@ -32,6 +32,9 @@ pub(crate) mod continuity;
 // `#[ignore]`'d, и `--run-ignored all` поднимает их.
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
+    #[path = "../kithara_play/engine_cpal_tests.rs"]
+    mod engine_cpal_tests;
+
     #[path = "../kithara_play/silvercomet_seek_hang.rs"]
     mod silvercomet_seek_hang;
 }
