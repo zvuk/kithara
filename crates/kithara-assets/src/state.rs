@@ -25,11 +25,6 @@ impl From<ResourceStatus> for AssetResourceState {
             ResourceStatus::Active => Self::Active,
             ResourceStatus::Committed { final_len } => Self::Committed { final_len },
             ResourceStatus::Failed(reason) => Self::Failed(reason),
-            // Cancellation surfaces as Missing at this layer: callers
-            // ask "is there usable data?" and a cancelled resource
-            // produces nothing usable. The underlying token is the
-            // authoritative cancellation signal.
-            ResourceStatus::Cancelled => Self::Missing,
         }
     }
 }

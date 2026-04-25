@@ -225,10 +225,6 @@ where
                             promote_key = Some(cache_key.clone());
                         }
                     }
-                    // Cancelled resources are not surfaced as committed/
-                    // active candidates — let the next iteration treat
-                    // them like absent entries.
-                    ResourceStatus::Cancelled => continue,
                 }
             }
 

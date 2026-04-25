@@ -477,13 +477,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             ResourceStatus::Committed {
                 final_len: state.final_len,
             }
-        } else if self.inner.cancel.is_cancelled() {
-            // Cancellation is asynchronous: the token can fire after
-            // the resource opens without any explicit `fail()` call.
-            // Surface it via the status enum so blocking observers
-            // (e.g. `kithara_assets::ProcessedResource`'s readiness
-            // gate) wake immediately instead of polling.
-            ResourceStatus::Cancelled
         } else {
             ResourceStatus::Active
         }

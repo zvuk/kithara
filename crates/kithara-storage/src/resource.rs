@@ -52,15 +52,6 @@ pub enum ResourceStatus {
     Committed { final_len: Option<u64> },
     /// Resource encountered an error.
     Failed(String),
-    /// Resource's cancellation token has fired.
-    ///
-    /// Distinct from [`Self::Failed`]: cancellation is a routine
-    /// shutdown signal (e.g. track switch, app exit), not a data error.
-    /// Surfacing it through `status()` lets blocking observers (e.g.
-    /// the readiness gate in `kithara_assets::ProcessedResource`) wake
-    /// promptly instead of polling on a timer until something else
-    /// flips the status.
-    Cancelled,
 }
 
 /// Unified sync resource trait.
