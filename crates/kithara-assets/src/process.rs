@@ -8,7 +8,7 @@
 use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use kithara_platform::Mutex;
+use kithara_platform::{Condvar, Mutex, time::Instant};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
@@ -46,12 +46,95 @@ pub type ProcessChunkFn<Ctx> =
 ///
 /// Processing only happens when `ctx` is `Some`. When `ctx` is `None`
 /// (playlists, keys), commit just delegates to inner — no processing.
+///
+/// ## Readability sync
+///
+/// `inner.wait_range` reports `Ready` as soon as bytes hit disk via
+/// `write_at`, but for an active processor those bytes are still
+/// **encrypted** until [`Self::commit`] runs `process_and_write`. A
+/// reader that observed `wait_range = Ready` and immediately called
+/// `read_at` would race the processor and hit
+/// [`StorageError::NotReadable`] (the symptom that surfaced as the
+/// `local_queue_playlist_behavior_*` post-seek hang under DRM).
+///
+/// `ProcessedResource` therefore owns a [`ReadinessGate`] that pairs
+/// the `processed` flag with a [`Condvar`]: `commit()` flips the flag
+/// and notifies, and `wait_range`/`read_at` block on the gate so
+/// callers cannot see "ready bytes" until processing has finished.
 pub struct ProcessedResource<R, Ctx> {
     inner: R,
     ctx: Option<Ctx>,
     process: ProcessChunkFn<Ctx>,
     pool: BytePool,
-    processed: Arc<Mutex<bool>>,
+    readiness: Arc<ReadinessGate>,
+}
+
+/// Pairs a `processed` flag with a [`Condvar`] so readers can block
+/// until [`ProcessedResource::commit`] drains the processor.
+///
+/// Splitting this out keeps the locking discipline explicit: the
+/// guard is only ever held inside [`ReadinessGate::wait_until_ready`]
+/// or the brief flip in [`ReadinessGate::mark_ready`].
+struct ReadinessGate {
+    processed: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl ReadinessGate {
+    fn new(initial: bool) -> Self {
+        Self {
+            processed: Mutex::new(initial),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.processed.lock_sync()
+    }
+
+    /// Mark the gate ready and wake every waiter.
+    fn mark_ready(&self) {
+        *self.processed.lock_sync() = true;
+        self.cv.notify_all();
+    }
+
+    /// Reset to "not ready" — used by [`ProcessedResource::reactivate`]
+    /// when the inner resource is reopened for fresh writes.
+    fn mark_pending(&self) {
+        *self.processed.lock_sync() = false;
+    }
+
+    /// Block the caller until `processed` becomes `true` or
+    /// `should_abort` reports that the underlying resource has
+    /// failed/cancelled. Returns `true` if the gate was reached,
+    /// `false` if the wait was aborted.
+    fn wait_until_ready(&self, should_abort: &dyn Fn() -> bool) -> bool {
+        loop {
+            // Bounded wake-up so a missed notify (or a status change
+            // that does not flow through `mark_ready`) cannot strand
+            // a reader. 100 ms keeps perceived latency under the
+            // 250 ms playback engine tick budget. The result is read
+            // out of the guard, which is dropped at the end of the
+            // block so `should_abort()` (which may take the inner
+            // resource's locks) cannot deadlock against a producer
+            // that wants the gate's own mutex.
+            let ready = {
+                let guard = self.processed.lock_sync();
+                if *guard {
+                    return true;
+                }
+                let deadline = Instant::now() + std::time::Duration::from_millis(100);
+                let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
+                *next
+            };
+            if ready {
+                return true;
+            }
+            if should_abort() {
+                return false;
+            }
+        }
+    }
 }
 
 impl<R, Ctx> Clone for ProcessedResource<R, Ctx>
@@ -65,7 +148,7 @@ where
             ctx: self.ctx.clone(),
             process: Arc::clone(&self.process),
             pool: self.pool.clone(),
-            processed: Arc::clone(&self.processed),
+            readiness: Arc::clone(&self.readiness),
         }
     }
 }
@@ -79,7 +162,7 @@ where
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
-            .field("is_processed", &*self.processed.lock_sync())
+            .field("is_processed", &self.readiness.is_ready())
             .finish_non_exhaustive()
     }
 }
@@ -96,7 +179,7 @@ where
             ctx,
             process,
             pool,
-            processed: Arc::new(Mutex::new(processed)),
+            readiness: Arc::new(ReadinessGate::new(processed)),
         }
     }
 }
@@ -107,7 +190,13 @@ where
     Ctx: Clone + Send + Sync + Debug,
 {
     fn is_readable(&self) -> bool {
-        self.ctx.is_none() || *self.processed.lock_sync()
+        self.ctx.is_none() || self.readiness.is_ready()
+    }
+
+    /// Whether further waiting is pointless because the inner
+    /// resource will never produce processed bytes.
+    fn inner_terminal(&self) -> bool {
+        matches!(self.inner.status(), ResourceStatus::Failed(_))
     }
 
     /// Process content chunk-by-chunk and write back to disk.
@@ -166,7 +255,6 @@ where
     delegate::delegate! {
         to self.inner {
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
             fn fail(&self, reason: String);
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
@@ -175,13 +263,34 @@ where
         }
     }
 
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range(range)?;
+        // No active processor → bytes-on-disk readiness *is* readiness.
+        // Forward the inner outcome unchanged. Same for `Eof` /
+        // `Interrupted`: those terminal/control variants do not depend
+        // on processing.
+        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        // Active processor: inner reports Ready as soon as bytes hit
+        // disk via write_at, but those bytes are still encrypted
+        // until commit() runs process_and_write. Block on the
+        // readiness gate so the caller cannot race past processing
+        // into a NotReadable read.
+        let aborted = !self.readiness.wait_until_ready(&|| self.inner_terminal());
+        if aborted {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        Ok(WaitOutcome::Ready)
+    }
+
     fn reactivate(&self) -> StorageResult<()> {
         // Reactivation reopens the inner resource for fresh writes (LRU slot
         // reuse). The processor must rerun on the next commit, so clear the
         // `processed` flag when a processing context is attached.
         self.inner.reactivate()?;
         if self.ctx.is_some() {
-            *self.processed.lock_sync() = false;
+            self.readiness.mark_pending();
         }
         Ok(())
     }
@@ -200,25 +309,27 @@ where
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         // Process on commit (once) if ctx is present.
         // Use the actual processed length (may differ due to padding removal).
-        let actual_len = {
-            let mut processed = self.processed.lock_sync();
-            if !*processed && self.ctx.is_some() {
-                if let Some(len) = final_len
-                    && len > 0
-                {
-                    let processed_len = self.process_and_write(len)?;
-                    *processed = true;
-                    Some(processed_len)
-                } else {
-                    *processed = true;
-                    final_len
-                }
+        let needs_processing = self.ctx.is_some() && !self.readiness.is_ready();
+        let actual_len = if needs_processing {
+            if let Some(len) = final_len
+                && len > 0
+            {
+                Some(self.process_and_write(len)?)
             } else {
                 final_len
             }
+        } else {
+            final_len
         };
 
-        self.inner.commit(actual_len)
+        let inner_result = self.inner.commit(actual_len);
+        // Mark readiness only after the inner commit succeeds — a
+        // failed inner commit must not unblock waiters that would
+        // then race against a half-written file.
+        if inner_result.is_ok() && needs_processing {
+            self.readiness.mark_ready();
+        }
+        inner_result
     }
 }
 
