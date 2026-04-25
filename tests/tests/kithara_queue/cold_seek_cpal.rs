@@ -1,21 +1,7 @@
-//! Reproduces the user-reported cold-cache mid-track HLS seek hang
-//! against a **real cpal audio backend** — matches the production demo
-//! (`cargo run -p kithara`) exactly, sans the iced window.
-//!
-//! Why a separate test: `cold_seek_middle.rs` uses `OfflineBackend`
-//! (no real device) because it must coexist with other tests in the
-//! same binary. The production demo uses cpal, which is a global
-//! singleton — initialising it poisons every subsequent test in the
-//! same process. This test runs with `#[ignore]` and is invoked
-//! manually when hunting the hang.
-//!
-//! Run with:
-//!   cargo test --test suite_heavy \
-//!     kithara_queue::cold_seek_cpal \
-//!     -- --ignored --nocapture --test-threads=1
-//!
-//! A temp directory is used for the HLS asset cache, so every run
-//! starts with a *cold* cache — mandatory for reproducing the bug.
+//! Real-network reproduction of the cold-cache mid-track HLS seek hang
+//! against silvercomet's HLS, using a real cpal backend. Used only by
+//! `just test-e2e`. The synthetic-fixture sibling lives in
+//! `cpal_cold_seek_synthetic.rs` (suite_heavy).
 
 #![forbid(unsafe_code)]
 
@@ -30,9 +16,7 @@ use kithara_net::NetOptions;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara, temp_dir,
-};
+use kithara_test_utils::{kithara, temp_dir};
 use tokio::time::sleep;
 
 use crate::common::decoder_backend::DecoderBackend;
@@ -100,132 +84,6 @@ async fn wait_for_position_at_least(
     ))
 }
 
-/// Cold-cache seek into a far segment over a real cpal backend.
-/// Matches the `kithara-app` GUI demo pipeline exactly.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
-#[ignore = "uses real cpal device — poisons session singleton; run manually with --ignored"]
-async fn cpal_cold_seek_far_segment_hls(#[case] backend: DecoderBackend) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
-    install_tracing();
-
-    let helper = TestServerHelper::new().await;
-    // 3 variants × 40 segments × 4s = 160s — closer to a real
-    // 2–3 minute multi-bitrate HLS master. 200ms delay per segment
-    // simulates cold-CDN latency so the ABR controller's decisions
-    // have real wall-clock impact and a seek far ahead of the
-    // current play head must actually drive the scheduler to fetch
-    // fresh segments on the selected variant.
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(40)
-        .segment_duration_secs(4.0)
-        .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000])
-        .packaged_audio_aac_lc(44_100, 2)
-        .push_delay_rule(DelayRule {
-            delay_ms: 200,
-            ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
-        .await
-        .expect("create long HLS fixture");
-    let master = created.master_url();
-
-    // Fresh cache dir so no segment survives from any previous run.
-    let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
-    let downloader = Downloader::new(DownloaderConfig::default());
-
-    // NOTE: do NOT call `init_offline_backend` — we want the real
-    // cpal backend so the pipeline matches what the user sees when
-    // running `cargo run -p kithara`. That means this test opens a
-    // real output stream on the default audio device.
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(16)).await; // iced subscription cadence
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
-    let source = TrackSource::Config(Box::new(cfg));
-
-    let mut rx = queue.subscribe();
-    let id = queue.append(source);
-    wait_for_status(
-        &mut rx,
-        &queue,
-        id,
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("load: {e}"));
-
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
-
-    let pos_before = wait_for_position_at_least(&queue, 1.5, Duration::from_secs(20))
-        .await
-        .expect("track never played past 1.5s");
-    eprintln!("[cpal] pre-seek pos={pos_before:.3}s");
-
-    // Seek to 75% of the track — well past whatever the initial
-    // fetch-ahead window covered. Matches the user's "seek to middle
-    // of an uncached track".
-    let seek_target = 120.0;
-    queue.seek(seek_target).expect("seek accepted");
-    eprintln!("[cpal] seek issued target={seek_target:.1}s (of 160s)");
-
-    let observation_deadline = Instant::now() + Duration::from_secs(30);
-    let mut confirmed = false;
-    while Instant::now() < observation_deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos > seek_target + 0.5
-        {
-            confirmed = true;
-            break;
-        }
-        if tick_handle.is_finished() {
-            break;
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-
-    if tick_handle.is_finished() {
-        match tick_handle.await {
-            Ok(()) => panic!("tick task exited without panic"),
-            Err(e) => panic!("seek watchdog panicked — HANG REPRODUCED: {e}"),
-        }
-    }
-
-    assert!(
-        confirmed,
-        "cpal cold seek to {seek_target:.2}s never advanced past target \
-         (pos_before={pos_before:.2}, last={:?}) — silent hang",
-        queue.position_seconds(),
-    );
-
-    tick_handle.abort();
-    drop(queue);
-    drop(downloader);
-    drop(temp);
-}
-
 /// Real-network reproduction against silvercomet's HLS — the exact
 /// track the user seeks on in the GUI demo. Uses the production app
 /// pipeline (cpal backend, shared Downloader, cold cache dir) with
@@ -241,7 +99,7 @@ async fn cpal_cold_seek_far_segment_hls(#[case] backend: DecoderBackend) {
 #[case::apple(DecoderBackend::Apple)]
 #[case::android(DecoderBackend::Android)]
 #[ignore = "real network + real cpal; run manually: \
-    cargo test --test suite_heavy \
+    cargo test --test suite_e2e \
     kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {

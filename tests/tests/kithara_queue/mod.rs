@@ -1,4 +1,6 @@
-// cold_seek_cpal только в suite_e2e (требует cpal-устройство + VPN).
+// cold_seek_cpal содержит только silvercomet+cpal #[ignore]-кейс,
+// подключается через suite_e2e #[path].
 mod cold_seek_middle;
+mod cpal_cold_seek_synthetic;
 mod local_track_plays;
-// real_playlist только в suite_e2e (silvercomet/zvuk live URLs).
+mod real_playlist;
