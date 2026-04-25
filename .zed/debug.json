@@ -10,6 +10,10 @@
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "auto"],
     "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "trace",
+      "RUST_BACKTRACE": "1"
+    },
     "sourceLanguages": ["rust"]
   },
   {
@@ -23,6 +27,10 @@
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "tui"],
     "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "trace",
+      "RUST_BACKTRACE": "1"
+    },
     "sourceLanguages": ["rust"]
   },
   {
@@ -36,6 +44,10 @@
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "gui"],
     "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "trace",
+      "RUST_BACKTRACE": "1"
+    },
     "sourceLanguages": ["rust"]
   }
 ]
