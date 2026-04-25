@@ -545,7 +545,12 @@ mod tests {
     impl ContextMemStore {
         fn new(asset_root: &str) -> Self {
             Self {
-                inner: MemAssetStore::new(asset_root, CancellationToken::new(), None),
+                inner: MemAssetStore::new(
+                    asset_root,
+                    CancellationToken::new(),
+                    None,
+                    crate::byte_pool(),
+                ),
             }
         }
     }
@@ -605,13 +610,19 @@ mod tests {
             dir,
             "test_asset",
             CancellationToken::new(),
+            crate::byte_pool(),
         ));
         CachedAssets::new(disk, capacity, None)
     }
 
     /// Bypass test: empty `asset_root` → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "",
+            CancellationToken::new(),
+            crate::byte_pool(),
+        ));
         CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)
     }
 
@@ -744,7 +755,7 @@ mod tests {
         let key = ResourceKey::new("delete_me.mp3");
         let _res = cached.acquire_resource(&key).unwrap();
 
-        assert!(cached.cache.lock_sync().len() > 0);
+        assert!(!cached.cache.lock_sync().is_empty());
 
         cached.delete_asset().unwrap();
 

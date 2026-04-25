@@ -147,8 +147,11 @@ where
         )
     }
 
-    /// Remove a single resource from the store. Also evicts the key
-    /// from the aggregate byte availability index.
+    /// Remove a single resource from the store. The concrete store
+    /// dispatches through the canonical [`crate::deleter::AssetDeleter`]
+    /// channel, which atomically clears the matching
+    /// [`AvailabilityIndex`](crate::index) entry — so this method
+    /// must not invalidate the index again.
     pub fn remove_resource(&self, key: &ResourceKey) {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -159,7 +162,6 @@ where
                 let _ = store.remove_resource(key);
             }
         }
-        self.availability().remove(self.asset_root(), key);
     }
 
     /// Return the root directory for the asset store.

@@ -2,6 +2,7 @@
 
 mod availability;
 mod lru;
+mod persist;
 mod pin;
 pub mod schema;
 

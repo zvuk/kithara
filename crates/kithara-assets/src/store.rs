@@ -409,12 +409,31 @@ where
 
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        let disk = Arc::new(DiskAssetStore::with_availability(
+        // Disk-backed pins/lru indexes shared across the decorator
+        // stack: `LeaseAssets` mutates pins on resource lifecycle,
+        // `EvictAssets` reads pins / mutates lru on touch & eviction,
+        // `DiskAssetDeleter` invalidates both on full-asset removal.
+        // All three see the same in-memory state through Arc-cloned
+        // `PinsIndex` / `LruIndex` handles.
+        let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
+        let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
+
+        // Single canonical deleter — see [`crate::deleter`].
+        let deleter: Arc<dyn crate::deleter::AssetDeleter> =
+            Arc::new(crate::disk_store::DiskAssetDeleter::new(
+                root_dir.clone(),
+                availability.clone(),
+                pins.clone(),
+                lru.clone(),
+            ));
+
+        let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
             root_dir,
             asset_root,
             cancel.clone(),
             availability,
             self.checkpoint_every,
+            Arc::clone(&deleter),
         ));
         // Spawn the background flusher after Arc wrapping so the task can
         // own a cheap clone of `Arc<DiskAssetStore>`. Silently no-ops when
@@ -425,7 +444,9 @@ where
             disk,
             evict_cfg,
             cancel.clone(),
-            pool.clone(),
+            lru,
+            pins.clone(),
+            deleter,
         ));
         let processing = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
@@ -438,7 +459,8 @@ where
         let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pool);
+        let _ = pool; // pool is consumed by ProcessingAssets and CachedAssets above
+        let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pins);
         (chain, base)
     }
 
@@ -459,17 +481,36 @@ where
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
         let asset_root_clone = asset_root.clone();
-        let mem = Arc::new(MemAssetStore::with_availability(
+        // Symmetric to the disk builder: single deleter shared by
+        // `MemAssetStore`, `EvictAssets`, and `LeaseAssets`. Mem
+        // backend uses ephemeral pins/lru indexes — disk persistence
+        // makes no sense without a backing file. See [`crate::deleter`].
+        let pins = crate::index::PinsIndex::ephemeral();
+        let lru = crate::index::LruIndex::ephemeral();
+        let active_resources = Arc::new(dashmap::DashMap::new());
+        let deleter: Arc<dyn crate::deleter::AssetDeleter> =
+            Arc::new(crate::mem_store::MemAssetDeleter::new(
+                asset_root.clone(),
+                availability.clone(),
+                pins.clone(),
+                lru.clone(),
+                Arc::clone(&active_resources),
+            ));
+        let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
             availability.clone(),
+            active_resources,
+            Arc::clone(&deleter),
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,
             evict_cfg,
             cancel.clone(),
-            pool.clone(),
+            lru,
+            pins.clone(),
+            deleter,
         ));
         let capacity = self
             .cache_capacity
@@ -491,8 +532,60 @@ where
             capacity,
             Some(hooked_on_invalidated),
         ));
-        LeaseAssets::new(cached, cancel, pool)
+        LeaseAssets::new(cached, cancel, pins)
     }
+}
+
+/// Open `_index/pins.bin` as a disk-backed [`crate::index::PinsIndex`].
+///
+/// Failures (path, parent dir creation) collapse to an ephemeral
+/// index — the cache is best-effort, broken state must not prevent
+/// store construction. The actual mmap file is materialised lazily
+/// inside [`crate::index::PinsIndex`] on the first flush, so a fresh
+/// store does not touch the filesystem until a real pin happens.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_disk_pins_index(
+    root_dir: &std::path::Path,
+    cancel: &CancellationToken,
+    pool: &BytePool,
+) -> crate::index::PinsIndex {
+    let Some(path) = lazy_index_path(root_dir, "pins.bin") else {
+        return crate::index::PinsIndex::ephemeral();
+    };
+    crate::index::PinsIndex::with_persist_at(path, cancel.clone(), pool)
+}
+
+/// Open `_index/lru.bin` as a disk-backed [`crate::index::LruIndex`].
+/// Same fallback policy and lazy-materialisation contract as
+/// [`open_disk_pins_index`].
+#[cfg(not(target_arch = "wasm32"))]
+fn open_disk_lru_index(
+    root_dir: &std::path::Path,
+    cancel: &CancellationToken,
+    pool: &BytePool,
+) -> crate::index::LruIndex {
+    let Some(path) = lazy_index_path(root_dir, "lru.bin") else {
+        return crate::index::LruIndex::ephemeral();
+    };
+    crate::index::LruIndex::with_persist_at(path, cancel.clone(), pool)
+}
+
+/// Build the on-disk path for an index file under `root_dir/_index/`.
+///
+/// Returns `None` when the parent directory cannot be created — the
+/// caller falls back to an ephemeral index. Only the parent directory
+/// is touched here; the file itself is materialised lazily on first
+/// flush.
+#[cfg(not(target_arch = "wasm32"))]
+fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let path = root_dir.join("_index").join(name);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::debug!("create _index dir failed: {e}");
+        return None;
+    }
+    Some(path)
 }
 
 impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx> {
@@ -537,7 +630,7 @@ mod tests {
         key::ResourceKey,
     };
 
-    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+    fn panic_message(err: &(dyn std::any::Any + Send)) -> String {
         if let Some(msg) = err.downcast_ref::<String>() {
             return msg.clone();
         }
@@ -606,7 +699,7 @@ mod tests {
         }))
         .expect_err("write_at via open_resource must panic");
         assert!(
-            panic_message(err).contains("write_at requires acquire_resource*"),
+            panic_message(&*err).contains("write_at requires acquire_resource*"),
             "panic must point to acquire_resource"
         );
 
@@ -615,7 +708,7 @@ mod tests {
         }))
         .expect_err("fail via open_resource must panic");
         assert!(
-            panic_message(err).contains("fail requires acquire_resource*"),
+            panic_message(&*err).contains("fail requires acquire_resource*"),
             "panic must point to acquire_resource"
         );
     }
@@ -640,7 +733,7 @@ mod tests {
         }))
         .expect_err("commit via open_resource must panic");
         assert!(
-            panic_message(err).contains("commit requires acquire_resource*"),
+            panic_message(&*err).contains("commit requires acquire_resource*"),
             "panic must point to acquire_resource"
         );
 
@@ -649,7 +742,7 @@ mod tests {
         }))
         .expect_err("reactivate via open_resource must panic");
         assert!(
-            panic_message(err).contains("reactivate requires acquire_resource*"),
+            panic_message(&*err).contains("reactivate requires acquire_resource*"),
             "panic must point to acquire_resource"
         );
     }
@@ -806,5 +899,204 @@ mod tests {
             .build_disk();
         let backend: AssetStore = store.into();
         assert!(!backend.is_ephemeral());
+    }
+
+    /// Red test pinning the root cause of the
+    /// `local_queue_playlist_behavior_*` HLS+AES128 hang
+    /// (`kithara_stream::stream::try_read` spins until the 10 s hang
+    /// detector panics).
+    ///
+    /// The exact production trace is:
+    ///
+    /// ```text
+    /// LeaseResource::drop -> remove_resource (BYPASSES availability invalidation)
+    ///     key=Relative("v0_15.m4s") status=Active
+    /// DiskStore::remove_resource
+    ///     existed=true availability_final_len=65640
+    /// ...
+    /// DiskStore::open_resource: NotFound (file missing)
+    ///     availability_final_len=65640 availability_contains_0_1=true
+    /// ```
+    ///
+    /// `AvailabilityIndex` is the canonical reflection of what is on
+    /// disk. Once a `commit` observer records `final_len`, the index
+    /// is the source of truth and must be invalidated synchronously
+    /// with any disk-side deletion. `CachedAssets` does NOT cause this
+    /// divergence — it only caches in-memory handles. The bug is in
+    /// the disk-side deletion path skipping availability invalidation.
+    ///
+    /// Path doing the divergent deletion: `LeaseResource::drop`
+    /// (lease.rs:367-394). When the writer drops with
+    /// `status = Active | Failed(_)` and `drop_token` strong count
+    /// reaches one, it runs the `RemoveFn` closure (lease.rs:484-488)
+    /// which does `inner.remove_resource(key)` — descending straight
+    /// through `CachedAssets`/`ProcessingAssets`/`EvictAssets` to
+    /// `DiskAssetStore::remove_resource` and `fs::remove_file`.
+    /// `unified::AssetStore::remove_resource` (unified.rs:152) — the
+    /// only place that calls `availability.remove` next to
+    /// `store.remove_resource` — is bypassed entirely.
+    ///
+    /// This reproduction triggers the exact production drop path:
+    /// commit a writer, then `reactivate()` the resource (the live
+    /// path that flips `MmapState::Committed → Active`, mmap.rs:289)
+    /// and drop without commit. `LeaseResource::drop` then sees
+    /// `status == Active` and runs `RemoveFn`. After the drop the
+    /// file is gone, but `AvailabilityIndex` still holds the
+    /// committed `final_len`. Same divergence as the production
+    /// trace, no LRU manipulation, no manual `fs` calls.
+    ///
+    /// FAILING today on the second assertion. Will pass once the
+    /// disk-side deletion path syncs `AvailabilityIndex`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn red_test_lease_resource_drop_strands_availability_index() {
+        let dir = tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("seg_root"))
+            .build();
+
+        let target = ResourceKey::new("v0_15.m4s");
+
+        // Phase 1 — committed writer. AvailabilityIndex receives
+        // `final_len = 4` via the MmapDriver commit observer.
+        {
+            let writer = store.acquire_resource(&target).unwrap();
+            writer.write_at(0, b"data").unwrap();
+            writer.commit(Some(4)).unwrap();
+        }
+        assert!(store.contains_range(&target, 0..4));
+        let path = dir.path().join("seg_root").join("v0_15.m4s");
+        assert!(path.exists(), "file must exist after commit");
+
+        // Phase 2 — exact production drop path. Acquire the resource
+        // again (cache returns the committed clone), reactivate it
+        // (MmapDriver: Committed → Active, mmap.rs:289-305), then
+        // drop without a fresh commit. `LeaseResource::drop` sees
+        // `status == Active`, drop_token strong count == 1, and runs
+        // `RemoveFn` (lease.rs:391) → `inner.remove_resource(key)` →
+        // DiskStore deletes the file. Availability is never told.
+        {
+            let writer2 = store.acquire_resource(&target).unwrap();
+            writer2.reactivate().expect("reactivate committed");
+        }
+
+        // Post-condition: file is gone from disk, but the index never
+        // received `availability.remove`.
+        assert!(
+            !path.exists(),
+            "LeaseResource::drop must have removed the file via inner.remove_resource — \
+             this confirms the bypass path before the divergence assertion"
+        );
+        assert!(
+            !store.contains_range(&target, 0..4),
+            "contains_range must NOT claim the range is ready after \
+             LeaseResource::drop deletes the on-disk file. \
+             AvailabilityIndex is the canonical reflection of disk \
+             state; the deletion path went through \
+             `inner.remove_resource` (lease.rs:487 → DiskStore) and \
+             skipped `unified::AssetStore::remove_resource`, the only \
+             place that calls `availability.remove`. Consequence in \
+             production: HLS reader spins on wait_range=Ready / \
+             read_at=Retry until hang_detector fires"
+        );
+    }
+
+    /// Red test pinning the SECOND bypass surfaced by the parallel
+    /// `local_queue_playlist_behavior_symphonia` failure in
+    /// `just test`. After fixing `LeaseResource::drop`'s availability
+    /// invalidation (`lease.rs` → `DiskStore::remove_resource`), the same
+    /// HLS+AES128 hang still reproduces under parallel pressure.
+    ///
+    /// Trace: any caller that deletes an entire `asset_root` directory
+    /// (instead of a single resource) goes through `delete_asset_dir`
+    /// (`fs::remove_dir_all`) without telling `AvailabilityIndex`.
+    /// Three production paths take this shortcut:
+    ///
+    /// 1. `DiskAssetStore::delete_asset` (in `disk_store.rs`) — invoked
+    ///    via `AssetStore::delete_asset` and `CachedAssets::delete_asset`.
+    /// 2. `EvictAssets::on_asset_created` (in `evict.rs`) — LRU
+    ///    eviction triggered when a new `asset_root` is observed.
+    /// 3. `EvictAssets::evict_one` → `delete_and_forget`
+    ///    (evict.rs:219) — explicit byte-cap eviction.
+    ///
+    /// All three invalidate the directory but leave per-resource
+    /// entries stranded in `AvailabilityIndex`. Subsequent
+    /// `contains_range` / `final_len` queries hit the hot-path map and
+    /// answer with stale `true` / `Some(len)`. A `wait_range` caller
+    /// then issues a `read_at` that returns `NotFound` — same race as
+    /// the first bypass, observable as a 10 s `hang_detector` panic.
+    ///
+    /// The minimal repro below uses `AssetStore::delete_asset` because
+    /// it is the most direct of the three. Once
+    /// `AvailabilityIndex::clear_root` (or equivalent) is wired into
+    /// every directory-deletion path, this test passes and the
+    /// remaining production hang lifts.
+    ///
+    /// FAILING today on the second assertion.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn red_test_delete_asset_strands_availability_index() {
+        let dir = tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("seg_root"))
+            .build();
+
+        let key_a = ResourceKey::new("v0_15.m4s");
+        let key_b = ResourceKey::new("v0_16.m4s");
+
+        // Commit two resources under the same asset_root. Availability
+        // observer records `final_len` for both via MmapDriver::commit.
+        for (key, payload) in [(&key_a, &b"aaaa"[..]), (&key_b, &b"bbbbb"[..])] {
+            let writer = store.acquire_resource(key).unwrap();
+            writer.write_at(0, payload).unwrap();
+            writer.commit(Some(payload.len() as u64)).unwrap();
+        }
+        assert!(store.contains_range(&key_a, 0..4));
+        assert!(store.contains_range(&key_b, 0..5));
+
+        let path_a = dir.path().join("seg_root").join("v0_15.m4s");
+        let path_b = dir.path().join("seg_root").join("v0_16.m4s");
+        assert!(path_a.exists());
+        assert!(path_b.exists());
+
+        // `AssetStore::delete_asset` removes the entire `asset_root`
+        // directory through `delete_asset_dir` (`fs::remove_dir_all`).
+        // Files under it disappear, but the per-resource availability
+        // map under `asset_root` is never cleared.
+        store.delete_asset().unwrap();
+
+        assert!(!path_a.exists(), "delete_asset must remove file A");
+        assert!(!path_b.exists(), "delete_asset must remove file B");
+
+        assert!(
+            !store.contains_range(&key_a, 0..4),
+            "contains_range(key_a) must NOT claim the range is ready \
+             after delete_asset. AvailabilityIndex still holds \
+             final_len/ranges for v0_15.m4s under `seg_root` because \
+             `delete_asset_dir` removes the directory without touching \
+             the per-resource availability map. Consequence in \
+             production: HLS reader spins on wait_range=Ready / \
+             read_at=Retry until hang_detector fires (the parallel \
+             `local_queue_playlist_behavior_symphonia` symptom)"
+        );
+        assert!(
+            !store.contains_range(&key_b, 0..5),
+            "contains_range(key_b) must NOT claim the range is ready \
+             after delete_asset. Same divergence as key_a — directory \
+             gone, per-resource entries stranded in AvailabilityIndex"
+        );
+        assert_eq!(
+            store.final_len(&key_a),
+            None,
+            "final_len(key_a) must be None after delete_asset — \
+             AvailabilityIndex must reflect that no bytes exist"
+        );
+        assert_eq!(
+            store.final_len(&key_b),
+            None,
+            "final_len(key_b) must be None after delete_asset"
+        );
     }
 }

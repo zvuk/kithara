@@ -1,11 +1,21 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fs,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 use kithara_bufpool::BytePool;
-use kithara_storage::{Atomic, ResourceExt, StorageError};
+use kithara_platform::Mutex;
+use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
+use tokio_util::sync::CancellationToken;
 
-use super::schema::{LruEntryFile, LruIndexFile};
+use super::{
+    persist,
+    schema::{LruEntryFile, LruIndexFile},
+};
 use crate::error::{AssetsError, AssetsResult};
 
 /// Eviction configuration for an assets store decorator.
@@ -15,32 +25,198 @@ pub struct EvictConfig {
     pub max_bytes: Option<u64>,
 }
 
-/// A best-effort LRU index over `asset_root`.
-pub(crate) struct LruIndex<R: ResourceExt> {
-    res: Atomic<R>,
-    pool: BytePool,
+/// In-memory + best-effort disk-backed LRU index over `asset_root`.
+///
+/// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex)
+/// and [`PinsIndex`](super::PinsIndex): the `Arc` is encapsulated
+/// **inside** the type, [`Clone`] is cheap (atomic refcount bump),
+/// every mutation flushes the optional disk-backed [`Atomic`]
+/// tempfile.
+///
+/// Persistence is **lazy**: the disk file is materialised only on the
+/// first [`Self::flush`]. A pre-existing on-disk file from a previous
+/// run is opened eagerly during [`Self::with_persist_at`] for
+/// hydration, but a fresh build does not touch the filesystem until a
+/// real touch/remove happens.
+///
+/// Two call-sites share a single instance per `cache_dir`:
+///   * `EvictAssets` (touch/remove during open and eviction),
+///   * `DiskAssetDeleter` (drop entry when an `asset_root` is fully removed).
+#[derive(Clone)]
+pub(crate) struct LruIndex {
+    inner: Arc<LruInner>,
 }
 
-impl<R: ResourceExt> LruIndex<R> {
-    pub(crate) fn new(res: R, pool: BytePool) -> Self {
+impl std::fmt::Debug for LruIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LruIndex")
+            .field("len", &self.inner.state.try_lock().map(|s| s.len()).ok())
+            .field("persist", &self.inner.persist.is_some())
+            .finish()
+    }
+}
+
+struct LruInner {
+    state: Mutex<LruState>,
+    persist: Option<LruPersist>,
+}
+
+struct LruPersist {
+    path: PathBuf,
+    cancel: CancellationToken,
+    res: OnceLock<Atomic<MmapResource>>,
+}
+
+impl LruIndex {
+    /// Construct an ephemeral index (mem backend mode).
+    pub(crate) fn ephemeral() -> Self {
         Self {
-            res: Atomic::new(res),
-            pool,
+            inner: Arc::new(LruInner {
+                state: Mutex::new(LruState::default()),
+                persist: None,
+            }),
         }
     }
 
-    /// Load the in-memory state from storage.
-    fn load(&self) -> AssetsResult<LruState> {
-        let mut buf = self.pool.get();
-        let n = self.res.read_into(&mut buf)?;
-
-        if n == 0 {
-            return Ok(LruState::default());
+    /// Construct a disk-backed index rooted at `path`.
+    ///
+    /// If the file already exists and is non-empty it is opened and
+    /// hydrated synchronously. Otherwise the disk file is **not**
+    /// materialised — it appears on the first [`Self::touch`] /
+    /// [`Self::remove`].
+    pub(crate) fn with_persist_at(
+        path: PathBuf,
+        cancel: CancellationToken,
+        pool: &BytePool,
+    ) -> Self {
+        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
+        Self {
+            inner: Arc::new(LruInner {
+                state: Mutex::new(initial),
+                persist: Some(LruPersist {
+                    path,
+                    cancel,
+                    res: opened.map_or_else(OnceLock::new, |a| {
+                        let cell = OnceLock::new();
+                        cell.set(a)
+                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
+                        cell
+                    }),
+                }),
+            }),
         }
+    }
 
-        let file = match rkyv::access::<super::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(
-            &buf[..n],
-        ) {
+    /// Touch (mark as most-recent) an asset. Returns `true` if a new
+    /// entry was created.
+    ///
+    /// Disk-backed instances flush the snapshot synchronously before
+    /// returning; an `Err` here means the touch is **not** durable.
+    /// Ephemeral instances cannot fail.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
+        let created = {
+            let mut st = self.inner.state.lock_sync();
+            st.touch(asset_root, bytes_hint)
+        };
+        self.flush()?;
+        Ok(created)
+    }
+
+    /// Remove an asset from the index (eviction or full deletion).
+    ///
+    /// Same durability contract as [`Self::touch`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
+        let removed = {
+            let mut st = self.inner.state.lock_sync();
+            st.remove(asset_root)
+        };
+        if removed {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Compute eviction candidates in LRU order (oldest first) under
+    /// the given config. Pure in-memory read — never fails.
+    pub(crate) fn eviction_candidates(
+        &self,
+        cfg: &EvictConfig,
+        pinned: &HashSet<String>,
+    ) -> Vec<String> {
+        let st = self.inner.state.lock_sync();
+        st.eviction_candidates(cfg, pinned)
+    }
+
+    /// Return total bytes across all assets (best-effort).
+    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
+        self.inner
+            .state
+            .lock_sync()
+            .by_root
+            .values()
+            .filter_map(|e| e.bytes)
+            .sum()
+    }
+
+    /// Persist the in-memory snapshot to disk (best-effort).
+    ///
+    /// Materialises the on-disk file on first call, reuses the cached
+    /// [`Atomic`] handle on subsequent calls.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] for mmap open / write failures and
+    /// rkyv serialisation errors.
+    pub(crate) fn flush(&self) -> AssetsResult<()> {
+        let Some(persist) = self.inner.persist.as_ref() else {
+            return Ok(());
+        };
+        let snapshot = self.inner.state.lock_sync().clone();
+        let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
+        write_state(atomic, &snapshot)
+    }
+}
+
+fn hydrate_existing(
+    path: &std::path::Path,
+    cancel: &CancellationToken,
+    pool: &BytePool,
+) -> (LruState, Option<Atomic<MmapResource>>) {
+    let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
+    if !nonempty {
+        return (LruState::default(), None);
+    }
+    match persist::open_existing(path, cancel) {
+        Ok(res) => {
+            let atomic = Atomic::new(res);
+            let initial = read_state(&atomic, pool).unwrap_or_default();
+            (initial, Some(atomic))
+        }
+        Err(e) => {
+            tracing::debug!("open existing lru.bin failed: {e}");
+            (LruState::default(), None)
+        }
+    }
+}
+
+fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruState> {
+    let mut buf = pool.get();
+    let n = res.read_into(&mut buf)?;
+
+    if n == 0 {
+        return Ok(LruState::default());
+    }
+
+    let file =
+        match rkyv::access::<super::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(&buf[..n]) {
             Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
                 .expect("LRU archived → owned deserialize"),
             Err(e) => {
@@ -49,53 +225,15 @@ impl<R: ResourceExt> LruIndex<R> {
             }
         };
 
-        Ok(LruState::from_file(file))
-    }
+    Ok(LruState::from_file(file))
+}
 
-    /// Persist the provided state to storage atomically.
-    pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
-        let file = state.to_file();
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
-            .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-        self.res.write_all(&bytes)?;
-        Ok(())
-    }
-
-    /// Touch (mark as most-recent) an asset.
-    pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
-        let mut st = self.load()?;
-        let created = st.touch(asset_root, bytes_hint);
-        self.store(&st)?;
-        Ok(created)
-    }
-
-    /// Remove an asset from the index (e.g. after eviction).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
-        let mut st = self.load()?;
-        st.remove(asset_root);
-        self.store(&st)?;
-        Ok(())
-    }
-
-    /// Compute eviction candidates in LRU order (oldest first) under the given config.
-    pub(crate) fn eviction_candidates(
-        &self,
-        cfg: &EvictConfig,
-        pinned: &HashSet<String>,
-    ) -> AssetsResult<Vec<String>> {
-        let st = self.load()?;
-        Ok(st.eviction_candidates(cfg, pinned))
-    }
-
-    /// Return total bytes across all assets (best-effort).
-    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
-        if let Ok(st) = self.load() {
-            st.by_root.values().filter_map(|e| e.bytes).sum()
-        } else {
-            0
-        }
-    }
+fn write_state(res: &Atomic<MmapResource>, state: &LruState) -> AssetsResult<()> {
+    let file = state.to_file();
+    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
+    res.write_all(&bytes)?;
+    Ok(())
 }
 
 /// In-memory state of the LRU index.
@@ -110,9 +248,9 @@ impl LruState {
         self.by_root.len()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn remove(&mut self, asset_root: &str) {
-        self.by_root.remove(asset_root);
+    /// Returns `true` if the entry was present and removed.
+    pub(crate) fn remove(&mut self, asset_root: &str) -> bool {
+        self.by_root.remove(asset_root).is_some()
     }
 
     /// Touch an asset in-memory.

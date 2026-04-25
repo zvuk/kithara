@@ -188,9 +188,7 @@ where
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if !self.is_readable() {
-            return Err(StorageError::Failed(
-                "processed resource is not readable before commit".to_string(),
-            ));
+            return Err(StorageError::NotReadable);
         }
         self.inner.read_at(offset, buf)
     }
@@ -574,7 +572,7 @@ mod tests {
         }
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    /// RED test (integration: `live_ephemeral_small_cache_playback_drm`)
     ///
     /// Scenario: an ephemeral DRM stream evicts and then re-acquires the
     /// same `(ResourceKey, Some(ctx))` slot while the entry is still in
@@ -664,7 +662,7 @@ mod tests {
         );
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    /// RED test (integration: `live_ephemeral_small_cache_playback_drm`)
     ///
     /// Root cause hypothesis for the DRM-only flake:
     ///
@@ -690,7 +688,7 @@ mod tests {
     ///
     /// Sibling case (`_hls`) is unaffected because without DRM context
     /// `ProcessedResource::is_readable()` short-circuits on
-    /// `ctx.is_none()`, and reactivate() never poisons reads.
+    /// `ctx.is_none()`, and `reactivate()` never poisons reads.
     ///
     /// Contract under test: after
     /// `acquire_resource_with_ctx(K, Some(ctx))` observes an existing
