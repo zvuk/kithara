@@ -364,8 +364,6 @@ where
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[case::apple(DecoderBackend::Apple)]
 #[case::android(DecoderBackend::Android)]
-#[ignore = "captures real bug: kithara_stream::stream::read 10s hang panic + auto-advance \
-            timeout on multi-fixture playlist after first crossfade; un-ignore once fixed"]
 async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     if backend.skip_if_unavailable() {
         return;

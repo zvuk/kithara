@@ -296,11 +296,10 @@ async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
 /// Fix is a proper downloader-level request coalescer (single-flight
 /// layer between `PeerHandle::execute` and the HTTP client) — design
 /// note at `.docs/plans/2026-04-21-downloader-request-coalescing.md`.
-/// Marked `#[ignore]` until the coalescer lands so the work gap is
-/// visible without blocking `just test`.
+///
+/// Без `#[ignore]` — пинит реальную регрессию: пока coalescer не написан,
+/// этот тест падает в `just test` и держит баг на виду.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[ignore = "requires downloader request coalescing — see \
-    .docs/plans/2026-04-21-downloader-request-coalescing.md"]
 async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0, temp_dir).await;
 }
