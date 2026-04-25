@@ -285,14 +285,18 @@ where
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Reactivation reopens the inner resource for fresh writes (LRU slot
-        // reuse). The processor must rerun on the next commit, so clear the
-        // `processed` flag when a processing context is attached.
-        self.inner.reactivate()?;
+        // Reactivation reopens the inner resource for fresh writes (LRU
+        // slot reuse). Flip the gate to Pending **before** touching
+        // `inner.reactivate` so `is_readable()` cannot lie during the
+        // window where the inner has been reopened but the next commit
+        // has not yet rerun the processor — otherwise a concurrent
+        // reader sees `processed = true` while the inner is mid-truncate
+        // and reads half-overwritten bytes. The flag is restored to
+        // Ready by the next successful commit.
         if self.ctx.is_some() {
             self.readiness.mark_pending();
         }
-        Ok(())
+        self.inner.reactivate()
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
