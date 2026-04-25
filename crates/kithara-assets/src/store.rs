@@ -23,6 +23,8 @@ impl Consts {
     const DEFAULT_CHECKPOINT_EVERY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 }
 
+use dashmap::DashMap;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
 use crate::{
@@ -487,7 +489,7 @@ where
         // makes no sense without a backing file. See [`crate::deleter`].
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
-        let active_resources = Arc::new(dashmap::DashMap::new());
+        let active_resources = Arc::new(DashMap::new());
         let deleter: Arc<dyn crate::deleter::AssetDeleter> =
             Arc::new(crate::mem_store::MemAssetDeleter::new(
                 asset_root.clone(),
