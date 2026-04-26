@@ -114,7 +114,7 @@ impl Source for ScriptSource {
     fn wait_range(
         &mut self,
         _range: Range<u64>,
-        _timeout: Duration,
+        _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
     }

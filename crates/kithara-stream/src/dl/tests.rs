@@ -133,7 +133,8 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions {
-        request_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        inactivity_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        total_timeout: Some(Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         ..NetOptions::default()
     };
     let dl = Downloader::new(DownloaderConfig::default().with_net(net));

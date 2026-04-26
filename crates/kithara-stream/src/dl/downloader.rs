@@ -89,7 +89,14 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let chunk_timeout = config.net.request_timeout;
+        // Per-chunk inactivity timeout in the BodyStream wrapper —
+        // semantically the Downloader-layer mirror of reqwest's
+        // `inactivity_timeout`. Both are idle gates between consecutive
+        // bytes of the response body; sharing one source of truth
+        // (`inactivity_timeout`) keeps the two layers consistent and
+        // independent from `total_timeout` (which caps the whole
+        // request lifetime, not idleness).
+        let chunk_timeout = config.net.inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);

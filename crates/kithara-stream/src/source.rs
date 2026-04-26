@@ -128,8 +128,14 @@ pub trait Source: Send + 'static {
 
     /// Wait for data in range to be available.
     ///
-    /// `timeout` is the maximum wait time before returning an implementation-defined
-    /// non-ready outcome (typically [`WaitOutcome::Interrupted`]).
+    /// `timeout` is the maximum wait time before returning an
+    /// implementation-defined non-ready outcome (typically a typed
+    /// "budget exceeded" error). Pass `None` to wait until the range
+    /// is ready or the source's internal cancel signal fires — used
+    /// for [`Stream::seek`](crate::Stream::seek), where giving up on
+    /// a timer would silently drop the seek under slow connections.
+    /// `Some(WAIT_RANGE_TIMEOUT)` is the cooperative-yield path used
+    /// by the audio worker's read loop.
     ///
     /// # Errors
     ///
@@ -137,7 +143,7 @@ pub trait Source: Send + 'static {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error>;
 
     /// Read data at offset into buffer.
@@ -323,7 +329,7 @@ mod tests {
             fn wait_range(
                 &mut self,
                 _range: Range<u64>,
-                _timeout: Duration,
+                _timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome, Self::Error> {
                 Ok(WaitOutcome::Ready)
             }

@@ -283,7 +283,7 @@ async fn wait_range_and_take_request(
     mut source: HlsSource,
     range: Range<u64>,
 ) -> SegmentRequest {
-    let handle = spawn_blocking(move || source.wait_range(range, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(range, Some(Duration::from_secs(1))));
 
     let deadline = Instant::now() + Duration::from_millis(300);
     let request = loop {
@@ -1382,7 +1382,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..1024, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(0..1024, Some(Duration::from_secs(1))));
 
     // Give wait_range time to enter the loop
     sleep(Duration::from_millis(20)).await;
@@ -1418,7 +1418,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(0..100, Some(Duration::from_secs(1))));
 
     // Push a segment covering 0..100 and commit its resource data
     sleep(Duration::from_millis(20)).await;
@@ -1448,7 +1448,7 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     let _epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(150..170, Duration::from_secs(1));
+    let result = source.wait_range(150..170, Some(Duration::from_secs(1)));
     assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
     assert!(
         shared.segment_requests.pop().is_none(),
@@ -1468,7 +1468,7 @@ fn test_wait_range_flushing_overrides_stale_eof() {
     let _ = shared.timeline.initiate_seek(Duration::ZERO);
     let mut source = make_test_source(Arc::clone(&shared), cancel);
 
-    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
+    let result = source.wait_range(total_bytes..total_bytes + 128, Some(Duration::from_secs(1)));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -1496,7 +1496,7 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
+    let result = source.wait_range(total_bytes..total_bytes + 128, Some(Duration::from_secs(1)));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -1522,7 +1522,8 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
 
-    let handle = spawn_blocking(move || source.wait_range(88_300..89_324, Duration::from_secs(1)));
+    let handle =
+        spawn_blocking(move || source.wait_range(88_300..89_324, Some(Duration::from_secs(1))));
 
     // Commit data and clear EOF. Repeatedly notify condvar until the
     // blocking wait_range task wakes up — spawn_blocking may not have
@@ -1573,7 +1574,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let result = source.wait_range(100..200, Duration::from_secs(1));
+    let result = source.wait_range(100..200, Some(Duration::from_secs(1)));
     assert!(matches!(result, Ok(WaitOutcome::Eof)));
 }
 
@@ -1717,7 +1718,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     shared.timeline.complete_seek(first_epoch);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let first_deadline = Instant::now() + Duration::from_millis(300);
     let first_request = loop {
@@ -1773,7 +1774,7 @@ async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change(
     shared.timeline.complete_seek(first_epoch);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let first_deadline = Instant::now() + Duration::from_millis(300);
     let first_request = loop {
@@ -1820,7 +1821,8 @@ async fn test_wait_range_without_size_map_does_not_enqueue_request() {
     shared.abr_variant_index.store(0, Ordering::Release);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..128, Duration::from_millis(150)));
+    let handle =
+        spawn_blocking(move || source.wait_range(0..128, Some(Duration::from_millis(150))));
 
     let result = timeout(Duration::from_secs(2), handle)
         .await
@@ -1852,7 +1854,7 @@ async fn test_wait_range_stalled_on_demand_request_is_interrupted_by_flush() {
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1894,7 +1896,7 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1941,7 +1943,7 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -1985,7 +1987,7 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -2030,7 +2032,7 @@ async fn test_wait_range_midstream_switch_target_request_stays_stable_until_read
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     set_source_variant_fence(&mut source, Some(0));
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -2086,7 +2088,7 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     set_source_variant_fence(&mut source, Some(0));
 
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -2174,7 +2176,7 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
     // wait_range for offset 100..200 — no entries cover this range.
     // Background entries are at 10000+. total grows but range stays unready.
     // Budget check returns Err(Timeout) after 3s.
-    let handle = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(3)));
+    let handle = spawn_blocking(move || source.wait_range(100..200, Some(Duration::from_secs(3))));
 
     #[cfg(not(target_arch = "wasm32"))]
     {

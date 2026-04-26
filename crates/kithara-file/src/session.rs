@@ -529,8 +529,12 @@ impl kithara_stream::Source for FileSource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
+        // The file backend's `Resource::wait_range` blocks on its own
+        // condvar / cancel signals; the source-level `timeout` is a hint
+        // that does not gate the inner wait. Both `Some` and `None`
+        // collapse to "wait until ready or cancel" here.
         let _ = timeout;
 
         match self.phase_at(range.clone()) {
@@ -928,7 +932,7 @@ mod tests {
 
         let _ = timeline.initiate_seek(Duration::from_secs(0));
 
-        let result = Source::wait_range(&mut source, 50..60, Duration::from_secs(1));
+        let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
         assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
     }
 

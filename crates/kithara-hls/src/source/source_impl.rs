@@ -21,8 +21,14 @@ use super::{
 };
 use crate::{HlsError, coord::SegmentRequest, playlist::PlaylistAccess};
 
-fn wait_range_hang_timeout(timeout: Duration) -> Duration {
-    timeout.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
+fn wait_range_hang_timeout(timeout: Option<Duration>) -> Duration {
+    // Hang-detector budget: when a caller waits unboundedly (`None`),
+    // the watchdog still has to pick a finite ceiling — use the floor
+    // alone so the detector never gates a legitimately-slow source
+    // smaller than that floor.
+    timeout.map_or(WAIT_RANGE_HANG_TIMEOUT_FLOOR, |t| {
+        t.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
+    })
 }
 
 impl Source for HlsSource {
@@ -36,15 +42,17 @@ impl Source for HlsSource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, HlsError> {
         let mut wait_seek_epoch: Option<u64> = None;
         let started_at = Instant::now();
 
         loop {
-            if started_at.elapsed() > timeout {
+            if let Some(budget) = timeout
+                && started_at.elapsed() > budget
+            {
                 return Err(StreamError::Source(HlsError::Timeout(format!(
-                    "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={timeout:?}",
+                    "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={budget:?}",
                     range.start,
                     range.end,
                     started_at.elapsed(),

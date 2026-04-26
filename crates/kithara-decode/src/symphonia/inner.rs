@@ -11,13 +11,13 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::StreamContext;
+use kithara_stream::{StreamContext, StreamSeekPastEof};
 use symphonia::core::{
     codecs::{
         CodecParameters,
         audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
     },
-    errors::Error as SymphoniaError,
+    errors::{Error as SymphoniaError, SeekErrorKind},
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
     units::{Time, Timestamp},
 };
@@ -296,7 +296,7 @@ impl SymphoniaInner {
 
         self.format_reader
             .seek(SeekMode::Accurate, seek_to)
-            .map_err(|e| DecodeError::SeekFailed(e.to_string()))?;
+            .map_err(|e| classify_format_seek_error(&e))?;
 
         self.decoder.reset();
         self.position = pos;
@@ -310,5 +310,36 @@ impl SymphoniaInner {
 
     pub(crate) fn update_byte_len(&self, len: u64) {
         self.byte_len_handle.store(len, Ordering::Release);
+    }
+}
+
+/// Classify a Symphonia format-reader seek failure into a typed
+/// [`DecodeError`] variant, distinguishing caller-side range errors
+/// (target invalid for this stream — pipeline must surface, no retry
+/// helps) from generic seek failures (decoder corruption, transient,
+/// recoverable via recreate).
+///
+/// Caller-side classes:
+/// - [`SymphoniaError::SeekError`] with [`SeekErrorKind::OutOfRange`] —
+///   Symphonia's own range check on the indexed track timeline.
+/// - [`SymphoniaError::IoError`] wrapping [`StreamSeekPastEof`] —
+///   `Stream::seek` rejected an absolute byte target Symphonia
+///   computed from a time seek (the production "перемотка не работает"
+///   path: sidx-based byte target overflow on fragmented MP4 streams,
+///   reported via [`std::io::ErrorKind::InvalidInput`] with the typed
+///   [`StreamSeekPastEof`] payload).
+fn classify_format_seek_error(err: &SymphoniaError) -> DecodeError {
+    match err {
+        SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => {
+            DecodeError::SeekOutOfRange(err.to_string())
+        }
+        SymphoniaError::IoError(io_err)
+            if io_err.get_ref().is_some_and(
+                <dyn std::error::Error + Send + Sync + 'static>::is::<StreamSeekPastEof>,
+            ) =>
+        {
+            DecodeError::SeekOutOfRange(io_err.to_string())
+        }
+        _ => DecodeError::SeekFailed(err.to_string()),
     }
 }

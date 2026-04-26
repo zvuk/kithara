@@ -56,7 +56,7 @@ impl Source for MemorySource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
         if range.start >= self.data.len() as u64 {

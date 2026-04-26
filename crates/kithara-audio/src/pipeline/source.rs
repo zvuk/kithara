@@ -602,18 +602,37 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Shared recovery path for a failed `decoder.seek()`.
     ///
-    /// Tries to recreate the decoder using the newest available
-    /// `MediaInfo`. The recreate offset is chosen by container class:
-    /// init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must land on the
-    /// source's init segment range — `fallback_offset` would be a
-    /// mid-segment byte with no ftyp/RIFF/EBML header, producing a
-    /// silent "missing ftyp atom" hang the second the factory runs.
-    /// Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS)
-    /// or unknown containers use `fallback_offset` directly.
+    /// Two classes of failure share this entry point and need different
+    /// architectural responses:
     ///
-    /// Calls `fail_seek` when either the `MediaInfo` is missing or the
-    /// container needs an init range that the source cannot yet
-    /// locate. Always returns `false` so callers can `return` directly.
+    /// 1. **Decoder internal-state corruption** — e.g. Symphonia's moof
+    ///    fragment table holding stale offsets after a variant switch.
+    ///    Fresh decoder state resolves this; recreate is the right cure.
+    ///
+    /// 2. **Caller-side invalid target** — e.g. seek past EOF, target
+    ///    timestamp out-of-range for the stream's known duration.
+    ///    Recreate cannot fix this: a freshly built decoder has the same
+    ///    `duration()` and rejects the same target with the same error.
+    ///    Retrying loops forever (the prod "перемотка не работает" bug).
+    ///
+    /// Classification is by [`DecodeError`] variant, not by string
+    /// match: caller-side errors arrive as
+    /// [`DecodeError::SeekOutOfRange`] (produced by the decoder layer
+    /// from typed Symphonia `SeekErrorKind::OutOfRange` and from typed
+    /// `StreamSeekPastEof` payloads in the underlying `io::Error`).
+    /// Those route directly to `fail_seek` — no recreate, no retry.
+    /// Anything else is treated as class (1) and dispatched to the
+    /// recreate-at-init path.
+    ///
+    /// Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at
+    /// the source's init segment range; mid-segment recreate would land
+    /// on bytes with no ftyp/RIFF/EBML header and the factory would fail
+    /// silently. Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/
+    /// MPEG-TS) and unknown containers use `fallback_offset` directly.
+    ///
+    /// Calls `fail_seek` for class (2), missing `MediaInfo`, or when an
+    /// init-bearing container has no available init range. Always
+    /// returns `false` so callers can `return` directly.
     #[expect(clippy::too_many_arguments, reason = "seek recovery context")]
     fn recover_from_decoder_seek_error(
         &mut self,
@@ -626,6 +645,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         fail_ctx: &'static str,
     ) -> bool {
         warn!(?err, epoch, ?position, "{warn_msg}");
+
+        if matches!(err, DecodeError::SeekOutOfRange(_)) {
+            // Decoder said the target is invalid for this stream. A fresh
+            // decoder will reject the identical target identically — no
+            // amount of recreates produces a different answer. Surface
+            // the failure to the caller instead of looping.
+            self.fail_seek(request, err, fail_ctx);
+            return false;
+        }
+
         let info = self
             .shared_stream
             .media_info()

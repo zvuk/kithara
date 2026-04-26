@@ -63,7 +63,13 @@ impl HttpClient {
         let builder = builder
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
             .danger_accept_invalid_certs(options.insecure)
-            .read_timeout(options.request_timeout);
+            // reqwest's `read_timeout` is documented as "applied for each
+            // read operation" — i.e. inactivity between reads, not a
+            // total deadline. Maps directly to our
+            // `NetOptions::inactivity_timeout`. The Downloader-layer
+            // `BodyStream` wrapper enforces the same notion at the chunk
+            // level downstream of reqwest.
+            .read_timeout(options.inactivity_timeout);
         let inner = builder.build().expect("failed to build reqwest client");
         Self { inner, options }
     }
@@ -128,7 +134,11 @@ impl HttpClient {
         accept_partial: bool,
     ) -> Result<reqwest::Response, NetError> {
         let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
+        let req = if let Some(total) = self.options.total_timeout {
+            req.timeout(total)
+        } else {
+            req
+        };
 
         let resp = req.send().await.map_err(NetError::from)?;
         let status = resp.status();
@@ -200,7 +210,11 @@ impl Net for HttpClient {
         let resp = {
             let mut req = self.inner.get(url.clone()).header("Range", "bytes=0-0");
             req = Self::apply_headers(req, headers);
-            let req = req.timeout(self.options.request_timeout);
+            let req = if let Some(total) = self.options.total_timeout {
+                req.timeout(total)
+            } else {
+                req
+            };
             req.send().await.map_err(NetError::from)?
         };
 
@@ -208,7 +222,11 @@ impl Net for HttpClient {
         let resp = {
             let req = self.inner.head(url.clone());
             let req = Self::apply_headers(req, headers);
-            let req = req.timeout(self.options.request_timeout);
+            let req = if let Some(total) = self.options.total_timeout {
+                req.timeout(total)
+            } else {
+                req
+            };
             req.send().await.map_err(NetError::from)?
         };
 

@@ -42,6 +42,33 @@ pub enum StreamReadError {
     Source(IoError),
 }
 
+/// Typed error from [`Stream::seek`] for an absolute byte target that
+/// lands beyond the stream's known length.
+///
+/// Surfaced as the typed payload of an `io::Error` (kind
+/// [`ErrorKind::InvalidInput`]) so consumers like Symphonia preserve it
+/// through their own error chain. Decoders downcast to recover the
+/// structured info and classify the failure as caller-side (the seek
+/// target is invalid for this stream, not a decoder state corruption).
+#[derive(Debug, Clone, Copy)]
+pub struct StreamSeekPastEof {
+    pub new_pos: u64,
+    pub len: u64,
+    pub current_pos: u64,
+}
+
+impl fmt::Display for StreamSeekPastEof {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "seek past EOF: new_pos={} len={} current_pos={}",
+            self.new_pos, self.len, self.current_pos
+        )
+    }
+}
+
+impl StdError for StreamSeekPastEof {}
+
 impl fmt::Display for StreamReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -238,7 +265,7 @@ impl<T: StreamType> Stream<T> {
             let pos = timeline.byte_position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            let wait_result = self.source.wait_range(range, WAIT_RANGE_TIMEOUT);
+            let wait_result = self.source.wait_range(range, Some(WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(e) => {
@@ -329,9 +356,6 @@ impl<T: StreamType> Read for Stream<T> {
 impl<T: StreamType> Seek for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        /// Timeout for seek `wait_range` calls before returning an error.
-        const SEEK_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-
         let timeline = self.source.timeline();
         let current = timeline.byte_position();
 
@@ -340,7 +364,12 @@ impl<T: StreamType> Seek for Stream<T> {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 if self.source.len().is_none() {
-                    let _ = self.source.wait_range(0..1, SEEK_WAIT_TIMEOUT);
+                    // Wait until the source learns its length OR is
+                    // cancelled / superseded by a new seek epoch — see
+                    // [`Source::wait_range`] for the cancellation contract.
+                    // No wall-clock budget: a slow connection must not
+                    // make seek silently give up.
+                    let _ = self.source.wait_range(0..1, None);
                 }
                 let Some(len) = self.source.len() else {
                     return Err(IoError::new(
@@ -362,18 +391,26 @@ impl<T: StreamType> Seek for Stream<T> {
         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let new_pos = new_pos as u64;
 
+        // Wait for the target byte unboundedly; only `coord.cancel` (track
+        // replaced / resource dropped / shutdown) or `seek_epoch` advance
+        // (the user issued another seek) interrupts the wait. The previous
+        // 10 s wall-clock budget caused position-frozen-at-target hangs on
+        // slow connections — `red`-pinned by
+        // `hls_seek_middle_lands_under_simulated_slow_connection`.
         let _ = self
             .source
-            .wait_range(new_pos..new_pos.saturating_add(1), SEEK_WAIT_TIMEOUT);
+            .wait_range(new_pos..new_pos.saturating_add(1), None);
 
         if let Some(len) = self.source.len()
             && new_pos > len
         {
             return Err(IoError::new(
                 ErrorKind::InvalidInput,
-                format!(
-                    "seek past EOF: new_pos={new_pos} len={len} current_pos={current} seek_from={pos:?}",
-                ),
+                StreamSeekPastEof {
+                    new_pos,
+                    len,
+                    current_pos: current,
+                },
             ));
         }
 
@@ -430,7 +467,7 @@ mod tests {
         fn wait_range(
             &mut self,
             _range: Range<u64>,
-            _timeout: Duration,
+            _timeout: Option<Duration>,
         ) -> crate::StreamResult<WaitOutcome, Self::Error> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
@@ -512,7 +549,7 @@ mod tests {
         fn wait_range(
             &mut self,
             _range: Range<u64>,
-            _timeout: Duration,
+            _timeout: Option<Duration>,
         ) -> crate::StreamResult<WaitOutcome, Self::Error> {
             let _ = self.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)

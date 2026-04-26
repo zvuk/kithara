@@ -30,6 +30,17 @@ pub enum DecodeError {
     #[error("Seek error: {0}")]
     SeekError(String),
 
+    /// The seek target is invalid for this stream — past EOF, beyond the
+    /// indexed sample range, or otherwise out of the addressable space.
+    ///
+    /// Distinct from [`SeekFailed`](Self::SeekFailed) because there is no
+    /// recovery action that helps: the duration/length come from the
+    /// stream itself, not from decoder state, so a freshly built decoder
+    /// rejects the same target with the same answer. Pipeline must
+    /// surface this to the caller (fail the seek) rather than retry.
+    #[error("Seek target out of range: {0}")]
+    SeekOutOfRange(String),
+
     #[error("Probe failed: could not detect codec")]
     ProbeFailed,
 

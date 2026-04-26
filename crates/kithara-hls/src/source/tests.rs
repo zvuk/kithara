@@ -682,7 +682,7 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
         coord.condvar.notify_all();
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
     join.join()
         .expect("clear-pending helper thread must complete");
 
@@ -712,7 +712,7 @@ fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
         seek_epoch: 0,
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
@@ -931,7 +931,7 @@ fn set_seek_epoch_keeps_exact_eof_visible_until_seek_lands() {
 
     source.set_seek_epoch(NEW_EPOCH);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -950,7 +950,7 @@ fn wait_range_uses_known_total_bytes_for_exact_eof() {
     source.coord.timeline().set_byte_position(total);
     source.coord.timeline().set_eof(false);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -1114,7 +1114,10 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
         },
     );
 
-    let result = source.wait_range(RANGE_START..RANGE_END, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(
+        RANGE_START..RANGE_END,
+        Some(Duration::from_millis(TIMEOUT_MS)),
+    );
 
     assert!(
         matches!(result, Ok(WaitOutcome::Ready)),

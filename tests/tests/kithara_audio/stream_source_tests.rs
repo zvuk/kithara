@@ -92,7 +92,7 @@ impl Source for TestSource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
         if self.timeline.is_flushing() {

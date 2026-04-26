@@ -67,7 +67,7 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        _timeout: Duration,
+        _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         if self.is_past_eof(range.start) {
             Ok(WaitOutcome::Eof)
