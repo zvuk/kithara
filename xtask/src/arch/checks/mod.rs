@@ -22,6 +22,7 @@ pub(crate) mod module_layers;
 pub(crate) mod readme_presence;
 pub(crate) mod redundant_accessors;
 pub(crate) mod shared_state;
+pub(crate) mod single_word_filenames;
 pub(crate) mod stray_rs_files;
 
 pub(crate) struct Context<'a> {
@@ -49,6 +50,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(file_density::FileDensity),
         Box::new(mixed_entities::MixedEntities),
         Box::new(redundant_accessors::RedundantAccessors),
+        Box::new(single_word_filenames::SingleWordFilenames),
         Box::new(module_layers::ModuleLayers),
     ]
 }

@@ -84,6 +84,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) mixed_entities: MixedEntitiesThreshold,
     #[serde(default)]
     pub(crate) redundant_accessors: RedundantAccessorsThreshold,
+    #[serde(default)]
+    pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +214,39 @@ pub(crate) enum AccessorSeverity {
     Off,
     Warn,
     Deny,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SingleWordFilenamesThreshold {
+    /// Maximum number of `_`-separated tokens in the filename stem.
+    /// Default 1 = filenames must be a single word (`peer.rs`, `source.rs`).
+    /// `stream_type.rs` has 2 tokens; `a_b_c.rs` has 3.
+    pub(crate) max_words: usize,
+    /// Filenames that always pass regardless of word count
+    /// (`mod.rs`, `lib.rs`, `main.rs`, `build.rs`).
+    pub(crate) exempt_filenames: Vec<String>,
+    /// Glob patterns of paths to skip entirely (e.g. `**/tests/**`).
+    #[serde(default)]
+    pub(crate) exempt_globs: Vec<String>,
+    /// `warn` (track via baseline) or `deny` (fail on new offenders) or `off`.
+    pub(crate) severity: AccessorSeverity,
+}
+
+impl Default for SingleWordFilenamesThreshold {
+    fn default() -> Self {
+        Self {
+            max_words: 1,
+            exempt_filenames: vec![
+                "mod.rs".into(),
+                "lib.rs".into(),
+                "main.rs".into(),
+                "build.rs".into(),
+            ],
+            exempt_globs: Vec::new(),
+            severity: AccessorSeverity::Warn,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

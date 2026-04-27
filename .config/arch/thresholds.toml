@@ -154,3 +154,16 @@ expose_methods = [
     "get", "get_mut",
     "into_inner",
 ]
+
+[single_word_filenames]
+# Filenames under `crates/*/src/` should be a single word — `peer.rs`,
+# `source.rs`, `stream.rs` — not `stream_type.rs` or `playlist_cache.rs`.
+# Rationale: short names compose well with the module path. The crate already
+# names the namespace; the file should name the entity, not the entity-and-its-role.
+#
+# `max_words` counts `_`-separated tokens in the filename stem (leading/trailing
+# `_` does not count, so `_internal.rs` is one word).
+max_words = 1
+exempt_filenames = ["mod.rs", "lib.rs", "main.rs", "build.rs"]
+exempt_globs = []
+severity = "warn"
