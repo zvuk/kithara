@@ -22,6 +22,7 @@ pub(crate) mod mixed_entities;
 pub(crate) mod module_layers;
 pub(crate) mod readme_presence;
 pub(crate) mod redundant_accessors;
+pub(crate) mod redundant_reexport;
 pub(crate) mod shared_state;
 pub(crate) mod single_impl_size;
 pub(crate) mod single_word_filenames;
@@ -52,6 +53,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(file_density::FileDensity),
         Box::new(mixed_entities::MixedEntities),
         Box::new(redundant_accessors::RedundantAccessors),
+        Box::new(redundant_reexport::RedundantReexport),
         Box::new(single_impl_size::SingleImplSize),
         Box::new(single_word_filenames::SingleWordFilenames),
         Box::new(module_layers::ModuleLayers),

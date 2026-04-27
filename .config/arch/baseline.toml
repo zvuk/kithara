@@ -134,6 +134,21 @@ xtask = 1
 "crates/kithara-play/src/impls/player.rs::PlayerImpl::initial_abr_mode" = 1
 "crates/kithara-test-utils/src/fixture_protocol.rs::DelayRule::matches" = 1
 
+[redundant_reexport]
+"crates/kithara-assets/internal.rs:5:0::kithara_bufpool::BytePool" = 1
+"crates/kithara-assets/internal.rs:5:0::kithara_bufpool::byte_pool" = 1
+"crates/kithara-assets/lease.rs:354:9::LeaseAssets::Res" = 1
+"crates/kithara-assets/process.rs:392:9::ProcessingAssets::Res" = 1
+"crates/kithara-file/session/source.rs:113:9::FileSource::Error" = 1
+"crates/kithara-file/stream.rs:30:9::File::Error" = 1
+"crates/kithara-hls/config.rs:5:0::kithara_abr::AbrMode" = 1
+"crates/kithara-hls/source/source_impl.rs:36:9::HlsSource::Error" = 1
+"crates/kithara-hls/stream.rs:56:9::Hls::Config" = 1
+"crates/kithara-hls/stream.rs:57:9::Hls::Source" = 1
+"crates/kithara-hls/stream.rs:58:9::Hls::Error" = 1
+"crates/kithara-storage/memory.rs:63:9::MemDriver::Options" = 1
+"crates/kithara-storage/mmap.rs:102:9::MmapDriver::Options" = 1
+
 [shared_state]
 "crates/kithara-app/src/gui/app.rs" = 1
 "crates/kithara-ffi/src/event_bridge.rs" = 1

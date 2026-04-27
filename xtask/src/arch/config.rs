@@ -88,6 +88,35 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
     #[serde(default)]
     pub(crate) single_impl_size: SingleImplSizeThreshold,
+    #[serde(default)]
+    pub(crate) redundant_reexport: RedundantReexportThreshold,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RedundantReexportThreshold {
+    /// Sub-checks to run: `explicit_duplicate` (R1) and `associated_type_leak` (R2).
+    #[serde(default = "default_redundant_reexport_detect")]
+    pub(crate) detect: Vec<String>,
+    /// Type names to exempt (canonical without crate prefix, e.g. `FileConfig`).
+    #[serde(default)]
+    pub(crate) exempt: Vec<String>,
+}
+
+impl Default for RedundantReexportThreshold {
+    fn default() -> Self {
+        Self {
+            detect: default_redundant_reexport_detect(),
+            exempt: Vec::new(),
+        }
+    }
+}
+
+fn default_redundant_reexport_detect() -> Vec<String> {
+    ["explicit_duplicate", "associated_type_leak"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
