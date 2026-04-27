@@ -30,7 +30,7 @@ pub mod audio {
         #[cfg(any(test, feature = "test-utils"))]
         #[must_use]
         pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-            self.pcm_rx()
+            &mut self.pcm_rx
         }
     }
 

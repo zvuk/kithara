@@ -174,13 +174,6 @@ impl<S> Audio<S> {
         self.preloaded
     }
 
-    /// Get reference to PCM receiver for direct channel access.
-    #[must_use]
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-        &mut self.pcm_rx
-    }
-
     /// Enable non-blocking mode for `read()`.
     ///
     /// After calling this, `read()` returns immediately from buffered data

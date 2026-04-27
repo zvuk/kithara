@@ -748,7 +748,6 @@ fn player_event_from_notification(notification: PlayerNotification) -> Option<Pl
                 item_id: item_id.map(|id| id.to_string()),
             })
         }
-        PlayerNotification::TrackPlaybackStopped(_) => None,
         _ => None,
     }
 }

@@ -2,17 +2,20 @@
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use std::num::NonZeroU32;
-use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use std::sync::LazyLock;
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::Ordering;
+use std::{marker::PhantomData, sync::Arc};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::OnceLock, time::Duration};
 
 #[rustfmt::skip]
 use firewheel::nodes::volume_pan::VolumePanNode;
-use firewheel::{FirewheelConfig, Volume, channel_config::ChannelCount, diff::Memo, node::NodeID};
+use firewheel::{
+    FirewheelConfig, Volume, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
+    node::NodeID,
+};
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,11 +68,16 @@ const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 pub(crate) type PlayerId = u64;
 
 #[cfg(not(target_arch = "wasm32"))]
-type RuntimeBackend = firewheel::cpal::CpalBackend;
+pub(crate) type DefaultBackend = firewheel::cpal::CpalBackend;
 #[cfg(target_arch = "wasm32")]
-type RuntimeBackend = firewheel_web_audio::WebAudioBackend;
+pub(crate) type DefaultBackend = firewheel_web_audio::WebAudioBackend;
 
-type RuntimeCtx = firewheel::FirewheelCtx<RuntimeBackend>;
+type SessionCtx<B> = firewheel::FirewheelCtx<B>;
+type BackendConfigFactory<B> = Box<dyn Fn(u32) -> <B as AudioBackend>::Config + Send + Sync>;
+
+pub(crate) type DefaultSessionClient = SessionClient<DefaultBackend>;
+#[cfg(target_arch = "wasm32")]
+type DefaultSessionState = SessionState<DefaultBackend>;
 
 #[derive(Debug)]
 struct SlotNodes {
@@ -114,8 +122,9 @@ impl PlayerState {
     }
 }
 
-struct SessionState {
-    ctx: Option<RuntimeCtx>,
+pub(crate) struct SessionState<B: AudioBackend + 'static = DefaultBackend> {
+    ctx: Option<SessionCtx<B>>,
+    make_config: BackendConfigFactory<B>,
     next_player_id: PlayerId,
     players: Vec<PlayerState>,
     sample_rate_hint: u32,
@@ -124,10 +133,14 @@ struct SessionState {
     session_output_node_id: Option<NodeID>,
 }
 
-impl SessionState {
-    fn new() -> Self {
+impl<B: AudioBackend + 'static> SessionState<B> {
+    fn new<F>(make_config: F) -> Self
+    where
+        F: Fn(u32) -> B::Config + Send + Sync + 'static,
+    {
         Self {
             ctx: None,
+            make_config: Box::new(make_config),
             next_player_id: 1,
             players: Vec::new(),
             sample_rate_hint: DEFAULT_SAMPLE_RATE,
@@ -138,7 +151,7 @@ impl SessionState {
     }
 }
 
-enum Cmd {
+pub(crate) enum Cmd {
     RegisterPlayer {
         eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
@@ -188,7 +201,7 @@ struct CmdMsg {
     reply_tx: mpsc::Sender<Reply>,
 }
 
-enum Reply {
+pub(crate) enum Reply {
     Ok,
     PlayerRegistered(PlayerId),
     SessionDucking(SessionDuckingMode),
@@ -202,7 +215,7 @@ enum Reply {
     Err(String),
 }
 
-pub(crate) struct SessionClient {
+pub(crate) struct SessionClient<B: AudioBackend + 'static = DefaultBackend> {
     #[cfg(not(target_arch = "wasm32"))]
     cmd_tx: Mutex<HeapProd<CmdMsg>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -211,10 +224,15 @@ pub(crate) struct SessionClient {
     /// `false` = Worker (remote channel proxy).
     #[cfg(target_arch = "wasm32")]
     local: bool,
+    marker: PhantomData<fn() -> B>,
 }
 
-impl SessionClient {
-    #[cfg(not(target_arch = "wasm32"))]
+pub(crate) trait SessionCaller<B: AudioBackend + 'static> {
+    fn call(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<B: AudioBackend + 'static> SessionClient<B> {
     fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
         let mut pending = msg;
         loop {
@@ -230,8 +248,10 @@ impl SessionClient {
             }
         }
     }
+}
 
-    #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
+impl<B: AudioBackend + 'static> SessionCaller<B> for SessionClient<B> {
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.push_cmd(CmdMsg { cmd, reply_tx })
@@ -240,17 +260,32 @@ impl SessionClient {
             .recv_sync()
             .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))
     }
+}
 
-    #[cfg(target_arch = "wasm32")]
+#[cfg(target_arch = "wasm32")]
+trait WasmSessionAccess: AudioBackend + 'static {
+    fn with_state<R>(f: impl FnOnce(&mut SessionState<Self>) -> R) -> Option<R>;
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmSessionAccess for DefaultBackend {
+    fn with_state<R>(f: impl FnOnce(&mut SessionState<Self>) -> R) -> Option<R> {
+        WASM_SESSION_STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            state.as_mut().map(f)
+        })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<B> SessionCaller<B> for SessionClient<B>
+where
+    B: WasmSessionAccess,
+{
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         if self.local {
-            WASM_SESSION_STATE.with(|cell| {
-                let mut state = cell.borrow_mut();
-                let state = state
-                    .as_mut()
-                    .ok_or_else(|| PlayError::Internal("local session state missing".into()))?;
-                Ok(run_cmd(state, cmd))
-            })
+            B::with_state(|state| session_step(state, cmd))
+                .ok_or_else(|| PlayError::Internal("local session state missing".into()))
         } else {
             let guard = WORKER_CMD_TX.lock_sync();
             let Some(ref tx) = *guard else {
@@ -266,9 +301,14 @@ impl SessionClient {
                 .map_err(|_| PlayError::Internal("session host gone (reply)".into()))
         }
     }
+}
 
+impl<B: AudioBackend + 'static> SessionClient<B>
+where
+    Self: SessionCaller<B>,
+{
     fn call_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let reply = self.call(cmd)?;
+        let reply = <Self as SessionCaller<B>>::call(self, cmd)?;
         if let Reply::Err(msg) = &reply {
             return Err(PlayError::Internal(msg.clone()));
         }
@@ -404,13 +444,17 @@ impl SessionClient {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
-    let mut state = SessionState::new();
+fn engine_thread<B, F>(mut cmd_rx: HeapCons<CmdMsg>, make_config: F)
+where
+    B: AudioBackend + 'static,
+    F: Fn(u32) -> B::Config + Send + Sync + 'static,
+{
+    let mut state = SessionState::<B>::new(make_config);
     loop {
         let mut processed = false;
         while let Some(msg) = cmd_rx.try_pop() {
             let CmdMsg { cmd, reply_tx } = msg;
-            let reply = run_cmd(&mut state, cmd);
+            let reply = session_step(&mut state, cmd);
             let _ = reply_tx.send_sync(reply);
             processed = true;
         }
@@ -420,20 +464,21 @@ fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
     }
 }
 
-pub(crate) fn session_client() -> Arc<SessionClient> {
+pub(crate) fn session_client() -> Arc<DefaultSessionClient> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
+        static SESSION_CLIENT: OnceLock<Arc<DefaultSessionClient>> = OnceLock::new();
         SESSION_CLIENT
             .get_or_init(|| {
                 let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SESSION_CMD_RINGBUF_CAPACITY).split();
                 let handle = spawn_named("kithara-engine", move || {
-                    engine_thread(cmd_rx);
+                    engine_thread::<DefaultBackend, _>(cmd_rx, default_backend_config);
                 });
                 let engine_thread = handle.thread().clone();
                 Arc::new(SessionClient {
                     cmd_tx: Mutex::new(cmd_tx),
                     engine_thread,
+                    marker: PhantomData,
                 })
             })
             .clone()
@@ -454,7 +499,7 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
                 WASM_SESSION_STATE.with(|state| {
                     let mut state = state.borrow_mut();
                     if state.is_none() {
-                        *state = Some(SessionState::new());
+                        *state = Some(DefaultSessionState::new(default_backend_config));
                     }
                 });
                 // Pre-warm BRIDGE_PLAYER_STATE: access the thread-local so
@@ -465,7 +510,10 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
                 BRIDGE_PLAYER_STATE.with(|_| {});
             }
 
-            let client = Arc::new(SessionClient { local: is_local });
+            let client = Arc::new(SessionClient {
+                local: is_local,
+                marker: PhantomData,
+            });
             *cell = Some(client.clone());
             client
         })
@@ -474,10 +522,10 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static WASM_SESSION_CLIENT: RefCell<Option<Arc<SessionClient>>> = const { RefCell::new(None) };
+    static WASM_SESSION_CLIENT: RefCell<Option<Arc<DefaultSessionClient>>> = const { RefCell::new(None) };
     /// Session state lives in a thread-local so that `SessionClient` itself
     /// is `Send` (needed for the Worker architecture).
-    static WASM_SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
+    static WASM_SESSION_STATE: RefCell<Option<DefaultSessionState>> = const { RefCell::new(None) };
     /// Shared player state captured during slot allocation (for bridge reads).
     static BRIDGE_PLAYER_STATE: RefCell<Option<Arc<SharedPlayerState>>> = const { RefCell::new(None) };
 }
@@ -519,7 +567,7 @@ pub(crate) fn tick_and_poll_remote() {
         let rx_guard = WORKER_CMD_RX.lock_sync();
         if let Some(ref rx) = *rx_guard {
             while let Ok(msg) = rx.try_recv() {
-                let reply = run_cmd(state, msg.cmd);
+                let reply = session_step(state, msg.cmd);
                 // Capture shared player state for bridge position reads.
                 if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
                     BRIDGE_PLAYER_STATE.with(|ps| {
@@ -612,7 +660,10 @@ fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     }
 }
 
-fn player_index(state: &SessionState, player_id: PlayerId) -> Result<usize, String> {
+fn player_index<B: AudioBackend + 'static>(
+    state: &SessionState<B>,
+    player_id: PlayerId,
+) -> Result<usize, String> {
     state
         .players
         .iter()
@@ -620,7 +671,10 @@ fn player_index(state: &SessionState, player_id: PlayerId) -> Result<usize, Stri
         .ok_or_else(|| format!("player not found: {player_id}"))
 }
 
-fn run_cmd(state: &mut SessionState, cmd: Cmd) -> Reply {
+pub(crate) fn session_step<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    cmd: Cmd,
+) -> Reply {
     match cmd {
         Cmd::RegisterPlayer {
             eq_layout,
@@ -704,34 +758,40 @@ fn run_cmd(state: &mut SessionState, cmd: Cmd) -> Reply {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
-    let config = firewheel::cpal::CpalConfig {
+fn default_backend_config(sample_rate: u32) -> <DefaultBackend as AudioBackend>::Config {
+    firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
             ..Default::default()
         },
         ..Default::default()
-    };
-    ctx.start_stream(config).map_err(|err| err.to_string())
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
-    let config = firewheel_web_audio::WebAudioConfig {
+fn default_backend_config(sample_rate: u32) -> <DefaultBackend as AudioBackend>::Config {
+    firewheel_web_audio::WebAudioConfig {
         sample_rate: NonZeroU32::new(sample_rate),
         request_input: false,
-    };
+    }
+}
+
+fn start_stream<B: AudioBackend>(ctx: &mut SessionCtx<B>, config: B::Config) -> Result<(), String> {
     ctx.start_stream(config).map_err(|err| err.to_string())
 }
 
-fn ensure_ctx(state: &mut SessionState, sample_rate: u32) -> Result<(), String> {
+fn ensure_ctx<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    sample_rate: u32,
+) -> Result<(), String> {
     if state.ctx.is_none() {
         let config = FirewheelConfig {
             num_graph_outputs: ChannelCount::STEREO,
             ..FirewheelConfig::default()
         };
-        let mut ctx = RuntimeCtx::new(config);
-        start_stream(&mut ctx, sample_rate)?;
+        let mut ctx = SessionCtx::<B>::new(config);
+        let backend_config = (state.make_config)(sample_rate);
+        start_stream(&mut ctx, backend_config)?;
         state.ctx = Some(ctx);
         state.sample_rate_hint = sample_rate;
     }
@@ -758,8 +818,8 @@ fn ensure_ctx(state: &mut SessionState, sample_rate: u32) -> Result<(), String> 
     Ok(())
 }
 
-fn start_player(
-    state: &mut SessionState,
+fn start_player<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
     player_id: PlayerId,
     sample_rate: u32,
     master_volume: f32,
@@ -810,12 +870,18 @@ fn start_player(
     Ok(())
 }
 
-fn stop_player(state: &mut SessionState, player_id: PlayerId) -> Result<(), String> {
+fn stop_player<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+) -> Result<(), String> {
     let idx = player_index(state, player_id)?;
     stop_player_idx(state, idx)
 }
 
-fn stop_player_idx(state: &mut SessionState, idx: usize) -> Result<(), String> {
+fn stop_player_idx<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    idx: usize,
+) -> Result<(), String> {
     if idx >= state.players.len() {
         return Err("player index out of range".into());
     }
@@ -844,7 +910,7 @@ fn stop_player_idx(state: &mut SessionState, idx: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_player_graph(fw_ctx: &mut RuntimeCtx, player: &mut PlayerState) {
+fn remove_player_graph<B: AudioBackend>(fw_ctx: &mut SessionCtx<B>, player: &mut PlayerState) {
     let player_id = player.player_id;
     let slots = player.slots.drain(..).collect::<Vec<_>>();
     for slot in slots {
@@ -874,7 +940,7 @@ fn clear_player_graph_state(player: &mut PlayerState) {
     player.master_vol_pan_memo = None;
 }
 
-fn shutdown_if_idle(state: &mut SessionState) {
+fn shutdown_if_idle<B: AudioBackend + 'static>(state: &mut SessionState<B>) {
     if state.players.iter().all(|player| !player.started) {
         if let Some(ref mut fw_ctx) = state.ctx {
             fw_ctx.stop_stream();
@@ -885,7 +951,10 @@ fn shutdown_if_idle(state: &mut SessionState) {
     }
 }
 
-fn unregister_player(state: &mut SessionState, player_id: PlayerId) -> Result<(), String> {
+fn unregister_player<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+) -> Result<(), String> {
     let idx = player_index(state, player_id)?;
     if state.players[idx].started {
         stop_player_idx(state, idx)?;
@@ -894,7 +963,10 @@ fn unregister_player(state: &mut SessionState, player_id: PlayerId) -> Result<()
     Ok(())
 }
 
-fn allocate_slot(state: &mut SessionState, player_id: PlayerId) -> Result<Reply, String> {
+fn allocate_slot<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+) -> Result<Reply, String> {
     let idx = player_index(state, player_id)?;
     if !state.players[idx].started {
         return Err("player not running".into());
@@ -954,7 +1026,11 @@ fn allocate_slot(state: &mut SessionState, player_id: PlayerId) -> Result<Reply,
     ))
 }
 
-fn release_slot(state: &mut SessionState, player_id: PlayerId, slot: SlotId) -> Result<(), String> {
+fn release_slot<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+    slot: SlotId,
+) -> Result<(), String> {
     let idx = player_index(state, player_id)?;
     if !state.players[idx].started {
         return Err("player not running".into());
@@ -986,8 +1062,8 @@ fn release_slot(state: &mut SessionState, player_id: PlayerId, slot: SlotId) -> 
     Ok(())
 }
 
-fn set_player_master_volume(
-    state: &mut SessionState,
+fn set_player_master_volume<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
     player_id: PlayerId,
     volume: f32,
 ) -> Result<(), String> {
@@ -1014,8 +1090,8 @@ fn set_player_master_volume(
     Ok(())
 }
 
-fn set_player_slot_volume(
-    state: &mut SessionState,
+fn set_player_slot_volume<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
     player_id: PlayerId,
     slot: SlotId,
     volume: f32,
@@ -1043,8 +1119,8 @@ fn set_player_slot_volume(
     Ok(())
 }
 
-fn set_player_eq_gain(
-    state: &mut SessionState,
+fn set_player_eq_gain<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
     player_id: PlayerId,
     band: usize,
     gain_db: f32,
@@ -1077,7 +1153,10 @@ fn set_player_eq_gain(
     Ok(())
 }
 
-fn set_session_ducking(state: &mut SessionState, mode: SessionDuckingMode) {
+fn set_session_ducking<B: AudioBackend + 'static>(
+    state: &mut SessionState<B>,
+    mode: SessionDuckingMode,
+) {
     state.session_ducking = mode;
     let Some(ref mut fw_ctx) = state.ctx else {
         return;
