@@ -157,9 +157,13 @@ fn engine_master_channels_returns_config() {
 fn engine_session_ducking_roundtrip() {
     let _lock = session_ducking_lock().lock().unwrap();
     let engine = make_engine();
-    engine.set_session_ducking(SessionDuckingMode::Soft).unwrap();
+    engine
+        .set_session_ducking(SessionDuckingMode::Soft)
+        .unwrap();
     assert_eq!(engine.session_ducking(), SessionDuckingMode::Soft);
-    engine.set_session_ducking(SessionDuckingMode::Hard).unwrap();
+    engine
+        .set_session_ducking(SessionDuckingMode::Hard)
+        .unwrap();
     assert_eq!(engine.session_ducking(), SessionDuckingMode::Hard);
     engine.set_session_ducking(SessionDuckingMode::Off).unwrap();
     assert_eq!(engine.session_ducking(), SessionDuckingMode::Off);

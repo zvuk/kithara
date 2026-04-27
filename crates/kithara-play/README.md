@@ -202,11 +202,40 @@ gantt
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
 <tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code></td></tr>
+<tr><td><code>backend-offline</code></td><td>no</td><td>Offline Firewheel backend for deterministic engine/player tests</td></tr>
 <tr><td><code>rodio</code></td><td>no</td><td><code>rodio</code> integration (<code>kithara-audio/rodio</code>)</td></tr>
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
-<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code></td></tr>
+<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code> plus offline test backend wiring</td></tr>
 <tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
 </table>
+
+## Offline Backend (Testing)
+
+`backend-offline` exists for deterministic native tests that need the full
+`EngineImpl + PlayerImpl + session_engine` stack without CPAL or real audio
+hardware. Use `EngineImpl::new_offline(...)` to create an engine and
+`engine.render_offline(frames)` to drive the graph manually.
+
+```rust
+use kithara_play::{Engine, EngineConfig, EngineImpl};
+use kithara_play::impls::offline_backend::OfflineConfig;
+use kithara_events::EventBus;
+
+let engine = EngineImpl::new_offline(
+    EngineConfig::default(),
+    EventBus::default(),
+    OfflineConfig::default(),
+);
+engine.start()?;
+let pcm = engine.render_offline(512)?;
+```
+
+This is different from `internal::offline::OfflinePlayer`: `OfflinePlayer`
+is a single-node helper for focused render tests, while `new_offline(...)`
+exercises the full engine/session orchestration path.
+
+`backend-offline` is test-only infrastructure. Do not use it in production
+runtime selection or app-facing engine setup.
 
 ## Invariants
 

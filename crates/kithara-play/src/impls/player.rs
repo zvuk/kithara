@@ -129,6 +129,30 @@ impl PlayerImpl {
             config.abr = Some(AbrController::new(AbrOptions::default()));
         }
 
+        Self::new_with_engine(config, resolved_pool, bus, engine)
+    }
+
+    #[cfg(any(test, feature = "backend-offline"))]
+    #[must_use]
+    pub fn with_engine(mut config: PlayerConfig, engine: EngineImpl) -> Self {
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
+        let bus = config.bus.clone().unwrap_or_default();
+        if config.abr.is_none() {
+            config.abr = Some(AbrController::new(AbrOptions::default()));
+        }
+
+        Self::new_with_engine(config, resolved_pool, bus, engine)
+    }
+
+    fn new_with_engine(
+        config: PlayerConfig,
+        resolved_pool: PcmPool,
+        bus: EventBus,
+        engine: EngineImpl,
+    ) -> Self {
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),

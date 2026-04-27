@@ -67,7 +67,6 @@ impl Resource {
     ///
     /// The resource shares the reader's event bus directly.
     /// Use this for custom sources.
-    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
