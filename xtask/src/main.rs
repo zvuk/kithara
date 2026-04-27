@@ -13,6 +13,7 @@ mod wasm;
 
 use android::AndroidCommand;
 use apple::AppleCommand;
+use arch::ArchArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
 use wasm::WasmCommand;
@@ -51,6 +52,8 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         threshold: u32,
     },
+    /// Architectural fitness functions.
+    Arch(ArchArgs),
     /// Code quality checks.
     Quality {
         #[command(subcommand)]
@@ -84,6 +87,7 @@ fn main() -> anyhow::Result<()> {
             baseline,
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
+        Command::Arch(ref args) => arch::run(args),
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),

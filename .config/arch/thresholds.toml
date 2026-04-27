@@ -1,0 +1,156 @@
+# Numeric thresholds for size/density/nesting checks.
+# Each section has `warn` and `deny` levels; values below `warn` are clean.
+
+[file_size]
+warn = 400
+deny = 1000
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    "**/generated/**",
+    "**/*.pb.rs",
+]
+
+[file_density]
+warn_fns_per_type = 25.0
+deny_fns_per_type = 40.0
+min_fns_to_evaluate = 20
+
+[shared_state]
+warn = 3
+deny = 5
+patterns = [
+    "Arc<Mutex<",
+    "Arc<RwLock<",
+    "Arc<parking_lot::Mutex<",
+    "Arc<parking_lot::RwLock<",
+    "Arc<tokio::sync::Mutex<",
+    "Arc<tokio::sync::RwLock<",
+]
+
+[flat_directory]
+# >=warn: recommend extracting subsystem into a submodule.
+# >=deny: hard fail.
+warn = 7
+deny = 12
+ignore_globs = ["**/tests/**", "**/benches/**"]
+
+[max_nesting]
+# Allowed depth of subdirectories under `crates/<crate>/src/`.
+# `src/foo/bar/baz.rs` is depth 2 (allowed); `src/a/b/c/d.rs` is depth 3 (deny).
+max_depth = 2
+exempt_crates = []
+
+[readme_presence]
+exempt = [
+    "kithara-workspace-hack",
+    "kithara-test-macros",
+    "kithara-hang-detector-macros",
+    "kithara-wasm-macros",
+]
+min_bytes = 200
+
+[mixed_entities]
+# A type is "sizable" when its `impl` surface meets EITHER bound:
+#   - has at least `min_fns_per_type` total `fn`s across all `impl X` and
+#     `impl Trait for X` blocks; or
+#   - has at least `min_impl_blocks` impl blocks (own + trait), which catches
+#     structural types whose surface is spread across many trait impls (e.g.
+#     `FilePeer` with separate `impl Peer`, `impl Abr`, ...).
+# A file mixing several sizable types signals that distinct entities should
+# live in separate files.
+min_fns_per_type = 5
+min_impl_blocks = 3
+warn = 2
+deny = 3
+
+[redundant_accessors]
+# AST data-flow analysis: catches multiple paths to the same datum within one
+# `impl` block. Three patterns, each toggleable and severity-configurable:
+#
+#   P1 — `pub` field exposed AND `pub fn x(&self) -> &T { &self.x }` (or
+#        `.clone()` flavour). Two paths to the same field.
+#   P2 — `pub fn a(&self) -> &Inner { &self.inner }` AND
+#        `pub fn b(&self) -> &TypeA { &self.inner.field }`.
+#        The shorthand path is a strict prefix-extension of the container path.
+#        Detection compares AST chains, not method names.
+#   P3 — handle exposing interior mutability AND a setter writing to the same
+#        field. External code can mutate via two paths.
+#
+# Severities: "deny" (fail), "warn" (track via baseline), "off" (skip pattern).
+#
+# Nesting support (all dimensions are unbounded by recursion):
+#   - field chain depth: `self.a.b.c.d.e...` — unlimited via AST recursion
+#   - type generic depth: `Option<Arc<Mutex<RwLock<T>>>>` — unlimited
+#   - body wrappers: `Some(&self.x)`, `Ok(...)`, `Box::new(...)`, `Cow::Borrowed(...)`,
+#                    `Cell::new(...)`, etc. — unwrapped recursively
+#   - expose-method calls: `self.x.as_ref()`, `.lock()`, `.borrow()`, `.read()`,
+#                          `.deref()`, `.into_inner()`, ... — recursive on receiver
+#   - cast: `&self.x as &dyn T` — unwrapped recursively
+#   - block/return/paren: `{ &self.x }`, `return &self.x;`, `(&self.x)` — recursive
+#   - module nesting: structs and impls inside any depth of `mod foo { ... }`
+#                     are scoped per module via `collect_scopes`; cross-module
+#                     name collisions don't create false positives
+#   - cross-impl aggregation: `impl X` + `impl Trait for X` are joined per type
+detect_field_passthrough = true
+detect_nested_shorthand  = true
+detect_mutation_handle   = true
+p1_severity = "warn"
+p2_severity = "warn"
+p3_severity = "deny"
+public_only = true
+ignore_deref = true
+
+# Types whose presence in a return type signals interior mutability. Detection
+# recurses into generic arguments — `Arc<AtomicUsize>` / `Option<&Mutex<T>>`
+# match because `AtomicUsize` / `Mutex` appears anywhere in the type tree.
+mutable_handle_types = [
+    "AtomicBool",
+    "AtomicI8", "AtomicI16", "AtomicI32", "AtomicI64", "AtomicIsize",
+    "AtomicU8", "AtomicU16", "AtomicU32", "AtomicU64", "AtomicUsize",
+    "AtomicPtr",
+    "Cell", "RefCell", "OnceCell", "LazyLock",
+    "Mutex", "RwLock", "Notify", "Semaphore", "Condvar",
+]
+
+# Method names that mutate when applied to `self.<field>` — `self.x.store(v)`,
+# `self.x.set(v)`, etc. Used by P3 to find a setter that targets the same
+# field as a `*_handle()` getter, AND used to detect direct `self.x = ...`
+# assignment (always counted regardless of this list).
+writer_methods = [
+    # Atomic*
+    "store", "swap",
+    "fetch_add", "fetch_sub", "fetch_or", "fetch_and", "fetch_xor",
+    "fetch_max", "fetch_min", "fetch_update", "fetch_nand",
+    "compare_exchange", "compare_exchange_weak",
+    # Cell / RefCell / OnceCell
+    "set", "replace", "replace_with", "take",
+    # Mutex / RwLock writers (manual `*guard = X` is also caught via plain assignment)
+    "write", "send", "send_replace", "send_modify",
+    # Notify
+    "notify_one", "notify_all", "notify_waiters",
+]
+
+# Single-arg constructor calls treated as transparent over their argument:
+# `Some(&self.x)` is treated identically to `&self.x` for accessor-pattern
+# detection. Patterns are matched as plain identifier (`Some`) or path suffix
+# (`Box::new` matches `std::boxed::Box::new`, `Box::new`, etc.).
+wrapper_ctors = [
+    "Some", "Ok", "Err",
+    "Box::new", "Arc::new", "Rc::new",
+    "Pin::new", "Pin::new_unchecked",
+    "Cow::Borrowed", "Cow::Owned",
+    "Cell::new", "RefCell::new", "Mutex::new", "RwLock::new", "OnceCell::new",
+]
+
+# 0-arg methods that expose internal data — `self.x.as_ref()` is treated as
+# `&self.x` for accessor detection. `*_mut` variants are emitted with the
+# `RefMut` access kind so P3 (mutation handle) can flag them.
+expose_methods = [
+    "as_ref", "as_mut", "as_str", "as_slice", "as_path", "as_bytes", "as_deref",
+    "deref", "deref_mut",
+    "borrow", "borrow_mut",
+    "read", "write", "lock",
+    "get", "get_mut",
+    "into_inner",
+]

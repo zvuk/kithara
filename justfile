@@ -33,9 +33,25 @@ deny:
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
 
-# Validate workspace architecture.
+# Validate workspace architecture (all checks against baseline).
 arch:
-    cargo xtask quality arch
+    cargo xtask arch
+
+# Run a single architectural check by id.
+arch-check NAME:
+    cargo xtask arch --check {{NAME}}
+
+# Generate markdown architectural report at target/arch-report.md.
+arch-report:
+    cargo xtask arch --report target/arch-report.md
+
+# Re-write the architectural baseline to current observations.
+arch-baseline:
+    cargo xtask arch --update-baseline
+
+# Emit architectural results as JSON (for CI artifacts).
+arch-json:
+    cargo xtask arch --json
 
 # Generate and open API docs.
 doc:

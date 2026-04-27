@@ -1,0 +1,17 @@
+# Per-crate intra-layer rules (opt-in).
+# A file in a lower-indexed layer may not depend on a file in a higher-indexed layer.
+# Crates without a `[[crate]]` entry are skipped (no constraints).
+#
+# Example (commented; enable per crate as subsystems crystallize):
+#
+# [[crate]]
+# name = "kithara-stream"
+#   [[crate.layer]]
+#   index = 0
+#   name = "types"
+#   paths = ["src/error.rs", "src/types.rs"]
+#
+#   [[crate.layer]]
+#   index = 1
+#   name = "core"
+#   paths = ["src/dl/**", "src/source.rs"]

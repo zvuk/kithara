@@ -1,0 +1,17 @@
+# Types that must have exactly one definition, in the declared owner crate.
+# A canonical type is the single source of truth shared across the workspace.
+
+[[canonical]]
+kind = "enum"
+name = "AudioCodec"
+owner = "kithara-stream"
+
+[[canonical]]
+kind = "enum"
+name = "ContainerFormat"
+owner = "kithara-stream"
+
+[[canonical]]
+kind = "struct"
+name = "MediaInfo"
+owner = "kithara-stream"
