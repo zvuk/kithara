@@ -33,25 +33,45 @@ deny:
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
 
-# Validate workspace architecture (all checks against baseline).
+# Run all workspace linters: arch + style + idioms.
+lint:
+    cargo xtask lint
+
+# Validate workspace architecture (topology, layers, file size, …).
 arch:
-    cargo xtask arch
+    cargo xtask lint arch
+
+# Validate code-style fitness (const locality, field/item ordering, …).
+style:
+    cargo xtask lint style
+
+# Validate idiomatic-construction fitness (branch chains, accumulators, …).
+idioms:
+    cargo xtask lint idioms
 
 # Run a single architectural check by id.
 arch-check NAME:
-    cargo xtask arch --check {{NAME}}
+    cargo xtask lint arch --check {{NAME}}
 
 # Generate markdown architectural report at target/arch-report.md.
 arch-report:
-    cargo xtask arch --report target/arch-report.md
+    cargo xtask lint arch --report target/arch-report.md
 
 # Re-write the architectural baseline to current observations.
 arch-baseline:
-    cargo xtask arch --update-baseline
+    cargo xtask lint arch --update-baseline
+
+# Re-write the style baseline to current observations.
+style-baseline:
+    cargo xtask lint style --update-baseline
+
+# Re-write the idioms baseline to current observations.
+idioms-baseline:
+    cargo xtask lint idioms --update-baseline
 
 # Emit architectural results as JSON (for CI artifacts).
 arch-json:
-    cargo xtask arch --json
+    cargo xtask lint arch --json
 
 # Generate and open API docs.
 doc:
