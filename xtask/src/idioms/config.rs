@@ -25,6 +25,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) branch_chains: BranchChainsConfig,
     #[serde(default)]
     pub(crate) guard_cascade: GuardCascadeConfig,
+    #[serde(default)]
+    pub(crate) accumulator_loops: AccumulatorLoopsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +122,42 @@ fn default_terminator_macros() -> Vec<String> {
     .iter()
     .map(|s| (*s).to_string())
     .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccumulatorLoopsConfig {
+    /// Patterns to detect: `push`, `extend`, `sum` (numeric `+=`/`-=`),
+    /// `count` (conditional `+= 1` inside an `if`).
+    #[serde(default = "default_accumulator_patterns")]
+    pub(crate) detect: Vec<String>,
+    /// Skip loops with `break`/`continue`/`return` inside the body — converting
+    /// to an iterator chain there changes control flow semantics.
+    #[serde(default = "default_true")]
+    pub(crate) ignore_with_break: bool,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for AccumulatorLoopsConfig {
+    fn default() -> Self {
+        Self {
+            detect: default_accumulator_patterns(),
+            ignore_with_break: true,
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+fn default_accumulator_patterns() -> Vec<String> {
+    ["push", "extend", "sum", "count"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>

@@ -1,5 +1,13 @@
 schema_version = 1
 
+[accumulator_loops]
+"crates/kithara-audio/src/effects/eq.rs:351:16" = 1
+"crates/kithara-audio/src/resampler.rs:339:8" = 1
+"crates/kithara-hls/src/stream_index.rs:488:8" = 1
+"crates/kithara-play/src/impls/player_processor.rs:425:20" = 1
+"crates/kithara-stream/src/dl/tests.rs:327:4" = 1
+"crates/kithara-test-utils/src/fmp4/bytes.rs:94:4" = 1
+
 [branch_chains]
 "crates/kithara-stream/src/media.rs:147:8" = 1
 

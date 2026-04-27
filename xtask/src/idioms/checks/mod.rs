@@ -13,6 +13,7 @@ use cargo_metadata::Metadata;
 use super::config::IdiomsConfig;
 use crate::common::violation::Violation;
 
+pub(crate) mod accumulator_loops;
 pub(crate) mod branch_chains;
 pub(crate) mod guard_cascade;
 
@@ -32,5 +33,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(branch_chains::BranchChains),
         Box::new(guard_cascade::GuardCascade),
+        Box::new(accumulator_loops::AccumulatorLoops),
     ]
 }
