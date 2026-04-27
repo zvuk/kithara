@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
+use crate::common::{
     parse::{count_items, parse_file},
     violation::Violation,
     walker::{relative_to, workspace_rs_files},

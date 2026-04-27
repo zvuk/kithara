@@ -8,7 +8,8 @@ use std::path::Path;
 use anyhow::Result;
 use cargo_metadata::Metadata;
 
-use super::{config::ArchConfig, violation::Violation};
+use super::config::ArchConfig;
+use crate::common::violation::Violation;
 
 pub(crate) mod canonical_types;
 pub(crate) mod direction;

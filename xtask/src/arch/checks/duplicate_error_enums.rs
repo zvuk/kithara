@@ -9,7 +9,7 @@ use anyhow::Result;
 use regex::Regex;
 
 use super::{Check, Context};
-use crate::{arch::violation::Violation, util::walk_rs_files};
+use crate::common::{violation::Violation, walker::walk_rs_files};
 
 pub(crate) const ID: &str = "duplicate_error_enums";
 

@@ -7,10 +7,12 @@
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
-    config::AccessorSeverity,
-    violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
+use crate::{
+    arch::config::AccessorSeverity,
+    common::{
+        violation::Violation,
+        walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
+    },
 };
 
 pub(crate) const ID: &str = "single_word_filenames";

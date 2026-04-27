@@ -8,7 +8,7 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-use crate::util::walk_rs_files;
+use crate::common::walker::walk_rs_files;
 
 #[derive(Clone, Copy, Debug, Subcommand)]
 pub(crate) enum QualityCommand {

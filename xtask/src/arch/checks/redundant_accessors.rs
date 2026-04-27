@@ -20,15 +20,17 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
-    config::AccessorSeverity,
-    parse::{
-        AccessKind, AccessPath, PassthroughOpts, Scope, collect_scopes, collect_self_field_writes,
-        extract_passthrough_with, is_strict_pub, parse_file, pub_methods, returns_handle_type,
-        self_ty_name,
+use crate::{
+    arch::config::AccessorSeverity,
+    common::{
+        parse::{
+            AccessKind, AccessPath, PassthroughOpts, Scope, collect_scopes,
+            collect_self_field_writes, extract_passthrough_with, is_strict_pub, parse_file,
+            pub_methods, returns_handle_type, self_ty_name,
+        },
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files},
     },
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files},
 };
 
 pub(crate) const ID: &str = "redundant_accessors";

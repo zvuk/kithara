@@ -7,7 +7,7 @@
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
+use crate::common::{
     parse::{parse_file, type_weights},
     violation::Violation,
     walker::{relative_to, workspace_rs_files},

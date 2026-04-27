@@ -10,7 +10,7 @@ use anyhow::Result;
 use syn::{Item, ItemImpl, Type, spanned::Spanned};
 
 use super::{Check, Context};
-use crate::arch::{
+use crate::common::{
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files},

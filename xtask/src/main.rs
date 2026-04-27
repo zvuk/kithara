@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 mod android;
 mod apple;
 mod arch;
+mod common;
 mod perf_compare;
 mod publish;
 mod quality;

@@ -9,7 +9,7 @@ use anyhow::Result;
 use cargo_metadata::{DependencyKind, Metadata, Node, Package};
 
 use super::{Check, Context};
-use crate::arch::violation::Violation;
+use crate::common::violation::Violation;
 
 pub(crate) const ID: &str = "direction";
 

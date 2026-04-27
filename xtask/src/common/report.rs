@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::arch::{
+use super::{
     baseline::RatchetDiff,
     violation::{Report, Severity},
 };

@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
+use crate::common::{
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
 };

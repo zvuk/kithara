@@ -5,7 +5,7 @@ use std::fs;
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::violation::Violation;
+use crate::common::violation::Violation;
 
 pub(crate) const ID: &str = "stray_rs_files";
 

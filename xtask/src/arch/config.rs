@@ -294,13 +294,13 @@ pub(crate) struct RedundantAccessorsThreshold {
     /// Single-arg constructor calls treated as transparent over their argument
     /// (`Some(&self.x)`, `Box::new(...)`, `Cow::Borrowed(...)`, `Arc::new(...)`,
     /// ...). Patterns are matched as plain (`Some`) or path suffix (`Box::new`).
-    #[serde(default = "crate::arch::parse::default_wrapper_ctors")]
+    #[serde(default = "crate::common::parse::default_wrapper_ctors")]
     pub(crate) wrapper_ctors: Vec<String>,
     /// 0-arg methods that expose internal data (`as_ref`, `as_str`, `lock`,
     /// `borrow`, `read`, ...). The receiver chain is treated as the data path.
     /// `_mut` variants (`as_mut`, `borrow_mut`, `deref_mut`, `get_mut`,
     /// `write`) are emitted with `RefMut` access kind.
-    #[serde(default = "crate::arch::parse::default_expose_methods")]
+    #[serde(default = "crate::common::parse::default_expose_methods")]
     pub(crate) expose_methods: Vec<String>,
 }
 
@@ -317,8 +317,8 @@ impl Default for RedundantAccessorsThreshold {
             ignore_deref: true,
             mutable_handle_types: default_mutable_handle_types(),
             writer_methods: default_writer_methods(),
-            wrapper_ctors: crate::arch::parse::default_wrapper_ctors(),
-            expose_methods: crate::arch::parse::default_expose_methods(),
+            wrapper_ctors: crate::common::parse::default_wrapper_ctors(),
+            expose_methods: crate::common::parse::default_expose_methods(),
         }
     }
 }

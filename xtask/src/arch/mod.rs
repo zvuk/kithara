@@ -14,18 +14,17 @@ use anyhow::{Context as _, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
 
-mod baseline;
 mod checks;
 mod config;
-mod parse;
-mod report;
-mod violation;
-mod walker;
 
-use baseline::{Baseline, RatchetDiff};
 use checks::{Context, registry};
 use config::ArchConfig;
-use violation::Report;
+
+use crate::common::{
+    baseline::{Baseline, RatchetDiff},
+    report,
+    violation::Report,
+};
 
 #[derive(Debug, Default, Args)]
 pub(crate) struct ArchArgs {

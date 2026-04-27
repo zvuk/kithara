@@ -5,7 +5,7 @@ use std::path::{Component, Path};
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::arch::{
+use crate::common::{
     violation::Violation,
     walker::{relative_to, workspace_rs_files},
 };
