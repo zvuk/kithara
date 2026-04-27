@@ -9,6 +9,7 @@ mod common;
 mod perf_compare;
 mod publish;
 mod quality;
+mod style;
 mod util;
 mod wasm;
 
@@ -17,6 +18,7 @@ use apple::AppleCommand;
 use arch::ArchArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
+use style::StyleArgs;
 use wasm::WasmCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -55,6 +57,8 @@ enum Command {
     },
     /// Architectural fitness functions.
     Arch(ArchArgs),
+    /// Code-style fitness functions.
+    Style(StyleArgs),
     /// Code quality checks.
     Quality {
         #[command(subcommand)]
@@ -89,6 +93,7 @@ fn main() -> anyhow::Result<()> {
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
         Command::Arch(ref args) => arch::run(args),
+        Command::Style(ref args) => style::run(args),
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),
