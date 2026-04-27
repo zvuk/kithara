@@ -6,12 +6,14 @@
     reason = "test mock code; values are small and positive by construction"
 )]
 
+use std::num::NonZeroUsize;
+
 use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};
-use crate::traits::{PcmReader, ReadOutcome, SeekOutcome};
+use crate::traits::{PcmReader, PendingReason, ReadOutcome, SeekOutcome};
 
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
@@ -76,10 +78,11 @@ impl PcmReader for TestPcmReader {
             return Ok(self.eof_outcome());
         }
         let channels = u64::from(self.spec.channels);
+        let position = self.frames_to_duration(self.position_frames);
         if channels == 0 || buf.is_empty() {
-            return Ok(ReadOutcome::Frames {
-                count: 0,
-                position: self.frames_to_duration(self.position_frames),
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position,
             });
         }
         let remaining_samples = (self.total_frames - self.position_frames) * channels;
@@ -89,9 +92,16 @@ impl PcmReader for TestPcmReader {
         }
         let frames_advanced = to_write as u64 / channels;
         self.position_frames += frames_advanced;
+        let new_position = self.frames_to_duration(self.position_frames);
+        let Some(count) = NonZeroUsize::new(to_write) else {
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: new_position,
+            });
+        };
         Ok(ReadOutcome::Frames {
-            count: to_write,
-            position: self.frames_to_duration(self.position_frames),
+            count,
+            position: new_position,
         })
     }
 
@@ -102,17 +112,18 @@ impl PcmReader for TestPcmReader {
         if self.at_natural_end() {
             return Ok(self.eof_outcome());
         }
+        let position = self.frames_to_duration(self.position_frames);
         if output.is_empty() {
-            return Ok(ReadOutcome::Frames {
-                count: 0,
-                position: self.frames_to_duration(self.position_frames),
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position,
             });
         }
         let channels = usize::from(self.spec.channels);
         if channels == 0 || output.len() < channels {
-            return Ok(ReadOutcome::Frames {
-                count: 0,
-                position: self.frames_to_duration(self.position_frames),
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position,
             });
         }
         let frames_per_channel = output[0].len();
@@ -124,22 +135,30 @@ impl PcmReader for TestPcmReader {
             }
         }
         self.position_frames += frames_to_write as u64;
+        let new_position = self.frames_to_duration(self.position_frames);
+        let Some(count) = NonZeroUsize::new(frames_to_write) else {
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: new_position,
+            });
+        };
         Ok(ReadOutcome::Frames {
-            count: frames_to_write,
-            position: self.frames_to_duration(self.position_frames),
+            count,
+            position: new_position,
         })
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate)) as u64;
         self.position_frames = frame.min(self.total_frames);
-        let landed = self.frames_to_duration(self.position_frames);
+        let landed_at = self.frames_to_duration(self.position_frames);
         if let Some(duration) = self.duration()
             && position >= duration
         {
-            return Ok(SeekOutcome::PastEof { duration });
+            return Ok(SeekOutcome::PastEof { target, duration });
         }
-        Ok(SeekOutcome::Landed { position: landed })
+        Ok(SeekOutcome::Landed { target, landed_at })
     }
 
     fn spec(&self) -> PcmSpec {

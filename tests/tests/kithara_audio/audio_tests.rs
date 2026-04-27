@@ -98,7 +98,7 @@ async fn test_audio_spec() {
     assert_eq!(spec.channels, 2);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn test_audio_read() {
     let (_cache, _tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
@@ -110,8 +110,8 @@ async fn test_audio_read() {
 
     let saw_eof = loop {
         match audio.read(&mut buf).expect("read") {
-            ReadOutcome::Frames { count: 0, .. } => break false,
-            ReadOutcome::Frames { count, .. } => total_read += count,
+            ReadOutcome::Pending { .. } => break false,
+            ReadOutcome::Frames { count, .. } => total_read += count.get(),
             ReadOutcome::Eof { .. } => break true,
         }
     };
@@ -135,7 +135,7 @@ async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_l
         panic!("expected Frames, got {outcome:?}");
     };
 
-    assert_eq!(count, buf_len);
+    assert_eq!(count.get(), buf_len);
 }
 
 #[kithara::test(tokio)]
@@ -148,7 +148,7 @@ async fn test_audio_is_eof() {
     let mut buf = [0.0f32; 1024];
     let saw_eof = loop {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => break false,
+            Ok(ReadOutcome::Pending { .. }) => break false,
             Ok(ReadOutcome::Frames { .. }) => continue,
             Ok(ReadOutcome::Eof { .. }) => break true,
             Err(e) => panic!("decode error: {e}"),
@@ -267,7 +267,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut buf = [0.0f32; 512];
     let read_result = audio.read(&mut buf);
     assert!(
-        matches!(read_result, Ok(ReadOutcome::Frames { count, .. }) if count > 0),
+        matches!(read_result, Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
         "read must commit PCM output",
     );
 
@@ -326,7 +326,7 @@ async fn test_audio_preload(#[case] second_preload: bool) {
     let mut buf = [0.0f32; 64];
     assert!(matches!(
         audio.read(&mut buf),
-        Ok(ReadOutcome::Frames { count, .. }) if count > 0
+        Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0
     ));
 }
 
@@ -345,7 +345,7 @@ async fn test_audio_preload_rearms_after_seek() {
 
     let mut buf = [0.0f32; 64];
     assert!(
-        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count > 0),
+        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
         "initial read must produce samples",
     );
 
@@ -385,7 +385,7 @@ async fn preloaded_survives_seek() {
         .expect("worker must deliver after seek");
     let mut buf = [0.0f32; 4096];
     assert!(
-        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count > 0),
+        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
         "must read samples after seek",
     );
 }

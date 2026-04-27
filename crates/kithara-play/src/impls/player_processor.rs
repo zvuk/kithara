@@ -509,12 +509,17 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc as TestArc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering},
+    use std::{
+        num::NonZeroUsize,
+        sync::{
+            Arc as TestArc, Mutex,
+            atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering},
+        },
     };
 
-    use kithara_audio::{DecodeError, PcmReader, ReadOutcome, SeekOutcome, mock::TestPcmReader};
+    use kithara_audio::{
+        DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome, mock::TestPcmReader,
+    };
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration};
@@ -570,8 +575,8 @@ mod tests {
 
     impl PcmReader for SampleRateTrackingReader {
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Frames {
-                count: 0,
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
                 position: Duration::ZERO,
             })
         }
@@ -580,14 +585,17 @@ mod tests {
             &mut self,
             _output: &'a mut [&'a mut [f32]],
         ) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Frames {
-                count: 0,
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
                 position: Duration::ZERO,
             })
         }
 
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-            Ok(SeekOutcome::Landed { position })
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn spec(&self) -> PcmSpec {
@@ -829,8 +837,8 @@ mod tests {
 
         impl PcmReader for SeekTrackingReader {
             fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-                Ok(ReadOutcome::Frames {
-                    count: 0,
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
                     position: Duration::ZERO,
                 })
             }
@@ -840,8 +848,8 @@ mod tests {
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError> {
                 let _ = output;
-                Ok(ReadOutcome::Frames {
-                    count: 0,
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
                     position: Duration::ZERO,
                 })
             }
@@ -854,7 +862,10 @@ mod tests {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(ms);
-                Ok(SeekOutcome::Landed { position })
+                Ok(SeekOutcome::Landed {
+                    target: position,
+                    landed_at: position,
+                })
             }
 
             fn spec(&self) -> PcmSpec {
@@ -930,13 +941,19 @@ mod tests {
 
         fn outcome(&self, buf_frames: usize) -> Result<ReadOutcome, DecodeError> {
             if self.stall_flag.load(AtomicOrdering::Acquire) {
-                Ok(ReadOutcome::Frames {
-                    count: 0,
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
                     position: Duration::from_secs(10),
                 })
             } else {
+                let Some(count) = NonZeroUsize::new(buf_frames) else {
+                    return Ok(ReadOutcome::Pending {
+                        reason: PendingReason::Buffering,
+                        position: Duration::from_secs(10),
+                    });
+                };
                 Ok(ReadOutcome::Frames {
-                    count: buf_frames,
+                    count,
                     position: Duration::from_secs(10),
                 })
             }
@@ -965,7 +982,10 @@ mod tests {
         }
 
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-            Ok(SeekOutcome::Landed { position })
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn spec(&self) -> PcmSpec {
@@ -1152,7 +1172,10 @@ mod tests {
         }
 
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-            Ok(SeekOutcome::Landed { position })
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn spec(&self) -> PcmSpec {

@@ -45,6 +45,11 @@ pub(super) fn container_to_file_type(container: ContainerFormat) -> Option<Audio
 pub(super) struct PacketRef<'a> {
     pub(super) data: &'a [u8],
     pub(super) description: AudioStreamPacketDescription,
+    /// Absolute byte offset of this packet inside the source container,
+    /// when known. `AudioFile` exposes it via
+    /// `kAudioFilePropertyPacketToByte`; fragmented MP4 has no useful
+    /// container-wide offset and reports `None`.
+    pub(super) byte_offset: Option<u64>,
 }
 
 /// Minimal interface the inner decoder needs from a container parser.
@@ -57,4 +62,13 @@ pub(super) trait PacketReader: Send {
     /// frame that will be emitted after the seek (may be less than
     /// `target_frame` when the seek lands on a packet boundary).
     fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64>;
+    /// Absolute byte offset of the *next* packet body inside the
+    /// source container after a successful seek. `AudioFile` resolves
+    /// it via `kAudioFilePropertyPacketToByte`; `Fmp4Reader` exposes
+    /// the shared `MediaSource` read cursor updated by
+    /// `IsoMp4Reader::seek`. `None` means the container genuinely
+    /// has no resolvable byte offset for the next packet — callers
+    /// must surface a typed `SeekFailed` rather than substitute a
+    /// derived guess.
+    fn landed_byte(&self) -> Option<u64>;
 }

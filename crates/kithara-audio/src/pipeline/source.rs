@@ -13,11 +13,15 @@ use std::{
 };
 
 use delegate::delegate;
-use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+use kithara_decode::{
+    DecodeError, DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder, PcmChunk,
+    PcmSpec,
+};
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{
-    ContainerFormat, MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
+    ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
+    Timeline,
 };
 use tracing::{debug, trace, warn};
 
@@ -206,9 +210,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 impl<T: StreamType> StreamAudioSource<T> {
     /// Nanoseconds per second for frame/duration conversion.
     const NANOS_PER_SEC: u128 = 1_000_000_000;
-
-    /// Decode progress logging interval in chunks.
-    const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
 
     /// Default read-ahead size in bytes when segment range is unknown.
     const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
@@ -403,17 +404,64 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<()> {
-        match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
+    fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
             Ok(result) => result,
-            Err(payload) => Err(DecodeError::InvalidData(format!(
-                "decoder panic during seek: {}",
-                Self::decode_panic_message(payload)
-            ))),
+            Err(payload) => {
+                return Err(DecodeError::InvalidData(format!(
+                    "decoder panic during seek: {}",
+                    Self::decode_panic_message(payload)
+                )));
+            }
+        };
+        if let Ok(ref outcome) = outcome {
+            self.commit_decoder_seek_outcome(outcome);
         }
+        outcome
     }
 
-    fn decoder_next_chunk_safe(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    /// Pin the timeline playhead to the decoder's actual landing point
+    /// from a [`DecoderSeekOutcome`]. The decoder is the only source
+    /// of ground truth — both for `landed_frame` (frame counter) and
+    /// for the wall-clock position it parked at; we never recompute
+    /// `frame * 1e9 / sample_rate` here.
+    fn commit_decoder_seek_outcome(&self, outcome: &DecoderSeekOutcome) {
+        let sample_rate = self.session.decoder.spec().sample_rate;
+        if sample_rate == 0 {
+            return;
+        }
+        let (frame_offset, end_position) = match *outcome {
+            DecoderSeekOutcome::Landed {
+                landed_frame,
+                landed_at,
+                landed_byte: _,
+            } => (landed_frame, landed_at),
+            DecoderSeekOutcome::PastEof { duration } => {
+                // The decoder reports the final wall-clock position
+                // directly via `duration`; we still need a frame
+                // counter for `committed_frame_end`, so derive it
+                // from the *single source* the decoder agrees on
+                // (sample rate × duration). This is the only place
+                // we accept the inverse mapping because `PastEof`
+                // does not carry a frame index.
+                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let end_frame = (duration.as_secs_f64() * f64::from(sample_rate)) as u64;
+                (end_frame, duration)
+            }
+        };
+        let end_position_ns = u64::try_from(end_position.as_nanos()).unwrap_or(u64::MAX);
+        let pos = kithara_stream::ChunkPosition {
+            sample_rate,
+            frame_offset,
+            frames: 0,
+            source_bytes: 0,
+            source_byte_offset: None,
+            end_position_ns,
+        };
+        self.timeline.commit_seek_landed(&pos);
+    }
+
+    fn decoder_next_chunk_safe(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
             Ok(result) => result,
             Err(payload) => Err(DecodeError::InvalidData(format!(
@@ -583,6 +631,40 @@ impl<T: StreamType> StreamAudioSource<T> {
         }));
     }
 
+    /// Soft seek rejection: the seek attempt cannot be honoured
+    /// (target out-of-range, etc.) but the existing decoder is still
+    /// alive — the track keeps playing from its current position.
+    /// Emits `SeekRejected`, clears the pending epoch, and parks the
+    /// FSM back in `Decoding`. Used for caller-side errors
+    /// (`SeekOutOfRange`) where retry/recreate cannot help; the
+    /// previous code marked the track `Failed` for these and broke
+    /// auto-advance, seek-after-near-end, and stress reproducers.
+    fn reject_seek(&mut self, request: SeekRequest, err: &DecodeError, context: &'static str) {
+        warn!(
+            ?err,
+            epoch = request.seek.epoch,
+            ?request.seek.target,
+            attempts = request.attempt.saturating_add(1),
+            "{context}"
+        );
+        self.emit_event(AudioEvent::SeekRejected {
+            epoch: request.seek.epoch,
+            target: request.seek.target,
+            attempts: request.attempt.saturating_add(1),
+        });
+        // Bump epoch alongside `clear_seek_pending`: `step_track` uses
+        // `timeline_epoch > self.epoch` as the "new seek arrived" gate,
+        // so a rejected seek that does not bump `self.epoch` re-enters
+        // `SeekRequested` on the next tick with the same target — an
+        // infinite reject/recreate loop. The success path in
+        // `step_applying_seek` already bumps both; soft-reject must
+        // mirror that contract: the seek was processed, even though
+        // rejected.
+        self.epoch.store(request.seek.epoch, Ordering::Release);
+        self.timeline.clear_seek_pending(request.seek.epoch);
+        self.update_state(TrackState::Decoding);
+    }
+
     fn fail_seek(&mut self, request: SeekRequest, err: DecodeError, context: &'static str) {
         warn!(
             ?err,
@@ -641,6 +723,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         position: Duration,
         epoch: u64,
         fallback_offset: u64,
+        seek_mode: SeekMode,
         warn_msg: &'static str,
         fail_ctx: &'static str,
     ) -> bool {
@@ -649,9 +732,33 @@ impl<T: StreamType> StreamAudioSource<T> {
         if matches!(err, DecodeError::SeekOutOfRange(_)) {
             // Decoder said the target is invalid for this stream. A fresh
             // decoder will reject the identical target identically — no
-            // amount of recreates produces a different answer. Surface
-            // the failure to the caller instead of looping.
-            self.fail_seek(request, err, fail_ctx);
+            // amount of recreates produces a different answer. Soft-reject
+            // the seek so the track keeps playing from its current
+            // position; do NOT mark it `Failed` — that would propagate as
+            // a terminal track failure and break auto-advance.
+            self.reject_seek(request, &err, fail_ctx);
+            return false;
+        }
+
+        if err.is_interrupted() {
+            // `Stream::read` returned `Pending::NotReady|Retry|SeekPending`:
+            // the bytes the decoder needs for this seek aren't cached yet
+            // but will be once the source delivers them. Recreating the
+            // decoder destroys state without solving the readiness gap and
+            // produces a tight recreate-loop. Park in `WaitingForSource`
+            // with the original `ApplySeek` context so the FSM resumes the
+            // same seek once the source is ready.
+            let applying = ApplySeekState {
+                mode: seek_mode,
+                request,
+            };
+            let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
+            let reason = map_source_phase(phase).unwrap_or(WaitingReason::Waiting);
+            self.update_state(TrackState::WaitingForSource {
+                context: WaitContext::ApplySeek(applying),
+                reason,
+            });
+            self.submit_demand_for_current_state();
             return false;
         }
 
@@ -736,6 +843,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                 position,
                 epoch,
                 self.session.base_offset,
+                SeekMode::Direct {
+                    target_byte: self.estimate_target_byte(position),
+                },
                 "seek: decoder.seek failed, recreating decoder and retrying",
                 "seek: decoder.seek failed",
             );
@@ -776,6 +886,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 position,
                 epoch,
                 anchor.byte_offset,
+                SeekMode::Anchor(anchor),
                 "seek anchor path: decoder seek failed, recreating decoder",
                 "seek anchor path: exact decoder seek failed",
             );
@@ -989,7 +1100,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .saturating_mul(u128::from(payload))
                 .saturating_div(dur_nanos.max(1)),
         )
-        .unwrap_or(u64::MAX)
+        .expect("pos_nanos * payload / dur_nanos overflowed u64")
         .min(payload);
         Some(base_offset.saturating_add(target_relative))
     }
@@ -1016,12 +1127,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         let nanos = (frames as u128)
             .saturating_mul(Self::NANOS_PER_SEC)
             .saturating_div(u128::from(spec.sample_rate));
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "clamped to u64::MAX before cast"
-        )]
+        assert!(
+            nanos <= u128::from(u64::MAX),
+            "duration_for_frames: nanos={nanos} exceeds u64::MAX (frames={frames}, sr={})",
+            spec.sample_rate
+        );
+        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
         {
-            Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+            Duration::from_nanos(nanos as u64)
         }
     }
 
@@ -1033,34 +1146,54 @@ impl<T: StreamType> StreamAudioSource<T> {
             .as_nanos()
             .saturating_mul(u128::from(spec.sample_rate))
             .saturating_div(Self::NANOS_PER_SEC);
-        frames.min(usize::MAX as u128) as usize
+        assert!(
+            frames <= usize::MAX as u128,
+            "source.rs:1036 frames_for_duration: frames={frames} \
+             exceeds usize::MAX (duration={duration:?}, sample_rate={})",
+            spec.sample_rate
+        );
+        frames as usize
     }
 
-    fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> Option<PcmChunk> {
+    /// Trim or drop a freshly-decoded chunk against an in-flight seek
+    /// skip. Returns the same [`DecoderChunkOutcome`] shape as
+    /// [`InnerDecoder::next_chunk`] so the decode loop carries one
+    /// uniform three-way distinction across the whole pipeline:
+    ///
+    /// - [`DecoderChunkOutcome::Chunk`] — emit (no skip active, or skip
+    ///   completed inside this chunk and the trimmed remainder is
+    ///   ready to play).
+    /// - [`DecoderChunkOutcome::Pending`] with
+    ///   [`PendingReason::SeekPending`] — chunk was fully consumed by
+    ///   the skip; caller must continue and fetch the next chunk.
+    ///
+    /// `Eof` is structurally impossible here (we don't observe stream
+    /// termination from a chunk we just decoded).
+    fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> DecoderChunkOutcome {
         let Some(resume) = self.resume_state().copied() else {
-            return Some(chunk);
+            return DecoderChunkOutcome::Chunk(chunk);
         };
         let Some(remaining) = resume.skip else {
-            return Some(chunk);
+            return DecoderChunkOutcome::Chunk(chunk);
         };
         if resume.seek.epoch != epoch {
             if let Some(state) = self.resume_state_mut() {
                 state.skip = None;
             }
-            return Some(chunk);
+            return DecoderChunkOutcome::Chunk(chunk);
         }
         if remaining.is_zero() {
             if let Some(state) = self.resume_state_mut() {
                 state.skip = None;
             }
-            return Some(chunk);
+            return DecoderChunkOutcome::Chunk(chunk);
         }
 
         let spec = chunk.spec();
         let channels = usize::from(spec.channels.max(1));
         let chunk_frames = chunk.frames();
         if chunk_frames == 0 {
-            return None;
+            return DecoderChunkOutcome::Pending(PendingReason::SeekPending);
         }
 
         let mut drop_frames = Self::frames_for_duration(spec, remaining);
@@ -1074,7 +1207,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             if let Some(state) = self.resume_state_mut() {
                 state.skip = (!next_remaining.is_zero()).then_some(next_remaining);
             }
-            return None;
+            return DecoderChunkOutcome::Pending(PendingReason::SeekPending);
         }
 
         let drop_samples = drop_frames.saturating_mul(channels);
@@ -1087,17 +1220,27 @@ impl<T: StreamType> StreamAudioSource<T> {
             .meta
             .timestamp
             .saturating_add(Self::duration_for_frames(spec, drop_frames));
+        // PcmMeta.frames must mirror the trimmed PCM length — the
+        // consumer-side reader (audio.rs) uses `chunk.meta.frames` to
+        // bound slice indexing into `chunk.pcm`. A stale higher value
+        // makes the reader copy past the end and panic.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "drop_frames < chunk_frames (u32) by guard above"
+        )]
+        let dropped_u32 = drop_frames as u32;
+        chunk.meta.frames = chunk.meta.frames.saturating_sub(dropped_u32);
         if let Some(state) = self.resume_state_mut() {
             state.skip = None;
         }
-        Some(chunk)
+        DecoderChunkOutcome::Chunk(chunk)
     }
 }
 
 /// Whether the decode loop should continue or return.
 enum DecodeAction {
     Yield,
-    Return(DecodeResult<Option<PcmChunk>>),
+    Return(DecodeResult<DecoderChunkOutcome>),
 }
 
 enum DecodeStep {
@@ -1137,11 +1280,11 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         if let Some(flushed) = flush_effects(&mut self.effects) {
             self.emit_event(AudioEvent::EndOfStream);
-            return DecodeAction::Return(Ok(Some(flushed)));
+            return DecodeAction::Return(Ok(DecoderChunkOutcome::Chunk(flushed)));
         }
 
         self.emit_event(AudioEvent::EndOfStream);
-        DecodeAction::Return(Ok(None))
+        DecodeAction::Return(Ok(DecoderChunkOutcome::Eof))
     }
 
     /// Handle an explicit source-level variant boundary signal.
@@ -1180,7 +1323,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Replaces the old `FallibleIterator::next` implementation.
     /// Called from `decode_one_fetch` to drive the decoder.
     #[kithara_hang_detector::hang_watchdog]
-    fn decode_next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             hang_tick!();
             yield_now();
@@ -1192,22 +1335,18 @@ impl<T: StreamType> StreamAudioSource<T> {
             // so a flushing signal sent from wait_range may never
             // escape the decoder's internal read loop.
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
-                trace!(
-                    flushing = self.timeline.is_flushing(),
-                    seek_pending = self.timeline.is_seek_pending(),
-                    current_epoch = self.epoch.load(Ordering::Acquire),
-                    timeline_epoch = self.timeline.seek_epoch(),
-                    phase = ?self.state.phase_tag(),
-                    "decode_next_chunk: exiting early because seek gate is active"
-                );
                 return Err(DecodeError::Interrupted);
             }
 
             match self.decoder_next_chunk_safe() {
-                Ok(Some(chunk)) => {
+                Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
-                    let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
-                        continue;
+                    let chunk = match self.apply_seek_skip(current_epoch, chunk) {
+                        DecoderChunkOutcome::Chunk(c) => c,
+                        DecoderChunkOutcome::Pending(_) => continue,
+                        DecoderChunkOutcome::Eof => unreachable!(
+                            "apply_seek_skip never produces Eof — it only trims/drops the chunk"
+                        ),
                     };
                     if chunk.pcm.is_empty() {
                         continue;
@@ -1216,33 +1355,28 @@ impl<T: StreamType> StreamAudioSource<T> {
 
                     self.track_chunk(&chunk);
 
-                    if self
-                        .chunks_decoded
-                        .is_multiple_of(Self::DECODE_PROGRESS_LOG_INTERVAL)
-                    {
-                        trace!(
-                            chunks = self.chunks_decoded,
-                            samples = self.total_samples,
-                            spec = ?chunk.spec(),
-                            "decode progress"
-                        );
-                    }
-
                     match apply_effects(&mut self.effects, chunk) {
-                        Some(processed) => return Ok(Some(processed)),
+                        Some(processed) => return Ok(DecoderChunkOutcome::Chunk(processed)),
                         None => continue,
                     }
                 }
-                Ok(None) => match self.handle_decode_eof() {
+                Ok(DecoderChunkOutcome::Eof) => match self.handle_decode_eof() {
                     DecodeAction::Yield => return Err(DecodeError::Interrupted),
                     DecodeAction::Return(result) => return result,
                 },
+                Ok(DecoderChunkOutcome::Pending(_reason)) => {
+                    // Decoder is alive but produced nothing this iteration
+                    // (transient stream backpressure / seek-pending observed
+                    // mid-decode). Retry the inner decode loop — the outer
+                    // worker scheduler will yield via `hang_tick!()` /
+                    // `yield_now()` between iterations.
+                    continue;
+                }
                 Err(e) if e.is_variant_change() => match self.handle_variant_change(e) {
                     DecodeAction::Yield => return Err(DecodeError::Interrupted),
                     DecodeAction::Return(result) => return result,
                 },
                 Err(e) if e.is_interrupted() => {
-                    trace!("decode interrupted by seek, retrying");
                     continue;
                 }
                 Err(e) => match Self::handle_decode_error(e) {
@@ -1356,8 +1490,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.timeline.set_total_duration(decoder_duration);
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
-        match self.decode_next_chunk() {
-            Ok(Some(chunk)) => {
+        let result = self.decode_next_chunk();
+        match result {
+            Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                 if self
                     .resume_state()
                     .is_some_and(|resume| resume.seek.epoch == current_epoch)
@@ -1377,10 +1512,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 }
                 DecodeStep::Produced(Fetch::new(chunk, false, current_epoch))
             }
-            Ok(None) => {
+            Ok(DecoderChunkOutcome::Eof) => {
                 self.update_state(TrackState::AtEof);
                 DecodeStep::Eof
             }
+            Ok(DecoderChunkOutcome::Pending(_reason)) => DecodeStep::Interrupted,
             Err(e) if e.is_interrupted() => {
                 // Seek-pending exit from the decode loop guard.
                 DecodeStep::Interrupted
@@ -1410,14 +1546,43 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         let current_epoch = self.epoch.load(Ordering::Acquire);
         if epoch <= current_epoch {
-            trace!(
-                current_epoch,
-                stale_epoch = epoch,
-                "apply_pending_seek: dropping stale seek"
-            );
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
             self.update_state(TrackState::Decoding);
+            return;
+        }
+
+        // Past-EOF short-circuit: a seek target at or beyond the known
+        // total duration is morally "skip to end" — the track ends.
+        // Dispatching to the decoder produces a typed `SeekOutOfRange`
+        // that `recover_from_decoder_seek_error` soft-rejects (to keep
+        // auto-advance alive on near-EOF estimation errors), which would
+        // leave the FSM in `Decoding` with no terminal notification.
+        // Pinned by `hls_seek_past_end_terminates_in_bounded_time`.
+        if let Some(duration) = self.timeline.total_duration()
+            && position >= duration
+        {
+            let sample_rate = self.session.decoder.spec().sample_rate;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "duration*sample_rate fits in u64 for any realistic track"
+            )]
+            let end_frame = (duration.as_secs_f64() * f64::from(sample_rate)) as u64;
+            let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+            self.timeline
+                .commit_seek_landed(&kithara_stream::ChunkPosition {
+                    sample_rate,
+                    frame_offset: end_frame,
+                    frames: 0,
+                    source_bytes: 0,
+                    source_byte_offset: None,
+                    end_position_ns,
+                });
+            self.timeline.complete_seek(epoch);
+            self.timeline.clear_seek_pending(epoch);
+            self.epoch.store(epoch, Ordering::Release);
+            self.update_state(TrackState::AtEof);
             return;
         }
 
@@ -1470,10 +1635,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             if !self.timeline.is_seek_pending()
                 && let Some((new_info, target_offset)) = self.detect_format_change()
             {
-                debug!(
-                    target_offset,
-                    "step_decoding: source blocked with pending format change, recreating"
-                );
                 self.start_recreating_decoder(
                     RecreateCause::FormatBoundary,
                     new_info,
@@ -1484,11 +1645,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return TrackStep::StateChanged;
             }
             let phase = self.shared_stream.phase();
-            trace!(
-                ?phase,
-                epoch = self.epoch.load(Ordering::Acquire),
-                "step_decoding: source not ready"
-            );
             if let Some(reason) = map_source_phase(phase) {
                 self.update_state(TrackState::WaitingForSource {
                     context: WaitContext::Playback,
@@ -1559,20 +1715,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         if applied {
             self.epoch.store(request.seek.epoch, Ordering::Release);
             self.timeline.clear_seek_pending(request.seek.epoch);
-            trace!(
-                epoch = request.seek.epoch,
-                flushing = self.timeline.is_flushing(),
-                seek_pending = self.timeline.is_seek_pending(),
-                stream_pos = self.shared_stream.position(),
-                segment_range = ?self.shared_stream.current_segment_range(),
-                "step_applying_seek: seek applied"
-            );
         }
         TrackStep::StateChanged
     }
 
     fn step_waiting_for_source(&mut self) -> TrackStep<PcmChunk> {
-        let Some((phase, stored_reason)) = (match &self.state {
+        let Some((phase, _stored_reason)) = (match &self.state {
             TrackState::WaitingForSource { context, reason } => {
                 Some((self.source_phase_for_wait_context(context), *reason))
             }
@@ -1588,13 +1736,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             // phase_at() (pure query) but nobody tells the downloader to
             // fetch the target segment.
             self.submit_demand_for_current_state();
-            trace!(
-                ?phase,
-                ?reason,
-                ?stored_reason,
-                epoch = self.epoch.load(Ordering::Acquire),
-                "step_waiting_for_source: still blocked"
-            );
             return TrackStep::Blocked(reason);
         }
 
@@ -1671,12 +1812,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return TrackStep::StateChanged;
             }
         };
-        debug!(
-            cause = ?recreate.cause,
-            offset = recreate.offset,
-            attempt = recreate.attempt,
-            "step_recreating_decoder: start"
-        );
 
         let Some(recreated) = self.execute_recreation(&recreate) else {
             return TrackStep::Failed;
@@ -1732,13 +1867,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         // Layout already switched by step_recreating_decoder before the
         // readiness gate.
         self.shared_stream.clear_variant_fence();
-        if let Err(err) = self.shared_stream.seek(SeekFrom::Start(recreate.offset)) {
-            warn!(
-                ?err,
-                cause = ?recreate.cause,
-                offset = recreate.offset,
-                "step_recreating_decoder: failed to seek stream"
-            );
+        if self
+            .shared_stream
+            .seek(SeekFrom::Start(recreate.offset))
+            .is_err()
+        {
             self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
                 offset: recreate.offset,
             }));
@@ -1782,7 +1915,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.timeline.clear_seek_pending(request.seek.epoch);
                     TrackStep::StateChanged
                 } else {
-                    TrackStep::Failed
+                    TrackStep::StateChanged
                 }
             }
         }
@@ -1790,7 +1923,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
         match self.decoder_seek_safe(request.seek.target) {
-            Ok(()) => {
+            Ok(_outcome) => {
                 self.shared_stream.commit_seek_landing(None);
                 let (variant, segment_index, byte_range_start, byte_range_end) =
                     self.seek_context();
@@ -1841,14 +1974,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 |byte| self.source_phase_for_boundary(byte),
             );
             if let Some(reason) = map_source_phase(phase) {
-                trace!(
-                    ?phase,
-                    ?reason,
-                    stream_pos = self.shared_stream.position(),
-                    ?anchor_offset,
-                    epoch = self.epoch.load(Ordering::Acquire),
-                    "step_awaiting_resume: source not ready"
-                );
                 // Carry the ResumeState into WaitingForSource so the wait
                 // loop's demand path targets the anchor byte instead of
                 // `shared_stream.position()` — which after a successful
@@ -1888,12 +2013,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             && !self.state.is_terminal()
             && !already_handling
         {
-            trace!(
-                timeline_epoch,
-                current_epoch,
-                phase = ?self.state.phase_tag(),
-                "step_track: seek preemption fired"
-            );
             self.update_state(TrackState::SeekRequested(SeekRequest {
                 attempt: 0,
                 seek: SeekContext {
@@ -1938,24 +2057,18 @@ fn playing_for_state(state: &TrackState) -> bool {
     !matches!(state, TrackState::AtEof | TrackState::Failed(_))
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "trivial 3-arm match; complexity comes from `warn!` macro expansions"
+)]
 fn emit_failure_log(failure: &TrackFailure) {
     match failure {
-        TrackFailure::Decode(err) => log_decode_failure(err),
-        TrackFailure::RecreateFailed { offset } => log_recreate_failure(*offset),
-        TrackFailure::SourceCancelled => log_source_cancelled(),
+        TrackFailure::Decode(err) => warn!(?err, "track failed: decode error"),
+        TrackFailure::RecreateFailed { offset } => {
+            warn!(offset = *offset, "track failed: decoder recreation failed");
+        }
+        TrackFailure::SourceCancelled => warn!("track failed: source cancelled"),
     }
-}
-
-fn log_decode_failure(err: &DecodeError) {
-    warn!(?err, "track failed: decode error");
-}
-
-fn log_recreate_failure(offset: u64) {
-    warn!(offset, "track failed: decoder recreation failed");
-}
-
-fn log_source_cancelled() {
-    warn!("track failed: source cancelled");
 }
 
 /// Build the recreate target `MediaInfo` for a format boundary.

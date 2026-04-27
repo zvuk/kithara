@@ -129,8 +129,8 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     let start = Instant::now();
     while start.elapsed() < timeout {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {}
-            Ok(ReadOutcome::Frames { count, .. }) => total += count as u64,
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error: {e}"),
         }

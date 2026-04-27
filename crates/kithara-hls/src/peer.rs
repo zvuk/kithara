@@ -659,6 +659,34 @@ fn skip_planned_segment(
     is_midstream_switch: bool,
     old_variant_for_skip: Option<usize>,
 ) -> bool {
+    // In-flight check comes BEFORE the `is_demanded` bypass: if a
+    // `FetchCmd` for this (variant, seg) was emitted earlier and has
+    // not yet completed, issuing a duplicate races two writers on the
+    // same cached `AssetResource`. On mmap storage the first commit
+    // flips the resource to `Committed` and the second `write_at`
+    // fails silently, so `commit_segment` fires from the first
+    // writer's `on_complete` while the bytes the second writer would
+    // have produced never appear, starving the reader. The demand
+    // signal does NOT override this — the reader already has a fetch
+    // in flight that will deliver these bytes; the demand-driven
+    // rewind path that brought us here is the same hot loop the
+    // comment on `maybe_rewind_for_demand` warns about.
+    if state
+        .scheduler
+        .in_flight_segments
+        .contains(&(variant, seg_idx))
+    {
+        debug!(
+            variant,
+            seg_idx,
+            batch_i,
+            is_demanded,
+            cursor = state.scheduler.current_segment_index(),
+            "poll_next: skipped segment — fetch already in flight"
+        );
+        state.scheduler.advance_current_segment_index(seg_idx + 1);
+        return true;
+    }
     if is_demanded {
         return false;
     }
@@ -787,6 +815,16 @@ fn build_fetch_cmd(
                 // which silently advances the cursor forward when
                 // `seg_idx > new_floor`, skipping segments the reader is
                 // now waiting for after the seek.
+                // Always release the in-flight slot first: a stale
+                // on_complete (epoch bumped underneath us) that early-
+                // returns before this remove leaks the entry forever.
+                // `skip_planned_segment` then refuses to re-issue the
+                // fetch — reader deadlocks waiting for bytes that will
+                // never come. `reset_for_seek_epoch` clears the whole
+                // set on a true seek, so a no-op remove here is safe;
+                // for non-seek cancellations (variant switch, peer
+                // shutdown) this is the only cleanup point.
+                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if seek_epoch != st.scheduler.coord.timeline().seek_epoch() {
                     debug!(
                         variant,
@@ -797,7 +835,6 @@ fn build_fetch_cmd(
                     );
                     return;
                 }
-                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if !is_already_committed {
                     debug!(variant, seg_idx, error = %e, "segment fetch failed, rewinding cursor");
                     st.scheduler.rewind_current_segment_index(seg_idx);
@@ -819,7 +856,12 @@ fn build_fetch_cmd(
             let Some(ref mut st) = *guard else {
                 return;
             };
-            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
+            // Order matters: commit first, then drop the in-flight
+            // marker. Removing in-flight before commit opens a race
+            // window where the segment is neither in-flight nor
+            // committed; a concurrent `build_batch` would re-issue a
+            // duplicate `FetchCmd` and race two writers (see
+            // `skip_planned_segment` in-flight protection).
             if let Ok(ref meta) = meta {
                 st.scheduler.commit_fetch_inline(
                     variant,
@@ -831,6 +873,7 @@ fn build_fetch_cmd(
                     start.elapsed(),
                 );
             }
+            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
             if let Some(waker) = st.waker.as_ref() {
                 waker.wake_by_ref();
             }

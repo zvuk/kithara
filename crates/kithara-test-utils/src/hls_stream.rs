@@ -215,6 +215,7 @@ impl GeneratedHls {
 
 fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSpecError> {
     if let Some(packaged) = &spec.packaged_audio {
+        let include_sidx = packaged.include_sidx;
         let variants = packaged
             .variants
             .iter()
@@ -222,7 +223,7 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                 encode_packaged_variant(packaged, variant)
                     .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     .and_then(|track| {
-                        mux_audio_track(&track)
+                        mux_audio_track(&track, include_sidx)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     })
             })

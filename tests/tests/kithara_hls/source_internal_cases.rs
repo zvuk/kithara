@@ -1,4 +1,5 @@
 use std::{
+    num::NonZeroUsize,
     ops::{Deref, Range},
     sync::{
         Arc,
@@ -918,7 +919,7 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
 
     assert_eq!(
         read,
-        ReadOutcome::Data(expected.len()),
+        ReadOutcome::Bytes(NonZeroUsize::new(expected.len()).unwrap()),
         "decoder-start boundary must be immediately readable"
     );
     assert_eq!(
@@ -973,7 +974,7 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
 
     assert_eq!(
         read,
-        ReadOutcome::Data(read_len),
+        ReadOutcome::Bytes(NonZeroUsize::new(read_len).unwrap()),
         "read_at must return committed bytes for a late loaded segment at its absolute layout offset"
     );
     assert_eq!(
@@ -1050,10 +1051,11 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
             .read_at(offset, &mut buf)
             .expect("read_at over mixed layout");
         match read {
-            ReadOutcome::Data(0) => {
+            ReadOutcome::Eof => {
                 panic!("unexpected EOF while reading mixed-layout byte stream at offset {offset}")
             }
-            ReadOutcome::Data(n) => {
+            ReadOutcome::Bytes(count) => {
+                let n = count.get();
                 actual.extend_from_slice(&buf[..n]);
                 offset += n as u64;
             }

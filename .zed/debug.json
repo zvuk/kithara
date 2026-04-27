@@ -5,16 +5,16 @@
     "request": "launch",
     "build": {
       "command": "cargo",
-      "args": ["build", "-p", "kithara-app", "--bin", "kithara"]
+      "args": ["build", "-p", "kithara-app", "--bin", "kithara"],
     },
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "auto"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
       "RUST_LOG": "trace",
-      "RUST_BACKTRACE": "1"
+      "RUST_BACKTRACE": "1",
     },
-    "sourceLanguages": ["rust"]
+    "sourceLanguages": ["rust"],
   },
   {
     "label": "kithara-app: tui",
@@ -22,16 +22,16 @@
     "request": "launch",
     "build": {
       "command": "cargo",
-      "args": ["build", "-p", "kithara-app", "--bin", "kithara"]
+      "args": ["build", "-p", "kithara-app", "--bin", "kithara"],
     },
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "tui"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
       "RUST_LOG": "trace",
-      "RUST_BACKTRACE": "1"
+      "RUST_BACKTRACE": "1",
     },
-    "sourceLanguages": ["rust"]
+    "sourceLanguages": ["rust"],
   },
   {
     "label": "kithara-app: gui",
@@ -39,15 +39,15 @@
     "request": "launch",
     "build": {
       "command": "cargo",
-      "args": ["build", "-p", "kithara-app", "--bin", "kithara"]
+      "args": ["build", "-p", "kithara-app", "--bin", "kithara"],
     },
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
     "args": ["--mode", "gui"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
-      "RUST_LOG": "trace",
-      "RUST_BACKTRACE": "1"
+      "RUST_LOG": "kithara_audio=trace,kithara_hls=trace,kithara_stream=trace",
+      "RUST_BACKTRACE": "1",
     },
-    "sourceLanguages": ["rust"]
-  }
+    "sourceLanguages": ["rust"],
+  },
 ]

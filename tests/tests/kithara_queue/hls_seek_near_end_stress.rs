@@ -35,13 +35,17 @@ use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, TestTempDir, kitha
 use tokio::time::sleep;
 use url::Url;
 
+use crate::common::decoder_backend::DecoderBackend;
+
 static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
     /// Number of fresh-player iterations. User reports the bug at
     /// roughly 1/19; 30 fresh runs gives >80 % catch probability if
-    /// the production rate is comparable.
+    /// the production rate is comparable. Bounded by `IterDeadline`
+    /// below so a hung iteration cannot exceed its share of the
+    /// outer test timeout.
     const FRESH_ITERATIONS: u32 = 30;
     /// HLS fixture shape: 8 segments × 4 s = 32 s total. Big enough
     /// that "near end" is well past the warmup window and any byte-range
@@ -62,11 +66,16 @@ impl Consts {
     /// before we sample position.
     const POST_SEEK_RENDER_WALL: Duration = Duration::from_millis(1_500);
     /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(30);
+    const LOAD_DEADLINE: Duration = Duration::from_secs(15);
     /// Pre-seek warmup. Mirrors "just opened, briefly listened, then
     /// dragged the playhead". Short enough that the player is still
     /// inside segment 0 when seek fires — prod scenario from the user.
     const PRE_SEEK_PLAY_S: f64 = 0.5;
+    /// Hard ceiling per iteration. Anything past this is a hang in
+    /// `run_one_attempt` itself (e.g. the player never produces
+    /// position updates). Bounds the worst-case test runtime to
+    /// `FRESH_ITERATIONS * ITER_DEADLINE` ≈ 5 min.
+    const ITER_DEADLINE: Duration = Duration::from_secs(10);
 }
 
 #[derive(Debug)]
@@ -86,12 +95,13 @@ enum IterOutcome {
     },
 }
 
-async fn build_hls(helper: &TestServerHelper) -> Url {
+async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
     let builder = HlsFixtureBuilder::new()
         .variant_count(1)
         .segments_per_variant(Consts::SEGMENT_COUNT)
         .segment_duration_secs(Consts::SEGMENT_DURATION_S)
-        .packaged_audio_aac_lc(44_100, 2);
+        .packaged_audio_aac_lc(44_100, 2)
+        .include_sidx(include_sidx);
     helper
         .create_hls(builder)
         .await
@@ -174,7 +184,12 @@ async fn wait_for_position_at_least(
 ///
 /// Returns `IterOutcome::Ok` if the seek landed within tolerance and
 /// playback advanced afterwards; otherwise `Hung` or `Errored`.
-async fn run_one_attempt(iter: u32, url: &Url, target_offset: f64) -> IterOutcome {
+async fn run_one_attempt(
+    iter: u32,
+    url: &Url,
+    target_offset: f64,
+    backend: DecoderBackend,
+) -> IterOutcome {
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
@@ -192,6 +207,7 @@ async fn run_one_attempt(iter: u32, url: &Url, target_offset: f64) -> IterOutcom
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
     cfg.initial_abr_mode = AbrMode::Auto(None);
+    cfg.prefer_hardware = backend.prefer_hardware();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 
     if let Err(e) = queue.select(track_id, Transition::None) {
@@ -286,7 +302,26 @@ async fn run_one_attempt(iter: u32, url: &Url, target_offset: f64) -> IterOutcom
         };
     }
 
-    sleep(Consts::POST_SEEK_RENDER_WALL).await;
+    // During the post-seek render window, also watch for the track
+    // entering `TrackStatus::Failed` — `commit_seek_landing` updates
+    // `timeline.byte_position` to the target before the audio FSM
+    // emits TrackError, so a "landed" position may coincide with a
+    // typed failure that the user-side wants to see as Errored, not
+    // Hung.
+    let post_seek_started = std::time::Instant::now();
+    while post_seek_started.elapsed() < Consts::POST_SEEK_RENDER_WALL {
+        if let Some(entry) = queue.track(track_id)
+            && let TrackStatus::Failed(err) = &entry.status
+        {
+            tick_handle.abort();
+            return IterOutcome::Errored {
+                iter,
+                target,
+                error: format!("track entered Failed (post-seek): {err}"),
+            };
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
     let pos_after = queue.position_seconds().unwrap_or(0.0);
     tick_handle.abort();
     let advance = pos_after - target;
@@ -303,17 +338,48 @@ async fn run_one_attempt(iter: u32, url: &Url, target_offset: f64) -> IterOutcom
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(900)))]
-async fn hls_seek_near_end_fresh_player_stress() {
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[case::symphonia_no_sidx(DecoderBackend::Symphonia, false)]
+#[case::symphonia_with_sidx(DecoderBackend::Symphonia, true)]
+#[case::apple_no_sidx(DecoderBackend::Apple, false)]
+#[case::apple_with_sidx(DecoderBackend::Apple, true)]
+#[case::android_no_sidx(DecoderBackend::Android, false)]
+#[case::android_with_sidx(DecoderBackend::Android, true)]
+async fn hls_seek_near_end_fresh_player_stress(
+    #[case] backend: DecoderBackend,
+    #[case] include_sidx: bool,
+) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
-    let url = build_hls(&helper).await;
+    let url = build_hls(&helper, include_sidx).await;
 
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
-        let outcome = run_one_attempt(iter, &url, offset).await;
+        // Hard ceiling per iteration: a hung `run_one_attempt`
+        // (e.g. position never updates because the worker died
+        // silently) cannot exceed `ITER_DEADLINE`. Surface this as
+        // an `Errored` so the panic message identifies the iter.
+        let outcome = match tokio::time::timeout(
+            Consts::ITER_DEADLINE,
+            run_one_attempt(iter, &url, offset, backend),
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(_) => IterOutcome::Errored {
+                iter,
+                target: f64::NAN,
+                error: format!(
+                    "iteration exceeded ITER_DEADLINE ({:?}) — hung outside seek budget",
+                    Consts::ITER_DEADLINE,
+                ),
+            },
+        };
         outcomes.push(outcome);
     }
 

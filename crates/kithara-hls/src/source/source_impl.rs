@@ -1,4 +1,5 @@
 use std::{
+    num::NonZeroUsize,
     ops::Range,
     sync::{Arc, atomic::Ordering},
 };
@@ -10,8 +11,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    Timeline,
+    MediaInfo, PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    StreamResult, Timeline,
 };
 use tracing::{debug, trace};
 
@@ -228,7 +229,7 @@ impl Source for HlsSource {
 
         let Some(seg) = seg else {
             if effective_total > 0 && offset >= effective_total {
-                return Ok(ReadOutcome::Data(0));
+                return Ok(ReadOutcome::Eof);
             }
 
             // ABR variant transition stall detection:
@@ -244,11 +245,11 @@ impl Source for HlsSource {
                     abr_variant,
                     "read_at: ABR variant stall — signaling VariantChange"
                 );
-                return Ok(ReadOutcome::VariantChange);
+                return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
             }
 
             self.queue_segment_request_for_offset(offset, read_epoch);
-            return Ok(ReadOutcome::Retry);
+            return Ok(ReadOutcome::Pending(PendingReason::Retry));
         };
 
         let previous_hint = self.current_segment_index().unwrap_or(seg.segment_index);
@@ -273,7 +274,7 @@ impl Source for HlsSource {
             if self.can_cross_variant_without_reset(fence, seg.variant) {
                 self.variant_fence = Some(seg.variant);
             } else {
-                return Ok(ReadOutcome::VariantChange);
+                return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
             }
         }
 
@@ -285,29 +286,33 @@ impl Source for HlsSource {
             // re-fetches this segment even when it's at the tail (Idle state).
             let seek_epoch = self.coord.timeline().seek_epoch();
             self.push_segment_request(seg.variant, seg.segment_index, seek_epoch);
-            return Ok(ReadOutcome::Retry);
+            return Ok(ReadOutcome::Pending(PendingReason::Retry));
         };
 
-        if bytes > 0 {
-            if self.coord.timeline().seek_epoch() != read_epoch {
-                return Ok(ReadOutcome::Retry);
-            }
-            let new_pos = offset.saturating_add(bytes as u64);
-            if seg.segment_index != previous_hint {
-                self.coord.reader_advanced.notify_one();
-            }
+        let Some(count) = NonZeroUsize::new(bytes) else {
+            // Source produced zero bytes for an existing segment — treat as
+            // a transient retry so the FSM re-walks the wait/read loop.
+            return Ok(ReadOutcome::Pending(PendingReason::Retry));
+        };
 
-            self.reader_segment
-                .store(seg.segment_index, Ordering::Release);
-
-            let total = self.segments.lock_sync().max_end_offset();
-            self.bus.publish(HlsEvent::ByteProgress {
-                position: new_pos,
-                total: Some(total),
-            });
+        if self.coord.timeline().seek_epoch() != read_epoch {
+            return Ok(ReadOutcome::Pending(PendingReason::Retry));
+        }
+        let new_pos = offset.saturating_add(count.get() as u64);
+        if seg.segment_index != previous_hint {
+            self.coord.reader_advanced.notify_one();
         }
 
-        Ok(ReadOutcome::Data(bytes))
+        self.reader_segment
+            .store(seg.segment_index, Ordering::Release);
+
+        let total = self.segments.lock_sync().max_end_offset();
+        self.bus.publish(HlsEvent::ByteProgress {
+            position: new_pos,
+            total: Some(total),
+        });
+
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn len(&self) -> Option<u64> {

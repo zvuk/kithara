@@ -121,8 +121,8 @@ async fn stress_random_seek_read_synthetic_wav() {
             // Read
             let read_count = |outcome: Result<ReadOutcome, _>| -> usize {
                 match outcome {
-                    Ok(ReadOutcome::Frames { count, .. }) => count,
-                    Ok(ReadOutcome::Eof { .. }) => 0,
+                    Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                    Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => 0,
                     Err(e) => panic!("decode error during seek read: {e}"),
                 }
             };
@@ -222,10 +222,10 @@ async fn stress_random_seek_read_synthetic_wav() {
         let mut saw_final_eof = false;
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    remaining_samples += count as u64;
-                    for &sample in &buf[..count] {
+                    remaining_samples += count.get() as u64;
+                    for &sample in &buf[..count.get()] {
                         assert!(
                             sample.is_finite() && (-1.0..=1.0).contains(&sample),
                             "invalid sample in final tail read",

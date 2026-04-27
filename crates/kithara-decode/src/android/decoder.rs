@@ -54,6 +54,12 @@ struct AndroidInner {
     pending_seek_target_us: Option<i64>,
     owner_thread: Cell<Option<thread::ThreadId>>,
     pcm_encoding: AndroidPcmEncoding,
+    /// Byte offset of the most recently fed input sample, captured from
+    /// `AMediaExtractor_getSampleFormat` via `CompressedSample.byte_offset`.
+    /// MediaCodec decouples input and output, so we cache this here to
+    /// attach it to the next decoded chunk; AAC/MP3/etc are FIFO so the
+    /// pairing is faithful for audio (no reorder).
+    last_input_byte_offset: Option<u64>,
 }
 
 pub(crate) struct Android {
@@ -136,6 +142,7 @@ impl Android {
                 pending_seek_target_us: None,
                 owner_thread: Cell::new(None),
                 pcm_encoding: codec_bootstrap.pcm_encoding,
+                last_input_byte_offset: None,
             },
         })
     }
@@ -179,6 +186,11 @@ impl Android {
             Some(sample) => {
                 let sample_len = sample.bytes.len();
                 let presentation_time_us = sample.presentation_time_us;
+                // Capture the extractor's sample byte offset for the
+                // *next* output chunk to inherit. MediaCodec is async
+                // but FIFO for audio, so the most recently queued
+                // input pairs with the next dequeued output.
+                self.inner.last_input_byte_offset = sample.byte_offset;
                 self.inner.codec.queue_input_buffer(
                     input_index,
                     sample_len,
@@ -239,6 +251,14 @@ impl Android {
             return Ok(None);
         }
 
+        // MediaCodec hands us decoded PCM bytes directly — that's the
+        // ground-truth size of the data this chunk consumed from the
+        // codec output buffer. We can't trivially map it back to the
+        // *encoded* input packet bytes without a PTS→input-bytes table
+        // (input/output are decoupled in MediaCodec), so we report the
+        // decoded payload size as the chunk's source-byte attribution.
+        let source_bytes = output_data.len() as u64;
+
         let presentation_time_us = if let Some(target_us) = self.inner.pending_seek_target_us {
             return match seek_trim_for_buffer(
                 target_us,
@@ -250,7 +270,8 @@ impl Android {
                 SeekTrimOutcome::Emit(trim) => {
                     let pcm = self.convert_output_payload(output_data, trim.trim_frames)?;
                     self.inner.pending_seek_target_us = None;
-                    self.build_chunk(trim.output_timestamp_us, pcm)
+                    let kept_frames = total_frames.saturating_sub(trim.trim_frames);
+                    self.build_chunk(trim.output_timestamp_us, pcm, kept_frames, source_bytes)
                 }
             };
         } else {
@@ -258,7 +279,7 @@ impl Android {
         };
 
         let pcm = self.convert_output_payload(output_data, 0)?;
-        self.build_chunk(presentation_time_us, pcm)
+        self.build_chunk(presentation_time_us, pcm, total_frames, source_bytes)
     }
 
     fn convert_output_payload(
@@ -287,16 +308,28 @@ impl Android {
         &mut self,
         presentation_time_us: i64,
         pcm: PcmBuf,
+        frames: usize,
+        source_bytes: u64,
     ) -> Result<Option<PcmChunk>, AndroidBackendError> {
         if pcm.is_empty() {
             return Ok(None);
         }
 
+        #[expect(clippy::cast_possible_truncation)] // audio frames fit u32
+        let frames_u32 = frames as u32;
         let meta = pcm_meta_from_pts_us(
             self.inner.spec,
             presentation_time_us,
             self.inner.stream_ctx.as_deref(),
             self.inner.epoch,
+            frames_u32,
+            source_bytes,
+            // Inherit the byte offset captured from the most recent input
+            // sample (`AMEDIAFORMAT_KEY_SAMPLE_FILE_OFFSET`), API 28+.
+            // `None` on older Android or when the container doesn't
+            // surface per-sample offsets — downstream treats that as
+            // "byte offset unknown".
+            self.inner.last_input_byte_offset,
         )
         .map_err(|error| AndroidBackendError::operation("pcm-meta", error.to_string()))?;
 

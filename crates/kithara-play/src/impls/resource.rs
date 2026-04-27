@@ -302,8 +302,8 @@ mod tests {
                 let ReadOutcome::Frames { count, .. } = outcome else {
                     panic!("expected Frames, got {outcome:?}");
                 };
-                assert_eq!(count, 64);
-                for sample in &buf[..count] {
+                assert_eq!(count.get(), 64);
+                for sample in &buf[..count.get()] {
                     assert!((sample - 0.5).abs() < f32::EPSILON);
                 }
             }
@@ -315,11 +315,11 @@ mod tests {
                 let ReadOutcome::Frames { count, .. } = outcome else {
                     panic!("expected Frames, got {outcome:?}");
                 };
-                assert_eq!(count, 32);
-                for &s in &ch0[..count] {
+                assert_eq!(count.get(), 32);
+                for &s in &ch0[..count.get()] {
                     assert!((s - 0.5).abs() < f32::EPSILON);
                 }
-                for &s in &ch1[..count] {
+                for &s in &ch1[..count.get()] {
                     assert!((s - 0.5).abs() < f32::EPSILON);
                 }
             }
@@ -362,7 +362,7 @@ mod tests {
         let mut buf = [0.0f32; 4096];
         let saw_eof = loop {
             match resource.read(&mut buf).expect("read") {
-                ReadOutcome::Frames { count: 0, .. } => break false,
+                ReadOutcome::Pending { .. } => break false,
                 ReadOutcome::Frames { .. } => continue,
                 ReadOutcome::Eof { .. } => break true,
             }

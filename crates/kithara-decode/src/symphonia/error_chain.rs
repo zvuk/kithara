@@ -45,10 +45,10 @@ mod tests {
     #[kithara::test]
     fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
         // Symphonia wraps the inner `io::Error` (which carries the
-        // typed `StreamReadError::SeekPending` payload) in
+        // typed `PendingReason::SeekPending` payload) in
         // `SymphoniaError::IoError`; the chain walker recovers it.
         let decode_err = DecodeError::Backend(Box::new(super::SymphoniaError::IoError(
-            IoError::other(kithara_stream::StreamReadError::SeekPending),
+            IoError::other(kithara_stream::PendingReason::SeekPending),
         )));
         assert!(decode_err.is_interrupted());
     }

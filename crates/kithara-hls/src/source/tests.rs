@@ -21,9 +21,13 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
     dl::{Downloader, DownloaderConfig, PeerHandle},
 };
+
+fn nz_bytes(n: usize) -> ReadOutcome {
+    ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
+}
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
@@ -1012,7 +1016,7 @@ fn read_at_does_not_advance_timeline_position() {
     let mut buf = vec![0u8; media_len as usize];
     let read = source.read_at(0, &mut buf).unwrap();
 
-    assert_eq!(read, ReadOutcome::Data(10));
+    assert_eq!(read, nz_bytes(10));
     assert_eq!(
         source.coord.timeline().byte_position(),
         0,
@@ -1081,7 +1085,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
 
     assert_eq!(
         read,
-        ReadOutcome::Retry,
+        ReadOutcome::Pending(PendingReason::Retry),
         "layout hole before effective total must trigger retry instead of synthetic EOF"
     );
 }
@@ -1195,7 +1199,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     for payload in &segments {
         let mut buf = vec![0u8; payload.len()];
         let read = source.read_at(offset, &mut buf).expect("read_at");
-        assert_eq!(read, ReadOutcome::Data(payload.len()));
+        assert_eq!(read, nz_bytes(payload.len()));
         assert_eq!(buf, *payload);
         offset += payload.len() as u64;
     }
@@ -1447,7 +1451,7 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     // Sanity: first read succeeds against the committed resource.
     let mut buf = vec![0u8; READ_SIZE];
     let first = source.read_at(0, &mut buf).expect("first read_at");
-    assert_eq!(first, ReadOutcome::Data(READ_SIZE));
+    assert_eq!(first, nz_bytes(READ_SIZE));
 
     // Step 2: simulate scheduler-driven re-fetch — a second DRM acquire
     // on the same key. Cache-hit branch must recognise the cached entry
@@ -1467,8 +1471,8 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
         .expect("read_at must not return hard error after reacquire");
     assert_eq!(
         outcome,
-        ReadOutcome::Data(READ_SIZE),
-        "expected Data({READ_SIZE}) after committed DRM reacquire — cache-hit must \
+        nz_bytes(READ_SIZE),
+        "expected Bytes({READ_SIZE}) after committed DRM reacquire — cache-hit must \
          not reactivate a Committed resource"
     );
 }

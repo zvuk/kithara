@@ -39,6 +39,7 @@ impl Consts {
     pub(super) const kAudioFilePropertyMagicCookieData: AudioFilePropertyID = 0x6d676963; // 'mgic'
     pub(super) const kAudioFilePropertyEstimatedDuration: AudioFilePropertyID = 0x65647572; // 'edur'
     pub(super) const kAudioFilePropertyFrameToPacket: AudioFilePropertyID = 0x66727470; // 'frtp'
+    pub(super) const kAudioFilePropertyPacketToByte: AudioFilePropertyID = 0x706b6279; // 'pkby'
 
     pub(super) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
 

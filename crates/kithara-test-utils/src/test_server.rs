@@ -278,6 +278,7 @@ impl HlsFixtureBuilder {
             bit_rate: Some(128_000),
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
+            include_sidx: false,
         });
         self
     }
@@ -297,6 +298,7 @@ impl HlsFixtureBuilder {
             bit_rate: Some(128_000),
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
+            include_sidx: false,
         });
         self
     }
@@ -326,6 +328,7 @@ impl HlsFixtureBuilder {
             bit_rate: Some(512_000),
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
+            include_sidx: false,
         });
         self
     }
@@ -345,6 +348,7 @@ impl HlsFixtureBuilder {
             bit_rate: Some(512_000),
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
+            include_sidx: false,
         });
         self
     }
@@ -409,6 +413,19 @@ impl HlsFixtureBuilder {
         self.data = HlsFixtureData::Spec(DataMode::TestPattern);
         self.init = HlsFixtureInit::Spec(InitMode::None);
         self.spec.packaged_audio = Some(packaged_audio);
+    }
+
+    /// Toggle the optional `sidx` index in the init segment of packaged
+    /// fMP4 fixtures. Default is `false` — bit-stable with existing
+    /// fixtures. Set to `true` to mirror real-world packagers (DASH,
+    /// HLS-fMP4 from CDNs) where `sidx` lets the demuxer resolve
+    /// `seek_track_by_time` in O(1).
+    #[must_use]
+    pub fn include_sidx(mut self, include: bool) -> Self {
+        if let Some(req) = self.spec.packaged_audio.as_mut() {
+            req.include_sidx = include;
+        }
+        self
     }
 }
 

@@ -15,7 +15,7 @@ fn test_progressive_file_timeline_monotonic() {
     let mut prev_frame_end = 0u64;
     let mut chunk_count = 0u64;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
         // Ensure the spec is correct
@@ -68,7 +68,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     // Seek to 0.5s
     decoder.seek(Duration::from_millis(500)).unwrap();
 
-    let chunk = decoder.next_chunk().unwrap().unwrap();
+    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
     let expected_frame = (0.5 * 44100.0) as u64;
 
     // frame_offset should be approximately at the seek position
@@ -158,7 +158,7 @@ mod hls_timeline {
             let mut chunk_count = 0u64;
             let mut max_segment_index = 0u32;
 
-            while let Ok(Some(chunk)) = decoder.next_chunk() {
+            while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
                 assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);

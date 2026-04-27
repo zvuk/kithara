@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::Arc};
+use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use futures::StreamExt;
 use kithara_abr::Abr;
@@ -608,9 +608,9 @@ impl kithara_stream::Source for FileSource {
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
 
-        if n == 0 {
-            return Ok(ReadOutcome::Data(0));
-        }
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
 
         let res_len = state.res.len();
         let bus = state.bus.clone();
@@ -624,7 +624,7 @@ impl kithara_stream::Source for FileSource {
         });
         trace!(offset, bytes = n, "FileSource read complete");
 
-        Ok(ReadOutcome::Data(n))
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn len(&self) -> Option<u64> {
@@ -651,7 +651,7 @@ impl kithara_stream::Source for FileSource {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{num::NonZeroUsize, sync::Arc};
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_events::Event;
@@ -661,6 +661,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    fn nz_bytes(n: usize) -> ReadOutcome {
+        ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
+    }
 
     fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
         Arc::new(FileCoord::new(timeline))
@@ -769,7 +773,7 @@ mod tests {
         let mut buf = [0u8; 11];
         assert_eq!(
             Source::read_at(&mut source, 0, &mut buf).unwrap(),
-            ReadOutcome::Data(11)
+            nz_bytes(11)
         );
         assert_eq!(&buf[..11], b"hello world");
         assert_eq!(
@@ -781,7 +785,7 @@ mod tests {
         let mut buf2 = [0u8; 7];
         assert_eq!(
             Source::read_at(&mut source, 6, &mut buf2).unwrap(),
-            ReadOutcome::Data(7)
+            nz_bytes(7)
         );
         assert_eq!(&buf2[..7], b"world f");
         assert_eq!(coord.read_pos(), 0);
@@ -802,7 +806,7 @@ mod tests {
         let mut buf = [0u8; 3];
         assert_eq!(
             Source::read_at(&mut source, 0, &mut buf).unwrap(),
-            ReadOutcome::Data(3)
+            nz_bytes(3)
         );
 
         let event = events.try_recv().expect("expected file event");
@@ -963,7 +967,7 @@ mod tests {
         let mut buf = [0u8; 2];
         assert_eq!(
             Source::read_at(&mut source, 0, &mut buf).unwrap(),
-            ReadOutcome::Data(2)
+            nz_bytes(2)
         );
 
         assert_eq!(coord.read_pos(), 0);

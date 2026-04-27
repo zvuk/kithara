@@ -105,11 +105,11 @@ impl PlayerResource {
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
             match self.resource.read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count: 0, .. }) => break,
                 Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
-                    self.write_len += count;
-                    self.write_pos += count;
+                    self.write_len += count.get();
+                    self.write_pos += count.get();
                 }
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => break,
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
                     natural_eof = true;
                     break;
@@ -273,8 +273,8 @@ mod tests {
 
     impl PcmReader for PendingReader {
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Frames {
-                count: 0,
+            Ok(ReadOutcome::Pending {
+                reason: kithara_audio::PendingReason::Buffering,
                 position: Duration::ZERO,
             })
         }
@@ -283,14 +283,17 @@ mod tests {
             &mut self,
             _output: &'a mut [&'a mut [f32]],
         ) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Frames {
-                count: 0,
+            Ok(ReadOutcome::Pending {
+                reason: kithara_audio::PendingReason::Buffering,
                 position: Duration::ZERO,
             })
         }
 
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-            Ok(SeekOutcome::Landed { position })
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn spec(&self) -> PcmSpec {

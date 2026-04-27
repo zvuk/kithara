@@ -219,7 +219,7 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
 
         use kithara::audio::ReadOutcome;
         match decoder.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 decoder.preload().expect("preload must succeed");
                 sleep(Duration::from_millis(10)).await;
             }

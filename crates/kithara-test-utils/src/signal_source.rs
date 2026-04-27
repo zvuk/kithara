@@ -2,7 +2,7 @@
 //!
 //! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
 
-use std::{io, io::Error as IoError, ops::Range};
+use std::{io, io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
@@ -78,7 +78,7 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         if buf.is_empty() || self.is_past_eof(offset) {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         }
 
         let mut written = 0usize;
@@ -103,7 +103,10 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
                 .render_pcm(pcm_offset as usize, pcm_max, &mut buf[written..]);
         }
 
-        Ok(ReadOutcome::Data(written))
+        let Some(count) = NonZeroUsize::new(written) else {
+            return Ok(ReadOutcome::Eof);
+        };
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
@@ -187,7 +190,7 @@ mod tests {
         let mut src = SignalSource::new(pcm);
         let total = src.len().unwrap();
         let mut buf = [0u8; 16];
-        assert_eq!(src.read_at(total, &mut buf).unwrap(), ReadOutcome::Data(0));
+        assert_eq!(src.read_at(total, &mut buf).unwrap(), ReadOutcome::Eof);
     }
 
     #[kithara::test]
@@ -207,7 +210,7 @@ mod tests {
         let mut src = SignalSource::new(pcm);
         let mut buf = [0xFFu8; 8];
         let result = src.read_at(40, &mut buf).unwrap();
-        assert_eq!(result, ReadOutcome::Data(8));
+        assert_eq!(result, ReadOutcome::Bytes(NonZeroUsize::new(8).unwrap()));
         assert_eq!(&buf[0..4], &0xFFFF_FFFFu32.to_le_bytes());
         assert_eq!(&buf[4..8], &[0, 0, 0, 0]);
     }

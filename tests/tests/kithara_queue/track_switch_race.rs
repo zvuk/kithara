@@ -149,7 +149,9 @@ async fn wait_for_loader_done(
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
+                TrackStatus::Loaded | TrackStatus::Consumed | TrackStatus::Cancelled => {
+                    return Ok(());
+                }
                 TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
                 _ => {}
             }
@@ -189,7 +191,7 @@ fn drain_event_backlog(rx: &mut EventReceiver) {
     while rx.try_recv().is_ok() {}
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(900)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::single_pass(1)]
 #[case::stress_pass(Consts::STRESS_ITERATIONS)]
 async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: u32) {

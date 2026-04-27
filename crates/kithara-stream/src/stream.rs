@@ -12,6 +12,7 @@ use std::{
     fmt,
     future::Future,
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
+    num::NonZeroUsize,
     ops::Range,
     sync::Arc,
 };
@@ -19,27 +20,42 @@ use std::{
 use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
 
-/// Typed error from [`Stream::try_read`].
+/// Real error from [`Stream::try_read`] — the underlying source
+/// surfaced an I/O failure.
 ///
-/// Each variant has distinct caller semantics — there is no string
-/// matching or downcast required. The `Read for Stream` adapter maps
-/// these onto `io::Error` for consumers that go through `std::io::Read`
-/// (Symphonia's `MediaSourceStream`); decoders that want precise
-/// classification call `try_read` directly via [`DecoderInput`] in
-/// `kithara-decode`.
+/// Status conditions (seek pending, data not ready, variant change,
+/// retry) are **not** errors and are carried in
+/// [`StreamReadOutcome::Pending`] with a typed [`PendingReason`]. Only
+/// genuine source failures end up here.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum StreamReadError {
-    /// A seek is pending (consumer flagged the timeline). The current
-    /// read must be aborted; do **not** retry — instead drain pending
-    /// state and let the seek apply.
-    SeekPending,
-    /// No data ready yet at the requested position. Transient — caller
-    /// may retry after backoff.
-    NotReady,
-    /// Source crossed a variant boundary mid-read.
-    VariantChange,
-    /// Anything else surfaced by the underlying `Source`.
+    /// Anything surfaced by the underlying [`Source`] as a real error.
     Source(IoError),
+}
+
+/// Outcome of a [`Stream::try_read`] call.
+///
+/// Mirrors the [`ReadOutcome`] shape from
+/// [`Source::read_at`](crate::Source::read_at), but extends each variant
+/// with the authoritative `byte_position` from the stream's
+/// [`Timeline`] for callers that don't want to read it back themselves.
+/// `Bytes` carries a [`NonZeroUsize`] count — the type system
+/// guarantees forward progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamReadOutcome {
+    /// Stream produced `count` bytes. `byte_position` is the new byte
+    /// offset **after** the read.
+    Bytes {
+        count: NonZeroUsize,
+        byte_position: u64,
+    },
+    /// No progress this call. See [`PendingReason`] for the precise
+    /// cause and required caller action.
+    Pending(PendingReason),
+    /// Natural end of stream. `byte_position` is the offset where EOF
+    /// was observed (typically the source length).
+    Eof { byte_position: u64 },
 }
 
 /// Typed error from [`Stream::seek`] for an absolute byte target that
@@ -72,9 +88,6 @@ impl StdError for StreamSeekPastEof {}
 impl fmt::Display for StreamReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SeekPending => f.write_str("seek pending"),
-            Self::NotReady => f.write_str("data not ready"),
-            Self::VariantChange => f.write_str("variant change"),
             Self::Source(e) => write!(f, "source error: {e}"),
         }
     }
@@ -84,14 +97,29 @@ impl StdError for StreamReadError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Source(e) => Some(e),
-            _ => None,
         }
     }
 }
 
+/// Non-retriable cross-variant boundary signal — the typed payload of
+/// the `io::Error` produced by `impl Read for Stream` when the
+/// underlying source fenced on a variant change. Decoders that go
+/// through `std::io::Read` (Symphonia chain walker) downcast on this
+/// type to recover the precise classification without string-matching.
+#[derive(Debug, Clone, Copy)]
+pub struct VariantChangeError;
+
+impl fmt::Display for VariantChangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("variant change: decoder recreation required")
+    }
+}
+
+impl StdError for VariantChangeError {}
+
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
-    source::{ReadOutcome, Source, VariantChangeError},
+    source::{PendingReason, ReadOutcome, Source},
 };
 
 /// Defines a stream type and how to create it.
@@ -232,29 +260,34 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
-    /// Typed read — returns one of the [`StreamReadError`] variants
-    /// instead of an opaque `io::Error`. Decoders that can act on the
-    /// distinction between `SeekPending`, `NotReady`, and source errors
-    /// should use this directly; `impl Read for Stream` wraps the
-    /// result for `std::io::Read` consumers.
+    /// Typed read — returns a [`StreamReadOutcome`] discriminating
+    /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
+    /// (`Pending` with a typed [`PendingReason`]) and natural EOF.
+    /// Only genuine source I/O failures surface as
+    /// [`StreamReadError::Source`]. `impl Read for Stream` wraps this
+    /// outcome for `std::io::Read` consumers.
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
-    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, StreamReadError> {
+    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
         /// Short timeout keeps the audio worker responsive for round-robin
         /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
         /// lasts ~46ms. A 10ms budget gives the worker time to serve other
         /// tracks and still refill the ringbuf before the audio callback drains it.
         const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
-        /// Maximum `wait_range` retries before returning `NotReady` to
-        /// the caller. Each retry takes `WAIT_RANGE_TIMEOUT` (10ms), so
-        /// 50 iterations ≈ 500ms. Prevents the hang detector from
-        /// firing when data is legitimately not yet available
-        /// (e.g. encrypted HLS startup).
+        /// Maximum `wait_range` retries before returning
+        /// `Pending(NotReady)` to the caller. Each retry takes
+        /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
+        /// Prevents the hang detector from firing when data is
+        /// legitimately not yet available (e.g. encrypted HLS startup).
         const MAX_WAIT_SPINS: u32 = 50;
 
+        let timeline = self.source.timeline();
+
         if buf.is_empty() {
-            return Ok(0);
+            return Ok(StreamReadOutcome::Eof {
+                byte_position: timeline.byte_position(),
+            });
         }
 
         let mut wait_spins = 0u32;
@@ -272,11 +305,11 @@ impl<T: StreamType> Stream<T> {
                     let msg = e.to_string();
                     if msg.contains("budget exceeded") {
                         if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
-                            return Err(StreamReadError::SeekPending);
+                            return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                         }
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(StreamReadError::NotReady);
+                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                         }
                         hang_tick!();
                         yield_now();
@@ -287,25 +320,27 @@ impl<T: StreamType> Stream<T> {
             };
             match wait_outcome {
                 WaitOutcome::Ready => {}
-                WaitOutcome::Eof => return Ok(0),
+                WaitOutcome::Eof => {
+                    return Ok(StreamReadOutcome::Eof { byte_position: pos });
+                }
                 WaitOutcome::Interrupted => {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
                         if wait_spins >= MAX_WAIT_SPINS {
-                            return Err(StreamReadError::NotReady);
+                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                         }
                         hang_tick!();
                         yield_now();
                         continue;
                     }
-                    return Err(StreamReadError::SeekPending);
+                    return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                 }
             }
 
             wait_spins = 0;
 
             if timeline.seek_epoch() != read_epoch {
-                return Err(StreamReadError::SeekPending);
+                return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
             match self
@@ -313,22 +348,29 @@ impl<T: StreamType> Stream<T> {
                 .read_at(pos, buf)
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
-                ReadOutcome::Data(n) => {
+                ReadOutcome::Bytes(count) => {
                     if timeline.seek_epoch() != read_epoch {
-                        return Err(StreamReadError::SeekPending);
+                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     hang_reset!();
                     timeline.set_segment_position(pos);
-                    timeline.set_byte_position(pos.saturating_add(n as u64));
-                    return Ok(n);
+                    let new_pos = pos.saturating_add(count.get() as u64);
+                    timeline.set_byte_position(new_pos);
+                    return Ok(StreamReadOutcome::Bytes {
+                        count,
+                        byte_position: new_pos,
+                    });
                 }
-                ReadOutcome::VariantChange => {
-                    return Err(StreamReadError::VariantChange);
+                ReadOutcome::Eof => {
+                    return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
-                ReadOutcome::Retry => {
+                ReadOutcome::Pending(PendingReason::Retry) => {
                     hang_tick!();
                     yield_now();
                     continue;
+                }
+                ReadOutcome::Pending(reason) => {
+                    return Ok(StreamReadOutcome::Pending(reason));
                 }
             }
         }
@@ -338,16 +380,21 @@ impl<T: StreamType> Stream<T> {
 impl<T: StreamType> Read for Stream<T> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.try_read(buf) {
-            Ok(n) => Ok(n),
-            // Place `SeekPending` as the typed inner error of `Other`
-            // so consumers of the `io::Read` surface (Symphonia chain
-            // walker in `kithara-decode`) can `downcast_ref` it
-            // without matching on strings.
-            Err(e @ StreamReadError::SeekPending) => Err(IoError::other(e)),
-            Err(StreamReadError::NotReady) => {
+            Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
+            Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
+            // `Pending(SeekPending)` rides as the typed inner of
+            // `IoError::other` so consumers of the `io::Read` surface
+            // (Symphonia chain walker in `kithara-decode`) can
+            // `downcast_ref` it without matching on strings.
+            Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
+                Err(IoError::other(reason))
+            }
+            Ok(StreamReadOutcome::Pending(PendingReason::NotReady | PendingReason::Retry)) => {
                 Err(IoError::new(ErrorKind::Interrupted, "data not ready"))
             }
-            Err(StreamReadError::VariantChange) => Err(IoError::other(VariantChangeError)),
+            Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
+                Err(IoError::other(VariantChangeError))
+            }
             Err(StreamReadError::Source(e)) => Err(e),
         }
     }
@@ -432,11 +479,26 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
+    /// Test helper — script entry that maps to either `Bytes(N)` (with
+    /// the source slicing actual `data`) or a terminal `Eof`. Pending
+    /// causes are exercised through the timeline (`initiate_seek`) and
+    /// the wait-outcome script, not the read script.
+    #[derive(Clone, Copy)]
+    enum ScriptRead {
+        Data(usize),
+        Eof,
+    }
+
+    fn bytes(count: usize) -> ReadOutcome {
+        let nz = NonZeroUsize::new(count).expect("ScriptSource::bytes: count must be > 0");
+        ReadOutcome::Bytes(nz)
+    }
+
     struct ScriptSource {
         anchor: Option<SourceSeekAnchor>,
         timeline: Timeline,
         data: Vec<u8>,
-        reads: VecDeque<ReadOutcome>,
+        reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
     }
 
@@ -444,7 +506,7 @@ mod tests {
         fn new(
             timeline: Timeline,
             waits: impl IntoIterator<Item = WaitOutcome>,
-            reads: impl IntoIterator<Item = ReadOutcome>,
+            reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
         ) -> Self {
             Self {
@@ -477,19 +539,22 @@ mod tests {
             offset: u64,
             buf: &mut [u8],
         ) -> crate::StreamResult<ReadOutcome, Self::Error> {
-            let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Data(0));
-            if let ReadOutcome::Data(n) = outcome {
-                let Ok(start) = usize::try_from(offset) else {
-                    return Ok(ReadOutcome::Data(0));
-                };
-                let end = (start + n).min(self.data.len());
-                let bytes = end.saturating_sub(start).min(buf.len());
-                if bytes > 0 {
-                    buf[..bytes].copy_from_slice(&self.data[start..start + bytes]);
+            let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
+            match step {
+                ScriptRead::Eof => Ok(ReadOutcome::Eof),
+                ScriptRead::Data(n) => {
+                    let Ok(start) = usize::try_from(offset) else {
+                        return Ok(ReadOutcome::Eof);
+                    };
+                    let end = (start + n).min(self.data.len());
+                    let bytes_count = end.saturating_sub(start).min(buf.len());
+                    if bytes_count == 0 {
+                        return Ok(ReadOutcome::Eof);
+                    }
+                    buf[..bytes_count].copy_from_slice(&self.data[start..start + bytes_count]);
+                    Ok(bytes(bytes_count))
                 }
-                return Ok(ReadOutcome::Data(bytes));
             }
-            Ok(outcome)
         }
 
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
@@ -561,7 +626,7 @@ mod tests {
             _buf: &mut [u8],
         ) -> crate::StreamResult<ReadOutcome, Self::Error> {
             self.read_calls += 1;
-            Ok(ReadOutcome::Data(4))
+            Ok(bytes(4))
         }
 
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
@@ -579,7 +644,7 @@ mod tests {
         let source = ScriptSource::new(
             timeline.clone(),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
-            [ReadOutcome::Data(4)],
+            [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
         );
         let mut stream = Stream::<DummyType> { source };
@@ -600,10 +665,13 @@ mod tests {
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
-        let err = stream
+        let outcome = stream
             .try_read(&mut buf)
-            .expect_err("flushing read must return error");
-        assert!(matches!(err, StreamReadError::SeekPending));
+            .expect("seek-pending is a status, not an error");
+        assert!(matches!(
+            outcome,
+            StreamReadOutcome::Pending(PendingReason::SeekPending)
+        ));
     }
 
     #[kithara::test]
@@ -616,11 +684,14 @@ mod tests {
         let mut stream = Stream::<SeekDuringWaitType> { source };
         let mut buf = [0u8; 4];
 
-        let err = stream
+        let outcome = stream
             .try_read(&mut buf)
-            .expect_err("seek epoch change must abort stale read");
+            .expect("seek-pending is a status, not an error");
 
-        assert!(matches!(err, StreamReadError::SeekPending));
+        assert!(matches!(
+            outcome,
+            StreamReadOutcome::Pending(PendingReason::SeekPending)
+        ));
         assert_eq!(stream.source.read_calls, 0);
         assert_eq!(stream.position(), 0);
     }

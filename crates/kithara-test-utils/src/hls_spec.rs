@@ -74,6 +74,7 @@ pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) timescale: u32,
     pub(crate) segments_per_variant: usize,
     pub(crate) segment_duration_secs: f64,
+    pub(crate) include_sidx: bool,
     pub(crate) variants: Vec<ResolvedPackagedVariant>,
 }
 
@@ -405,6 +406,7 @@ fn resolve_packaged_audio(
         timescale,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
+        include_sidx: packaged.include_sidx,
         variants,
     })
 }
@@ -574,6 +576,7 @@ mod tests {
                 bit_rate: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
                 variant_overrides: Vec::new(),
+                include_sidx: false,
             }),
             ..HlsSpec::default()
         };

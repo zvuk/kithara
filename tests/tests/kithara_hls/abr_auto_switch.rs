@@ -157,9 +157,9 @@ async fn abr_auto_switch_during_playback(
 
         while start.elapsed() < timeout {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
+                Ok(ReadOutcome::Pending { .. }) => continue,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    total_samples += count as u64;
+                    total_samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),

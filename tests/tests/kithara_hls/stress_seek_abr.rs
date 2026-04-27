@@ -82,8 +82,8 @@ async fn stress_seek_during_abr_switch_real_decoder(
         let mut warmup_samples = 0u64;
         while start.elapsed() < Duration::from_secs(2) {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count as u64,
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("warmup decode error: {e}"),
             }
@@ -116,8 +116,8 @@ async fn stress_seek_during_abr_switch_real_decoder(
                     seek_count += 1;
                     // Try to read some samples after seek
                     match audio.read(&mut buf) {
-                        Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
-                            samples_after_seek += count as u64;
+                        Ok(ReadOutcome::Frames { count, .. }) => {
+                            samples_after_seek += count.get() as u64;
                         }
                         Ok(_) => {
                             dead_seeks += 1;
@@ -212,11 +212,11 @@ async fn seek_sequence_from_log_real_stream(
             let read_deadline = Instant::now() + Duration::from_secs(8);
             while Instant::now() < read_deadline && samples_after_seek < 16_384 {
                 match audio.read(&mut buf) {
-                    Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                    Ok(ReadOutcome::Pending { .. }) => {
                         thread::sleep(Duration::from_millis(15));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
-                        samples_after_seek += count;
+                        samples_after_seek += count.get();
                     }
                     Ok(ReadOutcome::Eof { .. }) => break,
                     Err(e) => panic!("post-seek read error: {e}"),

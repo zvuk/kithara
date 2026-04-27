@@ -128,7 +128,7 @@ impl AudioPlayer {
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
     pub fn seek(&self, to_seconds: f64, callback: Arc<dyn SeekCallback>) {
         match self.queue.seek(to_seconds) {
-            Ok(()) => callback.on_complete(true),
+            Ok(_outcome) => callback.on_complete(true),
             Err(_) => callback.on_complete(false),
         }
     }

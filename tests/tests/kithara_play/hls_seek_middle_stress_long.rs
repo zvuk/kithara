@@ -5,7 +5,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::{sync::Once, time::Duration};
+use std::{
+    sync::Once,
+    time::{Duration, Instant},
+};
 
 use kithara::{
     assets::StoreOptions,
@@ -18,7 +21,7 @@ use kithara::{
 use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
 use tokio::time::sleep;
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared};
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -47,23 +50,44 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     result
 }
 
-async fn render_burst_paced(player: &mut OfflinePlayer, blocks: u32, min_wall_ms: u64) {
+/// Render up to `max_blocks`, paced so the network has time to deliver
+/// data. Returns as soon as `player.position() >= until_position`
+/// (i.e. the player has actually played past the expected mark) — or
+/// when the wall budget is exhausted.
+async fn render_until_position(
+    player: &mut OfflinePlayer,
+    max_blocks: u32,
+    until_position: f64,
+    min_wall_ms: u64,
+) {
     const BATCH: u32 = 16;
-    let batches = blocks.div_ceil(BATCH).max(1);
-    let per_batch_ms = min_wall_ms.div_ceil(u64::from(batches)).max(1);
-    let mut remaining = blocks;
-    while remaining > 0 {
-        let this = remaining.min(BATCH);
+    const TICK_MS: u64 = 25;
+    let deadline = Instant::now() + Duration::from_millis(min_wall_ms);
+    let mut rendered = 0u32;
+    loop {
+        let this = max_blocks.saturating_sub(rendered).min(BATCH).max(1);
         for _ in 0..this {
             let _ = player.render(Consts::BLOCK_FRAMES);
         }
-        remaining -= this;
-        sleep(Duration::from_millis(per_batch_ms)).await;
+        rendered = rendered.saturating_add(this);
+        if player.position() >= until_position && rendered >= max_blocks {
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        sleep(Duration::from_millis(TICK_MS)).await;
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(900)))]
-async fn hls_seek_middle_repeated_seeks_long_stress() {
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::apple(DecoderBackend::Apple)]
+#[case::android(DecoderBackend::Android)]
+async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBackend) {
+    if backend.skip_if_unavailable() {
+        return;
+    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
@@ -82,6 +106,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress() {
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
     cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
     cfg.store = store;
+    cfg.prefer_hardware = backend.prefer_hardware();
 
     let resource = Resource::new(cfg)
         .await
@@ -90,9 +115,11 @@ async fn hls_seek_middle_repeated_seeks_long_stress() {
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
-    render_burst_paced(
+    let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
+    render_until_position(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
+        warmup_target,
         1_500,
     )
     .await;
@@ -106,9 +133,11 @@ async fn hls_seek_middle_repeated_seeks_long_stress() {
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
         player.seek(target, u64::from(1 + iter));
-        render_burst_paced(
+        let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
+        render_until_position(
             &mut player,
             blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
+            post_target,
             post_seek_wall_ms,
         )
         .await;

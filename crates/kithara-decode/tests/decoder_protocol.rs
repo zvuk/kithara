@@ -87,8 +87,14 @@ fn available_backends() -> Vec<Backend> {
 /// Drain the decoder and return concatenated f32 PCM samples.
 fn drain_all(decoder: &mut dyn InnerDecoder) -> Vec<f32> {
     let mut all = Vec::new();
-    while let Some(chunk) = decoder.next_chunk().expect("decode should succeed") {
-        all.extend_from_slice(chunk.samples());
+    loop {
+        match decoder.next_chunk().expect("decode should succeed") {
+            kithara_decode::DecoderChunkOutcome::Chunk(chunk) => {
+                all.extend_from_slice(chunk.samples());
+            }
+            kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
+            kithara_decode::DecoderChunkOutcome::Eof => break,
+        }
     }
     all
 }
@@ -199,6 +205,7 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
         let chunk = dec
             .next_chunk()
             .expect("next_chunk after seek")
+            .into_chunk()
             .expect("at least one chunk after a 0.5s seek");
 
         // Apple seek is byte-estimated, so ts may land slightly before the
@@ -223,15 +230,15 @@ fn end_of_stream_returns_none_repeatedly() {
         while dec
             .next_chunk()
             .expect("decode before EOF should succeed")
-            .is_some()
+            .is_chunk()
         {}
 
-        // Calling again should keep returning None without panicking.
+        // Calling again should keep returning Eof without panicking.
         for _ in 0..3 {
             let next = dec.next_chunk().expect("decode after EOF");
             assert!(
-                next.is_none(),
-                "backend {backend:?} must keep returning None at EOF"
+                next.is_eof(),
+                "backend {backend:?} must keep returning Eof at end-of-stream"
             );
         }
     }

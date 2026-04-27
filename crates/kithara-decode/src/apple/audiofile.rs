@@ -18,16 +18,16 @@ use std::{
     time::Duration,
 };
 
-use kithara_stream::StreamReadError;
+use kithara_stream::PendingReason;
 use tracing::{debug, warn};
 
 use super::{
     consts::{Consts, os_status_to_string},
     ffi::{
-        AudioFileClose, AudioFileGetProperty, AudioFileGetPropertyInfo, AudioFileID,
-        AudioFileOpenWithCallbacks, AudioFilePropertyID, AudioFileReadPacketData, AudioFileTypeID,
-        AudioFramePacketTranslation, AudioStreamBasicDescription, AudioStreamPacketDescription,
-        Float64, OSStatus, SInt64, UInt32,
+        AudioBytePacketTranslation, AudioFileClose, AudioFileGetProperty, AudioFileGetPropertyInfo,
+        AudioFileID, AudioFileOpenWithCallbacks, AudioFilePropertyID, AudioFileReadPacketData,
+        AudioFileTypeID, AudioFramePacketTranslation, AudioStreamBasicDescription,
+        AudioStreamPacketDescription, Float64, OSStatus, SInt64, UInt32,
     },
     reader::{PacketReader, PacketRef},
 };
@@ -79,6 +79,22 @@ extern "C" fn read_callback(
         unsafe { *actual_count = 0 };
         return Consts::kAudioFilePositionError;
     }
+    // AudioFile occasionally probes well past the file length
+    // (huge speculative offsets while walking container atoms,
+    // or `i64::MAX` when we report length as unknown). Surfacing
+    // them as a real `Stream::seek` overflows the producer cursor
+    // and trips `StreamSeekPastEof`, which the decoder layer
+    // mistakes for a real seek failure. When the byte length is
+    // known, signal the caller that this address is out of range
+    // — AudioFile retries with a valid position from its atom
+    // tables. We use `kAudioFilePositionError` (not EOF) so the
+    // demuxer doesn't conclude the file truncated mid-decode.
+    let known_len = ctx.byte_len.load(Ordering::Acquire);
+    if known_len > 0 && position.cast_unsigned() >= known_len {
+        // SAFETY: out-param.
+        unsafe { *actual_count = 0 };
+        return Consts::kAudioFilePositionError;
+    }
     let mut filled = 0usize;
     while filled < buf.len() {
         if ctx
@@ -95,8 +111,8 @@ extern "C" fn read_callback(
             };
         }
         match ctx.source.try_read(&mut buf[filled..]) {
-            Ok(n) if n > 0 => filled += n,
-            Err(StreamReadError::SeekPending) => {
+            Ok(crate::traits::InputReadOutcome::Bytes(count)) => filled += count.get(),
+            Ok(crate::traits::InputReadOutcome::Pending(PendingReason::SeekPending)) => {
                 // The only case where we must surface as
                 // `DecodeError::Interrupted` rather than letting
                 // AudioFile mislabel the partial read as EOF.
@@ -148,6 +164,12 @@ pub(super) struct AudioFileReader {
     last_num_bytes: u32,
     last_desc: AudioStreamPacketDescription,
     next_packet: u64,
+    /// Absolute byte offset of `next_packet` inside the source container.
+    /// Resolved once via `kAudioFilePropertyPacketToByte` after open or
+    /// seek, then advanced incrementally by each successful read so we
+    /// don't trigger `AudioFile`'s internal scan on every packet (which
+    /// breaks state for streaming sources on MP3).
+    next_packet_byte_offset: Option<u64>,
 }
 
 impl AudioFileReader {
@@ -222,6 +244,7 @@ impl AudioFileReader {
             last_num_bytes: 0,
             last_desc: AudioStreamPacketDescription::default(),
             next_packet: 0,
+            next_packet_byte_offset: None,
         })
     }
 
@@ -316,6 +339,31 @@ impl AudioFileReader {
     fn get_property_f64(file: AudioFileID, prop: AudioFilePropertyID) -> DecodeResult<f64> {
         Self::get_property_scalar::<Float64>(file, prop)
     }
+
+    /// Translate a packet index into its absolute byte offset in the
+    /// source container via `kAudioFilePropertyPacketToByte`. Returns
+    /// `None` when the container does not expose a usable mapping (e.g.
+    /// estimated-only streams or stream-property failures).
+    fn packet_to_byte(file: AudioFileID, packet_index: SInt64) -> Option<u64> {
+        let mut translation = AudioBytePacketTranslation {
+            mPacket: packet_index,
+            ..Default::default()
+        };
+        let mut size = UInt32::try_from(size_of::<AudioBytePacketTranslation>()).ok()?;
+        // SAFETY: live AudioFileID + stack-allocated struct of matching layout.
+        let status = unsafe {
+            AudioFileGetProperty(
+                file,
+                Consts::kAudioFilePropertyPacketToByte,
+                &mut size,
+                &mut translation as *mut _ as *mut c_void,
+            )
+        };
+        if status != Consts::noErr || translation.mByte < 0 {
+            return None;
+        }
+        Some(translation.mByte.cast_unsigned())
+    }
 }
 
 impl PacketReader for AudioFileReader {
@@ -370,12 +418,25 @@ impl PacketReader for AudioFileReader {
         // packet despite an interrupt earlier in the call, treat the read
         // as successful — we got real data.
         if num_packets > 0 && status == Consts::noErr {
+            // Resolve the absolute byte offset only when we don't have a
+            // running cursor (after open or after seek). Subsequent
+            // packets advance the cursor by `num_bytes`. Per-packet
+            // queries to `kAudioFilePropertyPacketToByte` corrupt
+            // AudioFile state on streaming MP3 sources.
+            if self.next_packet_byte_offset.is_none() {
+                self.next_packet_byte_offset = Self::packet_to_byte(self.file, packet_index);
+            }
+            let byte_offset = self.next_packet_byte_offset;
+            if let Some(cursor) = self.next_packet_byte_offset.as_mut() {
+                *cursor = cursor.saturating_add(u64::from(num_bytes));
+            }
             self.next_packet += u64::from(num_packets);
             self.last_num_bytes = num_bytes;
             self.last_desc = desc;
             return Ok(Some(PacketRef {
                 data: &self.packet_buf[..num_bytes as usize],
                 description: desc,
+                byte_offset,
             }));
         }
 
@@ -406,6 +467,12 @@ impl PacketReader for AudioFileReader {
     }
 
     fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64> {
+        // Reset the byte cursor — `read_next_packet` will reload it for
+        // the next packet via `packet_to_byte`. We additionally prime
+        // it here from `next_packet` so callers (e.g. `AppleInner::seek`)
+        // can read the byte offset of the post-seek packet without
+        // forcing a packet read first.
+        self.next_packet_byte_offset = None;
         let frames_per_packet = u64::from(self.format.mFramesPerPacket);
         let (packet, aligned_frame) = if frames_per_packet > 0 {
             let packet = target_frame / frames_per_packet;
@@ -441,7 +508,20 @@ impl PacketReader for AudioFileReader {
             (packet, aligned)
         };
         self.next_packet = packet;
+        // Prime the cached byte cursor so `landed_byte()` returns a real
+        // offset right after seek. `read_next_packet` will reuse the
+        // cached value (no second `packet_to_byte` query).
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "packet index fits in i64 for realistic file sizes"
+        )]
+        let packet_index = packet as SInt64;
+        self.next_packet_byte_offset = Self::packet_to_byte(self.file, packet_index);
         Ok(aligned_frame)
+    }
+
+    fn landed_byte(&self) -> Option<u64> {
+        self.next_packet_byte_offset
     }
 }
 

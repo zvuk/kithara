@@ -25,6 +25,13 @@ pub(crate) struct ReadSeekAdapter<R> {
     /// Used to temporarily disable seeking during fMP4 reader initialization
     /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
     seek_enabled: Arc<AtomicBool>,
+    /// Live read-cursor position. Updated on every `Read::read` /
+    /// `Seek::seek` so the decoder layer can read it after
+    /// `format_reader.seek()` to learn the absolute byte offset
+    /// where the next packet body will be read from. The pipeline
+    /// uses this to plug a real byte target into `Stream::seek`,
+    /// avoiding ad-hoc `frame × bytes_per_frame` recomputation.
+    byte_pos: Arc<AtomicU64>,
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
@@ -60,10 +67,12 @@ impl<R: Seek> ReadSeekAdapter<R> {
         if !has_shared_value && let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }
+        let initial_pos = inner.stream_position().unwrap_or(0);
         Self {
             inner,
             byte_len,
             seek_enabled,
+            byte_pos: Arc::new(AtomicU64::new(initial_pos)),
         }
     }
 
@@ -73,6 +82,10 @@ impl<R: Seek> ReadSeekAdapter<R> {
 
     pub(crate) fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.seek_enabled)
+    }
+
+    pub(crate) fn byte_pos_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_pos)
     }
 
     fn probe_byte_len(reader: &mut R) -> Option<u64> {
@@ -85,13 +98,19 @@ impl<R: Seek> ReadSeekAdapter<R> {
 
 impl<R: Read> Read for ReadSeekAdapter<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.byte_pos.fetch_add(n as u64, Ordering::Release);
+        }
+        Ok(n)
     }
 }
 
 impl<R: Seek> Seek for ReadSeekAdapter<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.inner.seek(pos)
+        let new_pos = self.inner.seek(pos)?;
+        self.byte_pos.store(new_pos, Ordering::Release);
+        Ok(new_pos)
     }
 }
 

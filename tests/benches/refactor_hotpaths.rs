@@ -294,11 +294,14 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
                     while total < Consts::AUDIO_READ_TARGET_SAMPLES {
-                        let n = audio.read(&mut buf);
-                        if n == 0 {
-                            break;
+                        match audio.read(&mut buf) {
+                            Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                                total += count.get();
+                            }
+                            Ok(kithara_audio::ReadOutcome::Pending { .. }) => continue,
+                            Ok(kithara_audio::ReadOutcome::Eof { .. }) => break,
+                            Err(e) => panic!("audio read failed: {e}"),
                         }
-                        total += n;
                     }
                     black_box(total);
                 });

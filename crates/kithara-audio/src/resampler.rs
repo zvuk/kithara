@@ -220,6 +220,12 @@ pub struct ResamplerProcessor {
     temp_input_slice: SmallVec<[Vec<f32>; 8]>,
     temp_output_all: SmallVec<[Vec<f32>; 8]>,
     temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
+    /// Most recently observed input `PcmMeta`. Carried over to each
+    /// resampled output chunk so the timeline still gets the decoder's
+    /// authoritative `timestamp` / `end_timestamp` after rate
+    /// conversion (rubato changes frame counts but not wall-clock
+    /// duration). `None` until the first input chunk arrives.
+    last_input_meta: Option<PcmMeta>,
 }
 
 impl ResamplerProcessor {
@@ -272,6 +278,7 @@ impl ResamplerProcessor {
             temp_input_slice: smallvec_new_vecs(channels),
             temp_output_all: smallvec_new_vecs(channels),
             temp_output_bufs: smallvec_new_vecs(channels),
+            last_input_meta: None,
         };
 
         processor.update_resampler_if_needed();
@@ -362,13 +369,24 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        Some(PcmChunk::new(
-            PcmMeta {
-                spec: self.output_spec,
-                ..Default::default()
-            },
-            interleaved,
-        ))
+        // Carry the input chunk's `timestamp` / `end_timestamp` /
+        // segment / variant / epoch / source-byte info forward; only
+        // the output spec, frame count and frame_offset are
+        // resampler-local. Source-byte attribution stays attached so
+        // it is not double-counted: the decoder already credits each
+        // input chunk once.
+        let mut meta = self.last_input_meta.unwrap_or_default();
+        meta.spec = self.output_spec;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "frame counts fit in u32 for realistic chunks"
+        )]
+        let out_frames = interleaved
+            .len()
+            .checked_div(self.channels.max(1))
+            .unwrap_or(0) as u32;
+        meta.frames = out_frames;
+        Some(PcmChunk::new(meta, interleaved))
     }
 
     fn is_passthrough(&self) -> bool {
@@ -588,6 +606,10 @@ impl ResamplerProcessor {
     fn resample(&mut self, chunk: &PcmChunk) -> Option<PcmChunk> {
         self.resampler.as_ref()?;
 
+        // Capture the input chunk's meta so the next resampled output
+        // carries the decoder's authoritative `timestamp` /
+        // `end_timestamp` instead of `Default::default()`.
+        self.last_input_meta = Some(chunk.meta);
         self.append_to_buffer(&chunk.pcm);
 
         let input_frames = self.resampler.as_ref()?.input_frames_next();
@@ -678,13 +700,24 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        Some(PcmChunk::new(
-            PcmMeta {
-                spec: self.output_spec,
-                ..Default::default()
-            },
-            interleaved,
-        ))
+        // Carry the input chunk's `timestamp` / `end_timestamp` /
+        // segment / variant / epoch / source-byte info forward; only
+        // the output spec, frame count and frame_offset are
+        // resampler-local. Source-byte attribution stays attached so
+        // it is not double-counted: the decoder already credits each
+        // input chunk once.
+        let mut meta = self.last_input_meta.unwrap_or_default();
+        meta.spec = self.output_spec;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "frame counts fit in u32 for realistic chunks"
+        )]
+        let out_frames = interleaved
+            .len()
+            .checked_div(self.channels.max(1))
+            .unwrap_or(0) as u32;
+        meta.frames = out_frames;
+        Some(PcmChunk::new(meta, interleaved))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

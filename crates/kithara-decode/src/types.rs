@@ -29,6 +29,19 @@ impl fmt::Display for PcmSpec {
     }
 }
 
+impl From<&PcmMeta> for kithara_stream::ChunkPosition {
+    fn from(meta: &PcmMeta) -> Self {
+        Self {
+            sample_rate: meta.spec.sample_rate,
+            frame_offset: meta.frame_offset,
+            frames: u64::from(meta.frames),
+            source_bytes: meta.source_bytes,
+            source_byte_offset: meta.source_byte_offset,
+            end_position_ns: u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 /// Timeline metadata for a PCM chunk.
 ///
 /// Combines audio format specification with position on the logical timeline.
@@ -41,12 +54,44 @@ pub struct PcmMeta {
     pub frame_offset: u64,
     /// Timestamp of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Wall-clock position **after** this chunk's frames have played
+    /// out, computed by the decoder from its own frame counter. Used
+    /// by `Timeline::advance_committed_chunk` to update the playhead
+    /// without re-doing `frames * 1e9 / sample_rate` arithmetic on the
+    /// consumer side. For frame-based decoders (MP3 / AAC) the last
+    /// chunk may legitimately push this a few ms past the rounded
+    /// `total_duration`; the timeline clamps to duration on write.
+    pub end_timestamp: Duration,
     /// Segment index within playlist (`None` for progressive files).
     pub segment_index: Option<u32>,
     /// Variant/quality level index (`None` for progressive files).
     pub variant_index: Option<usize>,
     /// Decoder generation — increments on each ABR switch / decoder recreation.
     pub epoch: u64,
+    /// Number of audio frames this chunk represents (one frame =
+    /// `spec.channels` interleaved samples). Decoder fills it from the
+    /// output buffer length; consumer-side splits update it in place
+    /// when slicing a chunk into consumed/remaining halves.
+    pub frames: u32,
+    /// Number of source-stream bytes that produced this chunk's PCM, as
+    /// reported by the underlying decoder packet (e.g. `Packet.data.len()`
+    /// for Symphonia, `mDataByteSize` for Apple `AudioConverter`,
+    /// `readSampleData` return for Android `MediaExtractor`).
+    ///
+    /// Lets the consumer correlate chunk frames with the source byte
+    /// position without recomputing rate × time externally — the decoder
+    /// already knows the exact mapping for variable-bitrate compressed
+    /// formats and arbitrary-sized PCM packets. `0` means "unknown" (mock
+    /// decoders, post-EOF flush chunks).
+    pub source_bytes: u64,
+    /// Absolute byte offset of this chunk's source data within the input
+    /// stream, when the decoder reports it. Apple's `AudioFile` exposes
+    /// this via `AudioStreamPacketDescription.mStartOffset`; other
+    /// backends (Symphonia, Android `MediaExtractor`) do not surface
+    /// per-packet byte offsets through their public API and leave this
+    /// `None`. When present, downstream code can pin the chunk to an
+    /// exact byte range without recomputing rate × time.
+    pub source_byte_offset: Option<u64>,
 }
 
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
@@ -226,9 +271,13 @@ mod tests {
             },
             frame_offset: 1000,
             timestamp: Duration::from_millis(22),
+            end_timestamp: Duration::from_millis(22),
             segment_index: Some(5),
             variant_index: Some(2),
             epoch: 3,
+            frames: 0,
+            source_bytes: 0,
+            source_byte_offset: None,
         };
         let copied = meta;
         assert_eq!(meta, copied);
@@ -257,9 +306,13 @@ mod tests {
             },
             frame_offset: 100,
             timestamp: Duration::from_millis(2),
+            end_timestamp: Duration::from_millis(2),
             segment_index: Some(1),
             variant_index: Some(0),
             epoch: 1,
+            frames: 0,
+            source_bytes: 0,
+            source_byte_offset: None,
         };
         let mut b = a;
         assert_eq!(a, b);

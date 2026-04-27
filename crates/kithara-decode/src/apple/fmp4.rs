@@ -19,12 +19,13 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use kithara_bufpool::BytePool;
+use kithara_stream::StreamSeekPastEof;
 use symphonia_core::{
     codecs::{
         CodecParameters,
@@ -67,19 +68,88 @@ use crate::{
 /// `symphonia::adapter::ReadSeekAdapter`.
 struct BoxedMediaSource {
     inner: BoxedSource,
-    byte_len: Option<u64>,
+    /// Dynamic byte length shared with the audio FSM. Updated externally
+    /// as new HLS segments arrive; `0` means unknown.
+    /// Reading via `.load()` ensures the demuxer sees the current stream
+    /// length (the Apple decoder caches `byte_len: u64` at construction
+    /// goes stale on growing live streams — `BoxedMediaSource::seek` then
+    /// rejects byte targets that are valid in the current, larger stream).
+    byte_len: Arc<AtomicU64>,
     seek_enabled: Arc<AtomicBool>,
+    /// Live read-cursor of the underlying source. Updated on every
+    /// `Read::read` / `Seek::seek` so `Fmp4Reader::landed_byte` can
+    /// report the absolute byte offset of the next packet body
+    /// without reaching into `IsoMp4Reader`'s internals.
+    byte_pos: Arc<AtomicU64>,
 }
 
 impl io::Read for BoxedMediaSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.byte_pos.fetch_add(n as u64, Ordering::Release);
+        }
+        Ok(n)
     }
 }
 
 impl io::Seek for BoxedMediaSource {
     fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
-        self.inner.seek(pos)
+        // Resolve absolute target across all SeekFrom variants — Symphonia's
+        // `MediaSourceStream` reaches this layer via `SeekFrom::Current(delta)`
+        // when its buffer cursor needs to cross out of the buffered window, and
+        // a buggy demuxer-internal computation can push the absolute position
+        // far past EOF (or wrap into the sign-bit-set u64 space). Check every
+        // path, not just `Start`, so the typed `InvalidInput` reaches the
+        // decoder before the underlying source produces an opaque IO error.
+        let len = self.byte_len.load(Ordering::Acquire);
+        let target_abs: i128 = match pos {
+            io::SeekFrom::Start(t) => i128::from(t),
+            io::SeekFrom::Current(d) => {
+                i128::from(self.byte_pos.load(Ordering::Acquire)).saturating_add(i128::from(d))
+            }
+            io::SeekFrom::End(d) => {
+                if len == 0 {
+                    // Length unknown: defer to inner.seek, which knows whether
+                    // SeekFrom::End is supported.
+                    let new_pos = self.inner.seek(pos)?;
+                    self.byte_pos.store(new_pos, Ordering::Release);
+                    return Ok(new_pos);
+                }
+                i128::from(len).saturating_add(i128::from(d))
+            }
+        };
+        if target_abs < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("BoxedMediaSource::seek negative target: target={target_abs}"),
+            ));
+        }
+        if len > 0 && target_abs > i128::from(len) {
+            // Surface the typed `StreamSeekPastEof` payload (mirroring
+            // `kithara_stream::Stream::seek`) so the audio FSM's
+            // `classify_format_seek_error` recognises this as a caller-side
+            // out-of-range error instead of a generic `SeekFailed` —
+            // distinguishing it from transient decoder corruption avoids the
+            // recreate-loop on a structurally invalid byte target.
+            #[expect(
+                clippy::cast_sign_loss,
+                clippy::cast_possible_truncation,
+                reason = "target_abs > 0 (guarded above) and fits in u64 for realistic offsets"
+            )]
+            let new_pos = target_abs as u64;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                StreamSeekPastEof {
+                    new_pos,
+                    len,
+                    current_pos: self.byte_pos.load(Ordering::Acquire),
+                },
+            ));
+        }
+        let new_pos = self.inner.seek(pos)?;
+        self.byte_pos.store(new_pos, Ordering::Release);
+        Ok(new_pos)
     }
 }
 
@@ -89,7 +159,8 @@ impl MediaSource for BoxedMediaSource {
     }
 
     fn byte_len(&self) -> Option<u64> {
-        self.byte_len
+        let len = self.byte_len.load(Ordering::Acquire);
+        (len > 0).then_some(len)
     }
 }
 
@@ -107,12 +178,17 @@ pub(super) struct Fmp4Reader {
     packet_scratch: Vec<u8>,
     last_packet_desc: AudioStreamPacketDescription,
     eof: bool,
+    /// Shared with `BoxedMediaSource`: read-cursor of the underlying
+    /// source updated on every read/seek. After
+    /// `IsoMp4Reader::seek()` lands, this is the byte offset where
+    /// the next packet body will be read from.
+    byte_pos_handle: Arc<AtomicU64>,
 }
 
 impl Fmp4Reader {
     pub(super) fn open(
         source: BoxedSource,
-        byte_len: u64,
+        byte_len: Arc<AtomicU64>,
         _byte_pool: Option<&BytePool>,
     ) -> DecodeResult<Self> {
         // Start with seek disabled so `IsoMp4Reader::try_new` cannot probe the
@@ -121,10 +197,12 @@ impl Fmp4Reader {
         // decoder creation terminally). After the reader is built we flip the
         // flag to re-enable seeks for subsequent packet/seek operations.
         let seek_enabled = Arc::new(AtomicBool::new(false));
+        let byte_pos_handle = Arc::new(AtomicU64::new(0));
         let media_source: Box<dyn MediaSource> = Box::new(BoxedMediaSource {
             inner: source,
-            byte_len: (byte_len > 0).then_some(byte_len),
+            byte_len,
             seek_enabled: Arc::clone(&seek_enabled),
+            byte_pos: Arc::clone(&byte_pos_handle),
         });
         let mss = MediaSourceStream::new(media_source, MediaSourceStreamOptions::default());
 
@@ -213,6 +291,7 @@ impl Fmp4Reader {
             packet_scratch: Vec::new(),
             last_packet_desc: AudioStreamPacketDescription::default(),
             eof: false,
+            byte_pos_handle,
         })
     }
 }
@@ -361,6 +440,7 @@ impl PacketReader for Fmp4Reader {
             return Ok(Some(PacketRef {
                 data: &self.packet_scratch,
                 description: self.last_packet_desc,
+                byte_offset: None,
             }));
         }
     }
@@ -387,7 +467,7 @@ impl PacketReader for Fmp4Reader {
                     track_id: Some(self.audio_track_id),
                 },
             )
-            .map_err(|e| DecodeError::SeekFailed(e.to_string()))?;
+            .map_err(|e| crate::symphonia::inner::classify_format_seek_error(&e))?;
         self.eof = false;
 
         // Translate the seeked-to timestamp back to a frame count in
@@ -412,5 +492,13 @@ impl PacketReader for Fmp4Reader {
             aligned_ts
         };
         Ok(aligned_frame)
+    }
+
+    fn landed_byte(&self) -> Option<u64> {
+        // After `IsoMp4Reader::seek` parks at the target fragment, the
+        // shared `byte_pos_handle` reflects the underlying source's
+        // read cursor — i.e. the byte offset of the next packet body
+        // we will hand to AudioConverter.
+        Some(self.byte_pos_handle.load(Ordering::Acquire))
     }
 }

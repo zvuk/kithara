@@ -11,7 +11,9 @@ use kithara_bufpool::pcm_pool;
 use unimock::{MockFn, Unimock, matching};
 
 pub use crate::traits::InnerDecoderMock;
-use crate::{DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+use crate::{
+    DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
+};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
@@ -59,11 +61,13 @@ impl InnerDecoderLogs {
 ///
 /// `next_chunk()` yields from `chunks` then returns EOF.
 /// `seek()` logs positions and consumes preconfigured results in order.
+/// When the queue is exhausted, seek returns
+/// [`DecoderSeekOutcome::Landed`] at the requested position by default.
 #[must_use]
 pub fn scripted_inner_decoder(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     build_scripted_inner_decoder(spec, chunks, seek_results, duration, true)
@@ -77,7 +81,7 @@ pub fn scripted_inner_decoder(
 pub fn scripted_inner_decoder_loose(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     build_scripted_inner_decoder(spec, chunks, seek_results, duration, false)
@@ -86,7 +90,7 @@ pub fn scripted_inner_decoder_loose(
 fn build_scripted_inner_decoder(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
     verify_in_drop: bool,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
@@ -95,7 +99,12 @@ fn build_scripted_inner_decoder(
 
     build_inner_decoder_mock(
         spec,
-        move |_| Ok(next_chunk_queue.lock().pop_front()),
+        move |_| {
+            Ok(next_chunk_queue
+                .lock()
+                .pop_front()
+                .map_or(DecoderChunkOutcome::Eof, DecoderChunkOutcome::Chunk))
+        },
         seek_results,
         duration,
         verify_in_drop,
@@ -143,9 +152,9 @@ fn build_infinite_inner_decoder(
         spec,
         move |_| {
             if stop.load(Ordering::Acquire) {
-                return Ok(None);
+                return Ok(DecoderChunkOutcome::Eof);
             }
-            Ok(Some(PcmChunk::new(
+            Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
                 PcmMeta {
                     spec,
                     ..Default::default()
@@ -162,12 +171,12 @@ fn build_infinite_inner_decoder(
 fn build_inner_decoder_mock<F>(
     spec: PcmSpec,
     next_chunk: F,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
     verify_in_drop: bool,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs)
 where
-    F: Fn(&mut Unimock) -> DecodeResult<Option<PcmChunk>> + Send + Sync + 'static,
+    F: Fn(&mut Unimock) -> DecodeResult<DecoderChunkOutcome> + Send + Sync + 'static,
 {
     let seek_queue = Arc::new(MockLog::new(VecDeque::from(seek_results)));
     let seek_log = Arc::new(MockLog::new(Vec::new()));
@@ -192,7 +201,11 @@ where
                 if let Some(result) = seek_queue.lock().pop_front() {
                     return result;
                 }
-                Ok(())
+                Ok(DecoderSeekOutcome::Landed {
+                    landed_at: pos,
+                    landed_frame: 0,
+                    landed_byte: None,
+                })
             }))
             .at_least_times(0),
         InnerDecoderMock::update_byte_len

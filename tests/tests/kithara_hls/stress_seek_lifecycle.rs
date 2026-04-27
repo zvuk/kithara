@@ -58,8 +58,8 @@ impl Consts {
 fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize, bool) {
     for retry in 0..Consts::MAX_ZERO_READS {
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return (count, retry, false),
-            Ok(ReadOutcome::Frames { .. }) => {
+            Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
+            Ok(ReadOutcome::Pending { .. }) => {
                 // Give background worker some time to fill the buffer
                 thread::sleep(Duration::from_millis(1));
             }

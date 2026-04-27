@@ -66,6 +66,16 @@ pub(super) struct AudioFramePacketTranslation {
     pub(super) mFrameOffsetInPacket: UInt32,
 }
 
+/// Translation between absolute byte offset and packet index (VBR containers).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct AudioBytePacketTranslation {
+    pub(super) mByte: SInt64,
+    pub(super) mPacket: SInt64,
+    pub(super) mByteOffsetInPacket: UInt32,
+    pub(super) mFlags: UInt32,
+}
+
 /// Callbacks supplied to `AudioFileOpenWithCallbacks`. `inClientData`
 /// receives the pointer passed to `AudioFileOpenWithCallbacks`.
 pub(super) type AudioFile_ReadProc = extern "C" fn(

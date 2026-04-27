@@ -101,8 +101,8 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     loop {
         audio.preload();
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return count,
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
+            Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged ABR audio at stage={stage}");
             }
@@ -153,11 +153,11 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let mut saw_eof = false;
     while Instant::now() < deadline {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count as u64;
+                total_samples += count.get() as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => {
                 saw_eof = true;
@@ -215,8 +215,9 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 
     while Instant::now() < deadline {
         progress_audio.preload();
-        let read = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count,
+        let read: usize = match progress_audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. }) => 0,
             Ok(ReadOutcome::Eof { .. }) => {
                 progress_probe.drain(&mut progress_rx);
                 break;
@@ -384,11 +385,11 @@ async fn stream_continues_after_seek(
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                Ok(ReadOutcome::Pending { .. }) => {
                     sleep(Duration::from_millis(10)).await;
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count as u64;
+                    samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
@@ -406,11 +407,11 @@ async fn stream_continues_after_seek(
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count as u64;
+                post_seek_samples += count.get() as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error: {e}"),
@@ -452,11 +453,11 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 
     while Instant::now() < deadline {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count as u64;
+                total_samples += count.get() as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error: {e}"),
@@ -525,11 +526,11 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                Ok(ReadOutcome::Pending { .. }) => {
                     sleep(Duration::from_millis(10)).await;
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count as u64;
+                    samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
@@ -584,11 +585,11 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => {
+                Ok(ReadOutcome::Pending { .. }) => {
                     sleep(Duration::from_millis(10)).await;
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count as u64;
+                    samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
@@ -605,11 +606,11 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count as u64;
+                post_seek_samples += count.get() as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error: {e}"),

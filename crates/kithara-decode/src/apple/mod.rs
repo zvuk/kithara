@@ -28,8 +28,8 @@ pub(crate) use self::{backend::AppleBackend, config::AppleConfig};
 use crate::{
     backend::BoxedSource,
     error::{DecodeError, DecodeResult},
-    traits::InnerDecoder,
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    traits::{DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder},
+    types::{PcmSpec, TrackMetadata},
 };
 
 /// Apple `AudioToolbox` decoder.
@@ -51,7 +51,7 @@ impl fmt::Debug for Apple {
 }
 
 impl InnerDecoder for Apple {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         self.inner.next_chunk()
     }
 
@@ -59,7 +59,7 @@ impl InnerDecoder for Apple {
         self.inner.spec
     }
 
-    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.inner.seek(pos)
     }
 

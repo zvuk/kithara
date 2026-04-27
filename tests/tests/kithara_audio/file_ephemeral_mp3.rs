@@ -192,9 +192,9 @@ async fn audio_file_mp3_decodes_with_duration(
 
         for _ in 0..600 {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    total += count;
+                    total += count.get();
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
                     saw_eof = true;
@@ -274,9 +274,9 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
 
         for _ in 0..600 {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    total += count;
+                    total += count.get();
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
                     saw_eof = true;

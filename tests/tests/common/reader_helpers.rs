@@ -25,17 +25,18 @@ pub(crate) fn read_to_eof<S: StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
     let mut total = 0u64;
     loop {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 // Alive but no data this tick — on native this shouldn't
                 // stall indefinitely since the underlying source is
                 // fully buffered. Break to avoid a tight loop.
                 break;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                for &s in &buf[..count] {
+                let n = count.get();
+                for &s in &buf[..n] {
                     assert!(s.is_finite(), "non-finite sample at offset {total}");
                 }
-                total += count as u64;
+                total += n as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => return total,
             Err(e) => panic!("decode error at offset {total}: {e}"),
@@ -80,17 +81,18 @@ pub(crate) fn read_for_concurrency_check<S: StreamType>(
 
     while total < limit.min_samples && zero_reads < limit.max_zero_reads {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => {
+            Ok(ReadOutcome::Pending { .. }) => {
                 zero_reads += 1;
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
                 zero_reads = 0;
-                for &sample in &buf[..count] {
+                let n = count.get();
+                for &sample in &buf[..n] {
                     assert!(sample.is_finite(), "non-finite sample at offset {total}");
                 }
-                total += count as u64;
+                total += n as u64;
             }
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error at offset {total}: {e}"),

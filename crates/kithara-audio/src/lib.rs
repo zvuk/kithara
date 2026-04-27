@@ -61,6 +61,7 @@ pub use pipeline::{
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{
-    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, ReadOutcome, SeekOutcome,
+    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
+    SeekOutcome,
 };
 pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};

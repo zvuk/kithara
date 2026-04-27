@@ -185,8 +185,8 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
 
             // Read
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) if count > 0 => count,
-                Ok(ReadOutcome::Frames { .. }) => {
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Pending { .. }) => {
                     panic!(
                         "read returned 0 after seek #{i} to {pos_secs:.4}s",
                     );
@@ -340,10 +340,10 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         let mut saw_eof = false;
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    remaining_samples += count as u64;
-                    for &sample in &buf[..count] {
+                    remaining_samples += count.get() as u64;
+                    for &sample in &buf[..count.get()] {
                         assert!(
                             sample.is_finite() && (-1.0..=1.0).contains(&sample),
                             "invalid sample in final tail read",
@@ -375,7 +375,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
                 .unwrap_or_else(|e| panic!("seek-after-eof #{i} to {pos_secs:.4}s failed: {e}"));
 
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {}
+                Ok(ReadOutcome::Frames { .. }) => {}
                 Ok(other) => {
                     panic!(
                         "seek-after-eof #{i} at {pos_secs:.4}s produced no samples: {other:?}"

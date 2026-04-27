@@ -56,8 +56,8 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut total = 0u64;
     loop {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count: 0, .. }) => break,
-            Ok(ReadOutcome::Frames { count, .. }) => total += count as u64,
+            Ok(ReadOutcome::Pending { .. }) => break,
+            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(_) => break,
         }

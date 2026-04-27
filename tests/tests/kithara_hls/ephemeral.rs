@@ -152,8 +152,8 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
         for _ in 0..100 {
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             };

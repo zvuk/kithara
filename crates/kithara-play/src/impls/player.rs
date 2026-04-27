@@ -12,7 +12,7 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_abr::AbrMode;
-use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
+use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
@@ -463,7 +463,14 @@ impl PlayerImpl {
     }
 
     /// Seek active tracks to position in seconds.
-    pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
+    ///
+    /// Returns the typed [`SeekOutcome`] — either `Landed` with the
+    /// requested target (the actual landed position is committed
+    /// asynchronously by the worker thread; this call returns the
+    /// optimistic outcome based on what the player can authoritatively
+    /// know at this point) or `PastEof` when the target is past the
+    /// current track's known duration.
+    pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let slot_id = *self.current_slot.lock_sync();
         let Some(slot_id) = slot_id else {
             return Err(PlayError::NotReady);
@@ -476,9 +483,23 @@ impl PlayerImpl {
         let seek_epoch = shared_state.next_seek_epoch();
         shared_state.seek_epoch.store(seek_epoch, Ordering::SeqCst);
 
+        let target_secs = seconds.max(0.0);
+        let target = std::time::Duration::from_secs_f64(target_secs);
+
         self.send_to_slot(PlayerCmd::Seek {
-            seconds: seconds.max(0.0),
+            seconds: target_secs,
             seek_epoch,
+        })?;
+
+        Ok(match self.duration_seconds() {
+            Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
+                target,
+                duration: std::time::Duration::from_secs_f64(dur),
+            },
+            _ => SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            },
         })
     }
 

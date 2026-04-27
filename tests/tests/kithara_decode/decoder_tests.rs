@@ -48,10 +48,10 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
 
-    let chunk = chunk.unwrap();
+    let chunk = outcome.into_chunk().unwrap();
     assert!(!chunk.pcm.is_empty());
 }
 
@@ -67,7 +67,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     let mut total_samples = 0;
     let mut chunk_count = 0;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         total_samples += chunk.pcm.len();
         chunk_count += 1;
     }
@@ -100,8 +100,8 @@ fn from_media_info(
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
 }
 
 // Spec Tests
@@ -178,7 +178,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
         DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
     let spec = decoder.spec();
 
-    let chunk = decoder.next_chunk().unwrap().unwrap();
+    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
     // Samples should be f32 values in reasonable range
     for sample in chunk.pcm.iter() {
@@ -213,7 +213,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let mut prev_len = None;
     let mut chunk_count = 0;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         chunk_count += 1;
 
         // Each chunk should have samples multiple of channels
@@ -249,8 +249,8 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let mut decoder =
         DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
 
-    let first_chunk = decoder.next_chunk().unwrap().unwrap();
-    let second_chunk = decoder.next_chunk().unwrap().unwrap();
+    let first_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
+    let second_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
     // Chunks should be different (unless file is very short)
     if first_chunk.pcm.len() > 10 && second_chunk.pcm.len() > 10 {

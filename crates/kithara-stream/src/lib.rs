@@ -31,6 +31,8 @@ pub use demand::DemandSlot;
 pub use error::{StreamError, StreamResult};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use media_rfc6381::audio_codec_supports_fmp4_packaging;
-pub use source::{ReadOutcome, Source, SourcePhase, SourceSeekAnchor, VariantChangeError};
-pub use stream::{Stream, StreamReadError, StreamSeekPastEof, StreamType};
-pub use timeline::Timeline;
+pub use source::{PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor};
+pub use stream::{
+    Stream, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType, VariantChangeError,
+};
+pub use timeline::{ChunkPosition, Timeline};

@@ -19,7 +19,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::ContainerFormat;
+use kithara_stream::{ContainerFormat, PendingReason};
 use tracing::{debug, trace, warn};
 
 use super::{
@@ -38,6 +38,7 @@ use super::{
 use crate::{
     backend::BoxedSource,
     error::{DecodeError, DecodeResult},
+    traits::{DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 
@@ -66,10 +67,9 @@ fn open_reader(
     byte_len: Arc<AtomicU64>,
 ) -> DecodeResult<Box<dyn PacketReader>> {
     if container == ContainerFormat::Fmp4 {
-        let len = byte_len.load(Ordering::Acquire);
         return Ok(Box::new(Fmp4Reader::open(
             source,
-            len,
+            byte_len,
             config.byte_pool.as_ref(),
         )?));
     }
@@ -95,6 +95,11 @@ pub(super) struct AppleInner {
     frames_per_packet: usize,
     eof: bool,
     frames_decoded: u64,
+    /// Absolute byte offset of the most recently staged compressed
+    /// packet (when the reader exposes one). Reset on seek.
+    last_packet_byte_offset: Option<u64>,
+    /// Length of the most recently staged compressed packet.
+    last_packet_bytes: u32,
     pool: PcmPool,
     owner_thread: Cell<Option<thread::ThreadId>>,
 }
@@ -189,6 +194,8 @@ impl AppleInner {
             frames_per_packet,
             eof: false,
             frames_decoded: 0,
+            last_packet_byte_offset: None,
+            last_packet_bytes: 0,
             pool,
             owner_thread: Cell::new(None),
         })
@@ -268,26 +275,44 @@ impl AppleInner {
             size = packet.data.len(),
             "AppleInner: got packet from reader"
         );
+        self.last_packet_byte_offset = packet.byte_offset;
+        #[expect(clippy::cast_possible_truncation, reason = "packet size fits in u32")]
+        {
+            self.last_packet_bytes = packet.data.len() as u32;
+        }
         self.converter_input.set(packet.data, packet.description);
         Ok(true)
     }
 
-    pub(super) fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    pub(super) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         self.assert_thread_affinity();
         tracing::info!(eof = self.eof, "AppleInner::next_chunk called");
         if self.eof {
-            return Ok(None);
+            return Ok(DecoderChunkOutcome::Eof);
         }
         loop {
-            if !self.refill_input()? {
-                return Ok(None);
+            // `refill_input` returns `Err(DecodeError::Interrupted)` when
+            // the underlying source raised a seek-pending interrupt; surface
+            // that as a typed `Pending(SeekPending)` outcome instead of a
+            // generic Err so the worker can apply the pending seek.
+            let refilled = match self.refill_input() {
+                Ok(v) => v,
+                Err(e) if e.is_interrupted() => {
+                    return Ok(DecoderChunkOutcome::Pending(PendingReason::SeekPending));
+                }
+                Err(e) => return Err(e),
+            };
+            if !refilled {
+                return Ok(DecoderChunkOutcome::Eof);
             }
 
             let channels = self.spec.channels as usize;
             let output_frames = self.ensure_pcm_buffer_capacity(channels);
 
             if let Some(output_packets) = self.run_converter(output_frames)? {
-                return Ok(Some(self.finalize_chunk(output_packets, channels)?));
+                return Ok(DecoderChunkOutcome::Chunk(
+                    self.finalize_chunk(output_packets, channels)?,
+                ));
             }
         }
     }
@@ -379,15 +404,50 @@ impl AppleInner {
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
         pooled[..samples].copy_from_slice(&self.pcm_buffer[..samples]);
 
+        // Compute the post-chunk wall-clock position from the decoder's
+        // own frame counter — the canonical source of truth that the
+        // timeline mirrors via `ChunkPosition::end_position_ns`.
+        let frames_decoded_after = self.frames_decoded.saturating_add(frames as u64);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "precision loss acceptable for position tracking"
+        )]
+        let end_position_secs = frames_decoded_after as f64 / f64::from(self.spec.sample_rate);
+        let end_timestamp = Duration::from_secs_f64(end_position_secs);
+
         let meta = PcmMeta {
             spec: self.spec,
             frame_offset: self.frame_offset,
             timestamp: self.position,
+            end_timestamp,
             segment_index: None,
             variant_index: None,
             epoch: 0,
+            frames: output_packets,
+            source_bytes: u64::from(self.last_packet_bytes),
+            // Absolute byte offset of the staged compressed packet inside
+            // the source container, supplied by the reader (AudioFile via
+            // `kAudioFilePropertyPacketToByte`; fragmented MP4 has no
+            // useful container-wide offset and reports `None`).
+            source_byte_offset: self.last_packet_byte_offset,
         };
         let chunk = PcmChunk::new(meta, pooled);
+
+        // Contract validation: a chunk emitted upstream must carry a
+        // non-empty PCM buffer and a sane spec. A zero-frame chunk
+        // would cause the worker to advance the timeline by 0 and spin.
+        debug_assert!(
+            chunk.frames() > 0,
+            "Apple::finalize_chunk contract violated: frames=0",
+        );
+        debug_assert!(
+            chunk.spec().sample_rate > 0,
+            "Apple::finalize_chunk contract violated: sample_rate=0",
+        );
+        debug_assert!(
+            chunk.spec().channels > 0,
+            "Apple::finalize_chunk contract violated: channels=0",
+        );
 
         self.frames_decoded += frames as u64;
         self.frame_offset += frames as u64;
@@ -408,8 +468,17 @@ impl AppleInner {
         Ok(chunk)
     }
 
-    pub(super) fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+    pub(super) fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.assert_thread_affinity();
+
+        // Note: do NOT short-circuit on `pos >= duration`. The
+        // pipeline relies on `reader.seek_to_frame` failing so
+        // `recover_from_decoder_seek_error` can run a bounded
+        // recreate-loop and surface a typed `TrackError` — see
+        // `hls_seek_past_end_terminates_in_bounded_time`. An
+        // `Ok(PastEof)` from here would silently mark the seek
+        // successful while the decoder continues from the previous
+        // position.
 
         #[expect(
             clippy::cast_possible_truncation,
@@ -432,6 +501,8 @@ impl AppleInner {
 
         self.converter_input.clear();
         self.eof = false;
+        self.last_packet_byte_offset = None;
+        self.last_packet_bytes = 0;
 
         self.frames_decoded = aligned_frame;
         self.frame_offset = aligned_frame;
@@ -449,7 +520,39 @@ impl AppleInner {
             "Apple decoder: seek complete"
         );
 
-        Ok(())
+        // Contract validation: `Landed { landed_at }` must report a
+        // position inside the decoder's known duration window. If the
+        // underlying reader silently advanced past EOF, surface that as
+        // `PastEof` so the pipeline routes through the typed past-EOF
+        // path instead of producing zero chunks from a "successful"
+        // seek (the symptom captured by
+        // `hls_seek_near_end_fresh_player_stress`).
+        if let Some(duration) = self.duration
+            && self.position >= duration
+        {
+            return Ok(DecoderSeekOutcome::PastEof { duration });
+        }
+
+        debug_assert!(
+            self.duration.is_none_or(|dur| self.position <= dur),
+            "Apple::seek Landed contract violated: landed_at={landed:?} > duration={dur:?}",
+            landed = self.position,
+            dur = self.duration,
+        );
+
+        // `reader.landed_byte()` reports the absolute byte offset of
+        // the next packet body inside the source: AudioFile uses
+        // `kAudioFilePropertyPacketToByte` (primed at seek-time);
+        // Fmp4Reader exposes the underlying `MediaSource`'s read
+        // cursor after `IsoMp4Reader::seek`. May be `None` when the
+        // container has no resolvable byte mapping yet (e.g. AudioFile
+        // on streaming MP3 whose seek-table is not yet built); in
+        // that case the pipeline keeps the producer-side cursor.
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: self.position,
+            landed_frame: aligned_frame,
+            landed_byte: self.reader.landed_byte(),
+        })
     }
 }
 

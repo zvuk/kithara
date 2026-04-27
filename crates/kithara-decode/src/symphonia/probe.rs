@@ -27,6 +27,7 @@ use crate::error::{DecodeError, DecodeResult};
 pub(crate) struct ReaderBootstrap {
     pub(crate) format_reader: Box<dyn FormatReader>,
     pub(crate) byte_len_handle: Arc<AtomicU64>,
+    pub(crate) byte_pos_handle: Arc<AtomicU64>,
 }
 
 /// Create a format reader directly from a known container format.
@@ -58,6 +59,7 @@ where
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();
+    let byte_pos_handle = adapter.byte_pos_handle();
 
     let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
@@ -70,6 +72,7 @@ where
     Ok(ReaderBootstrap {
         format_reader,
         byte_len_handle,
+        byte_pos_handle,
     })
 }
 
@@ -98,6 +101,7 @@ where
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();
+    let byte_pos_handle = adapter.byte_pos_handle();
 
     let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
@@ -121,6 +125,7 @@ where
     Ok(ReaderBootstrap {
         format_reader,
         byte_len_handle,
+        byte_pos_handle,
     })
 }
 

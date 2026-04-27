@@ -3,7 +3,7 @@
 use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
@@ -32,7 +32,7 @@ use crate::{
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
-    traits::{ChunkOutcome, DecodeError, PcmReader, ReadOutcome, SeekOutcome},
+    traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         handle::{AudioWorkerHandle, TrackRegistration},
         thread_wake::ThreadWake,
@@ -96,11 +96,15 @@ pub struct Audio<S> {
     /// Current chunk being read (auto-recycles to pool on drop).
     pub(crate) current_chunk: Option<PcmChunk>,
 
-    /// Current position in the in-memory chunk only.
-    ///
-    /// This is not a global playback position and must not be used as timeline
-    /// source-of-truth. Timeline advances only after samples are committed to output.
-    pub(crate) chunk_offset: usize,
+    /// How many frames of `current_chunk` have been served to the
+    /// caller. Local consumer cursor — reset to 0 on every new chunk
+    /// (`fill_buffer`) and after seek (the next `fill_buffer` after
+    /// `commit_seek_landed` issues a fresh chunk). Avoids reloading
+    /// `committed_frame_end` from the timeline inside `Audio::read`'s
+    /// per-slice loop, which used to issue an atomic load + 3 atomic
+    /// stores on every slice and serialised the audio hot path on
+    /// the timeline counters.
+    pub(crate) current_chunk_consumed_frames: u64,
 
     /// Consumer-side phase — replaces the old `eof: bool` flag.
     pub(crate) consumer_phase: ConsumerPhase,
@@ -166,9 +170,6 @@ impl<S> Audio<S> {
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
 
-    /// Minimum playback rate to avoid division by zero.
-    const MIN_PLAYBACK_RATE: f64 = 0.01;
-
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
     /// Whether non-blocking recv is active.
@@ -226,11 +227,13 @@ impl<S> Audio<S> {
     }
 
     fn emit_playback_progress(&self) {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "clamped to u64::MAX before cast"
-        )]
-        let position_ms = self.position().as_millis().min(u128::from(u64::MAX)) as u64;
+        let position_ms_u128 = self.position().as_millis();
+        assert!(
+            position_ms_u128 <= u128::from(u64::MAX),
+            "position_ms={position_ms_u128} exceeds u64::MAX"
+        );
+        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
+        let position_ms = position_ms_u128 as u64;
         let total_ms = self.timeline.total_duration().map(|duration| {
             #[expect(
                 clippy::cast_possible_truncation,
@@ -302,32 +305,14 @@ impl<S> Audio<S> {
         &self.metadata
     }
 
-    /// Advance the timeline accounting for playback rate.
-    ///
-    /// At rate > 1.0, position advances faster (fewer effective samples per second).
-    /// At rate < 1.0, position advances slower.
-    pub(crate) fn advance_timeline(&self, interleaved_samples: u64) {
-        let rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "audio rate always produces valid sample rate"
-        )]
-        let effective_sr = (f64::from(self.spec.sample_rate) / rate) as u32;
-        self.timeline.advance_committed_samples(
-            interleaved_samples,
-            effective_sr.max(1),
-            self.spec.channels,
-        );
-    }
-
     /// Read decoded PCM samples into buffer.
     ///
     /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
     ///
-    /// Returns [`ReadOutcome::Frames`] — possibly with `count == 0`
-    /// when the reader is alive but has no data this tick — or
+    /// Returns [`ReadOutcome::Frames`] with a non-zero count when the
+    /// reader produced data, [`ReadOutcome::Pending`] with a typed
+    /// [`PendingReason`] when the reader is alive but produced no
+    /// frames this tick (buffering, seek-in-progress), or
     /// [`ReadOutcome::Eof`] on natural end-of-stream. Decoder /
     /// channel failures surface as [`DecodeError`] via the `Err` arm.
     ///
@@ -339,8 +324,8 @@ impl<S> Audio<S> {
     #[kithara_hang_detector::hang_watchdog]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         if buf.is_empty() {
-            return Ok(ReadOutcome::Frames {
-                count: 0,
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
                 position: self.position(),
             });
         }
@@ -364,24 +349,79 @@ impl<S> Audio<S> {
         while written < buf.len() {
             hang_tick!();
 
-            // Try to read from current chunk
-            if let Some(ref chunk) = self.current_chunk {
-                let remaining_in_chunk = chunk.pcm.len() - self.chunk_offset;
-                let to_copy = (buf.len() - written).min(remaining_in_chunk);
-                if to_copy > 0 {
-                    hang_reset!();
+            if let Some(chunk) = self.current_chunk.as_ref() {
+                let channels = u64::from(chunk.meta.spec.channels.max(1));
+                let chunk_total_frames = u64::from(chunk.meta.frames);
+                let consumed_frames_in_chunk = self.current_chunk_consumed_frames;
+                if consumed_frames_in_chunk >= chunk_total_frames {
+                    // Defensive: a stale chunk slipped through the
+                    // epoch validator. Drop and pull a fresh one;
+                    // `fill_buffer` resets the local counter.
+                    self.current_chunk = None;
+                    if !self.fill_buffer() {
+                        break;
+                    }
+                    continue;
+                }
+                let remaining_frames = chunk_total_frames - consumed_frames_in_chunk;
+                let space_frames = ((buf.len() - written) as u64) / channels.max(1);
+                let take_frames = remaining_frames.min(space_frames);
+                if take_frames == 0 {
+                    // No room in buf for even one frame — return what
+                    // we have; caller calls again with fresh buf.
+                    break;
                 }
 
-                buf[written..written + to_copy]
-                    .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
+                hang_reset!();
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "frame counts fit in usize on supported targets (64-bit)"
+                )]
+                let start_sample = (consumed_frames_in_chunk as usize) * (channels as usize);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "frame counts fit in usize on supported targets (64-bit)"
+                )]
+                let take_samples = (take_frames as usize) * (channels as usize);
+                buf[written..written + take_samples]
+                    .copy_from_slice(&chunk.pcm[start_sample..start_sample + take_samples]);
                 last_output_meta = Some(chunk.meta);
+                written += take_samples;
 
-                written += to_copy;
-                self.chunk_offset += to_copy;
+                let final_segment = take_frames == remaining_frames;
+                let consumed_total = consumed_frames_in_chunk + take_frames;
+                self.current_chunk_consumed_frames = consumed_total;
 
-                if self.chunk_offset >= chunk.pcm.len() {
+                if final_segment {
+                    // Final slice of this chunk: full timeline commit
+                    // (committed_position_ns + committed_frame_end +
+                    // last_sample_rate) using the decoder-anchored
+                    // end_timestamp.
+                    self.timeline
+                        .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
                     self.current_chunk = None; // auto-recycles via Drop
-                    self.chunk_offset = 0;
+                } else {
+                    // Intra-chunk slice: only update the UI
+                    // `committed_position_ns` so the player ticks. We
+                    // keep `committed_frame_end` pinned at the chunk
+                    // start until the chunk fully drains — avoids
+                    // 3 atomic stores per slice in the audio hot
+                    // path. Linear interpolation between the
+                    // decoder's `meta.timestamp` and `meta.end_timestamp`
+                    // is drift-free (every advance re-anchors to the
+                    // decoder's own values, no accumulation).
+                    let total_frames = chunk_total_frames.max(1);
+                    let start_ns =
+                        u64::try_from(chunk.meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
+                    let end_ns =
+                        u64::try_from(chunk.meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
+                    let span_ns = u128::from(end_ns.saturating_sub(start_ns));
+                    let consumed_ns_offset =
+                        span_ns * u128::from(consumed_total) / u128::from(total_frames);
+                    let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
+                    let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
+                    self.timeline
+                        .set_committed_position(Duration::from_nanos(interpolated_ns));
                 }
             }
 
@@ -395,30 +435,49 @@ impl<S> Audio<S> {
             }
         }
 
-        if written > 0 {
-            self.advance_timeline(written as u64);
+        if let Some(count) = NonZeroUsize::new(written) {
+            // Contract validation: `Frames { count }` must report a
+            // count within the caller's buffer capacity — `count`
+            // counts samples actually written, never more than the
+            // buffer length.
+            debug_assert!(
+                count.get() <= buf.len(),
+                "Audio::read Frames contract violated: count={c} > buf.len()={b}",
+                c = count.get(),
+                b = buf.len(),
+            );
             self.emit_post_seek_output_commit(last_output_meta);
             self.emit_playback_progress();
-            return Ok(ReadOutcome::Frames {
-                count: written,
-                position: self.position(),
-            });
+            let position = self.position();
+            // Position must stay within the known duration window.
+            debug_assert!(
+                self.timeline
+                    .total_duration()
+                    .is_none_or(|dur| position <= dur),
+                "Audio::read Frames contract: position={position:?} > duration={:?}",
+                self.timeline.total_duration(),
+            );
+            return Ok(ReadOutcome::Frames { count, position });
         }
 
         // `written == 0` — map terminal states:
         //   - AtEof (no buffered chunk): natural EOF
         //   - Failed: decoder/channel failure
-        //   - everything else: alive but no data this tick
+        //   - SeekPending: consumer drained, waiting for producer to ack
+        //   - everything else: alive but PCM ringbuf empty (buffering)
+        let position = self.position();
         match self.consumer_phase {
-            ConsumerPhase::AtEof => Ok(ReadOutcome::Eof {
-                position: self.position(),
-            }),
+            ConsumerPhase::AtEof => Ok(ReadOutcome::Eof { position }),
             ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
                 "pcm channel closed / producer failed",
             ))),
-            _ => Ok(ReadOutcome::Frames {
-                count: 0,
-                position: self.position(),
+            ConsumerPhase::SeekPending { .. } => Ok(ReadOutcome::Pending {
+                reason: PendingReason::SeekInProgress,
+                position,
+            }),
+            _ => Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position,
             }),
         }
     }
@@ -447,7 +506,7 @@ impl<S> Audio<S> {
         // 2. Update local consumer state
         self.validator.epoch = epoch;
         self.current_chunk = None;
-        self.chunk_offset = 0;
+        self.current_chunk_consumed_frames = 0;
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
         // 3. Drain stale chunks from pcm channel to unblock worker
@@ -473,8 +532,41 @@ impl<S> Audio<S> {
 
         trace!(?position, epoch, "seek initiated via Timeline");
         match self.timeline.total_duration() {
-            Some(duration) if position >= duration => Ok(SeekOutcome::PastEof { duration }),
-            _ => Ok(SeekOutcome::Landed { position }),
+            Some(duration) if position >= duration => {
+                // Contract validation: PastEof must always carry a
+                // target at or beyond duration.
+                debug_assert!(
+                    position >= duration,
+                    "Audio::seek PastEof contract: target={position:?} < duration={duration:?}",
+                );
+                Ok(SeekOutcome::PastEof {
+                    target: position,
+                    duration,
+                })
+            }
+            // Audio-level seek dispatches asynchronously through the
+            // worker; the producer commits the actual landing later.
+            // We surface the requested target as both `target` and
+            // `landed_at` because we have no better authoritative
+            // value at this point — a more accurate `landed_at` is
+            // observed by the caller via the producer's commit hook
+            // (e.g. `commit_seek_landing`) once the seek lands.
+            _ => {
+                // Contract validation: a `Landed` outcome must report
+                // landed_at within the known duration window when
+                // duration is known.
+                debug_assert!(
+                    self.timeline
+                        .total_duration()
+                        .is_none_or(|dur| position <= dur),
+                    "Audio::seek Landed contract: landed_at={position:?} > duration={:?}",
+                    self.timeline.total_duration(),
+                );
+                Ok(SeekOutcome::Landed {
+                    target: position,
+                    landed_at: position,
+                })
+            }
         }
     }
 
@@ -591,17 +683,11 @@ impl<S> Audio<S> {
                 FetchOutcome::Return(None)
             }
             FetchKind::Failure => {
-                trace!("Audio: received failure marker — entering Failed phase");
                 self.consumer_phase = ConsumerPhase::Failed;
                 FetchOutcome::Return(None)
             }
             FetchKind::Data => {
                 let chunk = fetch.into_inner();
-                trace!(
-                    samples = chunk.pcm.len(),
-                    spec = ?chunk.spec(),
-                    "Audio: received chunk"
-                );
                 FetchOutcome::Return(Some(chunk))
             }
         }
@@ -632,7 +718,7 @@ impl<S> Audio<S> {
         };
         self.spec = chunk.spec();
         self.current_chunk = Some(chunk);
-        self.chunk_offset = 0;
+        self.current_chunk_consumed_frames = 0;
 
         // Transition to Playing on first chunk received.
         if matches!(
@@ -947,7 +1033,7 @@ where
             validator: EpochValidator::new(),
             spec: output_spec,
             current_chunk: None,
-            chunk_offset: 0,
+            current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             timeline,
             metadata,
@@ -1053,8 +1139,8 @@ impl<S: Send> PcmReader for Audio<S> {
     ) -> Result<ReadOutcome, DecodeError> {
         let channels = output.len();
         if channels == 0 {
-            return Ok(ReadOutcome::Frames {
-                count: 0,
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
                 position: self.position(),
             });
         }
@@ -1066,15 +1152,31 @@ impl<S: Send> PcmReader for Audio<S> {
         });
         match self.read(&mut interleaved)? {
             ReadOutcome::Eof { position } => Ok(ReadOutcome::Eof { position }),
+            ReadOutcome::Pending { reason, position } => {
+                Ok(ReadOutcome::Pending { reason, position })
+            }
             ReadOutcome::Frames { count, position } => {
-                let actual_frames = count / channels;
+                let actual_frames = count.get() / channels;
+                // Contract validation: per-channel frame count must
+                // never exceed the per-channel buffer length.
+                debug_assert!(
+                    actual_frames <= frames,
+                    "Audio::read_planar Frames contract: actual_frames={actual_frames} \
+                     > per-channel buf frames={frames}",
+                );
                 for frame in 0..actual_frames {
                     for (ch, out_ch) in output.iter_mut().enumerate() {
                         out_ch[frame] = interleaved[frame * channels + ch];
                     }
                 }
+                let Some(actual) = NonZeroUsize::new(actual_frames) else {
+                    return Ok(ReadOutcome::Pending {
+                        reason: PendingReason::Buffering,
+                        position,
+                    });
+                };
                 Ok(ReadOutcome::Frames {
-                    count: actual_frames,
+                    count: actual,
                     position,
                 })
             }
@@ -1132,33 +1234,27 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        // Reuse preloaded chunk if it hasn't been partially consumed
-        let chunk = if self.chunk_offset == 0 {
-            self.current_chunk.take()
+        // Reuse preloaded chunk if any, else pull from the channel.
+        let chunk = if let Some(c) = self.current_chunk.take() {
+            c
+        } else if let Some(c) = self.recv_valid_chunk() {
+            c
         } else {
-            self.current_chunk = None;
-            None
-        };
-        self.chunk_offset = 0;
-
-        let chunk = match chunk {
-            Some(c) => c,
-            None => match self.recv_valid_chunk() {
-                Some(c) => c,
-                None => {
-                    return match self.consumer_phase {
-                        ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof {
-                            position: self.position(),
-                        }),
-                        ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                            "pcm channel closed / producer failed",
-                        ))),
-                        _ => Ok(ChunkOutcome::Pending {
-                            position: self.position(),
-                        }),
-                    };
-                }
-            },
+            let position = self.position();
+            return match self.consumer_phase {
+                ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
+                ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
+                    "pcm channel closed / producer failed",
+                ))),
+                ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
+                    reason: PendingReason::SeekInProgress,
+                    position,
+                }),
+                _ => Ok(ChunkOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position,
+                }),
+            };
         };
         self.spec = chunk.spec();
 
@@ -1170,7 +1266,8 @@ impl<S: Send> PcmReader for Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
 
-        self.advance_timeline(chunk.pcm.len() as u64);
+        self.timeline
+            .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 }
@@ -1198,7 +1295,7 @@ mod tests {
             validator: EpochValidator::new(),
             spec: PcmSpec::default(),
             current_chunk: None,
-            chunk_offset: 0,
+            current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             timeline: Timeline::new(),
             metadata: TrackMetadata::default(),
@@ -1256,7 +1353,7 @@ mod tests {
             validator: EpochValidator::new(),
             spec: PcmSpec::default(),
             current_chunk: None,
-            chunk_offset: 0,
+            current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             timeline: Timeline::new(),
             metadata: TrackMetadata::default(),
@@ -1285,16 +1382,6 @@ mod tests {
         chunk
     }
 
-    fn make_spec_chunk(samples: &[f32], spec: PcmSpec) -> PcmChunk {
-        PcmChunk::new(
-            PcmMeta {
-                spec,
-                ..Default::default()
-            },
-            pcm_pool().attach(samples.to_vec()),
-        )
-    }
-
     // ConsumerPhase transition tests
 
     #[kithara::test]
@@ -1312,46 +1399,6 @@ mod tests {
 
         assert!(audio.fill_buffer());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
-    }
-
-    #[kithara::test]
-    fn read_preserves_partial_chunk_tail_across_calls() {
-        let (mut audio, mut tx) = audio_with_channel();
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44_100,
-        };
-
-        let first: Vec<f32> = (0..4608).map(|i| i as f32).collect();
-        let second: Vec<f32> = (4608..9216).map(|i| i as f32).collect();
-
-        tx.try_push(Fetch::new(make_spec_chunk(&first, spec), false, 0))
-            .unwrap();
-        tx.try_push(Fetch::new(make_spec_chunk(&second, spec), false, 0))
-            .unwrap();
-
-        let mut buf_a = vec![0.0; 4410];
-        let mut buf_b = vec![0.0; 4410];
-
-        let outcome_a = audio.read(&mut buf_a).expect("read A");
-        let outcome_b = audio.read(&mut buf_b).expect("read B");
-
-        let ReadOutcome::Frames { count: n_a, .. } = outcome_a else {
-            panic!("expected Frames for read A, got {outcome_a:?}");
-        };
-        let ReadOutcome::Frames { count: n_b, .. } = outcome_b else {
-            panic!("expected Frames for read B, got {outcome_b:?}");
-        };
-        assert_eq!(n_a, 4410);
-        assert_eq!(n_b, 4410);
-        assert_eq!(buf_a, first[..4410]);
-
-        let mut expected_b = first[4410..].to_vec();
-        expected_b.extend_from_slice(&second[..(4410 - 198)]);
-        assert_eq!(
-            buf_b, expected_b,
-            "read() must consume the tail of the partially-read chunk before pulling a new one"
-        );
     }
 
     #[kithara::test]

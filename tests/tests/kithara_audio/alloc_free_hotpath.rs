@@ -39,10 +39,14 @@ fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
             sample_rate: 44100,
         },
         timestamp: Duration::ZERO,
+        end_timestamp: Duration::ZERO,
         segment_index: None,
         variant_index: None,
         epoch: 0,
         frame_offset: 0,
+        frames: 0,
+        source_bytes: 0,
+        source_byte_offset: None,
     };
     PcmChunk::new(meta, pcm)
 }

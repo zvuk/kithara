@@ -33,17 +33,35 @@ pub(crate) fn pcm_meta_from_pts_us(
     presentation_time_us: i64,
     stream_ctx: Option<&dyn StreamContext>,
     epoch: u64,
+    frames: u32,
+    source_bytes: u64,
+    source_byte_offset: Option<u64>,
 ) -> Result<PcmMeta, DecodeError> {
     let timestamp = duration_from_pts_us(presentation_time_us)?;
     let frame_offset = frame_offset_from_pts_us(spec.sample_rate, presentation_time_us);
+    // Compute the end-timestamp from the chunk's frame count and the
+    // sample rate — this is the decoder's own arithmetic surfaced
+    // through `PcmMeta` so the timeline never recomputes it.
+    let end_timestamp = if spec.sample_rate > 0 {
+        let nanos = u128::from(frames) * 1_000_000_000 / u128::from(spec.sample_rate);
+        timestamp.saturating_add(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+    } else {
+        timestamp
+    };
 
     Ok(PcmMeta {
         spec,
         frame_offset,
         timestamp,
+        end_timestamp,
         segment_index: stream_ctx.and_then(StreamContext::segment_index),
         variant_index: stream_ctx.and_then(StreamContext::variant_index),
         epoch,
+        frames,
+        source_bytes,
+        source_byte_offset,
     })
 }
 
@@ -55,7 +73,10 @@ pub(crate) fn frame_offset_from_pts_us(sample_rate: u32, presentation_time_us: i
     }
 
     let frames = i128::from(presentation_time_us) * i128::from(sample_rate) / MICROS_PER_SECOND;
-    u64::try_from(frames).unwrap_or(u64::MAX)
+    u64::try_from(frames).expect(
+        "frame_offset_from_pts_us: pts_us * sample_rate exceeds u64::MAX — \
+         indicates upstream bug (negative PTS or sample_rate=0 already filtered above)",
+    )
 }
 
 /// `Duration` from a PTS in microseconds; rejects negative values.
@@ -98,8 +119,10 @@ pub(crate) fn seek_trim_for_buffer(
         return SeekTrimOutcome::Drop;
     }
 
-    let trim_frames =
-        usize::try_from(target_frame.saturating_sub(buffer_start)).unwrap_or(usize::MAX);
+    let trim_frames = usize::try_from(target_frame.saturating_sub(buffer_start)).expect(
+        "seek_trim_for_buffer: target_frame - buffer_start exceeds usize::MAX — \
+         indicates a buffer or seek-target overflow upstream",
+    );
     SeekTrimOutcome::Emit(SeekTrim {
         trim_frames,
         output_frame_offset: target_frame,
@@ -157,7 +180,7 @@ mod tests {
             variant_index: Some(3),
         });
 
-        let meta = pcm_meta_from_pts_us(spec, 250_000, Some(stream_ctx.as_ref()), 9)
+        let meta = pcm_meta_from_pts_us(spec, 250_000, Some(stream_ctx.as_ref()), 9, 0, 0, None)
             .expect("metadata should derive from timestamp");
 
         assert_eq!(meta.spec, spec);
@@ -174,7 +197,8 @@ mod tests {
             sample_rate: 48_000,
             channels: 2,
         };
-        let err = pcm_meta_from_pts_us(spec, -1, None, 0).expect_err("negative pts should fail");
+        let err = pcm_meta_from_pts_us(spec, -1, None, 0, 0, 0, None)
+            .expect_err("negative pts should fail");
         match err {
             DecodeError::Backend(_) => {}
             other => panic!("unexpected error variant: {other:?}"),

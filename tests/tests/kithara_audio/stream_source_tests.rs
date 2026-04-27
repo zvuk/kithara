@@ -15,7 +15,8 @@ use std::{
 use kithara_audio::internal::source::*;
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
-    DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
+    DecodeError, DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder, PcmChunk,
+    PcmMeta, PcmSpec,
     mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
 };
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
@@ -108,10 +109,14 @@ impl Source for TestSource {
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+        use std::num::NonZeroUsize;
+
+        use kithara_stream::PendingReason;
+
         let mut state = self.state.lock_sync();
         let offset_usize = offset as usize;
         if offset_usize >= state.data.len() {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         }
 
         // Variant fence logic (mirrors HlsSource behavior).
@@ -129,7 +134,7 @@ impl Source for TestSource {
                 if let Some(fence) = state.variant_fence
                     && v != fence
                 {
-                    return Ok(ReadOutcome::VariantChange);
+                    return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
                 }
             }
         }
@@ -146,9 +151,12 @@ impl Source for TestSource {
         };
         let available = &state.data[offset_usize..data_end];
         let n = available.len().min(buf.len());
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
         buf[..n].copy_from_slice(&available[..n]);
 
-        Ok(ReadOutcome::Data(n))
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn clear_variant_fence(&mut self) {
@@ -1377,7 +1385,11 @@ fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
         vec![make_chunk(seek_spec, 100); 3],
         vec![
             Err(DecodeError::SeekError("direct seek failed".to_string())),
-            Ok(()),
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_frame: 0,
+                landed_byte: None,
+            }),
         ],
         None,
     );
@@ -1944,13 +1956,17 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let mut stream = test_stream_from_source(source);
     let mut buf = vec![0u8; 16];
 
-    let result = stream
+    let outcome = stream
         .try_read(&mut buf)
-        .expect_err("read should be interrupted by flushing");
-    // Typed `StreamReadError::SeekPending` distinguishes seek-induced
+        .expect("seek-pending is a status, not an error");
+    // Typed `Pending(SeekPending)` distinguishes seek-induced
     // aborts from transient backpressure (`NotReady`) — no string
     // matching, no `ErrorKind` overload.
-    assert!(matches!(result, StreamReadError::SeekPending));
+    use kithara_stream::{PendingReason, StreamReadOutcome};
+    assert!(matches!(
+        outcome,
+        StreamReadOutcome::Pending(PendingReason::SeekPending)
+    ));
 }
 
 // Encoded ABR switch test — verify no samples lost during decoder recreation
@@ -2076,7 +2092,7 @@ impl EncodedDecoder {
 }
 
 impl InnerDecoder for EncodedDecoder {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let mut pcm = Vec::new();
         let mut sample_buf = vec![0u8; self.sample_size];
 
@@ -2084,11 +2100,11 @@ impl InnerDecoder for EncodedDecoder {
             match self.read_exact_or_eof(&mut sample_buf) {
                 Ok(true) => {}
                 Ok(false) => {
-                    // EOF: return accumulated samples or None
+                    // EOF: return accumulated samples or Eof
                     return if pcm.is_empty() {
-                        Ok(None)
+                        Ok(DecoderChunkOutcome::Eof)
                     } else {
-                        Ok(Some(PcmChunk::new(
+                        Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
                             PcmMeta {
                                 spec: self.spec,
                                 ..Default::default()
@@ -2139,7 +2155,7 @@ impl InnerDecoder for EncodedDecoder {
             pcm.push(encode_pcm_sample(variant_segment, gsi as u32));
         }
 
-        Ok(Some(PcmChunk::new(
+        Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
             PcmMeta {
                 spec: self.spec,
                 ..Default::default()
@@ -2152,8 +2168,12 @@ impl InnerDecoder for EncodedDecoder {
         self.spec
     }
 
-    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
-        Ok(())
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: pos,
+            landed_frame: 0,
+            landed_byte: None,
+        })
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -2192,15 +2212,15 @@ impl ProbeBeforeSeekDecoder {
 }
 
 impl InnerDecoder for ProbeBeforeSeekDecoder {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        Ok(Some(make_chunk(self.spec, 64)))
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        Ok(DecoderChunkOutcome::Chunk(make_chunk(self.spec, 64)))
     }
 
     fn spec(&self) -> PcmSpec {
         self.spec
     }
 
-    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.seek_log.lock_sync().push(pos);
         let probe_pos = self.reader.stream_position().map_err(DecodeError::Io)?;
         self.probe_log.lock_sync().push(probe_pos);
@@ -2208,7 +2228,11 @@ impl InnerDecoder for ProbeBeforeSeekDecoder {
         self.reader
             .seek(SeekFrom::Start(self.landed_offset))
             .map_err(DecodeError::Io)?;
-        Ok(())
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: pos,
+            landed_frame: 0,
+            landed_byte: None,
+        })
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -2229,7 +2253,7 @@ impl PanicOnNextChunkDecoder {
 }
 
 impl InnerDecoder for PanicOnNextChunkDecoder {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         panic!("test panic from decoder next_chunk");
     }
 
@@ -2237,8 +2261,12 @@ impl InnerDecoder for PanicOnNextChunkDecoder {
         self.spec
     }
 
-    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
-        Ok(())
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: pos,
+            landed_frame: 0,
+            landed_byte: None,
+        })
     }
 
     fn update_byte_len(&self, _len: u64) {}

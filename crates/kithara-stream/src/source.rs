@@ -7,7 +7,7 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::{error::Error as StdError, fmt, ops::Range};
+use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -41,34 +41,60 @@ pub enum SourcePhase {
     WaitingMetadata,
 }
 
-/// Outcome of a `Source::read_at` call.
-///
-/// Distinguishes between normal data reads (including true EOF) and
-/// variant/format changes that require decoder recreation.
+/// Reason a [`ReadOutcome::Pending`] was returned — i.e. why the source
+/// did not make progress this call. Each variant maps to a distinct
+/// caller action; there is no overlap and no string-matching required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadOutcome {
-    /// Read `n` bytes. `n == 0` means true end-of-stream.
-    Data(usize),
-    /// Variant/format change at this offset. Caller must recreate the
-    /// decoder and call `clear_variant_fence()` before reads succeed.
-    /// Zero bytes were read — fence fires BEFORE any data is touched.
+#[non_exhaustive]
+pub enum PendingReason {
+    /// A seek is pending (consumer flagged the timeline). The caller
+    /// must abort the current read and let the seek apply — do **not**
+    /// retry from the same byte offset.
+    SeekPending,
+    /// Data is not yet available at the requested range. Transient —
+    /// caller may retry after backoff.
+    NotReady,
+    /// Source crossed a variant boundary at this offset. Caller must
+    /// recreate the decoder and call
+    /// [`Source::clear_variant_fence`] before reads succeed. Zero bytes
+    /// were touched — the fence fires BEFORE any data is read.
     VariantChange,
-    /// Resource was evicted between `wait_range` (metadata ready) and
-    /// `read_at` (actual I/O). Caller should retry from `wait_range`.
+    /// Resource was evicted between [`Source::wait_range`] (metadata
+    /// ready) and [`Source::read_at`] (actual I/O). Caller should
+    /// retry from `wait_range`, not from the same byte offset.
     Retry,
 }
 
-/// Non-retriable cross-variant boundary signal from [`ReadOutcome::VariantChange`].
-#[derive(Debug)]
-pub struct VariantChangeError;
-
-impl fmt::Display for VariantChangeError {
+impl fmt::Display for PendingReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("variant change: decoder recreation required")
+        f.write_str(match self {
+            Self::SeekPending => "seek pending",
+            Self::NotReady => "data not ready",
+            Self::VariantChange => "variant change: decoder recreation required",
+            Self::Retry => "resource evicted, retry wait_range",
+        })
     }
 }
 
-impl StdError for VariantChangeError {}
+impl StdError for PendingReason {}
+
+/// Outcome of a [`Source::read_at`] call.
+///
+/// Each variant has distinct caller semantics — there is no
+/// overload of a numeric zero. `Bytes` carries a typed
+/// [`NonZeroUsize`] so the type system guarantees forward progress;
+/// `Pending` carries an explicit [`PendingReason`]; `Eof` is terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOutcome {
+    /// Source produced `count` bytes (`count > 0` by construction).
+    Bytes(NonZeroUsize),
+    /// Source did not make progress this call. See [`PendingReason`]
+    /// for the precise cause and required caller action.
+    Pending(PendingReason),
+    /// Natural end of stream — no more bytes will ever come from this
+    /// source at this offset.
+    Eof,
+}
 
 /// Time-first seek anchor resolved by a segmented source.
 ///
@@ -148,8 +174,11 @@ pub trait Source: Send + 'static {
 
     /// Read data at offset into buffer.
     ///
-    /// Returns [`ReadOutcome::Data(n)`] with the number of bytes read (0 = true EOF),
-    /// or [`ReadOutcome::VariantChange`] when a variant fence blocks the read.
+    /// Returns [`ReadOutcome::Bytes`] with a non-zero byte count on
+    /// progress, [`ReadOutcome::Pending`] with a typed
+    /// [`PendingReason`] when no progress is possible this call (seek
+    /// pending, variant fence, eviction), or [`ReadOutcome::Eof`] at
+    /// natural end-of-stream.
     ///
     /// # Errors
     ///
@@ -338,7 +367,7 @@ mod tests {
                 _offset: u64,
                 _buf: &mut [u8],
             ) -> StreamResult<ReadOutcome, Self::Error> {
-                Ok(ReadOutcome::Data(0))
+                Ok(ReadOutcome::Eof)
             }
             fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
                 SourcePhase::Ready

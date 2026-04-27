@@ -14,8 +14,8 @@ use std::time::Duration;
 use self::inner::SymphoniaInner;
 use crate::{
     error::DecodeResult,
-    traits::{DecoderInput, InnerDecoder},
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    traits::{DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InnerDecoder},
+    types::{PcmSpec, TrackMetadata},
 };
 
 pub(crate) mod adapter;
@@ -51,7 +51,7 @@ impl Symphonia {
 }
 
 impl InnerDecoder for Symphonia {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         self.inner.next_chunk()
     }
 
@@ -59,7 +59,7 @@ impl InnerDecoder for Symphonia {
         self.inner.spec
     }
 
-    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.inner.seek(pos)
     }
 
@@ -119,10 +119,10 @@ mod tests {
         };
         let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        let chunk = decoder.next_chunk().unwrap();
-        assert!(chunk.is_some());
+        let outcome = decoder.next_chunk().unwrap();
+        assert!(outcome.is_chunk());
 
-        let chunk = chunk.unwrap();
+        let chunk = outcome.into_chunk().unwrap();
         assert_eq!(chunk.spec().sample_rate, 44100);
         assert_eq!(chunk.spec().channels, 2);
         assert!(!chunk.pcm.is_empty());
@@ -139,10 +139,10 @@ mod tests {
         };
         let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
 
-        while decoder.next_chunk().unwrap().is_some() {}
+        while decoder.next_chunk().unwrap().is_chunk() {}
 
         let result = decoder.next_chunk().unwrap();
-        assert!(result.is_none());
+        assert!(result.is_eof());
     }
 
     #[kithara::test]
@@ -161,8 +161,8 @@ mod tests {
 
         decoder.seek(Duration::from_secs(0)).unwrap();
 
-        let chunk = decoder.next_chunk().unwrap();
-        assert!(chunk.is_some());
+        let outcome = decoder.next_chunk().unwrap();
+        assert!(outcome.is_chunk());
     }
 
     #[kithara::test]

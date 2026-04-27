@@ -172,8 +172,8 @@ async fn stress_seek_abr_audio() {
             }
 
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(ReadOutcome::Eof { .. }) => {
                     panic!(
                         "Hit EOF before ABR switch (ascending={}, unknown={})",
@@ -218,8 +218,8 @@ async fn stress_seek_abr_audio() {
         let mut post_switch_ok = 0u64;
         for chunk_idx in 0..10 {
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) if count > 0 => count,
-                Ok(ReadOutcome::Frames { .. }) => {
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Pending { .. }) => {
                     panic!("read returned 0 in post-switch chunk {}", chunk_idx);
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
@@ -331,8 +331,8 @@ async fn stress_seek_abr_audio() {
             });
 
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => count,
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(ReadOutcome::Eof { .. }) => continue,
                 Err(e) => panic!("seek read error at iteration {}: {}", i, e),
             };
@@ -457,10 +457,10 @@ async fn stress_seek_abr_audio() {
         let mut saw_eof = false;
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count: 0, .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    remaining_samples += count as u64;
-                    for &sample in &buf[..count] {
+                    remaining_samples += count.get() as u64;
+                    for &sample in &buf[..count.get()] {
                         assert!(
                             sample.is_finite() && (-1.0..=1.0).contains(&sample),
                             "invalid sample in final tail read",

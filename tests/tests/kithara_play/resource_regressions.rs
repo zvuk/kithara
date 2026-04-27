@@ -255,8 +255,8 @@ async fn warm_hls_worker(
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => break,
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => break,
+            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while warming HLS worker for {url}")
             }
@@ -276,10 +276,10 @@ async fn warm_hls_worker(
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
                 return audio.position().as_secs_f64();
             }
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF after HLS warmup seek for {url}")
             }
@@ -314,10 +314,10 @@ async fn warm_hls_worker_without_seek(
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => {
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
                 return audio.position().as_secs_f64();
             }
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while warming HLS worker without seek for {url}")
             }
@@ -391,8 +391,8 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return count,
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged audio at stage={stage}")
             }
@@ -416,8 +416,8 @@ async fn read_some(resource: &mut Resource, stage: &str) -> usize {
             .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"))
             .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
         match resource.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count > 0 => return count,
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for stage={stage}")
             }
@@ -852,7 +852,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     while Instant::now() < deadline && progress_probe.progress_events < 10 {
         progress_audio.preload().expect("preload must succeed");
         let read_count = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count,
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. }) => 0,
             Ok(ReadOutcome::Eof { .. }) => {
                 progress_probe.drain(&mut progress_rx);
                 break;
@@ -1222,6 +1223,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         loop {
             match resource.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => {
+                    let count = count.get();
                     if count > 0 {
                         total += count;
                     }
@@ -1230,6 +1232,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
                     saw_eof = true;
                     break;
                 }
+                Ok(ReadOutcome::Pending { .. }) => {}
                 Err(e) => panic!("path={path}: decode error: {e}"),
             }
             if resource.position() >= Duration::from_secs(2) {
@@ -1369,11 +1372,13 @@ async fn live_remote_resource_decodes_with_duration(
     loop {
         match resource.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
+                let count = count.get();
                 if count > 0 {
                     samples += count;
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("{url}: decode error: {e}"),
         }
         if resource.position() >= Duration::from_secs(2) {
@@ -1537,11 +1542,13 @@ async fn local_resource_decodes_with_duration(
     loop {
         match resource.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
+                let count = count.get();
                 if count > 0 {
                     samples += count;
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("{url}: decode error: {e}"),
         }
         if resource.position() >= Duration::from_secs(2) {

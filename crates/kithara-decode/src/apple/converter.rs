@@ -43,6 +43,10 @@ impl ConverterInputState {
         let len = data.len() as UInt32;
         self.packet_ptr = data.as_ptr();
         self.packet_len = len;
+        // `mStartOffset` here is the offset of the packet WITHIN the
+        // `mData` buffer fed to `AudioConverter`. Since `mData` already
+        // points at the packet body, this must stay zero; non-zero
+        // values cause the converter to read past the buffer.
         self.packet_desc = AudioStreamPacketDescription {
             mStartOffset: 0,
             mVariableFramesInPacket: description.mVariableFramesInPacket,
