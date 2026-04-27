@@ -13,7 +13,7 @@ use std::{
 use tracing::warn;
 
 use super::{error::AndroidBackendError, ffi};
-use crate::hardware::BoxedSource;
+use crate::backend::BoxedSource;
 
 pub(crate) struct SourceState {
     source: Mutex<BoxedSource>,

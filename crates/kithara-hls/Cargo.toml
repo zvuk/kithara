@@ -60,7 +60,6 @@ unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-rodio = { workspace = true, features = ["playback"] }
 tracing-subscriber = { workspace = true }
 
 [package.metadata.cargo-machete]

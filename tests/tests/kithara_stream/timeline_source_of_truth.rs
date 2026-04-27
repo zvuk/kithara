@@ -3,6 +3,7 @@
 
 use std::{
     io::{self, Error as IoError, Read, Seek, SeekFrom},
+    num::NonZeroUsize,
     ops::Range,
     sync::Arc,
 };
@@ -36,7 +37,7 @@ impl Source for TimelineSource {
     fn wait_range(
         &mut self,
         _range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
         Ok(WaitOutcome::Ready)
@@ -44,15 +45,18 @@ impl Source for TimelineSource {
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let Ok(start) = usize::try_from(offset) else {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         };
         if start >= self.data.len() {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         }
         let available = &self.data[start..];
         let n = available.len().min(buf.len());
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
         buf[..n].copy_from_slice(&available[..n]);
-        Ok(ReadOutcome::Data(n))
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {

@@ -91,7 +91,7 @@ flowchart LR
     style AB fill:#d4a574,color:#000
 ```
 
-- **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `HlsEvent::VariantApplied` on quality switch.
+- **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `AbrEvent::VariantApplied` on quality switch.
 - **Virtual byte stream**: segments are indexed linearly. Reader sees a single contiguous byte stream via `DownloadState`.
 - **Backpressure**: downloader waits when too far ahead of reader position (`look_ahead_bytes`).
 

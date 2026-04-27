@@ -26,7 +26,7 @@ use kithara::{
     bufpool::pcm_pool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     net::NetOptions,
     stream::{
         Stream,
@@ -294,11 +294,14 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
                     while total < Consts::AUDIO_READ_TARGET_SAMPLES {
-                        let n = audio.read(&mut buf);
-                        if n == 0 {
-                            break;
+                        match audio.read(&mut buf) {
+                            Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                                total += count.get();
+                            }
+                            Ok(kithara_audio::ReadOutcome::Pending { .. }) => continue,
+                            Ok(kithara_audio::ReadOutcome::Eof { .. }) => break,
+                            Err(e) => panic!("audio read failed: {e}"),
                         }
-                        total += n;
                     }
                     black_box(total);
                 });
@@ -337,13 +340,9 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);
-                    let abr = AbrOptions {
-                        mode: AbrMode::Auto(Some(1)),
-                        ..AbrOptions::default()
-                    };
                     let config = HlsConfig::new(url)
                         .with_store(store)
-                        .with_abr_options(abr)
+                        .with_initial_abr_mode(AbrMode::Auto(Some(1)))
                         .with_downloader(downloader)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);

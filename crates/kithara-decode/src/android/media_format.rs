@@ -47,24 +47,22 @@ impl OwnedFormat {
     }
 
     pub(crate) fn get_u16(&self, key: &CStr) -> Result<Option<u16>, AndroidBackendError> {
-        self.get_i32(key)
-            .map(|value| {
-                u16::try_from(value).map_err(|_| {
-                    AndroidBackendError::operation(
-                        "media-format-u16",
-                        format!("{}={value} is out of range", key.to_string_lossy()),
-                    )
-                })
-            })
-            .transpose()
+        self.get_uint(key, "media-format-u16")
     }
 
     pub(crate) fn get_u32(&self, key: &CStr) -> Result<Option<u32>, AndroidBackendError> {
+        self.get_uint(key, "media-format-u32")
+    }
+
+    fn get_uint<T>(&self, key: &CStr, op: &'static str) -> Result<Option<T>, AndroidBackendError>
+    where
+        T: TryFrom<i32>,
+    {
         self.get_i32(key)
             .map(|value| {
-                u32::try_from(value).map_err(|_| {
+                T::try_from(value).map_err(|_| {
                     AndroidBackendError::operation(
-                        "media-format-u32",
+                        op,
                         format!("{}={value} is out of range", key.to_string_lossy()),
                     )
                 })

@@ -52,6 +52,18 @@ pub enum ResourceStatus {
     Committed { final_len: Option<u64> },
     /// Resource encountered an error.
     Failed(String),
+    /// Resource's cancellation token has fired and the data
+    /// lifecycle has not progressed past `Active` (no committed
+    /// bytes, no recorded failure).
+    ///
+    /// `Committed { .. }` and `Failed(_)` retain priority because
+    /// their data outcomes already classify the resource — observers
+    /// that want to read the bytes a `Committed` resource produced
+    /// before being cancelled need not be denied. Treat `Cancelled`
+    /// as the routine shutdown signal that supersedes `Active`
+    /// **only** when there is no other lifecycle classification to
+    /// surface.
+    Cancelled,
 }
 
 /// Unified sync resource trait.

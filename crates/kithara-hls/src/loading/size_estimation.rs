@@ -34,39 +34,71 @@ pub(crate) async fn estimate_size_maps(
     let mut buf = kithara_bufpool::byte_pool().get();
 
     for variant in 0..num_variants {
-        if playlist_state.has_size_map(variant) {
-            continue;
-        }
-
-        let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
-        if num_segments == 0 {
-            continue;
-        }
-
-        // Strategy 1: EXT-X-BYTERANGE
-        if let Some(size_map) = try_byte_range(media_playlists, variant, num_segments) {
-            debug!(variant, "size_map: from EXT-X-BYTERANGE");
-            playlist_state.set_size_map(variant, size_map);
-            continue;
-        }
-
-        // Strategy 2: Init segment avg_bitrate
-        if let Some(size_map) =
-            try_init_bitrate(loader, media_playlists, variant, num_segments, &mut buf)
-        {
-            debug!(variant, "size_map: from init segment avg_bitrate");
-            playlist_state.set_size_map(variant, size_map);
-            continue;
-        }
-
-        // Strategy 3: HEAD requests (fallback)
-        if let Some(size_map) =
-            try_head_requests(peer_handle, playlist_state, variant, num_segments, headers).await
-        {
-            debug!(variant, "size_map: from HEAD requests");
-            playlist_state.set_size_map(variant, size_map);
-        }
+        estimate_variant_size_map(
+            peer_handle,
+            playlist_state,
+            loader,
+            media_playlists,
+            headers,
+            variant,
+            &mut buf,
+        )
+        .await;
     }
+}
+
+/// Fill the size map for a single variant using the first strategy that
+/// produces a result: byte-range, init bitrate, or HEAD requests.
+async fn estimate_variant_size_map(
+    peer_handle: &kithara_stream::dl::PeerHandle,
+    playlist_state: &PlaylistState,
+    loader: &SegmentLoader,
+    media_playlists: &[(url::Url, MediaPlaylist)],
+    headers: Option<&kithara_net::Headers>,
+    variant: usize,
+    buf: &mut Vec<u8>,
+) {
+    if playlist_state.has_size_map(variant) {
+        return;
+    }
+
+    let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
+    if num_segments == 0 {
+        return;
+    }
+
+    if let Some((source, size_map)) =
+        run_offline_strategies(loader, media_playlists, variant, num_segments, buf)
+    {
+        debug!(variant, "size_map: from {source}");
+        playlist_state.set_size_map(variant, size_map);
+        return;
+    }
+
+    if let Some(size_map) =
+        try_head_requests(peer_handle, playlist_state, variant, num_segments, headers).await
+    {
+        debug!(variant, "size_map: from HEAD requests");
+        playlist_state.set_size_map(variant, size_map);
+    }
+}
+
+/// Try non-network strategies in priority order. Returns
+/// `(source_name, size_map)` on the first hit.
+fn run_offline_strategies(
+    loader: &SegmentLoader,
+    media_playlists: &[(url::Url, MediaPlaylist)],
+    variant: usize,
+    num_segments: usize,
+    buf: &mut Vec<u8>,
+) -> Option<(&'static str, VariantSizeMap)> {
+    if let Some(size_map) = try_byte_range(media_playlists, variant, num_segments) {
+        return Some(("EXT-X-BYTERANGE", size_map));
+    }
+    if let Some(size_map) = try_init_bitrate(loader, media_playlists, variant, num_segments, buf) {
+        return Some(("init segment avg_bitrate", size_map));
+    }
+    None
 }
 
 /// Strategy 1: exact sizes from `#EXT-X-BYTERANGE`.

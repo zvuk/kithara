@@ -63,7 +63,6 @@ enum PerfScenario {
 #[case("storage_random_read", PerfScenario::RandomReads)]
 #[case("storage_write", PerfScenario::Writes)]
 #[case("storage_wait_range", PerfScenario::WaitRange)]
-#[ignore]
 fn perf_storage_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

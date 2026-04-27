@@ -1,18 +1,14 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::{self, Debug},
     fs,
     ops::Range,
     path::Path,
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Weak},
 };
 
-use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
@@ -89,11 +85,12 @@ where
 {
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     cancel: CancellationToken,
-    dirty: Arc<AtomicBool>,
     inner: Arc<A>,
     live: Arc<Mutex<HashMap<ResourceKey, Weak<LiveResource>>>>,
-    pins: Arc<Mutex<HashSet<String>>>,
-    pool: BytePool,
+    /// Shared pins index — same instance held by `EvictAssets` and
+    /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
+    /// immediately via the index's internal best-effort persistence.
+    pins: PinsIndex,
 }
 
 impl<A> Debug for LeaseAssets<A>
@@ -101,10 +98,8 @@ where
     A: Assets,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let pin_count = self.pins.try_lock().ok().map(|pins| pins.len());
         f.debug_struct("LeaseAssets")
-            .field("dirty", &self.dirty.load(Ordering::Acquire))
-            .field("pin_count", &pin_count)
+            .field("pins", &self.pins)
             .finish_non_exhaustive()
     }
 }
@@ -113,38 +108,24 @@ impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub fn new(inner: Arc<A>, cancel: CancellationToken, pool: BytePool) -> Self {
-        Self {
-            byte_recorder: None,
-            cancel,
-            dirty: Arc::new(AtomicBool::new(false)),
-            inner,
-            live: Arc::new(Mutex::new(HashMap::new())),
-            pins: Arc::new(Mutex::new(HashSet::new())),
-            pool,
-        }
+    pub(crate) fn new(inner: Arc<A>, cancel: CancellationToken, pins: PinsIndex) -> Self {
+        Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
     /// Create with byte recorder for asset-size tracking.
-    pub fn with_byte_recorder(
+    pub(crate) fn with_byte_recorder(
         inner: Arc<A>,
         cancel: CancellationToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
-        pool: BytePool,
+        pins: PinsIndex,
     ) -> Self {
         Self {
             byte_recorder,
             cancel,
-            dirty: Arc::new(AtomicBool::new(false)),
             inner,
             live: Arc::new(Mutex::new(HashMap::new())),
-            pins: Arc::new(Mutex::new(HashSet::new())),
-            pool,
+            pins,
         }
-    }
-
-    pub(crate) fn inner(&self) -> &A {
-        &self.inner
     }
 
     fn is_active(&self) -> bool {
@@ -153,63 +134,32 @@ where
             .contains(crate::base::Capabilities::LEASE)
     }
 
-    fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
-        PinsIndex::open(self.inner(), self.pool.clone())
-    }
-
-    fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
-        let idx = self.open_index()?;
-        idx.store(pins)
-    }
-
-    fn load_pins_best_effort(&self) -> AssetsResult<HashSet<String>> {
-        let idx = self.open_index()?;
-        idx.load()
-    }
-
-    fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
-        let is_empty = self.pins.lock_sync().is_empty();
-
-        if !is_empty {
-            return Ok(());
-        }
-
-        let loaded = self.load_pins_best_effort()?;
-        let mut guard = self.pins.lock_sync();
-        for p in loaded {
-            guard.insert(p);
-        }
-        drop(guard);
-        Ok(())
-    }
-
-    /// Persist the current pin set to disk if dirty, then clear the dirty flag.
+    /// Persist the current pins snapshot to disk (best-effort).
+    ///
+    /// Mutations through [`PinsIndex::add`] / [`PinsIndex::remove`]
+    /// already flush eagerly; this method is a passive flush kept for
+    /// API compatibility with callers that want an explicit checkpoint.
     ///
     /// # Errors
     ///
-    /// Returns `AssetsError` if the pin index cannot be opened or written to disk.
+    /// Returns `AssetsError` if the pins index resource cannot be
+    /// written. No-op (returns `Ok`) when the lease layer is bypassed
+    /// (capability inactive) or the index is ephemeral.
     pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.is_active() || !self.dirty.swap(false, Ordering::AcqRel) {
+        if !self.is_active() {
             return Ok(());
         }
-        let snapshot = self.pins.lock_sync().clone();
-        self.persist_pins_best_effort(&snapshot)
+        self.pins.flush()
     }
 
     fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
-        self.ensure_loaded_best_effort()?;
+        // PinsIndex flushes immediately on every mutation; an `Err`
+        // here means the pin did not reach disk and must propagate so
+        // the caller can fail the resource open instead of silently
+        // returning a non-durable lease.
+        self.pins.add(asset_root)?;
 
-        {
-            let mut pins = self.pins.lock_sync();
-            if pins.insert(asset_root.to_string()) {
-                self.dirty.store(true, Ordering::Release);
-            }
-        }
-
-        // Eagerly persist so crash-recovery sees the pin.
-        let _ = self.flush_pins();
-
-        let owner = self.clone();
+        let pins = self.pins.clone();
         let ar = asset_root.to_string();
         let cancel = self.cancel.clone();
 
@@ -219,18 +169,14 @@ where
                     if cancel.is_cancelled() {
                         return;
                     }
-
                     tracing::trace!(asset_root = %ar, "LeaseGuard::drop - removing pin");
-
-                    {
-                        let mut pins = owner.pins.lock_sync();
-                        if pins.remove(&ar) {
-                            owner.dirty.store(true, Ordering::Release);
-                        }
+                    if let Err(e) = pins.remove(&ar) {
+                        tracing::warn!(
+                            asset_root = %ar,
+                            error = %e,
+                            "LeaseGuard::drop: failed to persist unpin",
+                        );
                     }
-
-                    // Eagerly persist unpin so crash-recovery sees it.
-                    let _ = owner.flush_pins();
                 }),
             })),
         })
@@ -383,7 +329,7 @@ where
 
         if !matches!(
             self.inner.status(),
-            ResourceStatus::Active | ResourceStatus::Failed(_)
+            ResourceStatus::Active | ResourceStatus::Cancelled | ResourceStatus::Failed(_)
         ) {
             return;
         }
@@ -540,14 +486,8 @@ where
     A: Assets,
 {
     fn drop(&mut self) {
-        if !self.is_active() {
-            return;
-        }
-        // Only persist on the last clone (all Arc fields share the same refcount via `pins`)
-        if Arc::strong_count(&self.pins) == 1 && self.dirty.load(Ordering::Acquire) {
-            let snapshot = self.pins.lock_sync().clone();
-            let _ = self.persist_pins_best_effort(&snapshot);
-        }
+        // Pins are flushed eagerly on every mutation through
+        // `PinsIndex` itself; no per-clone bookkeeping needed here.
     }
 }
 
@@ -579,31 +519,51 @@ impl Drop for LeaseGuardInner {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    use std::collections::HashSet;
+
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{disk_store::DiskAssetStore, index::PinsIndex, key::ResourceKey};
+    use crate::{disk_store::DiskAssetStore, key::ResourceKey};
+
+    fn make_pins_disk(dir: &Path) -> PinsIndex {
+        let path = dir.join("_index").join("pins.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        PinsIndex::with_persist_at(path, CancellationToken::new(), crate::byte_pool())
+    }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
             "test_asset",
             CancellationToken::new(),
+            crate::byte_pool(),
         ));
-        LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
+        let pins = make_pins_disk(dir);
+        LeaseAssets::new(disk, CancellationToken::new(), pins)
     }
 
     /// Bypass test: empty `asset_root` → capabilities lack LEASE.
     fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
-        LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "",
+            CancellationToken::new(),
+            crate::byte_pool(),
+        ));
+        let pins = make_pins_disk(dir);
+        LeaseAssets::new(disk, CancellationToken::new(), pins)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
-        let disk = DiskAssetStore::new(dir, "test_asset", CancellationToken::new());
-        PinsIndex::open(&disk, crate::byte_pool().clone())
-            .map_or_else(|_| HashSet::new(), |idx| idx.load().unwrap_or_default())
+        // Reopen pins.bin and snapshot its on-disk state.
+        let path = dir.join("_index").join("pins.bin");
+        if !path.exists() {
+            return HashSet::new();
+        }
+        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), crate::byte_pool());
+        idx.snapshot()
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -624,21 +584,19 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn eager_flush_clears_dirty_flag() {
+    fn explicit_flush_after_pin_is_safe() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
 
         let _res = lease.acquire_resource(&key).unwrap();
 
-        // Dirty flag is already cleared by eager flush in pin()
-        assert!(
-            !lease.dirty.load(Ordering::Acquire),
-            "dirty flag should be cleared by eager flush"
-        );
-
-        // Explicit flush is a no-op
+        // Mutations through `PinsIndex::add` already flush eagerly,
+        // so an explicit flush is just a re-write of the same state.
         lease.flush_pins().unwrap();
+
+        let on_disk = load_persisted_pins(dir.path());
+        assert!(on_disk.contains("test_asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -717,7 +675,7 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
 
         // Pins should be empty when capability absent
-        assert!(lease.pins.lock_sync().is_empty(), "bypass should not pin");
+        assert!(lease.pins.snapshot().is_empty(), "bypass should not pin");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

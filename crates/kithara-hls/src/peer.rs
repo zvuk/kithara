@@ -2,14 +2,19 @@ use std::{
     io::Error as IoError,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
 };
 
-use kithara_events::HlsEvent;
+use kithara_abr::{Abr, AbrState};
+use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, HlsEvent, VariantDuration};
 use kithara_net::NetError;
-use kithara_platform::{Mutex, time::Instant, tokio};
+use kithara_platform::{
+    Mutex,
+    time::{Duration, Instant},
+    tokio,
+};
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
@@ -44,16 +49,60 @@ pub(crate) struct HlsPeer {
     /// Same Arc-clone as the one held by `HlsCoord` — reads from the
     /// audio FSM are published here and observed by `priority()`.
     timeline: Timeline,
+    /// Per-peer ABR state owned by this peer, shared with the controller.
+    abr: Arc<AbrState>,
+    /// Highest segment index the reader has touched on the current variant.
+    /// Updated by `HlsSource::read_at` after a successful read; consumed by
+    /// `progress()` together with `committed_segment` to drive buffer-ahead
+    /// decisions in the ABR controller.
+    reader_segment: Arc<AtomicUsize>,
+    /// One past the highest segment index the scheduler has committed on
+    /// the current variant. Updated by `HlsScheduler::commit_segment`.
+    committed_segment: Arc<AtomicUsize>,
 }
 
 impl HlsPeer {
-    pub(crate) fn new(timeline: Timeline) -> Self {
+    pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
         Self {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_cancel: CancellationToken::new(),
             timeline,
+            abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
+            reader_segment: Arc::new(AtomicUsize::new(0)),
+            committed_segment: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Fill in the variant list after the master playlist is parsed.
+    pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
+        self.abr.set_variants(variants);
+    }
+
+    /// Shared ABR state for the scheduler's lock/unlock and seek routing.
+    pub(crate) fn abr(&self) -> &Arc<AbrState> {
+        &self.abr
+    }
+
+    /// Shared cursor tracking the segment the reader is currently consuming.
+    pub(crate) fn reader_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.reader_segment)
+    }
+
+    /// Shared counter of segments the scheduler has committed — one past the
+    /// highest index ever committed on the current variant.
+    pub(crate) fn committed_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.committed_segment)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_committed_segment(&self, count: usize) {
+        self.committed_segment.store(count, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reader_segment(&self, idx: usize) {
+        self.reader_segment.store(idx, Ordering::Release);
     }
 
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
@@ -129,6 +178,37 @@ impl Drop for HlsPeer {
         // even when there is no pending `reader_advanced` notification
         // to trigger its select loop.
         self.wake_cancel.cancel();
+    }
+}
+
+impl Abr for HlsPeer {
+    fn variants(&self) -> Vec<AbrVariant> {
+        self.abr.variants_snapshot()
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.abr))
+    }
+
+    fn progress(&self) -> Option<AbrProgressSnapshot> {
+        let current = self.abr.current_variant_index();
+        let variants = self.abr.variants_snapshot();
+        let variant = variants.iter().find(|v| v.variant_index == current)?;
+        let durations = match &variant.duration {
+            VariantDuration::Segmented(d) => d.as_slice(),
+            VariantDuration::Total(_) | VariantDuration::Unknown => return None,
+        };
+        let reader_idx = self.reader_segment.load(Ordering::Acquire);
+        let committed = self.committed_segment.load(Ordering::Acquire);
+        let reader_clamped = reader_idx.min(durations.len());
+        let committed_clamped = committed.min(durations.len());
+        let reader_playback_time: Duration = durations[..reader_clamped].iter().copied().sum();
+        let download_head_playback_time: Duration =
+            durations[..committed_clamped].iter().copied().sum();
+        Some(AbrProgressSnapshot {
+            reader_playback_time,
+            download_head_playback_time,
+        })
     }
 }
 
@@ -291,93 +371,101 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     };
 
     if req.seek_epoch != sched.active_seek_epoch {
-        // New seek epoch — full reset.
-        state.epoch_cancel.cancel();
-        state.epoch_cancel = CancellationToken::new();
-        sched.demand_throttle_until = None;
-
-        let (is_variant_switch, is_midstream_switch) =
-            sched.classify_variant_transition(req.variant, req.segment_index);
-        sched.handle_midstream_switch(is_midstream_switch);
-        if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
-            sched
-                .segments
-                .lock_sync()
-                .set_expected_sizes(req.variant, sizes);
-        }
-        if is_variant_switch {
-            sched.download_variant = req.variant;
-        }
-        let (cached_count, cached_end_offset) =
-            sched.populate_cached_segments_if_needed(req.variant);
-        sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
-
+        reset_for_new_epoch(state, &req);
         cx.waker().wake_by_ref();
         return DemandResult::ResetAndPend;
     }
 
-    // Same-epoch demand.
-    let mut variant_override = None;
-    if req.segment_index < sched.current_segment_index() {
-        // Two cases where rewinding the cursor re-emits a duplicate FetchCmd
-        // and drives a hot loop with the reader's condvar re-demand pump:
-        //  1. The demanded segment is already committed — the original
-        //     already-loaded check.
-        //  2. The demanded segment is IN FLIGHT — a `FetchCmd` has been
-        //     emitted but its `on_complete` has not fired yet. Issuing a
-        //     duplicate `FetchCmd` races two writers on the same cached
-        //     `AssetResource`; on mmap storage the first commit flips the
-        //     resource to `Committed` and the second `write_at` fails,
-        //     starving the reader until the hang detector fires.
-        let in_flight = sched
-            .in_flight_segments
-            .contains(&(req.variant, req.segment_index));
-        let already_loaded = !in_flight
-            && sched
-                .segments
-                .lock_sync()
-                .is_segment_loaded(req.variant, req.segment_index);
-        if in_flight {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand for in-flight segment, skipping rewind"
-            );
-        } else if already_loaded {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand already committed, skipping rewind"
-            );
-        } else {
-            debug!(
-                variant = req.variant,
-                segment = req.segment_index,
-                cursor = sched.current_segment_index(),
-                "poll_next: same-epoch demand behind cursor, rewinding"
-            );
-            sched.rewind_current_segment_index(req.segment_index);
-        }
-    }
-    if req.variant != sched.download_variant {
-        variant_override = Some(req.variant);
-    }
+    resolve_same_epoch_demand(&mut state.scheduler, &req)
+}
 
+fn reset_for_new_epoch(state: &mut HlsState, req: &crate::coord::SegmentRequest) {
+    let sched = &mut state.scheduler;
+    state.epoch_cancel.cancel();
+    state.epoch_cancel = CancellationToken::new();
+    sched.demand_throttle_until = None;
+
+    let (is_variant_switch, is_midstream_switch) =
+        sched.classify_variant_transition(req.variant, req.segment_index);
+    sched.handle_midstream_switch(is_midstream_switch);
+    if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
+        sched
+            .segments
+            .lock_sync()
+            .set_expected_sizes(req.variant, sizes);
+    }
+    if is_variant_switch {
+        sched.download_variant = req.variant;
+    }
+    let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(req.variant);
+    sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
+}
+
+fn resolve_same_epoch_demand(
+    sched: &mut HlsScheduler,
+    req: &crate::coord::SegmentRequest,
+) -> DemandResult {
+    if req.segment_index < sched.current_segment_index() {
+        maybe_rewind_for_demand(sched, req);
+    }
+    let variant_override = (req.variant != sched.download_variant).then_some(req.variant);
     DemandResult::Demand {
         segment: req.segment_index,
         variant_override,
     }
 }
 
+fn maybe_rewind_for_demand(sched: &mut HlsScheduler, req: &crate::coord::SegmentRequest) {
+    // Two cases where rewinding the cursor re-emits a duplicate FetchCmd
+    // and drives a hot loop with the reader's condvar re-demand pump:
+    //  1. The demanded segment is already committed — the original
+    //     already-loaded check.
+    //  2. The demanded segment is IN FLIGHT — a `FetchCmd` has been
+    //     emitted but its `on_complete` has not fired yet. Issuing a
+    //     duplicate `FetchCmd` races two writers on the same cached
+    //     `AssetResource`; on mmap storage the first commit flips the
+    //     resource to `Committed` and the second `write_at` fails,
+    //     starving the reader until the hang detector fires.
+    let reason = classify_rewind(sched, req);
+    debug!(
+        variant = req.variant,
+        segment = req.segment_index,
+        cursor = sched.current_segment_index(),
+        "{}",
+        reason
+    );
+    if matches!(
+        reason,
+        "poll_next: same-epoch demand behind cursor, rewinding"
+    ) {
+        sched.rewind_current_segment_index(req.segment_index);
+    }
+}
+
+fn classify_rewind(sched: &HlsScheduler, req: &crate::coord::SegmentRequest) -> &'static str {
+    if sched
+        .in_flight_segments
+        .contains(&(req.variant, req.segment_index))
+    {
+        return "poll_next: same-epoch demand for in-flight segment, skipping rewind";
+    }
+    if sched
+        .segments
+        .lock_sync()
+        .is_segment_loaded(req.variant, req.segment_index)
+    {
+        return "poll_next: same-epoch demand already committed, skipping rewind";
+    }
+    "poll_next: same-epoch demand behind cursor, rewinding"
+}
+
 fn resolve_variant(
     sched: &mut HlsScheduler,
     demand_variant_override: Option<usize>,
 ) -> (usize, usize) {
-    let old_variant = sched.abr.get_current_variant_index();
-    let decision = sched.make_abr_decision();
-    let mut variant = sched.abr.get_current_variant_index();
+    let old_variant = sched.abr.current_variant_index();
+    let _decision = sched.make_abr_decision();
+    let mut variant = sched.abr.current_variant_index();
 
     // Demand variant override.
     if let Some(dv) = demand_variant_override
@@ -404,8 +492,8 @@ fn resolve_variant(
         variant = sched.download_variant;
     }
 
-    sched.publish_variant_applied(old_variant, variant, &decision);
-
+    // VariantApplied is now emitted by the shared `AbrController` as
+    // `AbrEvent::VariantApplied` — no HLS-level publish.
     (old_variant, variant)
 }
 
@@ -475,6 +563,7 @@ fn build_batch(
                 is_variant_switch,
             ));
     let prefetch_count = state.scheduler.prefetch_count;
+    let old_variant_for_skip = is_variant_switch.then_some(old_variant);
 
     for batch_i in 0..prefetch_count {
         let seg_idx = state.scheduler.current_segment_index();
@@ -483,25 +572,15 @@ fn build_batch(
         }
 
         let is_demanded = demand_segment == Some(seg_idx);
-        let skipped = !is_demanded
-            && state.scheduler.should_skip_planned_segment(
-                variant,
-                seg_idx,
-                is_midstream_switch,
-                if is_variant_switch {
-                    Some(old_variant)
-                } else {
-                    None
-                },
-            );
-        if skipped {
-            debug!(
-                variant,
-                seg_idx,
-                batch_i,
-                cursor_after = state.scheduler.current_segment_index(),
-                "poll_next: skipped segment"
-            );
+        if skip_planned_segment(
+            state,
+            variant,
+            seg_idx,
+            batch_i,
+            is_demanded,
+            is_midstream_switch,
+            old_variant_for_skip,
+        ) {
             continue;
         }
 
@@ -529,46 +608,18 @@ fn build_batch(
             }
         };
 
-        // Cached hit — commit directly.
         if let Some(cached_len) = prepared.cached_len {
-            let init_meta = if plan_need_init {
-                state.loader.get_init_segment_cached(variant)
-            } else {
-                None
-            };
-            let init_len = init_meta.as_ref().map_or(0, |m| m.len);
-            let init_url = init_meta.map(|m| m.url);
-
-            let meta = match state.loader.complete_media(&prepared, cached_len) {
-                Ok(m) => m,
-                Err(e) => {
-                    state
-                        .scheduler
-                        .publish_download_error("complete_media cached", &e);
-                    state.scheduler.advance_current_segment_index(seg_idx + 1);
-                    continue;
-                }
-            };
-
-            let cursor_before = state.scheduler.current_segment_index();
-            state.scheduler.commit_fetch_inline(
-                variant,
-                seg_idx,
-                seek_epoch,
-                &meta,
-                init_len,
-                init_url,
-                std::time::Duration::ZERO,
-            );
-            state.scheduler.advance_current_segment_index(seg_idx + 1);
-            debug!(
-                variant,
-                seg_idx,
-                batch_i,
-                cached_len,
-                cursor_before,
-                cursor_after = state.scheduler.current_segment_index(),
-                "poll_next: cached commit"
+            commit_cached_segment(
+                state,
+                &CachedCommit {
+                    variant,
+                    seg_idx,
+                    batch_i,
+                    seek_epoch,
+                    prepared: &prepared,
+                    cached_len,
+                    plan_need_init,
+                },
             );
             continue;
         }
@@ -597,6 +648,116 @@ fn build_batch(
     }
 
     cmds
+}
+
+fn skip_planned_segment(
+    state: &mut HlsState,
+    variant: usize,
+    seg_idx: usize,
+    batch_i: usize,
+    is_demanded: bool,
+    is_midstream_switch: bool,
+    old_variant_for_skip: Option<usize>,
+) -> bool {
+    // In-flight check comes BEFORE the `is_demanded` bypass: if a
+    // `FetchCmd` for this (variant, seg) was emitted earlier and has
+    // not yet completed, issuing a duplicate races two writers on the
+    // same cached `AssetResource`. On mmap storage the first commit
+    // flips the resource to `Committed` and the second `write_at`
+    // fails silently, so `commit_segment` fires from the first
+    // writer's `on_complete` while the bytes the second writer would
+    // have produced never appear, starving the reader. The demand
+    // signal does NOT override this — the reader already has a fetch
+    // in flight that will deliver these bytes; the demand-driven
+    // rewind path that brought us here is the same hot loop the
+    // comment on `maybe_rewind_for_demand` warns about.
+    if state
+        .scheduler
+        .in_flight_segments
+        .contains(&(variant, seg_idx))
+    {
+        debug!(
+            variant,
+            seg_idx,
+            batch_i,
+            is_demanded,
+            cursor = state.scheduler.current_segment_index(),
+            "poll_next: skipped segment — fetch already in flight"
+        );
+        state.scheduler.advance_current_segment_index(seg_idx + 1);
+        return true;
+    }
+    if is_demanded {
+        return false;
+    }
+    let skipped = state.scheduler.should_skip_planned_segment(
+        variant,
+        seg_idx,
+        is_midstream_switch,
+        old_variant_for_skip,
+    );
+    if skipped {
+        debug!(
+            variant,
+            seg_idx,
+            batch_i,
+            cursor_after = state.scheduler.current_segment_index(),
+            "poll_next: skipped segment"
+        );
+    }
+    skipped
+}
+
+struct CachedCommit<'a> {
+    variant: usize,
+    seg_idx: usize,
+    batch_i: usize,
+    seek_epoch: u64,
+    prepared: &'a PreparedMedia,
+    cached_len: u64,
+    plan_need_init: bool,
+}
+
+fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
+    let init_meta = if c.plan_need_init {
+        state.loader.get_init_segment_cached(c.variant)
+    } else {
+        None
+    };
+    let init_len = init_meta.as_ref().map_or(0, |m| m.len);
+    let init_url = init_meta.map(|m| m.url);
+
+    let meta = match state.loader.complete_media(c.prepared, c.cached_len) {
+        Ok(m) => m,
+        Err(e) => {
+            state
+                .scheduler
+                .publish_download_error("complete_media cached", &e);
+            state.scheduler.advance_current_segment_index(c.seg_idx + 1);
+            return;
+        }
+    };
+
+    let cursor_before = state.scheduler.current_segment_index();
+    state.scheduler.commit_fetch_inline(
+        c.variant,
+        c.seg_idx,
+        c.seek_epoch,
+        &meta,
+        init_len,
+        init_url,
+        Duration::ZERO,
+    );
+    state.scheduler.advance_current_segment_index(c.seg_idx + 1);
+    debug!(
+        variant = c.variant,
+        seg_idx = c.seg_idx,
+        batch_i = c.batch_i,
+        cached_len = c.cached_len,
+        cursor_before,
+        cursor_after = state.scheduler.current_segment_index(),
+        "poll_next: cached commit"
+    );
 }
 
 #[expect(clippy::significant_drop_tightening)]
@@ -654,6 +815,16 @@ fn build_fetch_cmd(
                 // which silently advances the cursor forward when
                 // `seg_idx > new_floor`, skipping segments the reader is
                 // now waiting for after the seek.
+                // Always release the in-flight slot first: a stale
+                // on_complete (epoch bumped underneath us) that early-
+                // returns before this remove leaks the entry forever.
+                // `skip_planned_segment` then refuses to re-issue the
+                // fetch — reader deadlocks waiting for bytes that will
+                // never come. `reset_for_seek_epoch` clears the whole
+                // set on a true seek, so a no-op remove here is safe;
+                // for non-seek cancellations (variant switch, peer
+                // shutdown) this is the only cleanup point.
+                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if seek_epoch != st.scheduler.coord.timeline().seek_epoch() {
                     debug!(
                         variant,
@@ -664,7 +835,6 @@ fn build_fetch_cmd(
                     );
                     return;
                 }
-                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
                 if !is_already_committed {
                     debug!(variant, seg_idx, error = %e, "segment fetch failed, rewinding cursor");
                     st.scheduler.rewind_current_segment_index(seg_idx);
@@ -686,7 +856,12 @@ fn build_fetch_cmd(
             let Some(ref mut st) = *guard else {
                 return;
             };
-            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
+            // Order matters: commit first, then drop the in-flight
+            // marker. Removing in-flight before commit opens a race
+            // window where the segment is neither in-flight nor
+            // committed; a concurrent `build_batch` would re-issue a
+            // duplicate `FetchCmd` and race two writers (see
+            // `skip_planned_segment` in-flight protection).
             if let Ok(ref meta) = meta {
                 st.scheduler.commit_fetch_inline(
                     variant,
@@ -698,6 +873,7 @@ fn build_fetch_cmd(
                     start.elapsed(),
                 );
             }
+            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
             if let Some(waker) = st.waker.as_ref() {
                 waker.wake_by_ref();
             }
@@ -713,10 +889,14 @@ fn build_fetch_cmd(
 mod tests {
     //! RED tests confirming specific root causes of integration-test failures.
 
-    use std::{sync::Arc, task::Context, time::Duration};
+    use std::{
+        sync::{Arc, atomic::AtomicUsize},
+        task::Context,
+        time::Duration,
+    };
 
     use futures::task::noop_waker;
-    use kithara_abr::{AbrDecision, AbrReason};
+    use kithara_abr::{Abr, AbrDecision, AbrMode, AbrReason, AbrState};
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
@@ -804,7 +984,7 @@ mod tests {
         let downloader =
             Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
         let timeline = Timeline::new();
-        let peer = Arc::new(HlsPeer::new(timeline.clone()));
+        let peer = Arc::new(HlsPeer::new(timeline.clone(), AbrMode::default()));
         let handle = downloader.register(peer);
         let cache = PlaylistCache::new(backend.clone(), handle.clone());
         let loader = Arc::new(crate::loading::SegmentLoader::new(
@@ -817,11 +997,15 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
+        let abr = Arc::new(AbrState::new(Vec::new(), AbrMode::default()));
         let (scheduler, _source) = build_pair(
             backend,
             handle,
             &parsed,
             &config,
+            abr,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
             playlist_state,
             EventBus::new(16),
             timeline,
@@ -1127,7 +1311,7 @@ mod tests {
             "precondition: cursor at tail"
         );
         assert_eq!(
-            state.scheduler.abr.get_current_variant_index(),
+            state.scheduler.abr.current_variant_index(),
             1,
             "precondition: ABR wants variant 1"
         );
@@ -1767,7 +1951,7 @@ mod tests {
     #[kithara::test]
     fn priority_defaults_to_low_before_activation() {
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline);
+        let peer = HlsPeer::new(timeline, AbrMode::default());
         assert_eq!(
             peer.priority(),
             crate::peer::Priority::Low,
@@ -1778,7 +1962,7 @@ mod tests {
     #[kithara::test]
     fn priority_tracks_set_playing_without_activation() {
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         assert_eq!(peer.priority(), crate::peer::Priority::Low);
 
         timeline.set_playing(true);
@@ -1803,7 +1987,7 @@ mod tests {
         // `state` is a PlatformMutex, lock_sync would block forever if
         // priority() tried to acquire it.
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         let _guard = peer.state.lock_sync();
         timeline.set_playing(true);
         assert_eq!(
@@ -1820,7 +2004,7 @@ mod tests {
         // verify this indirectly: flip set_playing on the peer's
         // timeline and observe is_playing on a re-cloned handle.
         let timeline = Timeline::new();
-        let peer = HlsPeer::new(timeline.clone());
+        let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
         let other_handle = timeline.clone();
         other_handle.set_playing(true);
         assert!(other_handle.is_playing());
@@ -1829,5 +2013,43 @@ mod tests {
             crate::peer::Priority::High,
             "peer's Timeline clone must observe writes to sibling clones"
         );
+    }
+
+    #[kithara::test]
+    fn hls_peer_progress_reflects_download_and_reader() {
+        use kithara_events::{AbrVariant, VariantDuration};
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline, AbrMode::Auto(Some(0)));
+        peer.set_abr_variants(vec![AbrVariant {
+            variant_index: 0,
+            bandwidth_bps: 128_000,
+            duration: VariantDuration::Segmented(vec![Duration::from_secs(10); 10]),
+        }]);
+
+        // No reads, no commits yet.
+        let p = peer.progress().expect("variants cover current variant");
+        assert_eq!(p.reader_playback_time, Duration::ZERO);
+        assert_eq!(p.download_head_playback_time, Duration::ZERO);
+
+        peer.set_reader_segment(2);
+        peer.set_last_committed_segment(6);
+        let p = peer.progress().expect("variants cover current variant");
+        assert_eq!(p.reader_playback_time, Duration::from_secs(20));
+        assert_eq!(p.download_head_playback_time, Duration::from_secs(60));
+    }
+
+    #[kithara::test]
+    fn hls_peer_progress_none_when_duration_unknown() {
+        use kithara_events::{AbrVariant, VariantDuration};
+        let timeline = Timeline::new();
+        let peer = HlsPeer::new(timeline, AbrMode::Auto(Some(0)));
+        peer.set_abr_variants(vec![AbrVariant {
+            variant_index: 0,
+            bandwidth_bps: 128_000,
+            duration: VariantDuration::Unknown,
+        }]);
+        peer.set_reader_segment(2);
+        peer.set_last_committed_segment(6);
+        assert!(peer.progress().is_none());
     }
 }

@@ -8,6 +8,8 @@ mod receiver;
 mod scope;
 mod seek;
 
+#[cfg(feature = "abr")]
+mod abr;
 #[cfg(feature = "app")]
 mod app;
 #[cfg(feature = "audio")]
@@ -25,6 +27,11 @@ mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
+#[cfg(feature = "abr")]
+pub use abr::{
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource,
+    VariantDuration, VariantInfo,
+};
 #[cfg(feature = "app")]
 pub use app::AppEvent;
 #[cfg(feature = "audio")]

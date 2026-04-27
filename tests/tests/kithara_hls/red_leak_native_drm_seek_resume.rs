@@ -46,8 +46,8 @@ use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioWorkerHandle, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
@@ -66,11 +66,10 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
-        }
-        if audio.is_eof() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
             std::time::Instant::now() <= deadline,
@@ -95,10 +94,7 @@ async fn run_drm_seek_resume_cycle(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_downloader(downloader.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::new(hls_config).with_worker(shared_worker.clone()),

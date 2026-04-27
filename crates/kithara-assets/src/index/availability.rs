@@ -133,6 +133,19 @@ impl AvailabilityIndex {
         }
     }
 
+    /// Drop every per-resource entry recorded under `asset_root`.
+    ///
+    /// Used by deletion paths that wipe an entire asset directory at
+    /// once (`DiskAssetStore::delete_asset`, `MemAssetStore::delete_asset`,
+    /// the LRU evictor's `delete_asset_dir`). Without this, stale
+    /// `final_len` / `ranges` survive on the index map and
+    /// `contains_range` answers `true` for bytes that no longer exist
+    /// on disk — producing the HLS hang pinned by
+    /// `red_test_delete_asset_strands_availability_index`.
+    pub(crate) fn clear_root(&self, asset_root: &str) {
+        self.inner.assets.remove(asset_root);
+    }
+
     fn resolve_refs<'a>(asset_root: &'a str, key: &'a ResourceKey) -> (&'a str, &'a str) {
         match key {
             ResourceKey::Relative(path) => (asset_root, path.as_str()),

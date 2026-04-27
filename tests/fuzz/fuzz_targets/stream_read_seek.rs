@@ -114,22 +114,23 @@ impl Source for ScriptSource {
     fn wait_range(
         &mut self,
         _range: Range<u64>,
-        _timeout: Duration,
+        _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
-        let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Data(0));
+        let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Eof);
         match outcome {
-            ReadOutcome::Data(n) => {
+            ReadOutcome::Bytes(count) => {
                 let start = offset as usize;
-                let end = start.saturating_add(n).min(self.data.len());
+                let end = start.saturating_add(count.get()).min(self.data.len());
                 let copied = end.saturating_sub(start).min(buf.len());
-                if copied > 0 {
-                    buf[..copied].copy_from_slice(&self.data[start..start + copied]);
-                }
-                Ok(ReadOutcome::Data(copied))
+                let Some(nz) = std::num::NonZeroUsize::new(copied) else {
+                    return Ok(ReadOutcome::Eof);
+                };
+                buf[..copied].copy_from_slice(&self.data[start..start + copied]);
+                Ok(ReadOutcome::Bytes(nz))
             }
             other => Ok(other),
         }
@@ -168,9 +169,14 @@ fuzz_target!(|input: Input| {
         WaitStep::Interrupted => WaitOutcome::Interrupted,
     });
     let reads = input.reads.into_iter().map(|r| match r {
-        ReadStep::Data(n) => ReadOutcome::Data(usize::from(n)),
-        ReadStep::Retry => ReadOutcome::Retry,
-        ReadStep::VariantChange => ReadOutcome::VariantChange,
+        ReadStep::Data(n) => match std::num::NonZeroUsize::new(usize::from(n)) {
+            Some(nz) => ReadOutcome::Bytes(nz),
+            None => ReadOutcome::Eof,
+        },
+        ReadStep::Retry => ReadOutcome::Pending(kithara_stream::PendingReason::Retry),
+        ReadStep::VariantChange => {
+            ReadOutcome::Pending(kithara_stream::PendingReason::VariantChange)
+        }
     });
 
     let timeline = Timeline::new();

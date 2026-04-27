@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    fs::OpenOptions,
+    sync::{Arc, Mutex},
+};
 
 use iced::Size;
 use kithara_queue::Queue;
@@ -14,15 +17,33 @@ use crate::{
 
 /// Initialize tracing for GUI-only mode (no CRLF writer needed).
 ///
+/// Reads the filter from `RUST_LOG` (falling back to `INFO`). If
+/// `KITHARA_LOG_FILE` is set, output goes to that path (append mode);
+/// otherwise to stderr.
+///
 /// # Errors
 /// Returns an error if tracing initialization fails.
 pub fn init_tracing() -> Result<(), FrontendError> {
-    let filter = EnvFilter::default().add_directive(LevelFilter::INFO.into());
-    tracing_subscriber::fmt()
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::default().add_directive(LevelFilter::INFO.into()));
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_line_number(false)
-        .with_file(false)
-        .init();
+        .with_file(false);
+
+    if let Some(path) = std::env::var_os("KITHARA_LOG_FILE") {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+        builder
+            .with_writer(Mutex::new(file))
+            .with_ansi(false)
+            .init();
+    } else {
+        builder.init();
+    }
     Ok(())
 }
 

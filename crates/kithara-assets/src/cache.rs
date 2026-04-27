@@ -90,6 +90,8 @@ enum CacheEntry<R, I> {
 }
 
 type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
+type SharedCache<A> =
+    Arc<Cache<<A as Assets>::Res, <A as Assets>::Context, <A as Assets>::IndexRes>>;
 type CacheMap<A> = LruCache<
     CacheKey<<A as Assets>::Context>,
     CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
@@ -116,7 +118,7 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
+    cache: SharedCache<A>,
     pinned: Arc<Mutex<HashSet<ResourceKey>>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
@@ -169,6 +171,31 @@ where
         }
     }
 
+    fn open_index_resource<F>(
+        &self,
+        cache_key: CacheKey<A::Context>,
+        load: F,
+    ) -> AssetsResult<A::IndexRes>
+    where
+        F: FnOnce() -> AssetsResult<A::IndexRes>,
+    {
+        if !self.is_active() {
+            return load();
+        }
+
+        let mut cache = self.cache.lock_sync();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
+            return Ok(res.clone());
+        }
+
+        let res = load()?;
+        let _ = self.cache_entry(&mut cache, cache_key, CacheEntry::Index(res.clone()));
+        drop(cache);
+
+        Ok(res)
+    }
+
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
         let (committed, has_active) = {
             let mut cache = self.cache.lock_sync();
@@ -191,7 +218,14 @@ where
                     ResourceStatus::Failed(reason) => {
                         return Some(AssetResourceState::Failed(reason));
                     }
-                    ResourceStatus::Active => has_active = true,
+                    // Cancelled folds into Active for the same reason
+                    // `AssetResourceState::From` does — a cancelled
+                    // handle still represents a live cache entry
+                    // whose partial bytes are valid for a Phase-2
+                    // reopen. The cancellation signal is consumed by
+                    // `ProcessedResource::inner_terminal` via
+                    // `ResourceStatus::Cancelled` directly.
+                    ResourceStatus::Active | ResourceStatus::Cancelled => has_active = true,
                     ResourceStatus::Committed { final_len } => {
                         if committed.is_none() {
                             committed = Some(AssetResourceState::Committed { final_len });
@@ -436,47 +470,13 @@ where
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.is_active() {
-            return self.inner.open_pins_index_resource();
-        }
-
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
-            return Ok(res.clone());
-        }
-
-        let res = self.inner.open_pins_index_resource()?;
-        let _ = self.cache_entry(
-            &mut cache,
-            CacheKey::PinsIndex,
-            CacheEntry::Index(res.clone()),
-        );
-        drop(cache);
-
-        Ok(res)
+        self.open_index_resource(CacheKey::PinsIndex, || {
+            self.inner.open_pins_index_resource()
+        })
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.is_active() {
-            return self.inner.open_lru_index_resource();
-        }
-
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
-            return Ok(res.clone());
-        }
-
-        let res = self.inner.open_lru_index_resource()?;
-        let _ = self.cache_entry(
-            &mut cache,
-            CacheKey::LruIndex,
-            CacheEntry::Index(res.clone()),
-        );
-        drop(cache);
-
-        Ok(res)
+        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
@@ -552,7 +552,12 @@ mod tests {
     impl ContextMemStore {
         fn new(asset_root: &str) -> Self {
             Self {
-                inner: MemAssetStore::new(asset_root, CancellationToken::new(), None),
+                inner: MemAssetStore::new(
+                    asset_root,
+                    CancellationToken::new(),
+                    None,
+                    crate::byte_pool(),
+                ),
             }
         }
     }
@@ -612,13 +617,19 @@ mod tests {
             dir,
             "test_asset",
             CancellationToken::new(),
+            crate::byte_pool(),
         ));
         CachedAssets::new(disk, capacity, None)
     }
 
     /// Bypass test: empty `asset_root` → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "",
+            CancellationToken::new(),
+            crate::byte_pool(),
+        ));
         CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)
     }
 
@@ -751,7 +762,7 @@ mod tests {
         let key = ResourceKey::new("delete_me.mp3");
         let _res = cached.acquire_resource(&key).unwrap();
 
-        assert!(cached.cache.lock_sync().len() > 0);
+        assert!(!cached.cache.lock_sync().is_empty());
 
         cached.delete_asset().unwrap();
 

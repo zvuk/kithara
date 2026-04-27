@@ -344,7 +344,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
@@ -357,14 +356,11 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             return Ok(WaitOutcome::Ready);
         }
 
-        let mut prev_available_len: u64 = 0;
         loop {
-            // Fast path: let the driver check without holding state lock.
             if self.inner.driver.try_fast_check(&range) {
                 return Ok(WaitOutcome::Ready);
             }
 
-            // Slow path: lock state and check coverage, wait if needed.
             let state = self.inner.state.lock_sync();
 
             if self.inner.cancel.is_cancelled() {
@@ -402,13 +398,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 // needed data and notifies the condvar.
             }
 
-            // Reset hang detector when download makes progress.
-            let current_available_len: u64 = state.available.iter().map(|r| r.end - r.start).sum();
-            if current_available_len > prev_available_len {
-                prev_available_len = current_available_len;
-                hang_reset!();
-            }
-
             debug!(
                 range_start = range.start,
                 range_end = range.end,
@@ -417,7 +406,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 "storage::wait_range spinning"
             );
 
-            hang_tick!();
             yield_now();
             let deadline = Instant::now() + PlatformDuration::from_millis(WAIT_SPIN_TIMEOUT_MS);
             let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
@@ -484,11 +472,22 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     fn status(&self) -> ResourceStatus {
         let state = self.inner.state.lock_sync();
         if let Some(ref reason) = state.failed {
+            // `Failed` keeps priority over `Cancelled` — a data error
+            // is more informative than a routine shutdown signal.
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {
+            // `Committed` keeps priority too: bytes are still
+            // readable for observers that opened a fresh handle on
+            // top of an already-committed file.
             ResourceStatus::Committed {
                 final_len: state.final_len,
             }
+        } else if self.inner.cancel.is_cancelled() {
+            // Token-fired before the data lifecycle progressed.
+            // Surface as `Cancelled` so blocking observers (e.g.
+            // `kithara_assets::ProcessedResource`'s readiness gate)
+            // can wake immediately instead of polling on a watchdog.
+            ResourceStatus::Cancelled
         } else {
             ResourceStatus::Active
         }

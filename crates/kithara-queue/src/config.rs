@@ -39,11 +39,6 @@ pub struct QueueConfig {
     /// Max concurrent `Loader` in-flight loads. Default: 3.
     #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
     pub max_concurrent_loads: NonZeroUsize,
-
-    /// Whether the Queue should start playing as soon as the first track
-    /// enters [`TrackStatus::Loaded`](crate::TrackStatus::Loaded).
-    /// Default: `false`.
-    pub autoplay: bool,
 }
 
 impl QueueConfig {
@@ -72,13 +67,6 @@ mod tests {
     fn default_config_has_reasonable_loader_cap() {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(!cfg.autoplay);
         assert!(cfg.player.is_none());
-    }
-
-    #[kithara::test]
-    fn with_autoplay_sets_field() {
-        let cfg = QueueConfig::default().with_autoplay(true);
-        assert!(cfg.autoplay);
     }
 }

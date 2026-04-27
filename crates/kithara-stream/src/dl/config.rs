@@ -1,6 +1,7 @@
 //! Downloader configuration.
 
 use derive_setters::Setters;
+use kithara_abr::AbrSettings;
 use kithara_net::NetOptions;
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use tokio_util::sync::CancellationToken;
@@ -30,6 +31,8 @@ pub struct DownloaderConfig {
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
     pub soft_timeout: Duration,
+    /// Settings for the shared ABR controller owned by the Downloader.
+    pub abr_settings: AbrSettings,
 }
 
 impl Default for DownloaderConfig {
@@ -43,6 +46,7 @@ impl Default for DownloaderConfig {
             max_concurrent: MAX_CONCURRENT,
             demand_throttle: Duration::ZERO,
             soft_timeout: Duration::from_secs(SOFT_TIMEOUT_SECS),
+            abr_settings: AbrSettings::default(),
         }
     }
 }

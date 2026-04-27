@@ -1,0 +1,21 @@
+id: rust.no-fallback-if-let-else
+message: |
+  Fallback chain detected: `if let Ok(x) = primary() { x } else { secondary() }`.
+  Per AGENTS.md: if the primary path has no correct answer, the state
+  contract is broken. Fix the contract, don't paper over it with a
+  secondary code path.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  any:
+    - pattern: |
+        if let Ok($X) = $P { $X } else { $FALLBACK() }
+    - pattern: |
+        if let Some($X) = $P { $X } else { $FALLBACK() }
+    - pattern: |
+        match $P {
+            Ok($X) => $X,
+            Err($$$) => $FALLBACK($$$),
+        }

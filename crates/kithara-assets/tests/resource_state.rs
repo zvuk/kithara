@@ -20,8 +20,8 @@ fn xor_process_fn() -> ProcessChunkFn<u8> {
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, "pins", CancellationToken::new());
-    PinsIndex::open(&disk, byte_pool().clone())
+    let disk = DiskAssetStore::new(root_dir, "pins", CancellationToken::new(), byte_pool());
+    PinsIndex::open(&disk, byte_pool())
         .and_then(|index| index.load())
         .unwrap_or_default()
 }

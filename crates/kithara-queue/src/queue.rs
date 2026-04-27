@@ -69,6 +69,16 @@ struct PendingSelect {
     transition: Transition,
 }
 
+/// Where a new track should land in the queue's internal `Vec`.
+#[derive(Clone, Copy, Debug)]
+enum Placement {
+    /// Push past the tail — used by [`Queue::append`].
+    Append,
+    /// Insert at a caller-resolved position — used by [`Queue::insert`]
+    /// after it looks up `after_id`.
+    At(usize),
+}
+
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns an `Arc<PlayerImpl>` and a private async track loader, plus queue-level state
@@ -107,7 +117,6 @@ pub struct Queue {
     /// downstream UIs should read from this field rather than polling
     /// the engine directly.
     cached_position: Arc<Mutex<Option<f64>>>,
-    autoplay: bool,
 }
 
 impl Queue {
@@ -128,7 +137,6 @@ impl Queue {
         let QueueConfig {
             player,
             max_concurrent_loads,
-            autoplay,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
@@ -151,7 +159,6 @@ impl Queue {
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(Mutex::new(None)),
             cached_position: Arc::new(Mutex::new(None)),
-            autoplay,
         }
     }
 
@@ -160,6 +167,15 @@ impl Queue {
     #[must_use]
     pub fn player(&self) -> &Arc<PlayerImpl> {
         &self.player
+    }
+
+    /// ABR handle of the currently playing adaptive item, if any.
+    ///
+    /// Returned handle drives runtime variant/bandwidth control — FFI and
+    /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.player.current_abr_handle()
     }
 
     /// Subscribe to the unified event stream: `QueueEvent` + underlying
@@ -209,28 +225,7 @@ impl Queue {
 
     /// Append a track. Loading starts immediately in the background.
     pub fn append<S: Into<TrackSource>>(&self, source: S) -> TrackId {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let source = source.into();
-        let entry = TrackEntry {
-            id,
-            name: extract_track_name(&source),
-            url: source.uri().map(str::to_string),
-            status: TrackStatus::Pending,
-        };
-
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            guard.push(entry);
-            guard.len() - 1
-        };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, source.clone());
-        self.player.reserve_slots(index + 1);
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        self.spawn_apply_after_load(id, source);
-        id
+        self.insert_entry(source.into(), Placement::Append)
     }
 
     /// Insert a track after the given id, or at the head when `after` is
@@ -244,8 +239,30 @@ impl Queue {
         source: S,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let source = source.into();
+        let pos = {
+            let guard = self.lock_tracks();
+            match after {
+                None => 0,
+                Some(after_id) => guard
+                    .iter()
+                    .position(|e| e.id == after_id)
+                    .map(|i| i + 1)
+                    .ok_or(QueueError::UnknownTrackId(after_id))?,
+            }
+        };
+        Ok(self.insert_entry(source, Placement::At(pos)))
+    }
+
+    /// Shared insertion path for [`Self::append`] and [`Self::insert`].
+    ///
+    /// Allocates a fresh [`TrackId`], builds the [`TrackEntry`], places it
+    /// per `placement`, then mirrors the track into the player, bus, and
+    /// background loader. Position resolution — including fallible
+    /// `after_id` lookup — happens in the caller, so this helper is
+    /// infallible.
+    fn insert_entry(&self, source: TrackSource, placement: Placement) -> TrackId {
+        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let entry = TrackEntry {
             id,
             name: extract_track_name(&source),
@@ -255,16 +272,16 @@ impl Queue {
 
         let index = {
             let mut guard = self.lock_tracks_mut();
-            let pos = match after {
-                None => 0,
-                Some(after_id) => guard
-                    .iter()
-                    .position(|e| e.id == after_id)
-                    .map(|i| i + 1)
-                    .ok_or(QueueError::UnknownTrackId(after_id))?,
-            };
-            guard.insert(pos, entry);
-            pos
+            match placement {
+                Placement::Append => {
+                    guard.push(entry);
+                    guard.len() - 1
+                }
+                Placement::At(pos) => {
+                    guard.insert(pos, entry);
+                    pos
+                }
+            }
         };
         self.sources
             .lock()
@@ -273,7 +290,7 @@ impl Queue {
         self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
-        Ok(id)
+        id
     }
 
     /// Remove a track from the queue by id.
@@ -396,6 +413,11 @@ impl Queue {
 
         match status {
             TrackStatus::Loaded => {
+                // Cancel any other in-flight pending — otherwise its
+                // spawn_apply_after_load completion would still plant
+                // its resource and `select_item_with_crossfade` it,
+                // barging in over the track the user just selected.
+                self.cancel_stale_pending(id);
                 let was_playing = self.player.is_playing();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
                 self.player
@@ -412,10 +434,10 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
-                *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
+                self.override_pending_select(PendingSelect { id, transition });
                 Ok(())
             }
-            TrackStatus::Consumed | TrackStatus::Failed(_) => {
+            TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
                 let source = self
                     .sources
                     .lock()
@@ -423,7 +445,7 @@ impl Queue {
                     .get(&id)
                     .cloned()
                     .ok_or(QueueError::NotReady(id))?;
-                *self.lock_pending_select_mut() = Some(PendingSelect { id, transition });
+                self.override_pending_select(PendingSelect { id, transition });
                 self.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source);
                 Ok(())
@@ -437,15 +459,37 @@ impl Queue {
     /// [`RepeatMode::Off`] is active).
     pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
         let len = self.len();
-        let Some(idx) = self.lock_navigation_mut().next(len) else {
-            self.bus.publish(QueueEvent::QueueEnded);
-            return None;
-        };
-        let id = self.lock_tracks().get(idx).map(|e| e.id)?;
-        if let Err(e) = self.select(id, transition) {
-            warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
+        // `TrackStatus::Cancelled` slots stay populated in the queue
+        // but their resource was never planted (load was overridden
+        // by a later explicit select), so auto-advance must not flip
+        // `current()` onto them. Loop until we find a playable slot
+        // or run off the end of the queue. An explicit
+        // [`Self::select`] of a Cancelled track is honoured via the
+        // `Cancelled | Consumed | Failed` branch in `select`.
+        loop {
+            let Some(idx) = self.lock_navigation_mut().next(len) else {
+                self.bus.publish(QueueEvent::QueueEnded);
+                return None;
+            };
+            let Some((id, status)) = self
+                .lock_tracks()
+                .get(idx)
+                .map(|e| (e.id, e.status.clone()))
+            else {
+                continue;
+            };
+            if matches!(status, TrackStatus::Cancelled) {
+                debug!(
+                    id = id.as_u64(),
+                    "advance_to_next: skipping cancelled track"
+                );
+                continue;
+            }
+            if let Err(e) = self.select(id, transition) {
+                warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
+            }
+            return Some(id);
         }
-        Some(id)
     }
 
     /// Go back to the previous track. Returns the newly selected id, or
@@ -483,9 +527,21 @@ impl Queue {
 
     /// Seek within the currently-playing track.
     ///
+    /// Seek-hang detection is not handled here: the audio pipeline's
+    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
+    /// `Stream::read`, `decode_next_chunk`) already panics with a
+    /// stacktrace and context dump when no progress is observed. Adding
+    /// a second Queue-level watchdog would just duplicate those panics.
+    ///
+    /// Returns the typed [`SeekOutcome`] — either `Landed` with the
+    /// requested target (the actual landed position is reconciled by
+    /// the worker after applying the seek; this call returns the
+    /// optimistic outcome) or `PastEof` if the target is beyond the
+    /// known track duration.
+    ///
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
-    pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
+    pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
         self.player.seek_seconds(seconds).map_err(QueueError::from)
     }
 
@@ -645,6 +701,47 @@ impl Queue {
         self.tracks.set_status(id, status);
     }
 
+    /// Replace `pending_select` with a new selection. If the previous
+    /// pending track is different from `new`, mark it
+    /// [`TrackStatus::Cancelled`] so the in-flight load — when it
+    /// finishes — does not silently plant its resource into the queue
+    /// and "barge in" via auto-advance. `TrackStatus::Cancelled` is the
+    /// single source of truth for this: `spawn_apply_after_load` reads
+    /// it on completion and `advance_to_next` reads it when iterating.
+    /// See Bug B reproducer (`tests/.../track_switch_race.rs`).
+    fn override_pending_select(&self, new: PendingSelect) {
+        let mut p = self.lock_pending_select_mut();
+        let prev_id = match *p {
+            Some(prev) if prev.id != new.id => Some(prev.id),
+            _ => None,
+        };
+        *p = Some(new);
+        drop(p);
+        if let Some(prev_id) = prev_id {
+            self.set_status(prev_id, TrackStatus::Cancelled);
+        }
+    }
+
+    /// Synchronous-select counterpart to [`Self::override_pending_select`]:
+    /// the user picked a `Loaded` track, so any other in-flight load is
+    /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
+    /// so its `spawn_apply_after_load` completion path does not barge
+    /// in on top of the just-selected track.
+    fn cancel_stale_pending(&self, applying_id: TrackId) {
+        let stale = {
+            let mut p = self.lock_pending_select_mut();
+            let result = match *p {
+                Some(prev) if prev.id != applying_id => Some(prev.id),
+                _ => None,
+            };
+            *p = None;
+            result
+        };
+        if let Some(stale_id) = stale {
+            self.set_status(stale_id, TrackStatus::Cancelled);
+        }
+    }
+
     fn spawn_apply_after_load(&self, id: TrackId, source: TrackSource) {
         let handle = self.loader.spawn_load(id, source);
         let player = Arc::clone(&self.player);
@@ -652,7 +749,6 @@ impl Queue {
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let bus = self.bus.clone();
-        let autoplay = self.autoplay;
         tokio::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
@@ -662,6 +758,27 @@ impl Queue {
                     return;
                 }
             };
+
+            // Bug B (barge-in): if a later `select` overrode this
+            // load's `pending_select`, the previous track was marked
+            // `TrackStatus::Cancelled` synchronously by
+            // `override_pending_select`. Skip `replace_item` so the
+            // slot stays empty and auto-advance falls through; the
+            // status remains `Cancelled` so an explicit user
+            // `select(id)` still re-engages via the
+            // `Cancelled | Consumed | Failed` branch in `select`.
+            let was_cancelled = tracks
+                .lock()
+                .iter()
+                .find(|e| e.id == id)
+                .is_some_and(|e| matches!(e.status, TrackStatus::Cancelled));
+            if was_cancelled {
+                debug!(
+                    id = id.as_u64(),
+                    "load was overridden by a later select; skipping replace_item"
+                );
+                return;
+            }
 
             let index = {
                 let guard = tracks.lock();
@@ -711,18 +828,6 @@ impl Queue {
                             duration_seconds: crossfade,
                         });
                     }
-                    mark_consumed();
-                }
-            } else if autoplay && !player.is_playing() {
-                // First autoplay is always an immediate cut — nothing
-                // is playing yet, so there's nothing to fade from.
-                if let Err(e) = player.select_item_with_crossfade(index, true, 0.0) {
-                    warn!(id = id.as_u64(), error = %e, "autoplay select failed");
-                } else {
-                    navigation
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .select(index);
                     mark_consumed();
                 }
             }

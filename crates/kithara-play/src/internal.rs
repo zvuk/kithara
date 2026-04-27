@@ -45,7 +45,7 @@ pub mod offline {
     use kithara_platform::Mutex;
     use ringbuf::{
         HeapRb,
-        traits::{Producer, Split},
+        traits::{Consumer, Producer, Split},
     };
 
     use crate::impls::{
@@ -172,6 +172,59 @@ pub mod offline {
                 })
                 .expect("send Seek");
         }
+
+        /// Drain pending processor notifications.
+        ///
+        /// Tests use this to discriminate between a track that ended/failed
+        /// cleanly (notification arrives within the observation window) and
+        /// a pipeline stuck in a recreate-loop (no terminal notification —
+        /// position stays pinned at the seek target).
+        ///
+        /// Returns notification kind tags rather than the full enum so the
+        /// internal `PlayerNotification` type stays `pub(crate)`.
+        pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
+            let mut rx = self.shared_state.notification_rx.lock_sync();
+            let mut out = Vec::new();
+            while let Some(n) = rx.try_pop() {
+                use crate::impls::player_notification::PlayerNotification as N;
+                out.push(match n {
+                    N::TrackError(_, _) => NotificationKind::TrackError,
+                    N::TrackLoaded(_) => NotificationKind::TrackLoaded,
+                    N::TrackUnloaded(_) => NotificationKind::TrackUnloaded,
+                    N::TrackAboutToEnd(_) => NotificationKind::TrackAboutToEnd,
+                    N::TrackPlaybackStarted(_) => NotificationKind::TrackPlaybackStarted,
+                    N::TrackPlaybackStopped(_) => NotificationKind::TrackPlaybackStopped,
+                    N::TrackPlaybackPaused(_) => NotificationKind::TrackPlaybackPaused,
+                    N::TrackRequested(_) => NotificationKind::TrackRequested,
+                    N::TrackChanged { .. } => NotificationKind::TrackChanged,
+                    N::TrackFadingIn(_) => NotificationKind::TrackFadingIn,
+                    N::TrackFadingOut(_) => NotificationKind::TrackFadingOut,
+                });
+            }
+            out
+        }
+    }
+
+    /// Tag for [`PlayerNotification`] variants.
+    ///
+    /// Mirrors the variants of the internal `PlayerNotification` enum so
+    /// tests can match on terminal-state classes (`TrackError`,
+    /// `TrackPlaybackStopped`) without importing the `pub(crate)` type.
+    ///
+    /// [`PlayerNotification`]: crate::impls::player_notification::PlayerNotification
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NotificationKind {
+        TrackError,
+        TrackLoaded,
+        TrackUnloaded,
+        TrackAboutToEnd,
+        TrackPlaybackStarted,
+        TrackPlaybackStopped,
+        TrackPlaybackPaused,
+        TrackRequested,
+        TrackChanged,
+        TrackFadingIn,
+        TrackFadingOut,
     }
 
     /// Create a [`Resource`](crate::Resource) from any [`PcmReader`].

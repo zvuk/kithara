@@ -12,19 +12,14 @@ use axum::{
 use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     file::{File, FileConfig},
     stream::Stream,
 };
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-struct Consts;
-impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../../assets/test.mp3");
-    /// Expected duration of test.mp3 (ffprobe: 187.102041s).
-    const EXPECTED_DURATION_SECS: f64 = 187.0;
-}
+use crate::common::test_defaults::Consts;
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -184,28 +179,35 @@ async fn audio_file_mp3_decodes_with_duration(
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "path={path} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
-        Consts::EXPECTED_DURATION_SECS
+        Consts::TEST_MP3_DURATION_SECS
     );
 
     // Decode at least 2 seconds of real PCM.
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
 
         for _ in 0..600 {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total += count.get();
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            total += n;
             if audio.position() >= Duration::from_secs(2) {
                 break;
             }
         }
 
-        (total, audio.position(), audio.is_eof())
+        (total, audio.position(), saw_eof)
     })
     .await
     .unwrap();
@@ -249,9 +251,9 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "path={path} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
-        Consts::EXPECTED_DURATION_SECS
+        Consts::TEST_MP3_DURATION_SECS
     );
 }
 
@@ -268,19 +270,26 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
 
         for _ in 0..600 {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total += count.get();
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            total += n;
             if audio.position() >= Duration::from_secs(2) {
                 break;
             }
         }
 
-        (total, audio.position(), audio.is_eof())
+        (total, audio.position(), saw_eof)
     })
     .await
     .unwrap();

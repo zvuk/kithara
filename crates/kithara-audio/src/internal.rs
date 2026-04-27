@@ -77,8 +77,8 @@ pub mod source {
         pipeline::{
             fetch::Fetch,
             track_fsm::{
-                RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
-                TrackState, WaitContext,
+                RecreateCause, RecreateNext, RecreateState, SeekContext, SeekRequest, TrackState,
+                WaitContext,
             },
         },
         traits::AudioEffect,
@@ -257,29 +257,13 @@ pub mod source {
         source.0.session.media_info = media_info;
     }
 
-    pub fn set_awaiting_resume_state<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
-        epoch: u64,
-        target: Duration,
-        recover_attempts: u8,
-        skip: Option<Duration>,
-    ) {
-        source.0.state = TrackState::AwaitingResume(ResumeState {
-            recover_attempts,
-            seek: SeekContext { epoch, target },
-            skip,
-            anchor_offset: None,
-        });
-    }
-
-    pub fn set_recreating_decoder<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
+    fn build_recreate_state(
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-    ) {
-        source.0.state = TrackState::RecreatingDecoder(RecreateState {
+    ) -> RecreateState {
+        RecreateState {
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
             media_info,
@@ -288,29 +272,33 @@ pub mod source {
                 seek: SeekContext { epoch, target },
             }),
             offset,
-        });
+        }
     }
 
-    pub fn set_waiting_recreation<T: StreamType>(
+    /// Where a recreate state should land when placed on the FSM:
+    /// either directly (active decoder recreation) or wrapped in a
+    /// `WaitingForSource` context with a matching wait reason.
+    #[derive(Debug, Clone, Copy)]
+    pub enum RecreateKind {
+        Decoder,
+        WaitingFor(WaitingReason),
+    }
+
+    pub fn set_recreate<T: StreamType>(
         source: &mut StreamAudioSource<T>,
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-        reason: WaitingReason,
+        kind: RecreateKind,
     ) {
-        source.0.state = TrackState::WaitingForSource {
-            context: WaitContext::Recreation(RecreateState {
-                attempt: 0,
-                cause: RecreateCause::VariantSwitch,
-                media_info,
-                next: RecreateNext::Seek(SeekRequest {
-                    attempt: 0,
-                    seek: SeekContext { epoch, target },
-                }),
-                offset,
-            }),
-            reason,
+        let state = build_recreate_state(epoch, target, media_info, offset);
+        source.0.state = match kind {
+            RecreateKind::Decoder => TrackState::RecreatingDecoder(state),
+            RecreateKind::WaitingFor(reason) => TrackState::WaitingForSource {
+                context: WaitContext::Recreation(state),
+                reason,
+            },
         };
     }
 }

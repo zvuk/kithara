@@ -1188,9 +1188,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.0"
+version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b193af5b67834b676abd72466a96c1024e6a6ad978a1f484bd90b85c94041351"
+checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1210,9 +1210,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.0"
+version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1110bd8a634a1ab8cb04345d8d878267d57c3cf1b38d91b71af6686408bbca6a"
+checksum = "f2ce8604710f6733aa641a2b3731eaa1e8b3d9973d5e3565da11800813f997a9"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3278,9 +3278,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.8.1"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
+checksum = "6299f016b246a94207e63da54dbe807655bf9e00044f73ded42c3ac5305fbcca"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3292,7 +3292,6 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "pin-utils",
  "smallvec",
  "tokio",
  "want",
@@ -3646,7 +3645,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
- "quick-error",
+ "quick-error 2.0.1",
 ]
 
 [[package]]
@@ -3902,7 +3901,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-workspace-hack",
- "rodio",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -3913,13 +3911,15 @@ name = "kithara-abr"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "delegate",
  "derivative",
  "kithara-abr",
+ "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "tracing",
+ "proptest",
+ "thiserror 2.0.18",
+ "tokio-util",
  "unimock",
  "wasm-bindgen-test",
 ]
@@ -4001,6 +4001,7 @@ dependencies = [
  "fast-interleave",
  "hotpath",
  "js-sys",
+ "kithara-abr",
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
@@ -4017,7 +4018,6 @@ dependencies = [
  "portable-atomic",
  "reqwest 0.13.2",
  "ringbuf",
- "rodio",
  "rubato 2.0.0",
  "smallvec",
  "tempfile",
@@ -4059,6 +4059,8 @@ dependencies = [
  "kithara-workspace-hack",
  "ndk-context",
  "symphonia 0.6.0-alpha.1",
+ "symphonia-core 0.6.0-alpha.1",
+ "symphonia-format-isomp4",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
@@ -4103,7 +4105,6 @@ dependencies = [
  "dashmap",
  "delegate",
  "derivative",
- "kithara-abr",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
@@ -4119,7 +4120,6 @@ version = "0.1.0"
 dependencies = [
  "kithara",
  "kithara-platform",
- "rodio",
  "tokio",
  "url",
 ]
@@ -4141,7 +4141,7 @@ dependencies = [
  "kithara-queue",
  "kithara-test-utils",
  "ndk-context",
- "rustls-platform-verifier",
+ "rustls-platform-verifier 0.7.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -4162,6 +4162,7 @@ dependencies = [
  "derive_setters",
  "futures",
  "hotpath",
+ "kithara-abr",
  "kithara-assets",
  "kithara-events",
  "kithara-file",
@@ -4173,7 +4174,6 @@ dependencies = [
  "kithara-workspace-hack",
  "memory-stats",
  "reqwest 0.13.2",
- "rodio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
@@ -4213,6 +4213,8 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
+ "serde_json",
  "tracing",
  "wasm-bindgen-test",
  "web-time",
@@ -4256,7 +4258,6 @@ dependencies = [
  "kithara-workspace-hack",
  "rangemap",
  "re_mp4",
- "rodio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
@@ -4307,7 +4308,6 @@ dependencies = [
  "reqwest 0.13.2",
  "ringbuf",
  "rkyv",
- "rodio",
  "serde",
  "serde_json",
  "serial_test",
@@ -4404,7 +4404,6 @@ dependencies = [
  "kithara-workspace-hack",
  "portable-atomic",
  "ringbuf",
- "rodio",
  "thiserror 2.0.18",
  "thunderdome",
  "tokio-util",
@@ -4421,6 +4420,7 @@ dependencies = [
  "delegate",
  "derivative",
  "derive_setters",
+ "kithara-abr",
  "kithara-events",
  "kithara-platform",
  "kithara-play",
@@ -4440,7 +4440,6 @@ dependencies = [
  "derivative",
  "hotpath",
  "kithara-bufpool",
- "kithara-hang-detector",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4467,6 +4466,7 @@ dependencies = [
  "derive_setters",
  "futures",
  "hotpath",
+ "kithara-abr",
  "kithara-events",
  "kithara-hang-detector",
  "kithara-net",
@@ -4555,6 +4555,7 @@ name = "kithara-wasm-macros"
 version = "0.1.0"
 dependencies = [
  "kithara-workspace-hack",
+ "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
@@ -4608,7 +4609,6 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
  "ringbuf",
- "rodio",
  "rustfft",
  "rustix 1.1.4",
  "semver",
@@ -6145,6 +6145,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 
 [[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bit-set 0.8.0",
+ "bit-vec 0.8.0",
+ "bitflags 2.11.0",
+ "num-traits",
+ "rand 0.9.2",
+ "rand_chacha",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
 name = "ptr_meta"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6178,6 +6197,12 @@ dependencies = [
  "web-sys",
  "winapi",
 ]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-error"
@@ -6340,6 +6365,15 @@ name = "rand_core"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c8d0fd677905edcbeedbf2edb6494d676f0e98d54d5cf9bda0b061cb8fb8aba"
+
+[[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
+]
 
 [[package]]
 name = "range-alloc"
@@ -6659,7 +6693,7 @@ dependencies = [
  "quinn",
  "rustls",
  "rustls-pki-types",
- "rustls-platform-verifier",
+ "rustls-platform-verifier 0.6.2",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -6727,13 +6761,13 @@ dependencies = [
 
 [[package]]
 name = "rkyv"
-version = "0.8.15"
+version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a30e631b7f4a03dee9056b8ef6982e8ba371dd5bedb74d3ec86df4499132c70"
+checksum = "73389e0c99e664f919275ab5b5b0471391fe9a8de61e1dff9b1eaf56a90f16e3"
 dependencies = [
  "bytecheck",
  "bytes",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "indexmap",
  "munge",
  "ptr_meta",
@@ -6746,26 +6780,13 @@ dependencies = [
 
 [[package]]
 name = "rkyv_derive"
-version = "0.8.15"
+version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8100bb34c0a1d0f907143db3149e6b4eea3c33b9ee8b189720168e818303986f"
+checksum = "5d2ed0b54125315fb36bd021e82d314d1c126548f871634b483f46b31d13cac6"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "rodio"
-version = "0.22.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a536bb79db59098ef71a4dd4246c02eb87b316deceb1b68e0cde7167ec01eb"
-dependencies = [
- "cpal",
- "dasp_sample",
- "num-rational",
- "symphonia 0.5.5",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -6953,6 +6974,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-platform-verifier"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d1e2536ce4f35f4846aa13bff16bd0ff40157cdb14cc056c7b14ba41233ba0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "jni 0.22.4",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier-android",
+ "rustls-webpki",
+ "security-framework",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rustls-platform-verifier-android"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6975,6 +7017,18 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "rusty-fork"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
+dependencies = [
+ "fnv",
+ "quick-error 1.2.3",
+ "tempfile",
+ "wait-timeout",
+]
 
 [[package]]
 name = "rustybuzz"
@@ -7655,15 +7709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039"
 dependencies = [
  "lazy_static",
- "symphonia-bundle-flac 0.5.5",
- "symphonia-bundle-mp3 0.5.5",
- "symphonia-codec-aac 0.5.5",
- "symphonia-codec-pcm 0.5.5",
- "symphonia-codec-vorbis 0.5.5",
  "symphonia-core 0.5.5",
- "symphonia-format-isomp4 0.5.5",
- "symphonia-format-ogg 0.5.5",
- "symphonia-format-riff 0.5.5",
  "symphonia-metadata 0.5.5",
 ]
 
@@ -7674,32 +7720,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a85941e1de62270fff9c09918703dd4cdcf8509f2683b9b8f36b229006dfbc8"
 dependencies = [
  "lazy_static",
- "symphonia-bundle-flac 0.6.0-alpha.1",
- "symphonia-bundle-mp3 0.6.0-alpha.1",
- "symphonia-codec-aac 0.6.0-alpha.1",
+ "symphonia-bundle-flac",
+ "symphonia-bundle-mp3",
+ "symphonia-codec-aac",
  "symphonia-codec-adpcm",
  "symphonia-codec-alac",
- "symphonia-codec-pcm 0.6.0-alpha.1",
- "symphonia-codec-vorbis 0.6.0-alpha.1",
+ "symphonia-codec-pcm",
+ "symphonia-codec-vorbis",
  "symphonia-core 0.6.0-alpha.1",
  "symphonia-format-caf",
- "symphonia-format-isomp4 0.6.0-alpha.1",
+ "symphonia-format-isomp4",
  "symphonia-format-mkv",
- "symphonia-format-ogg 0.6.0-alpha.1",
- "symphonia-format-riff 0.6.0-alpha.1",
+ "symphonia-format-ogg",
+ "symphonia-format-riff",
  "symphonia-metadata 0.6.0-alpha.1",
-]
-
-[[package]]
-name = "symphonia-bundle-flac"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c91565e180aea25d9b80a910c546802526ffd0072d0b8974e3ebe59b686c9976"
-dependencies = [
- "log",
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
- "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -7716,18 +7750,6 @@ dependencies = [
 
 [[package]]
 name = "symphonia-bundle-mp3"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4872dd6bb56bf5eac799e3e957aa1981086c3e613b27e0ac23b176054f7c57ed"
-dependencies = [
- "lazy_static",
- "log",
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
-]
-
-[[package]]
-name = "symphonia-bundle-mp3"
 version = "0.6.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae998661afd26776ccffeccbce9813dfcc5ab2ca93e184607a11db9ec66e0d8b"
@@ -7735,17 +7757,6 @@ dependencies = [
  "lazy_static",
  "log",
  "symphonia-core 0.6.0-alpha.1",
-]
-
-[[package]]
-name = "symphonia-codec-aac"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c263845aa86881416849c1729a54c7f55164f8b96111dba59de46849e73a790"
-dependencies = [
- "lazy_static",
- "log",
- "symphonia-core 0.5.5",
 ]
 
 [[package]]
@@ -7781,33 +7792,12 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-pcm"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e89d716c01541ad3ebe7c91ce4c8d38a7cf266a3f7b2f090b108fb0cb031d95"
-dependencies = [
- "log",
- "symphonia-core 0.5.5",
-]
-
-[[package]]
-name = "symphonia-codec-pcm"
 version = "0.6.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31386721e6ae023d96b73c20f4e0acd88e47a8e02055b64498eb98aedfe4983e"
 dependencies = [
  "log",
  "symphonia-core 0.6.0-alpha.1",
-]
-
-[[package]]
-name = "symphonia-codec-vorbis"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f025837c309cd69ffef572750b4a2257b59552c5399a5e49707cc5b1b85d1c73"
-dependencies = [
- "log",
- "symphonia-core 0.5.5",
- "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -7873,19 +7863,6 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-isomp4"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "243739585d11f81daf8dac8d9f3d18cc7898f6c09a259675fc364b382c30e0a5"
-dependencies = [
- "encoding_rs",
- "log",
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
- "symphonia-utils-xiph",
-]
-
-[[package]]
-name = "symphonia-format-isomp4"
 version = "0.6.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6bede3f9592b84f287ad42056c4ca54082db544db1fdfa19a8510b415d9f50e"
@@ -7910,18 +7887,6 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-ogg"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b4955c67c1ed3aa8ae8428d04ca8397fbef6a19b2b051e73b5da8b1435639cb"
-dependencies = [
- "log",
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
- "symphonia-utils-xiph",
-]
-
-[[package]]
-name = "symphonia-format-ogg"
 version = "0.6.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80258eabf34a4634465cb4cff5f27eaf89d1a84c9c175c6738f63a9e20477aaf"
@@ -7930,18 +7895,6 @@ dependencies = [
  "symphonia-common",
  "symphonia-core 0.6.0-alpha.1",
  "symphonia-metadata 0.6.0-alpha.1",
-]
-
-[[package]]
-name = "symphonia-format-riff"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2d7c3df0e7d94efb68401d81906eae73c02b40d5ec1a141962c592d0f11a96f"
-dependencies = [
- "extended",
- "log",
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
 ]
 
 [[package]]
@@ -7979,16 +7932,6 @@ dependencies = [
  "regex-lite",
  "smallvec",
  "symphonia-core 0.6.0-alpha.1",
-]
-
-[[package]]
-name = "symphonia-utils-xiph"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee27c85ab799a338446b68eec77abf42e1a6f1bb490656e121c6e27bfbab9f16"
-dependencies = [
- "symphonia-core 0.5.5",
- "symphonia-metadata 0.5.5",
 ]
 
 [[package]]
@@ -8455,6 +8398,7 @@ version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
+ "indexmap",
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
@@ -8766,6 +8710,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
 name = "unicase"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9057,9 +9007,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.22.0"
+version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a68d3c8f01c0cfa54a75291d83601161799e4a89a39e0929f4b0354d88757a37"
+checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
  "atomic",
  "getrandom 0.4.2",
@@ -9115,6 +9065,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d9b2acfb050df409c972a37d3b8e08cdea3bddb0c09db9d53137e504cfabed0"
 dependencies = [
  "utf8parse",
+]
+
+[[package]]
+name = "wait-timeout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -10442,8 +10401,12 @@ dependencies = [
  "clap",
  "glob",
  "kithara-workspace-hack",
+ "proc-macro2",
  "regex",
+ "serde",
+ "syn 2.0.117",
  "tempfile",
+ "toml 0.8.23",
 ]
 
 [[package]]

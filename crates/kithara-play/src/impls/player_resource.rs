@@ -80,23 +80,19 @@ impl PlayerResource {
     ///
     /// # Errors
     ///
-    /// Returns `PlayError::Internal` with "eof" if the resource has reached
-    /// end of file and no buffered data remains.
+    /// Returns `PlayError::Eof` if the resource has reached end of file and
+    /// no buffered data remains.
     pub(crate) fn read(
         &mut self,
         output: &mut [&mut [f32]],
         range: Range<usize>,
     ) -> Result<(), PlayError> {
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = false;
+        let mut natural_eof = false;
+        let mut decode_err: Option<kithara_audio::DecodeError> = None;
 
         // Fill scratch buffers until we have enough data
         while frames_to_read > self.write_len {
-            if self.resource.is_eof() {
-                eof_reached = true;
-                break;
-            }
-
             let avail = self.channel_buffers[0].len() - self.write_pos;
             if avail == 0 {
                 break;
@@ -108,15 +104,21 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let n = self.resource.read_planar(&mut planar);
-            if n == 0 {
-                if self.resource.is_eof() {
-                    eof_reached = true;
+            match self.resource.read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                    self.write_len += count.get();
+                    self.write_pos += count.get();
                 }
-                break;
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => break,
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    natural_eof = true;
+                    break;
+                }
+                Err(e) => {
+                    decode_err = Some(e);
+                    break;
+                }
             }
-            self.write_len += n;
-            self.write_pos += n;
         }
 
         // Copy from scratch buffers to output
@@ -153,8 +155,15 @@ impl PlayerResource {
             self.write_pos = tail_size;
 
             Ok(())
-        } else if eof_reached {
-            Err(PlayError::Internal("eof".into()))
+        } else if natural_eof {
+            Err(PlayError::Eof)
+        } else if let Some(err) = decode_err {
+            tracing::warn!(
+                src = %self.src,
+                error = %err,
+                "PlayerResource: transient decode error"
+            );
+            Err(PlayError::Internal(format!("decode error: {err}")))
         } else {
             // Reader returned 0 frames but is not at EOF (e.g. async seek
             // in progress). Zero-fill output so the audio thread outputs
@@ -174,7 +183,7 @@ impl PlayerResource {
     pub(crate) fn seek(&mut self, seconds: f64) {
         let position = Duration::from_secs_f64(seconds);
         match self.resource.seek(position) {
-            Ok(()) => {
+            Ok(_) => {
                 self.write_len = 0;
                 self.write_pos = 0;
             }
@@ -225,8 +234,8 @@ impl PlayerResource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
-    use kithara_audio::{PcmReader, mock::TestPcmReader};
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_audio::{DecodeError, PcmReader, ReadOutcome, SeekOutcome, mock::TestPcmReader};
+    use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -263,24 +272,32 @@ mod tests {
     }
 
     impl PcmReader for PendingReader {
-        fn read(&mut self, _buf: &mut [f32]) -> usize {
-            0
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Pending {
+                reason: kithara_audio::PendingReason::Buffering,
+                position: Duration::ZERO,
+            })
         }
 
-        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
-            0
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Pending {
+                reason: kithara_audio::PendingReason::Buffering,
+                position: Duration::ZERO,
+            })
         }
 
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            false
         }
 
         fn position(&self) -> Duration {
@@ -418,23 +435,17 @@ mod tests {
             kithara_bufpool::pcm_pool(),
         );
 
-        // Read all data
+        // Read until natural EOF surfaces as `PlayError::Eof`.
         let mut left = vec![0.0f32; 4096];
         let mut right = vec![0.0f32; 4096];
-        loop {
+        for _ in 0..1024 {
             let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
             match pr.read(&mut output, 0..4096) {
-                Ok(()) => {
-                    if pr.write_len == 0 && pr.resource.is_eof() {
-                        // Next read should return eof error
-                        let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
-                        let result = pr.read(&mut output2, 0..4096);
-                        assert!(result.is_err());
-                        return;
-                    }
-                }
-                Err(_) => return,
+                Ok(()) => continue,
+                Err(PlayError::Eof) => return,
+                Err(e) => panic!("unexpected error: {e}"),
             }
         }
+        panic!("reader never reached natural EOF within iteration budget");
     }
 }

@@ -58,7 +58,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::TestServer;
@@ -69,11 +69,13 @@ use kithara_platform::{
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
+use crate::common::test_defaults::Consts as Shared;
+
 struct Consts;
 impl Consts {
     const STREAM_ITERATIONS: usize = 4;
     const SEEKS_PER_STREAM: usize = 8;
-    const PACKAGED_SEGMENT_SIZE: u64 = 200_000;
+    const PACKAGED_SEGMENT_SIZE: u64 = Shared::SEGMENT_SIZE as u64;
 }
 
 async fn build_small_cache_stream(
@@ -88,10 +90,7 @@ async fn build_small_cache_stream(
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     Stream::<Hls>::new(config)
         .await
         .expect("HLS stream creation")

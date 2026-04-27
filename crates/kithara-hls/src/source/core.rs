@@ -1,10 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
-use kithara_abr::{AbrController, AbrOptions, Variant};
+use kithara_abr::AbrState;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -42,6 +45,10 @@ pub struct HlsSource {
     pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
     /// Peer handle. Dropped with this source, cancelling the peer.
     pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
+    /// Shared with `HlsPeer::reader_segment` — `read_at` updates this
+    /// cursor after each successful read so `HlsPeer::progress` can report
+    /// `reader_playback_time` to the ABR controller.
+    pub(crate) reader_segment: Arc<AtomicUsize>,
 }
 
 impl Drop for HlsSource {
@@ -97,13 +104,14 @@ impl HlsSource {
     pub(super) fn current_layout_variant(&self) -> Option<VariantIndex> {
         let pos = self.coord.timeline().byte_position();
         let segments = self.segments.lock_sync();
-        if let Some(seg_ref) = segments.find_at_offset(pos) {
+        if let Some(seg_ref) = segments.find_at_offset(pos).filter(|s| s.data.is_some()) {
             return Some(seg_ref.variant);
         }
         // Fallback: check the last committed segment across all variants
         if segments.max_end_offset() > 0
-            && let Some(seg_ref) =
-                segments.find_at_offset(segments.max_end_offset().saturating_sub(1))
+            && let Some(seg_ref) = segments
+                .find_at_offset(segments.max_end_offset().saturating_sub(1))
+                .filter(|s| s.data.is_some())
         {
             return Some(seg_ref.variant);
         }
@@ -118,10 +126,15 @@ impl HlsSource {
         let segments = self.segments.lock_sync();
         let result = segments
             .find_at_offset(reader_offset)
+            .filter(|s| s.data.is_some())
             .or_else(|| {
                 let max = segments.max_end_offset();
                 (max > 0)
-                    .then(|| segments.find_at_offset(max.saturating_sub(1)))
+                    .then(|| {
+                        segments
+                            .find_at_offset(max.saturating_sub(1))
+                            .filter(|s| s.data.is_some())
+                    })
                     .flatten()
             })
             .map(|seg_ref| (seg_ref.variant, seg_ref.segment_index));
@@ -310,34 +323,20 @@ impl HlsSource {
 /// handed to [`HlsPeer::new`]. Passing it in — instead of minting a new
 /// one inside — guarantees the peer's `priority()` reads the same
 /// `PLAYING` flag the audio FSM writes through the coord.
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub(crate) fn build_pair(
     backend: AssetStore<DecryptContext>,
     _track: kithara_stream::dl::PeerHandle,
-    variants: &[crate::parsing::VariantStream],
+    _variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
+    abr: Arc<AbrState>,
+    reader_segment: Arc<AtomicUsize>,
+    committed_segment: Arc<AtomicUsize>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
     timeline: Timeline,
 ) -> (HlsScheduler, HlsSource) {
-    let abr_variants: Vec<Variant> = variants
-        .iter()
-        .map(|v| Variant {
-            variant_index: v.id.0,
-            bandwidth_bps: v.bandwidth.unwrap_or(0),
-        })
-        .collect();
-
     let cancel = config.cancel.clone().unwrap_or_default();
-    let abr = match config.abr.clone() {
-        Some(ctrl) => {
-            ctrl.set_variants(abr_variants);
-            ctrl
-        }
-        None => AbrController::new(AbrOptions {
-            variants: abr_variants,
-            ..AbrOptions::default()
-        }),
-    };
     let abr_variant_index = abr.variant_index_handle();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
@@ -367,7 +366,7 @@ pub(crate) fn build_pair(
         cursor: DownloadCursor::fill(0),
         force_init_for_seek: false,
         sent_init_for_variant: HashSet::new(),
-        abr,
+        abr: Arc::clone(&abr),
         coord: Arc::clone(&coord),
         segments: Arc::clone(&segments),
         bus: bus.clone(),
@@ -377,7 +376,9 @@ pub(crate) fn build_pair(
         filling_layout_gap: false,
         demand_throttle_until: None,
         announced_cached_count: HashMap::new(),
+        populated_cached_count: HashMap::new(),
         in_flight_segments: HashSet::new(),
+        committed_segment,
     };
 
     let source = HlsSource {
@@ -389,6 +390,7 @@ pub(crate) fn build_pair(
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
+        reader_segment,
     };
 
     (downloader, source)

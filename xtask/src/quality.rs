@@ -8,12 +8,10 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-use crate::util::walk_rs_files;
+use crate::common::walker::walk_rs_files;
 
 #[derive(Clone, Copy, Debug, Subcommand)]
 pub(crate) enum QualityCommand {
-    /// Validate workspace architecture.
-    Arch,
     /// Generate a quality report.
     Report {
         #[arg(long)]
@@ -140,7 +138,6 @@ fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
 
 pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
     match cmd {
-        QualityCommand::Arch => crate::arch::run(),
         QualityCommand::Report {
             min_unimock_traits,
             min_rstest_cases,

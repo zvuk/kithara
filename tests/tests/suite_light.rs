@@ -56,6 +56,8 @@ mod kithara_hls {
     mod wait_range_contract;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_abr_integration;
 mod kithara_net;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play;

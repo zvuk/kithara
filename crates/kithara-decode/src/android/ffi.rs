@@ -19,6 +19,10 @@ pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";
 pub(crate) const KEY_DURATION_US: &CStr = c"durationUs";
 pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
+/// `AMEDIAFORMAT_KEY_SAMPLE_FILE_OFFSET` — present on the per-sample
+/// format returned by `AMediaExtractor_getSampleFormat` (API 28+).
+/// Carries the byte offset of the current sample in the source file.
+pub(crate) const KEY_SAMPLE_FILE_OFFSET: &CStr = c"sample-file-offset";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -124,6 +128,15 @@ unsafe extern "C" {
     pub(crate) fn AMediaExtractor_getSampleTime(extractor: *mut AMediaExtractor) -> i64;
     pub(crate) fn AMediaExtractor_getSampleTrackIndex(extractor: *mut AMediaExtractor) -> i32;
     pub(crate) fn AMediaExtractor_advance(extractor: *mut AMediaExtractor) -> bool;
+    /// Available since API 28 (Android 9). Populates `*out_format` with a
+    /// new `AMediaFormat` carrying per-sample metadata, including
+    /// `"sample-file-offset"` (the byte offset of the current sample in
+    /// the source file).  Caller owns the returned format and must free
+    /// it with [`AMediaFormat_delete`].
+    pub(crate) fn AMediaExtractor_getSampleFormat(
+        extractor: *mut AMediaExtractor,
+        out_format: *mut *mut AMediaFormat,
+    ) -> MediaStatus;
 
     pub(crate) fn AMediaCodec_createDecoderByType(mime_type: *const c_char) -> *mut AMediaCodec;
     pub(crate) fn AMediaCodec_delete(codec: *mut AMediaCodec) -> MediaStatus;

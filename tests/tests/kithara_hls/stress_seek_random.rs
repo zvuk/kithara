@@ -14,7 +14,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{
@@ -130,10 +130,7 @@ async fn stress_random_seek_read_hls(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 

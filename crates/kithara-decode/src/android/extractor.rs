@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::{ptr::NonNull, time::Duration};
+use std::{ptr, ptr::NonNull, time::Duration};
 
 use kithara_stream::AudioCodec;
 use tracing::debug;
@@ -28,6 +28,12 @@ pub(crate) struct ExtractorBootstrap {
 pub(crate) struct CompressedSample<'a> {
     pub(crate) bytes: &'a [u8],
     pub(crate) presentation_time_us: i64,
+    /// Byte offset of this sample within the source file, when the
+    /// extractor reports it via the `sample-file-offset` key on
+    /// `AMediaExtractor_getSampleFormat` (API 28+). `None` on earlier
+    /// API levels or when the underlying container does not provide
+    /// a per-sample byte offset.
+    pub(crate) byte_offset: Option<u64>,
 }
 
 pub(crate) struct OwnedExtractor {
@@ -86,6 +92,14 @@ impl OwnedExtractor {
             return Ok(None);
         }
 
+        // Pull the per-sample format BEFORE `readSampleData`: the
+        // extractor's "current sample" cursor is what `getSampleFormat`
+        // describes, and `readSampleData` advances internal state in
+        // some implementations. The format carries
+        // `sample-file-offset` (API 28+); leave as `None` on earlier
+        // levels or when the container doesn't surface offsets.
+        let byte_offset = self.current_sample_byte_offset();
+
         let bytes_read = unsafe {
             ffi::AMediaExtractor_readSampleData(self.raw(), buffer.as_mut_ptr(), buffer.len())
         };
@@ -102,7 +116,29 @@ impl OwnedExtractor {
         Ok(Some(CompressedSample {
             bytes: &buffer[..bytes_read],
             presentation_time_us,
+            byte_offset,
         }))
+    }
+
+    /// Return the byte offset of the extractor's current sample if
+    /// `AMediaExtractor_getSampleFormat` succeeds and reports
+    /// `sample-file-offset`. Failures and missing keys both yield
+    /// `None` — the offset is best-effort metadata.
+    fn current_sample_byte_offset(&self) -> Option<u64> {
+        let mut format: *mut ffi::AMediaFormat = ptr::null_mut();
+        let status = unsafe { ffi::AMediaExtractor_getSampleFormat(self.raw(), &mut format) };
+        if status != MEDIA_STATUS_OK || format.is_null() {
+            return None;
+        }
+        let mut value: i64 = 0;
+        let found = unsafe {
+            ffi::AMediaFormat_getInt64(format, ffi::KEY_SAMPLE_FILE_OFFSET.as_ptr(), &mut value)
+        };
+        unsafe { ffi::AMediaFormat_delete(format) };
+        if !found {
+            return None;
+        }
+        u64::try_from(value).ok()
     }
 
     pub(crate) fn advance(&self) -> Result<bool, AndroidBackendError> {

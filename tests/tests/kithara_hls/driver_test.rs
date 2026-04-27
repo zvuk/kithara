@@ -12,8 +12,8 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    events::{Event, EventBus, HlsEvent},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    events::{AbrEvent, Event, EventBus, HlsEvent},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{
@@ -53,10 +53,7 @@ async fn test_driver_seek_after_playlist_finished(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
@@ -129,13 +126,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_events(bus)
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.5,
-            min_buffer_for_up_switch_secs: 1.0,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.2,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
@@ -146,16 +137,9 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
     spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
-                Event::Hls(HlsEvent::VariantApplied {
-                    from_variant,
-                    to_variant,
-                    ..
-                }) => {
-                    info!("Variant switch: {} -> {}", from_variant, to_variant);
-                    switches_clone
-                        .lock()
-                        .unwrap()
-                        .push((from_variant, to_variant));
+                Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
+                    info!("Variant switch: {} -> {}", from, to);
+                    switches_clone.lock().unwrap().push((from, to));
                 }
                 Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}

@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     base::{Assets, Capabilities},
+    deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
     index::AvailabilityIndex,
     key::ResourceKey,
@@ -77,6 +78,81 @@ pub struct DiskAssetStore {
     /// preserves the explicit-checkpoint historical behaviour (callers
     /// must invoke `AssetStore::checkpoint()` themselves).
     checkpoint_signal: Option<Arc<CheckpointSignal>>,
+    /// Single canonical removal channel. Synchronises FS deletion with
+    /// the [`AvailabilityIndex`]. See [`crate::deleter`] module docs.
+    deleter: Arc<dyn AssetDeleter>,
+}
+
+/// Disk-backed [`AssetDeleter`].
+///
+/// Owns clones of every shared in-memory + disk-backed index handle
+/// (`availability`, `pins`, `lru`) plus `root_dir`. `asset_root` is
+/// **not** stored on the deleter itself — every method takes it as a
+/// parameter so one deleter instance services own-asset teardown,
+/// resource-level removal, and foreign-asset LRU eviction (the
+/// call-site supplies the right name).
+///
+/// Contract: every method synchronises the FS-side change (or absence
+/// thereof) with **all** indexes that reflect on-disk state — see
+/// [`crate::deleter`] for normative wording.
+#[derive(Debug)]
+pub(crate) struct DiskAssetDeleter {
+    root_dir: PathBuf,
+    availability: AvailabilityIndex,
+    pins: crate::index::PinsIndex,
+    lru: crate::index::LruIndex,
+}
+
+impl DiskAssetDeleter {
+    pub(crate) fn new(
+        root_dir: PathBuf,
+        availability: AvailabilityIndex,
+        pins: crate::index::PinsIndex,
+        lru: crate::index::LruIndex,
+    ) -> Self {
+        Self {
+            root_dir,
+            availability,
+            pins,
+            lru,
+        }
+    }
+}
+
+impl AssetDeleter for DiskAssetDeleter {
+    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()> {
+        let path = match key {
+            ResourceKey::Relative(rel) => {
+                let safe_root = sanitize_rel(asset_root).map_err(|()| AssetsError::InvalidKey)?;
+                let safe_rel = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
+                self.root_dir.join(safe_root).join(safe_rel)
+            }
+            ResourceKey::Absolute(path) => path.clone(),
+        };
+        let result = match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        };
+        // Resource-level removal only invalidates the per-resource
+        // entry in `AvailabilityIndex`. Pins/LRU are per-asset_root,
+        // so they are untouched by a single-resource removal.
+        self.availability.remove(asset_root, key);
+        result
+    }
+
+    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+        // Asset-level removal: FS + every index that ties state to
+        // this asset_root must be cleared. We attempt **all** of
+        // them even on partial failure so the index that did manage
+        // to update isn't left out of sync; the first error wins
+        // for the return value.
+        let fs_result = delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from);
+        self.availability.clear_root(asset_root);
+        let pins_result = self.pins.remove(asset_root).map(|_| ());
+        let lru_result = self.lru.remove(asset_root);
+        fs_result.and(pins_result).and(lru_result)
+    }
 }
 
 impl DiskAssetStore {
@@ -90,8 +166,30 @@ impl DiskAssetStore {
         root_dir: P,
         asset_root: S,
         cancel: CancellationToken,
+        _pool: &kithara_bufpool::BytePool,
     ) -> Self {
-        Self::with_availability(root_dir, asset_root, cancel, AvailabilityIndex::new(), None)
+        let root_dir = root_dir.into();
+        let availability = AvailabilityIndex::new();
+        // Standalone construction (tests, ad-hoc callers): ephemeral
+        // indexes carry no on-disk state and need no pool. The
+        // production builder uses disk-backed instances shared with
+        // `LeaseAssets` and `EvictAssets`.
+        let pins = crate::index::PinsIndex::ephemeral();
+        let lru = crate::index::LruIndex::ephemeral();
+        let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
+            root_dir.clone(),
+            availability.clone(),
+            pins,
+            lru,
+        ));
+        Self::with_availability_and_deleter(
+            root_dir,
+            asset_root,
+            cancel,
+            availability,
+            None,
+            deleter,
+        )
     }
 
     /// Like [`DiskAssetStore::new`] but shares the given aggregate
@@ -112,12 +210,20 @@ impl DiskAssetStore {
     /// background flusher (see [`Self::spawn_auto_flush`]). `None`
     /// disables auto-flush — callers must invoke
     /// [`crate::AssetStore::checkpoint`] explicitly.
-    pub(crate) fn with_availability<P: Into<PathBuf>, S: Into<String>>(
+    ///
+    /// The `deleter` parameter is the canonical removal channel —
+    /// every path that physically deletes a resource (own or foreign)
+    /// goes through it, see [`crate::deleter`]. Production callers
+    /// share one [`Arc<dyn AssetDeleter>`] between the store and the
+    /// LRU evictor; tests construct a fresh deleter via
+    /// [`Self::new`].
+    pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>, S: Into<String>>(
         root_dir: P,
         asset_root: S,
         cancel: CancellationToken,
         availability: AvailabilityIndex,
         checkpoint_every: Option<NonZeroUsize>,
+        deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         let checkpoint_signal = checkpoint_every.map(|n| Arc::new(CheckpointSignal::new(n)));
         let store = Self {
@@ -126,6 +232,7 @@ impl DiskAssetStore {
             cancel,
             availability,
             checkpoint_signal,
+            deleter,
         };
         let _ = store.seed_availability_from_disk();
         store
@@ -382,16 +489,16 @@ impl Assets for DiskAssetStore {
         if self.cancel.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
-        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(Into::into)
+        // Delegate to the canonical deleter — physical FS removal and
+        // AvailabilityIndex invalidation happen atomically inside.
+        // No other path is allowed to call `delete_asset_dir` or
+        // `availability.clear_root` directly. See [`crate::deleter`].
+        self.deleter.delete_asset(&self.asset_root)
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        let path = self.resource_path(key)?;
-        match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
+        // Single canonical removal channel, see `delete_asset` above.
+        self.deleter.remove_resource(&self.asset_root, key)
     }
 }
 
@@ -463,7 +570,12 @@ mod tests {
         let file_path = dir.path().join("local_audio.mp3");
         fs::write(&file_path, b"fake audio data").unwrap();
 
-        let store = DiskAssetStore::new(dir.path().join("cache"), "_", CancellationToken::new());
+        let store = DiskAssetStore::new(
+            dir.path().join("cache"),
+            "_",
+            CancellationToken::new(),
+            crate::byte_pool(),
+        );
 
         let key = ResourceKey::absolute(&file_path);
         let res = store.open_resource(&key).unwrap();

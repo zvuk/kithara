@@ -28,6 +28,9 @@ use crate::{
 /// AES-128 key length in bytes.
 const AES_KEY_LEN: usize = 16;
 
+/// Resolved DRM decryption inputs for a segment.
+type DecryptInputs<'a> = (&'a Arc<KeyManager>, [u8; AES_KEY_LEN], Url);
+
 // Public segment-data types
 
 /// Segment metadata (data is on disk, not in memory).
@@ -100,24 +103,36 @@ impl SegmentLoader {
         url: &Url,
         decrypt_ctx: Option<DecryptContext>,
     ) -> HlsResult<(u64, bool)> {
+        match self.try_cached_fetch(url, decrypt_ctx)? {
+            CachedOrPending::Cached(len) => Ok((len, true)),
+            CachedOrPending::Pending(res) => {
+                trace!(url = %url, "start_fetch: downloading via PeerHandle");
+                let bytes = self.download_stream_via_downloader(url, &res).await?;
+                Ok((bytes, false))
+            }
+        }
+    }
+
+    /// Resolve whether `url` is already cached. On hit returns the
+    /// committed length; on miss returns an acquired resource ready
+    /// for network download.
+    fn try_cached_fetch(
+        &self,
+        url: &Url,
+        decrypt_ctx: Option<DecryptContext>,
+    ) -> HlsResult<CachedOrPending> {
         let key = ResourceKey::from_url(url);
         if let Some(len) = self.backend.final_len(&key) {
             trace!(url = %url, len, "start_fetch: cache hit via AssetStore availability index");
-            return Ok((len, true));
+            return Ok(CachedOrPending::Cached(len));
         }
 
         let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
-
-        let status = res.status();
-        if let ResourceStatus::Committed { final_len } = status {
-            let len = final_len.unwrap_or(0);
+        if let Some(len) = committed_len(&res) {
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok((len, true));
+            return Ok(CachedOrPending::Cached(len));
         }
-
-        trace!(url = %url, "start_fetch: downloading via PeerHandle");
-        let bytes = self.download_stream_via_downloader(url, &res).await?;
-        Ok((bytes, false))
+        Ok(CachedOrPending::Pending(Box::new(res)))
     }
 
     /// Stream a fetch into an `AssetResource` via [`PeerHandle`].
@@ -155,6 +170,52 @@ impl SegmentLoader {
         Ok(res.len().unwrap_or(total))
     }
 
+    /// Prepare AES-128 decryption inputs.
+    ///
+    /// Returns `Ok(None)` when the segment is unencrypted or uses an
+    /// unsupported method. Returns `Ok(Some(...))` with the resolved
+    /// [`KeyManager`], derived IV, and absolute key URL when a DRM key
+    /// fetch/lookup is required. Returns `Err` when the segment is
+    /// encrypted but no [`KeyManager`] has been configured.
+    fn prepare_decrypt_inputs(
+        &self,
+        key: Option<&SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<Option<DecryptInputs<'_>>> {
+        let Some(seg_key) = key else {
+            return Ok(None);
+        };
+        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+            return Ok(None);
+        }
+        let Some(ref key_info) = seg_key.key_info else {
+            return Ok(None);
+        };
+        let Some(ref km) = self.key_manager else {
+            return Err(HlsError::KeyProcessing(
+                "encrypted segment but no KeyManager configured".to_string(),
+            ));
+        };
+
+        let iv = KeyManager::derive_iv(key_info, sequence);
+        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
+        Ok(Some((km, iv, key_url)))
+    }
+
+    /// Validate a raw AES-128 key and build a [`DecryptContext`].
+    fn build_decrypt_context(raw_key: &[u8], iv: [u8; AES_KEY_LEN]) -> HlsResult<DecryptContext> {
+        if raw_key.len() != AES_KEY_LEN {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                raw_key.len()
+            )));
+        }
+        let mut key_bytes = [0u8; AES_KEY_LEN];
+        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
+        Ok(DecryptContext::new(key_bytes, iv))
+    }
+
     /// Resolve decryption context for a segment.
     ///
     /// Returns `Some(DecryptContext)` for AES-128 encrypted segments,
@@ -165,37 +226,13 @@ impl SegmentLoader {
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {
-        let Some(seg_key) = key else {
+        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
+        else {
             return Ok(None);
         };
 
-        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
-            return Ok(None);
-        }
-
-        let Some(ref key_info) = seg_key.key_info else {
-            return Ok(None);
-        };
-
-        let Some(ref km) = self.key_manager else {
-            return Err(HlsError::KeyProcessing(
-                "encrypted segment but no KeyManager configured".to_string(),
-            ));
-        };
-
-        let iv = KeyManager::derive_iv(key_info, sequence);
-        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
         let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
-
-        if raw_key.len() != AES_KEY_LEN {
-            return Err(HlsError::KeyProcessing(format!(
-                "invalid AES-128 key length: {}",
-                raw_key.len()
-            )));
-        }
-
-        let mut key_bytes = [0u8; AES_KEY_LEN];
-        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
+        let ctx = Self::build_decrypt_context(&raw_key, iv)?;
 
         debug!(
             url = %segment_url,
@@ -203,7 +240,7 @@ impl SegmentLoader {
             "resolved DRM context for segment"
         );
 
-        Ok(Some(DecryptContext::new(key_bytes, iv)))
+        Ok(Some(ctx))
     }
 
     /// Download init segment for a variant. No race recovery needed —
@@ -282,35 +319,13 @@ impl SegmentLoader {
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {
-        let Some(seg_key) = key else {
+        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
+        else {
             return Ok(None);
-        };
-        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
-            return Ok(None);
-        }
-        let Some(ref key_info) = seg_key.key_info else {
-            return Ok(None);
-        };
-        let Some(ref km) = self.key_manager else {
-            return Err(HlsError::KeyProcessing(
-                "encrypted segment but no KeyManager configured".to_string(),
-            ));
         };
 
-        let iv = KeyManager::derive_iv(key_info, sequence);
-        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
         let raw_key = km.get_cached_key(&key_url)?;
-
-        if raw_key.len() != AES_KEY_LEN {
-            return Err(HlsError::KeyProcessing(format!(
-                "invalid AES-128 key length: {}",
-                raw_key.len()
-            )));
-        }
-
-        let mut key_bytes = [0u8; AES_KEY_LEN];
-        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
-        Ok(Some(DecryptContext::new(key_bytes, iv)))
+        Ok(Some(Self::build_decrypt_context(&raw_key, iv)?))
     }
 
     /// Synchronous media segment preparation using pre-fetched data.
@@ -448,6 +463,22 @@ impl SegmentLoader {
             len,
         })
     }
+}
+
+/// Return `Some(len)` when the resource is already committed, else `None`.
+fn committed_len(res: &AssetResource<DecryptContext>) -> Option<u64> {
+    match res.status() {
+        ResourceStatus::Committed { final_len } => Some(final_len.unwrap_or(0)),
+        _ => None,
+    }
+}
+
+/// Outcome of a pre-fetch cache probe.
+enum CachedOrPending {
+    /// Resource already committed with the given length.
+    Cached(u64),
+    /// Resource acquired but not yet populated; caller must download.
+    Pending(Box<AssetResource<DecryptContext>>),
 }
 
 /// A media segment prepared for download via `poll_next` / `on_chunk`.

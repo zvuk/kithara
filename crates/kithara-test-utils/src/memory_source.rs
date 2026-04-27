@@ -1,6 +1,6 @@
 //! In-memory Source implementation for testing.
 
-use std::{io, io::Error as IoError, ops::Range};
+use std::{io, io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
@@ -56,7 +56,7 @@ impl Source for MemorySource {
     fn wait_range(
         &mut self,
         range: Range<u64>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome, Self::Error> {
         let _ = timeout;
         if range.start >= self.data.len() as u64 {
@@ -69,12 +69,15 @@ impl Source for MemorySource {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let offset = offset as usize;
         if offset >= self.data.len() {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         }
         let available = self.data.len() - offset;
         let n = buf.len().min(available);
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
         buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(ReadOutcome::Data(n))
+        Ok(ReadOutcome::Bytes(count))
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {

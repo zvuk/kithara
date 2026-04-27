@@ -1,12 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
-use kithara_abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator};
+use kithara_abr::{AbrDecision, AbrState};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent, SeekEpoch};
+use kithara_events::{AbrReason, EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use tracing::debug;
 
@@ -31,7 +34,10 @@ pub(crate) struct HlsScheduler {
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
     pub(crate) force_init_for_seek: bool,
     pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
-    pub(crate) abr: AbrController<ThroughputEstimator>,
+    /// Shared ABR state — same `Arc` the owning `HlsPeer` exposes via
+    /// `Abr::state()`. Lock/unlock drives the seek-no-switch invariant;
+    /// `current_variant_index()` is the source of truth for the scheduler.
+    pub(crate) abr: Arc<AbrState>,
     pub(crate) coord: Arc<HlsCoord>,
     pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     pub(crate) bus: EventBus,
@@ -60,6 +66,17 @@ pub(crate) struct HlsScheduler {
     /// `apply_cached_segment_progress` from re-publishing the same events
     /// on every `poll_next` tick.
     pub(crate) announced_cached_count: HashMap<VariantIndex, usize>,
+    /// Highest cached-segment count already populated into `StreamIndex`
+    /// by `populate_cached_segments_if_needed` per variant. Prevents
+    /// repeated full-playlist disk scans on every `poll_next` tick — the
+    /// scan is heavy (per-segment `resource_state` + `commit_segment`)
+    /// and unconditionally fires `coord.condvar.notify_all()` which wakes
+    /// the audio worker, which polls again, which re-scans: a CPU-bound
+    /// hot loop that exhausts the test budget under stress.
+    ///
+    /// Only meaningful for non-ephemeral backends — ephemeral stores
+    /// short-circuit `populate_cached_segments` directly.
+    pub(crate) populated_cached_count: HashMap<VariantIndex, usize>,
     /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
     /// has not yet fired. Used by `process_demand` to skip rewinding the
     /// cursor onto an in-flight segment (which would issue a duplicate
@@ -67,6 +84,10 @@ pub(crate) struct HlsScheduler {
     /// `AssetResource`). Cleared on new seek epoch (the old epoch's
     /// cancel token drops any in-flight fetches).
     pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
+    /// One past the highest segment index ever committed — shared with the
+    /// owning `HlsPeer::committed_segment` cursor so `HlsPeer::progress`
+    /// can expose `download_head_playback_time` to the ABR controller.
+    pub(crate) committed_segment: Arc<AtomicUsize>,
 }
 
 /// Maximum initial segment index for verbose logging.
@@ -112,6 +133,7 @@ impl HlsScheduler {
         self.segments
             .lock_sync()
             .find_at_offset_in(layout, byte_pos)
+            .filter(|seg| seg.data.is_some())
             .map_or(0, |seg| seg.segment_index)
     }
 
@@ -139,7 +161,7 @@ impl HlsScheduler {
         if variant == layout {
             return false;
         }
-        let current_variant = self.abr.get_current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         variant == current_variant && segment_index < self.gap_scan_start_segment()
     }
 
@@ -148,7 +170,7 @@ impl HlsScheduler {
         reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
     )]
     pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
-        let variant = self.abr.get_current_variant_index();
+        let variant = self.abr.current_variant_index();
         let anchor = {
             let segments = self.segments.lock_sync();
             let vs = segments.variant_segments(variant)?;
@@ -241,7 +263,7 @@ impl HlsScheduler {
         self.download_variant = variant;
         self.filling_layout_gap = false;
 
-        let current_variant = self.abr.get_current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         if current_variant != variant {
             self.abr.apply(
                 &AbrDecision {

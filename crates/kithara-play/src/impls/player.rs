@@ -11,8 +11,8 @@ use std::sync::{
 
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
-use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
+use kithara_abr::AbrMode;
+use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
@@ -43,9 +43,10 @@ const MIN_PLAYBACK_RATE: f32 = 0.01;
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
-    /// Shared ABR controller. When `None`, a default one is created.
-    #[derivative(Debug = "ignore")]
-    pub abr: Option<AbrController<ThroughputEstimator>>,
+    /// Default ABR mode seeded onto new HLS resources. Per-sample
+    /// decisions run inside the shared `AbrController` owned by the
+    /// `Downloader`; this field only picks the initial variant.
+    pub initial_abr_mode: AbrMode,
     /// Root event bus for this player.
     ///
     /// When set, all player/engine/resource events are published here.
@@ -98,6 +99,11 @@ pub struct PlayerImpl {
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
 
+    /// ABR handle for the currently loaded item, when the item is adaptive
+    /// (HLS). Populated by [`load_current_item`]; drained when the item
+    /// is replaced. Exposes runtime `set_mode` / `set_max_bandwidth_bps`.
+    active_abr: Mutex<Option<kithara_abr::AbrHandle>>,
+
     /// Engine drops last — worker shutdown happens after all tracks unregister.
     engine: EngineImpl,
 }
@@ -105,7 +111,7 @@ pub struct PlayerImpl {
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
-    pub fn new(mut config: PlayerConfig) -> Self {
+    pub fn new(config: PlayerConfig) -> Self {
         let resolved_pool = config
             .pcm_pool
             .clone()
@@ -120,9 +126,6 @@ impl PlayerImpl {
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
-        if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrOptions::default()));
-        }
 
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
@@ -138,6 +141,7 @@ impl PlayerImpl {
             rate: AtomicF32::new(0.0), // starts paused
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
+            active_abr: Mutex::new(None),
             engine,
             config,
         }
@@ -150,6 +154,15 @@ impl PlayerImpl {
     #[must_use]
     pub fn worker(&self) -> &AudioWorkerHandle {
         self.engine.worker()
+    }
+
+    /// ABR handle of the currently loaded item.
+    ///
+    /// Returns `Some` only while an adaptive (HLS) item is loaded; `None`
+    /// otherwise (no item, non-adaptive file item).
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.active_abr.lock_sync().clone()
     }
 
     /// Runtime handle captured by this player's engine.
@@ -176,8 +189,16 @@ impl PlayerImpl {
         config.worker = Some(self.engine.worker().clone());
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
         #[cfg(feature = "hls")]
-        if config.abr.is_none() {
-            config.abr.clone_from(&self.config.abr);
+        {
+            // Apply the player's initial ABR mode only when the caller left
+            // the config at the default. An explicit override on the
+            // `ResourceConfig` (e.g. the test harness selecting
+            // `AbrMode::Manual(idx)` for a given track) must survive —
+            // otherwise per-track ABR locking can never work through the
+            // Queue/PlayerImpl pipeline.
+            if config.initial_abr_mode == AbrMode::default() {
+                config.initial_abr_mode = self.config.initial_abr_mode;
+            }
         }
         if config.bus.is_none() {
             config.bus = Some(self.bus.scoped());
@@ -250,17 +271,31 @@ impl PlayerImpl {
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
-        // Start engine and allocate slot if needed.
-        if let Err(e) = self.ensure_engine_started() {
-            warn!(?e, "failed to start engine");
-            return;
-        }
-        if let Err(e) = self.ensure_slot() {
-            warn!(?e, "failed to allocate slot");
+        if !self.prepare_playback_slot() {
             return;
         }
 
-        // Load current resource into slot and start playback.
+        self.kick_off_playback(rate);
+        debug!(rate, "play");
+    }
+
+    /// Ensure engine is started and a slot is allocated. Logs failures and
+    /// returns `false` if either step fails (caller should bail out).
+    fn prepare_playback_slot(&self) -> bool {
+        if let Err(e) = self.ensure_engine_started() {
+            warn!(?e, "failed to start engine");
+            return false;
+        }
+        if let Err(e) = self.ensure_slot() {
+            warn!(?e, "failed to allocate slot");
+            return false;
+        }
+        true
+    }
+
+    /// Load the current item into the slot, push initial commands, and
+    /// publish status + rate events.
+    fn kick_off_playback(&self, rate: f32) {
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         self.load_current_item();
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
@@ -269,7 +304,6 @@ impl PlayerImpl {
         self.set_status(PlayerStatus::ReadyToPlay);
         self.bus.publish(PlayerEvent::CurrentItemChanged);
         self.bus.publish(PlayerEvent::RateChanged { rate });
-        debug!(rate, "play");
     }
 
     /// Pause playback (sets rate to 0.0).
@@ -429,7 +463,14 @@ impl PlayerImpl {
     }
 
     /// Seek active tracks to position in seconds.
-    pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
+    ///
+    /// Returns the typed [`SeekOutcome`] — either `Landed` with the
+    /// requested target (the actual landed position is committed
+    /// asynchronously by the worker thread; this call returns the
+    /// optimistic outcome based on what the player can authoritatively
+    /// know at this point) or `PastEof` when the target is past the
+    /// current track's known duration.
+    pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let slot_id = *self.current_slot.lock_sync();
         let Some(slot_id) = slot_id else {
             return Err(PlayError::NotReady);
@@ -442,9 +483,23 @@ impl PlayerImpl {
         let seek_epoch = shared_state.next_seek_epoch();
         shared_state.seek_epoch.store(seek_epoch, Ordering::SeqCst);
 
+        let target_secs = seconds.max(0.0);
+        let target = std::time::Duration::from_secs_f64(target_secs);
+
         self.send_to_slot(PlayerCmd::Seek {
-            seconds: seconds.max(0.0),
+            seconds: target_secs,
             seek_epoch,
+        })?;
+
+        Ok(match self.duration_seconds() {
+            Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
+                target,
+                duration: std::time::Duration::from_secs_f64(dur),
+            },
+            _ => SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            },
         })
     }
 
@@ -565,17 +620,17 @@ impl PlayerImpl {
         Ok(())
     }
 
-    /// Get the shared ABR controller (if configured).
+    /// Default initial ABR mode used when preparing new HLS resources.
     #[must_use]
-    pub fn abr(&self) -> Option<&AbrController<ThroughputEstimator>> {
-        self.config.abr.as_ref()
+    pub fn initial_abr_mode(&self) -> AbrMode {
+        self.config.initial_abr_mode
     }
 
-    /// Change ABR mode at runtime. Takes effect on next `decide()`.
-    pub fn set_abr_mode(&self, mode: AbrMode) {
-        if let Some(ref ctrl) = self.config.abr {
-            ctrl.set_mode(mode);
-        }
+    /// Change the default initial ABR mode for resources configured
+    /// after this call. Existing tracks' modes are untouched — use
+    /// `PeerHandle::abr().set_mode(...)` to override a live track.
+    pub fn set_initial_abr_mode(&mut self, mode: AbrMode) {
+        self.config.initial_abr_mode = mode;
     }
 
     /// Select and load a queue item by index, using the configured
@@ -670,13 +725,20 @@ impl PlayerImpl {
 
     /// Apply effective volume to the current slot (per-instance).
     fn apply_effective_volume(&self, volume: f32) {
-        if let Some(slot_id) = *self.current_slot.lock_sync() {
-            debug!(volume, ?slot_id, "applying effective volume to slot");
-            if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
-                warn!(?e, volume, "failed to set slot volume");
-            }
-        } else {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
             debug!(volume, "apply_effective_volume: no slot allocated yet");
+            return;
+        };
+        self.set_slot_volume_logged(slot_id, volume);
+    }
+
+    /// Set volume on an allocated slot, logging success at debug and any
+    /// error at warn. Extracted to keep `apply_effective_volume` below the
+    /// cognitive-complexity threshold.
+    fn set_slot_volume_logged(&self, slot_id: SlotId, volume: f32) {
+        debug!(volume, ?slot_id, "applying effective volume to slot");
+        if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
+            warn!(?e, volume, "failed to set slot volume");
         }
     }
 
@@ -711,6 +773,11 @@ impl PlayerImpl {
         let Some(resource) = items[index].take() else {
             return; // Already loaded
         };
+
+        // Snapshot the resource's ABR handle — `None` for non-adaptive
+        // sources. Runtime `set_abr_mode` / `set_preferred_peak_bitrate`
+        // route through this handle until the current item changes.
+        *self.active_abr.lock_sync() = resource.abr_handle();
 
         // Propagate current playback rate to the resource's audio pipeline.
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
@@ -894,7 +961,7 @@ mod tests {
     #[kithara::test]
     fn player_config_custom() {
         let config = PlayerConfig {
-            abr: None,
+            initial_abr_mode: AbrMode::default(),
             bus: None,
             crossfade_duration: 2.0,
             default_rate: 0.5,

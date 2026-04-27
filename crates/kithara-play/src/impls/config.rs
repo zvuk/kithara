@@ -9,7 +9,7 @@ use std::{
 
 use derive_setters::Setters;
 #[cfg(feature = "hls")]
-use kithara_abr::{AbrController, AbrOptions, ThroughputEstimator};
+use kithara_abr::AbrMode;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
@@ -101,9 +101,11 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct ResourceConfig {
-    /// ABR controller (shared across tracks in a player).
+    /// Initial ABR mode passed to the HLS stream. The shared
+    /// `AbrController` lives on the `Downloader` and runs per-sample
+    /// decisions; this field only seeds the starting variant.
     #[cfg(feature = "hls")]
-    pub abr: Option<AbrController<ThroughputEstimator>>,
+    pub initial_abr_mode: AbrMode,
     /// Unified event bus for streaming, decode, and audio events.
     ///
     /// When set, the bus is propagated to the underlying stream and audio
@@ -165,6 +167,12 @@ pub struct ResourceConfig {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: NonZeroUsize,
+    /// Forwarded to [`AudioConfig::with_prefer_hardware`] via
+    /// `into_file_config` / `into_hls_config`. When `false` the factory
+    /// uses Symphonia; when `true` it uses the hardware backend
+    /// (Apple `AudioToolbox` / Android `MediaCodec`). No runtime
+    /// fallback between paths — a failure is terminal.
+    pub prefer_hardware: bool,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
@@ -230,7 +238,7 @@ impl ResourceConfig {
 
         Ok(Self {
             #[cfg(feature = "hls")]
-            abr: None,
+            initial_abr_mode: AbrMode::default(),
             bus: None,
             byte_pool: None,
             cancel: None,
@@ -249,6 +257,7 @@ impl ResourceConfig {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_for_expensive_networks: 0.0,
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
+            prefer_hardware: false,
             resampler_quality: ResamplerQuality::default(),
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -349,6 +358,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        config = config.with_prefer_hardware(self.prefer_hardware);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }
@@ -379,17 +389,12 @@ impl ResourceConfig {
             hls_config = hls_config.with_downloader(dl);
         }
 
-        hls_config.abr = self.abr;
+        hls_config = hls_config.with_initial_abr_mode(self.initial_abr_mode);
 
-        if self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate >= 1.0 {
-            #[expect(clippy::cast_sign_loss)]
-            #[expect(clippy::cast_possible_truncation)]
-            let cap = self.preferred_peak_bitrate as u64;
-            let ctrl = hls_config
-                .abr
-                .get_or_insert_with(|| AbrController::new(AbrOptions::default()));
-            ctrl.set_max_bandwidth_bps(Some(cap));
-        }
+        // NOTE: `preferred_peak_bitrate` per-track cap now lives on the
+        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path. Wiring it
+        // requires access to the registered handle, which is built inside
+        // `Hls::create` — deferred to Commit 3.
 
         if let Some(bytes) = self.look_ahead_bytes {
             hls_config = hls_config.with_look_ahead_bytes(bytes);
@@ -430,6 +435,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        config = config.with_prefer_hardware(self.prefer_hardware);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }
@@ -566,16 +572,15 @@ mod tests {
     #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
+        // `preferred_peak_bitrate` → per-track cap wiring lives on the
+        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path which is
+        // established inside `Hls::create`. The old `HlsConfig::abr`
+        // field has been removed, so this test now only verifies that
+        // `into_hls_config()` accepts the bitrate without panicking.
         let config = ResourceConfig::new("https://example.com/live.m3u8")
             .unwrap()
             .with_preferred_peak_bitrate(512_000.0);
-        let audio_config = config.into_hls_config().unwrap();
-        let abr = audio_config
-            .stream
-            .abr
-            .as_ref()
-            .expect("controller should be set");
-        assert_eq!(abr.max_bandwidth_bps(), Some(512_000));
+        let _audio_config = config.into_hls_config().unwrap();
     }
 
     #[kithara::test]

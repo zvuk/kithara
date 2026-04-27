@@ -13,10 +13,8 @@ use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_platform::{time::sleep, tokio::task::spawn};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
-#[cfg(not(target_arch = "wasm32"))]
-use rodio::Decoder;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::info;
 use url::Url;
 
 // Test Cases
@@ -68,33 +66,11 @@ async fn test_basic_hls_playback(
         }
     });
 
-    // 3. Test: Create rodio decoder (this validates the stream format)
-    info!("Creating rodio decoder...");
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let decoder_result = spawn_blocking(move || Decoder::new(stream)).await;
-
-        match decoder_result {
-            Ok(_decoder) => {
-                info!("Rodio decoder created successfully");
-                Ok(())
-            }
-            Err(e) => {
-                warn!("Failed to create rodio decoder: {}", e);
-                // Test data is not valid audio, so decoder failure is expected
-                info!("Note: Rodio decoder failed, but HLS layer is functional");
-                Ok(())
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = stream;
-        sleep(Duration::from_millis(50)).await;
-        info!("HLS stream opened successfully on wasm");
-        Ok(())
-    }
+    // 3. Smoke test: stream object is usable (just hold it briefly).
+    let _ = stream;
+    sleep(Duration::from_millis(50)).await;
+    info!("HLS stream opened successfully");
+    Ok(())
 }
 
 /// Test that verifies HLS session creation without actual playback.

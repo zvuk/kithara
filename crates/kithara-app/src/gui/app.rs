@@ -8,7 +8,7 @@ use iced::{
     keyboard::{Event as KeyboardEvent, Key, key::Named},
     time as iced_time,
 };
-use kithara::prelude::{Event, HlsEvent};
+use kithara::{events::AbrEvent, prelude::Event};
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::trace;
@@ -182,12 +182,12 @@ fn start_variant_listener(
         let mut variants: Vec<kithara::abr::VariantInfo> = Vec::new();
         loop {
             match rx.recv().await {
-                Ok(Event::Hls(HlsEvent::VariantsDiscovered {
+                Ok(Event::Abr(AbrEvent::VariantsRegistered {
                     variants: v,
-                    initial_variant,
+                    initial,
                 })) => {
                     variants.clone_from(&v);
-                    let text = variant_display_label(&variants, initial_variant);
+                    let text = variant_display_label(&variants, initial);
                     if let Ok(mut l) = variant_label.lock() {
                         *l = text;
                     }
@@ -207,8 +207,8 @@ fn start_variant_listener(
                         *sv = gui_variants;
                     }
                 }
-                Ok(Event::Hls(HlsEvent::VariantApplied { to_variant, .. })) => {
-                    let text = variant_display_label(&variants, to_variant);
+                Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+                    let text = variant_display_label(&variants, to);
                     if let Ok(mut l) = variant_label.lock() {
                         *l = text;
                     }

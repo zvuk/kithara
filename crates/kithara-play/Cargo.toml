@@ -19,7 +19,7 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-file = { workspace = true, optional = true }
 kithara-hls = { workspace = true, optional = true }
-kithara-abr = { workspace = true, optional = true }
+kithara-abr = { workspace = true }
 kithara-assets = { workspace = true, optional = true }
 kithara-net = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
@@ -40,9 +40,6 @@ tracing = { workspace = true }
 url = { workspace = true }
 portable-atomic = { workspace = true }
 
-# Audio output
-rodio = { workspace = true, optional = true }
-
 # Testing
 unimock = { workspace = true, optional = true }
 
@@ -56,10 +53,9 @@ firewheel-web-audio = { workspace = true, optional = true }
 [features]
 default = ["file", "hls", "backend-cpal"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+hls = ["dep:kithara-hls", "dep:kithara-assets", "dep:kithara-net"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
-rodio = ["dep:rodio", "kithara-audio/rodio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
 test-utils = ["unimock"]

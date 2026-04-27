@@ -173,6 +173,13 @@ pub struct PackagedAudioRequest {
     pub source: PackagedAudioSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variant_overrides: Vec<PackagedAudioVariantOverride>,
+    /// If true, the init segment carries an `sidx` index referencing every
+    /// media segment by (size, duration). Real-world fMP4 produced by
+    /// packagers (DASH, HLS-fMP4 from major CDNs) usually includes one;
+    /// the kithara mux defaults to `false` so existing test fixtures
+    /// remain bit-stable.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub include_sidx: bool,
 }
 
 /// Declarative delay rule for segment serving.

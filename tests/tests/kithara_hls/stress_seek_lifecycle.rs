@@ -18,8 +18,8 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -45,21 +45,35 @@ impl Consts {
     const MAX_ZERO_READS: usize = 50;
 }
 
-/// Read with retry: keeps trying until data arrives or stuck.
-/// Returns (`samples_read`, `retries_needed`).
-fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize) {
+/// Read with retry: keeps trying until data arrives, a terminal signal is
+/// reached (natural EOF or unrecoverable producer failure), or the retry
+/// budget is exhausted. Returns (`samples_read`, `retries_needed`,
+/// `saw_terminal`).
+///
+/// `saw_terminal = true` combines natural EOF (`Ok(ReadOutcome::Eof)`) and
+/// terminal producer failure (`Err(DecodeError)`, i.e. `ConsumerPhase::Failed`).
+/// Both are permanent for this `Audio` instance, so the stress test treats
+/// them identically: end of this read loop. A terminal Err counts against
+/// the `dead_seeks` tolerance budget (1% of `STRESS_SEEK_ITERATIONS`).
+fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize, bool) {
     for retry in 0..Consts::MAX_ZERO_READS {
-        if audio.is_eof() {
-            return (0, retry);
+        match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
+            Ok(ReadOutcome::Pending { .. }) => {
+                // Give background worker some time to fill the buffer
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(ReadOutcome::Eof { .. }) => return (0, retry, true),
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "terminal producer failure under stress; counted as dead seek"
+                );
+                return (0, retry, true);
+            }
         }
-        let n = audio.read(buf);
-        if n > 0 {
-            return (n, retry);
-        }
-        // Give background worker some time to fill the buffer
-        thread::sleep(Duration::from_millis(1));
     }
-    (0, Consts::MAX_ZERO_READS)
+    (0, Consts::MAX_ZERO_READS, false)
 }
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
@@ -75,7 +89,10 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
-async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast: AbrOptions) {
+async fn stress_seek_lifecycle_with_zero_reset(
+    #[case] ephemeral: bool,
+    abr_fast: kithara_abr::AbrSettings,
+) {
     let init_segment = Arc::new(create_wav_header(
         Consts::D.sample_rate,
         Consts::D.channels,
@@ -176,10 +193,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let _ = &abr_fast;
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -207,7 +222,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let warmup_deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < warmup_deadline {
-            let (n, _) = read_with_retry(&mut audio, &mut buf);
+            let (n, _, _) = read_with_retry(&mut audio, &mut buf);
             if n == 0 {
                 break;
             }
@@ -263,7 +278,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 continue;
             }
 
-            let (n, retries) = read_with_retry(&mut audio, &mut buf);
+            let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);
             total_retries += retries as u64;
             if retries > max_retries_single {
                 max_retries_single = retries;
@@ -275,7 +290,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                     warn!(
                         iteration = i,
                         pos_secs,
-                        is_eof = audio.is_eof(),
+                        is_eof = saw_eof,
                         retries,
                         "STUCK: read returned 0 after {} retries", Consts::MAX_ZERO_READS
                     );
@@ -352,23 +367,24 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
 
+        let mut final_saw_eof = false;
         loop {
-            let (n, retries) = read_with_retry(&mut audio, &mut buf);
+            let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);
             read_attempts += 1;
 
             if n == 0 {
-                if audio.is_eof() {
+                if saw_eof {
+                    final_saw_eof = true;
                     break;
                 }
                 if retries >= Consts::MAX_ZERO_READS {
                     panic!(
                         "STUCK at position {:.3}s after seek to 0: \
                          read returned 0 after {} retries, \
-                         total_frames_read={}, is_eof={}",
+                         total_frames_read={}",
                         audio.position().as_secs_f64(),
                         Consts::MAX_ZERO_READS,
                         total_frames_read,
-                        audio.is_eof()
                     );
                 }
                 continue;
@@ -455,7 +471,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             }
         }
 
-        assert!(audio.is_eof(), "expected EOF after full track read");
+        assert!(final_saw_eof, "expected EOF after full track read");
 
         let expected_frames = (Consts::SEGMENT_COUNT * Consts::D.segment_size) / (Consts::D.channels as usize * 2);
         let frame_diff = total_frames_read.abs_diff(expected_frames as u64);

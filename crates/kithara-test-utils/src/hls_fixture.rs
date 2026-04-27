@@ -349,9 +349,18 @@ pub struct PackagedTestServer {
 impl PackagedTestServer {
     #[must_use]
     pub async fn new() -> Self {
+        Self::with_delay_rules(Vec::new()).await
+    }
+
+    /// Build a server whose plain (3-variant AAC fMP4) fixture applies the
+    /// given per-segment server-side delays. Lets tests pin behaviour
+    /// under simulated slow connections — the encrypted fixture is built
+    /// without delays as it is unaffected by these scenarios.
+    #[must_use]
+    pub async fn with_delay_rules(delay_rules: Vec<DelayRule>) -> Self {
         let helper = TestServerHelper::new().await;
         let plain = helper
-            .create_hls(packaged_plain_builder())
+            .create_hls(packaged_plain_builder().delay_rules(delay_rules))
             .await
             .expect("create packaged plain HLS fixture");
         let encrypted = helper

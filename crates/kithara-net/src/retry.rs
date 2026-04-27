@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::{
@@ -53,17 +55,17 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
             cancel,
         }
     }
-}
 
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+    async fn retry_loop<F, Fut, T>(&self, mut op: F) -> Result<T, NetError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, NetError>>,
+    {
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.get_bytes(url.clone(), headers.clone()).await {
-                Ok(bytes) => return Ok(bytes),
+            match op().await {
+                Ok(value) => return Ok(value),
                 Err(error) => {
                     if !self.retry_policy.should_retry(&error, attempt) {
                         return Err(error);
@@ -87,35 +89,19 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
             source: Box::new(NetError::Unimplemented),
         }))
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
+    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+        self.retry_loop(|| self.inner.get_bytes(url.clone(), headers.clone()))
+            .await
+    }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.stream(url.clone(), headers.clone()).await {
-                Ok(stream) => return Ok(stream),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
+            .await
     }
 
     async fn get_range(
@@ -124,67 +110,16 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self
-                .inner
+        self.retry_loop(|| {
+            self.inner
                 .get_range(url.clone(), range.clone(), headers.clone())
-                .await
-            {
-                Ok(stream) => return Ok(stream),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+        })
+        .await
     }
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.head(url.clone(), headers.clone()).await {
-                Ok(out) => return Ok(out),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+        self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
+            .await
     }
 }
 

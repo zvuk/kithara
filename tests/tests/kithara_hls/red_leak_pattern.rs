@@ -49,6 +49,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_abr::Abr;
 use kithara_integration_tests::hls_fixture::TestServer;
 use kithara_platform::time::{Duration, sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
@@ -68,6 +69,8 @@ impl ImmortalPeer {
         }
     }
 }
+
+impl Abr for ImmortalPeer {}
 
 impl Peer for ImmortalPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {

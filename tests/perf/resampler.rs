@@ -68,7 +68,6 @@ enum PerfScenario {
 #[case("resampler_passthrough", PerfScenario::PassthroughDetection)]
 #[case("resampler_deinterleave", PerfScenario::DeinterleaveOverhead)]
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
-#[ignore]
 fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

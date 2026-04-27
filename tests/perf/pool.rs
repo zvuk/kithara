@@ -62,7 +62,6 @@ enum PerfScenario {
 #[case("pool_multi_thread", PerfScenario::MultiThreadContention)]
 #[case("pool_allocation_rate", PerfScenario::AllocationRate)]
 #[case("pool_scalability", PerfScenario::Scalability)]
-#[ignore]
 fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

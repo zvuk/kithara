@@ -20,12 +20,9 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    events::{Event, EventBus, HlsEvent},
-    hls::{
-        AbrMode, AbrOptions, Hls, HlsConfig,
-        config::{AbrController, ThroughputEstimator},
-    },
+    audio::{Audio, AudioConfig, ReadOutcome},
+    events::{AbrEvent, Event, EventBus, HlsEvent},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -102,10 +99,8 @@ impl EventCollector {
                             cached: *cached,
                         });
                     }
-                    Event::Hls(HlsEvent::VariantApplied {
-                        to_variant, reason, ..
-                    }) => {
-                        info!(to = to_variant, ?reason, "VariantApplied");
+                    Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                        info!(to = to, ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
                     }
                     _ => {}
@@ -133,11 +128,12 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     let mut total = 0u64;
     let start = Instant::now();
     while start.elapsed() < timeout {
-        let n = audio.read(&mut buf);
-        if n == 0 && audio.is_eof() {
-            break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
-        total += n as u64;
     }
     total
 }
@@ -186,20 +182,11 @@ async fn vod_manual_switch_affects_future_segments() {
     let bus = EventBus::new(64);
     let collector = EventCollector::new(&bus);
 
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_events(bus.clone());
-    hls_config.abr = Some(abr);
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)
@@ -303,24 +290,16 @@ async fn multi_track_shared_abr_with_cache() {
     let temp_dir = TestTempDir::new();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    // Shared ABR controller across both tracks.
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
     // Step 1: Track 1, Auto mode → downloads V0
     info!("=== Step 1: Track 1 Auto ===");
     let bus1 = EventBus::new(64);
     let collector1 = EventCollector::new(&bus1);
 
-    let mut hls1 = HlsConfig::new(url1.clone())
+    let hls1 = HlsConfig::new(url1.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus1.clone());
-    hls1.abr = Some(abr.clone());
+        .with_events(bus1.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config1 = AudioConfig::<Hls>::new(hls1)
         .with_events(bus1)
@@ -348,16 +327,15 @@ async fn multi_track_shared_abr_with_cache() {
 
     // Step 2: Switch to Manual(1) and load Track 2
     info!("=== Step 2: Manual(1) → Track 2 ===");
-    abr.set_mode(AbrMode::Manual(1));
 
     let bus2 = EventBus::new(64);
     let collector2 = EventCollector::new(&bus2);
 
-    let mut hls2 = HlsConfig::new(url2)
+    let hls2 = HlsConfig::new(url2)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus2.clone());
-    hls2.abr = Some(abr.clone());
+        .with_events(bus2.clone())
+        .with_initial_abr_mode(AbrMode::Manual(1));
 
     let config2 = AudioConfig::<Hls>::new(hls2)
         .with_events(bus2)
@@ -385,16 +363,15 @@ async fn multi_track_shared_abr_with_cache() {
     );
 
     // Step 3: Replay Track 1 with Manual(0) → uses cache from step 1
-    abr.set_mode(AbrMode::Manual(0));
 
     let bus3 = EventBus::new(64);
     let collector3 = EventCollector::new(&bus3);
 
-    let mut hls3 = HlsConfig::new(url1)
+    let hls3 = HlsConfig::new(url1)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus3.clone());
-    hls3.abr = Some(abr.clone());
+        .with_events(bus3.clone())
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let config3 = AudioConfig::<Hls>::new(hls3)
         .with_events(bus3)
@@ -480,22 +457,11 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let bus = EventBus::new(64);
     let collector = EventCollector::new(&bus);
 
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        down_switch_buffer_secs: 0.0,
-        // Prevent up-switch back to V0 -- this test validates the V0->V1
-        // down-switch path; ABR oscillation is a separate concern.
-        min_buffer_for_up_switch_secs: 999.0,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_events(bus.clone());
-    hls_config.abr = Some(abr);
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)

@@ -1,5 +1,5 @@
 #[cfg(target_arch = "wasm32")]
 mod stress;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "selenium"))]
 mod selenium;

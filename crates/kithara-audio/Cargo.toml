@@ -14,6 +14,7 @@ workspace = true
 delegate = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
+kithara-abr = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
@@ -24,7 +25,6 @@ audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 tokio-util = { workspace = true }
 ringbuf = { workspace = true }
-rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
@@ -34,11 +34,9 @@ hotpath = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["symphonia"]
 test-utils = ["unimock"]
 internal = []
-# Enable rodio::Source adapter for playback
-rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
@@ -47,6 +45,9 @@ memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 apple = ["kithara-decode/apple"]
 # Enable Android MediaCodec hardware decoder (Android)
 android = ["kithara-decode/android"]
+# Enable the Symphonia software decoder path. Disable to build with
+# only the hardware backend (apple or android) and no software fallback.
+symphonia = ["kithara-decode/symphonia"]
 # Disable hang-loop detection in wait loops (fallback to no-op detector)
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",
@@ -67,13 +68,13 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-kithara-audio = { path = ".", default-features = false, features = ["internal"] }
+kithara-audio = { path = ".", default-features = false, features = ["internal", "symphonia"] }
 assert_no_alloc = { workspace = true }
 tokio-util = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-kithara-decode = { workspace = true, features = ["test-utils"] }
+kithara-decode = { workspace = true, features = ["test-utils", "symphonia"] }
 kithara-test-utils = { workspace = true }
 tempfile = { workspace = true }
 aes = { workspace = true }
@@ -89,5 +90,4 @@ kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
-rodio = { workspace = true, features = ["playback"] }
 hotpath = { workspace = true }

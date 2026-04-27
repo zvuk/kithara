@@ -2,16 +2,13 @@
 
 use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
-use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
-use kithara_storage::ResourceExt;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::disk_store::delete_asset_dir;
 use crate::{
     AssetResourceState,
     base::Assets,
+    deleter::AssetDeleter,
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
@@ -19,7 +16,7 @@ use crate::{
 
 /// Trait for recording asset bytes for eviction tracking.
 #[cfg_attr(test, unimock::unimock(api = ByteRecorderMock))]
-pub trait ByteRecorder: Send + Sync {
+pub(crate) trait ByteRecorder: Send + Sync {
     /// Record asset bytes and check if eviction is needed.
     fn record_bytes(&self, asset_root: &str, bytes: u64);
 }
@@ -33,8 +30,8 @@ pub trait ByteRecorder: Send + Sync {
 /// ## Normative
 /// - Eviction is evaluated only when a new `asset_root` is observed (i.e., the first
 ///   `open_resource` for that root in this process).
-/// - The decision uses the persisted LRU index, not in-memory state (except for a
-///   small "already seen" set to avoid reloading the index on every open).
+/// - The decision uses the in-memory snapshots of [`LruIndex`] and [`PinsIndex`]
+///   (which are themselves backed by best-effort disk persistence).
 /// - Pinned assets are excluded from eviction candidates.
 /// - Both `max_assets` and `max_bytes` are soft caps enforced best-effort.
 /// - Byte accounting is best-effort and must be explicitly updated via
@@ -49,13 +46,15 @@ where
     cfg: EvictConfig,
     seen: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
-    pool: BytePool,
-}
-
-struct PreparedEviction<R: ResourceExt> {
-    candidates: Vec<String>,
-    lru: LruIndex<R>,
-    pinned: HashSet<String>,
+    /// Shared LRU index — same instance held by `DiskAssetDeleter` so
+    /// LRU bookkeeping and disk-side deletion stay in sync.
+    lru: LruIndex,
+    /// Shared pins index — same instance used by `LeaseAssets` for
+    /// pin/unpin lifecycle and by `DiskAssetDeleter` for full-asset
+    /// removal cleanup.
+    pins: PinsIndex,
+    /// Single canonical removal channel — see [`crate::deleter`].
+    deleter: Arc<dyn AssetDeleter>,
 }
 
 impl<A: Assets> fmt::Debug for EvictAssets<A> {
@@ -72,24 +71,24 @@ where
 {
     /// Create a new eviction decorator.
     ///
-    /// Activation is driven by [`Capabilities::EVICT`] on the inner store.
+    /// Activation is driven by [`crate::base::Capabilities::EVICT`] on the inner store.
     pub(crate) fn new(
         inner: Arc<A>,
         cfg: EvictConfig,
         cancel: CancellationToken,
-        pool: BytePool,
+        lru: LruIndex,
+        pins: PinsIndex,
+        deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
             inner,
             cfg,
             seen: Arc::new(Mutex::new(HashSet::new())),
             cancel,
-            pool,
+            lru,
+            pins,
+            deleter,
         }
-    }
-
-    pub(crate) fn inner(&self) -> &A {
-        &self.inner
     }
 
     fn is_active(&self) -> bool {
@@ -98,18 +97,20 @@ where
             .contains(crate::base::Capabilities::EVICT)
     }
 
-    /// Record asset size for byte-based eviction (best-effort).
+    /// Record asset size for byte-based eviction.
     ///
     /// # Errors
     ///
-    /// Returns `AssetsError` if the LRU index cannot be opened or updated.
+    /// Returns `AssetsError` if the LRU index cannot persist the
+    /// touch — caller must decide whether the lost durability is
+    /// acceptable for its scenario (the [`ByteRecorder`] adapter
+    /// downgrades it to a `tracing::warn`).
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
         if !self.is_active() {
             return Ok(());
         }
         tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
-        let lru = self.open_lru()?;
-        let _ = lru.touch(asset_root, Some(bytes))?;
+        self.lru.touch(asset_root, Some(bytes))?;
         tracing::debug!(asset_root = %asset_root, bytes, "Asset bytes recorded");
         Ok(())
     }
@@ -120,22 +121,8 @@ where
             return;
         }
 
-        let Some(PreparedEviction {
-            candidates,
-            lru,
-            pinned,
-        }) = self.prepare_over_limit_eviction()
-        else {
-            return;
-        };
-
-        self.evict_candidates(&lru, &pinned, candidates);
-    }
-
-    fn prepare_over_limit_eviction(&self) -> Option<PreparedEviction<A::IndexRes>> {
-        let lru = self.load_lru_for_eviction()?;
-        let pinned = self.load_pins_for_eviction()?;
-        let total_bytes = Self::load_total_bytes_for_eviction(&lru);
+        let pinned = self.pins.snapshot();
+        let total_bytes = self.lru.total_bytes_best_effort();
         tracing::debug!(
             total_bytes,
             max_bytes = ?self.cfg.max_bytes,
@@ -143,93 +130,26 @@ where
             "check_and_evict_if_over_limit"
         );
 
-        let candidates = self.load_candidates_for_eviction(&lru, &pinned)?;
+        let candidates = self.lru.eviction_candidates(&self.cfg, &pinned);
 
         tracing::debug!(candidates = ?candidates, "Eviction candidates selected");
-        Some(PreparedEviction {
-            candidates,
-            lru,
-            pinned,
-        })
-    }
-
-    fn load_lru_for_eviction(&self) -> Option<LruIndex<A::IndexRes>> {
-        match self.open_lru() {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::debug!("Failed to open LRU index: {:?}", e);
-                None
-            }
-        }
-    }
-
-    fn load_pins_for_eviction(&self) -> Option<HashSet<String>> {
-        match self.open_pins().and_then(|pins| pins.load()) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::debug!("Failed to load pins index: {:?}", e);
-                None
-            }
-        }
-    }
-
-    fn load_total_bytes_for_eviction(lru: &LruIndex<A::IndexRes>) -> u64 {
-        lru.total_bytes_best_effort()
-    }
-
-    fn load_candidates_for_eviction(
-        &self,
-        lru: &LruIndex<A::IndexRes>,
-        pinned: &HashSet<String>,
-    ) -> Option<Vec<String>> {
-        match lru.eviction_candidates(&self.cfg, pinned) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::debug!("Failed to get eviction candidates: {:?}", e);
-                None
-            }
-        }
-    }
-
-    fn evict_candidates(
-        &self,
-        lru: &LruIndex<A::IndexRes>,
-        pinned: &HashSet<String>,
-        candidates: Vec<String>,
-    ) {
         for cand in candidates {
             if self.cancel.is_cancelled() {
                 break;
             }
-
-            if pinned.contains(&cand) {
-                tracing::debug!(asset_root = %cand, "Skipping pinned asset");
-                continue;
-            }
-
-            tracing::debug!(asset_root = %cand, "Attempting to delete asset");
-            #[cfg(not(target_arch = "wasm32"))]
-            if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
-                tracing::debug!(asset_root = %cand, "Asset deleted successfully");
-                let _ = lru.remove(&cand);
-            } else {
-                tracing::debug!(asset_root = %cand, "Failed to delete asset");
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = lru;
-                tracing::debug!(asset_root = %cand, "WASM backend does not support delete_asset_dir");
-            }
+            self.evict_one(&pinned, &cand);
         }
     }
 
-    fn open_lru(&self) -> AssetsResult<LruIndex<A::IndexRes>> {
-        let res = self.inner.open_lru_index_resource()?;
-        Ok(LruIndex::new(res, self.pool.clone()))
-    }
-
-    fn open_pins(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
-        PinsIndex::open(self.inner(), self.pool.clone())
+    fn evict_one(&self, pinned: &HashSet<String>, cand: &str) {
+        if pinned.contains(cand) {
+            tracing::debug!(asset_root = %cand, "Skipping pinned asset");
+            return;
+        }
+        // Single canonical removal channel: deleter clears FS,
+        // `AvailabilityIndex`, `PinsIndex`, and `LruIndex` together.
+        // See [`crate::deleter`].
+        log_eviction_outcome(cand, self.deleter.delete_asset(cand));
     }
 
     fn mark_seen(&self, asset_root: &str) -> bool {
@@ -242,38 +162,21 @@ where
             return;
         }
 
-        let Ok(lru) = self.open_lru() else {
-            return;
-        };
-
-        let Ok(pins) = self.open_pins() else {
-            return;
-        };
-
-        let Ok(pinned) = pins.load() else {
-            return;
-        };
-
+        let pinned = self.pins.snapshot();
         let mut pinned_with_new = pinned.clone();
         pinned_with_new.insert(asset_root.to_string());
 
-        let Ok(candidates) = lru.eviction_candidates(&self.cfg, &pinned_with_new) else {
-            return;
-        };
+        let candidates = self.lru.eviction_candidates(&self.cfg, &pinned_with_new);
 
         for cand in candidates {
             if self.cancel.is_cancelled() {
                 break;
             }
-
             if pinned.contains(&cand) {
                 continue;
             }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
-                let _ = lru.remove(&cand);
-            }
+            // Same canonical channel — deleter wipes FS and all indexes.
+            let _ = self.deleter.delete_asset(&cand);
         }
     }
 
@@ -286,16 +189,12 @@ where
             return;
         }
 
-        let Ok(lru) = self.open_lru() else {
-            return;
-        };
-
-        let Ok(created) = lru.touch(asset_root, bytes_hint) else {
-            return;
-        };
-
-        if created {
-            self.on_asset_created(asset_root);
+        match self.lru.touch(asset_root, bytes_hint) {
+            Ok(true) => self.on_asset_created(asset_root),
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(asset_root, error = %e, "touch_and_maybe_evict: lru touch failed");
+            }
         }
     }
 }
@@ -347,6 +246,18 @@ where
     fn record_bytes(&self, asset_root: &str, bytes: u64) {
         let _ = self.record_asset_bytes(asset_root, bytes);
         self.check_and_evict_if_over_limit();
+    }
+}
+
+/// Free helper: log the outcome of a deleter-driven eviction.
+///
+/// Extracted so the calling site stays a one-liner — keeps
+/// `evict_one`'s body focused on the policy decision (pin check,
+/// dispatch) instead of branching on the result for tracing.
+fn log_eviction_outcome(asset_root: &str, result: AssetsResult<()>) {
+    match result {
+        Ok(()) => tracing::debug!(%asset_root, "Asset deleted successfully"),
+        Err(error) => tracing::debug!(%asset_root, %error, "Failed to delete asset"),
     }
 }
 

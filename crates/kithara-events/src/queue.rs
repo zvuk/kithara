@@ -36,6 +36,12 @@ pub enum TrackStatus {
     /// Consumed by the engine after playback — needs a fresh load before
     /// it can be selected again.
     Consumed,
+    /// In-flight load was overridden by a later [`Queue::select`] of a
+    /// different track. The slot is intentionally left unpopulated so
+    /// auto-advance does not flip onto a track the user explicitly
+    /// walked away from. An explicit `select(id)` from the user
+    /// re-engages this state and triggers a fresh load.
+    Cancelled,
 }
 
 /// Queue-level events emitted by `kithara-queue::Queue`.

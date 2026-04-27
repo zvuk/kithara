@@ -29,6 +29,7 @@ pub(crate) struct PackagedVariantData {
 
 pub(crate) fn mux_audio_track(
     track: &EncodedTrack,
+    include_sidx: bool,
 ) -> Result<PackagedVariantData, PackagedMuxError> {
     if track.access_units.is_empty() {
         return Err(PackagedMuxError::EmptyTrack);
@@ -58,10 +59,12 @@ pub(crate) fn mux_audio_track(
         .iter()
         .map(|au| u64::from(au.duration))
         .sum();
-    let init_segment = Arc::new(build_init_segment(track, &descriptor, total_duration));
 
+    // Build media segments first to know their sizes + durations for the
+    // optional `sidx` index in the init segment.
     let mut media_segments = Vec::new();
     let mut segment_durations_secs = Vec::new();
+    let mut sidx_refs: Vec<(u32, u32)> = Vec::new();
     let mut decode_time = 0u64;
     let mut sequence_number = 1u32;
 
@@ -71,11 +74,19 @@ pub(crate) fn mux_audio_track(
             .iter()
             .map(|sample| u64::from(sample.duration))
             .sum::<u64>();
+        sidx_refs.push((bytes.len() as u32, duration as u32));
         media_segments.push(Arc::new(bytes));
         segment_durations_secs.push(duration as f64 / f64::from(track.timescale));
         decode_time = decode_time.saturating_add(duration);
         sequence_number = sequence_number.saturating_add(1);
     }
+
+    let init_segment = Arc::new(build_init_segment(
+        track,
+        &descriptor,
+        total_duration,
+        if include_sidx { Some(&sidx_refs) } else { None },
+    ));
 
     Ok(PackagedVariantData {
         rfc6381_codec,
@@ -89,11 +100,34 @@ fn build_init_segment(
     track: &EncodedTrack,
     descriptor: &CodecDescriptor,
     total_duration: u64,
+    sidx_refs: Option<&[(u32, u32)]>,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(ftyp_box());
     bytes.extend(moov_box(track, descriptor, total_duration));
+    if let Some(refs) = sidx_refs {
+        bytes.extend(sidx_box(track.timescale, refs));
+    }
     bytes
+}
+
+fn sidx_box(timescale: u32, refs: &[(u32, u32)]) -> Vec<u8> {
+    full_box(*b"sidx", 0, 0, |buf| {
+        buf.push_u32(1); // reference_ID = track_id
+        buf.push_u32(timescale);
+        buf.push_u32(0); // earliest_presentation_time (v0 = u32)
+        buf.push_u32(0); // first_offset (anchor = end of sidx, refs immediately follow)
+        buf.push_u16(0); // reserved
+        buf.push_u16(refs.len() as u16); // reference_count
+        for (size, duration) in refs {
+            // bit 31 = reference_type (0 = media), bits 30..0 = referenced_size
+            buf.push_u32(*size & 0x7FFF_FFFF);
+            buf.push_u32(*duration);
+            // bit 31 = starts_with_SAP (1), bits 30..28 = SAP_type (1),
+            // bits 27..0 = SAP_delta_time (0)
+            buf.push_u32(0x9000_0000);
+        }
+    })
 }
 
 fn build_media_segment(
@@ -423,7 +457,7 @@ mod tests {
     #[kithara::test]
     fn init_segment_contains_ftyp_and_moov() {
         let track = test_track();
-        let packaged = mux_audio_track(&track).unwrap();
+        let packaged = mux_audio_track(&track, false).unwrap();
         let init = packaged.init_segment.as_slice();
 
         assert!(init.windows(4).any(|window| window == b"ftyp"));
@@ -435,7 +469,7 @@ mod tests {
     #[kithara::test]
     fn media_segments_keep_tfdt_monotonic() {
         let track = test_track();
-        let packaged = mux_audio_track(&track).unwrap();
+        let packaged = mux_audio_track(&track, false).unwrap();
         assert_eq!(packaged.media_segments.len(), 2);
         assert!(
             packaged.media_segments[0]
@@ -455,7 +489,7 @@ mod tests {
     #[kithara::test]
     fn init_segment_contains_flac_sample_entry_and_dfla() {
         let track = flac_track();
-        let packaged = mux_audio_track(&track).unwrap();
+        let packaged = mux_audio_track(&track, false).unwrap();
         let init = packaged.init_segment.as_slice();
 
         assert!(init.windows(4).any(|window| window == b"fLaC"));

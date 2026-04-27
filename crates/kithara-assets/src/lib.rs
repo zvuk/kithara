@@ -36,6 +36,7 @@
 
 mod base;
 pub(crate) mod cache;
+mod deleter;
 mod disk_store;
 mod error;
 mod evict;

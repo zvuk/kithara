@@ -24,21 +24,26 @@ fn open_test_resource(
 ) -> TestResource {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Resource::open(
-            cancel,
-            MmapOptions {
-                path: temp_dir.path().join(name),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .expect("open should succeed")
+        open_mmap_at(temp_dir.path().join(name), cancel)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (temp_dir, name);
         MemResource::new(cancel)
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_mmap_at(path: std::path::PathBuf, cancel: CancellationToken) -> MmapResource {
+    Resource::open(
+        cancel,
+        MmapOptions {
+            path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
+    .expect("open should succeed")
 }
 
 #[kithara::test(
@@ -48,15 +53,7 @@ fn open_test_resource(
 )]
 fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("test.dat");
-    let atomic: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
+    let atomic = open_mmap_at(file_path.clone(), cancel_token);
 
     assert_eq!(atomic.path(), Some(file_path.as_path()));
 
@@ -112,27 +109,11 @@ fn atomic_resource_read_missing_file(
     let file_path = temp_dir.path().join("missing.dat");
 
     if create_file_first {
-        let atomic: MmapResource = Resource::open(
-            cancel_token.clone(),
-            MmapOptions {
-                path: file_path.clone(),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let atomic = open_mmap_at(file_path.clone(), cancel_token.clone());
         atomic.write_all(b"initial").unwrap();
     }
 
-    let atomic: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
+    let atomic = open_mmap_at(file_path, cancel_token);
 
     let mut buf = byte_pool().get();
     if create_file_first {
@@ -234,15 +215,7 @@ async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: 
 )]
 fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let invalid_path = temp_dir.path().join("nonexistent").join("file.dat");
-    let atomic: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: invalid_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
+    let atomic = open_mmap_at(invalid_path, cancel_token);
 
     let result = atomic.write_all(b"data");
     assert!(result.is_ok(), "write should create parent dirs");
@@ -258,15 +231,7 @@ fn atomic_resource_large_file_operations() {
     let file_path = temp_dir.path().join("large.dat");
     let cancel_token = CancellationToken::new();
 
-    let atomic: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
+    let atomic = open_mmap_at(file_path, cancel_token);
 
     let large_data = vec![0x42; 10 * 1024 * 1024];
     atomic.write_all(&large_data).unwrap();
@@ -282,7 +247,8 @@ fn atomic_resource_large_file_operations() {
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case("persist_small", b"persist me")]
+#[case::small("persist_small", b"persist me")]
+#[case::empty("persist_empty", b"")]
 fn atomic_resource_persists_across_reopen(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -292,66 +258,13 @@ fn atomic_resource_persists_across_reopen(
     let file_path = temp_dir.path().join(format!("{name}.dat"));
 
     {
-        let atomic: MmapResource = Resource::open(
-            cancel_token.clone(),
-            MmapOptions {
-                path: file_path.clone(),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let atomic = open_mmap_at(file_path.clone(), cancel_token.clone());
         atomic.write_all(payload).unwrap();
     }
 
-    let reopened: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
-    let mut buf = byte_pool().get();
-    reopened.read_into(&mut buf).unwrap();
-    assert_eq!(&*buf, payload);
-}
-
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-fn atomic_resource_empty_persists_across_reopen(
-    temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
-) {
-    let file_path = temp_dir.path().join("persist_empty.dat");
-
-    {
-        let atomic: MmapResource = Resource::open(
-            cancel_token.clone(),
-            MmapOptions {
-                path: file_path.clone(),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
-        atomic.write_all(b"").unwrap();
-    }
-
-    let reopened: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
+    let reopened = open_mmap_at(file_path, cancel_token);
     let mut buf = byte_pool().get();
     let n = reopened.read_into(&mut buf).unwrap();
-    assert_eq!(n, 0);
+    assert_eq!(n, payload.len(), "byte count should match written payload");
+    assert_eq!(&*buf, payload, "round-tripped bytes should match payload");
 }

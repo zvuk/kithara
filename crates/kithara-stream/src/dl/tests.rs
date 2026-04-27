@@ -16,6 +16,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream::iter as stream_iter;
+use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::NetOptions;
 use kithara_platform::{
@@ -49,6 +50,7 @@ use consts::*;
 
 struct MockPeer;
 
+impl Abr for MockPeer {}
 impl Peer for MockPeer {}
 
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
@@ -131,7 +133,8 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 #[kithara_test_macros::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions {
-        request_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        inactivity_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        total_timeout: Some(Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         ..NetOptions::default()
     };
     let dl = Downloader::new(DownloaderConfig::default().with_net(net));
@@ -393,6 +396,7 @@ async fn poll_next_respects_max_concurrent() {
         remaining: Mutex<usize>,
     }
 
+    impl Abr for FloodPeer {}
     impl Peer for FloodPeer {
         fn priority(&self) -> Priority {
             Priority::Low
@@ -615,6 +619,7 @@ struct TaggedPriorityPeer {
     tag: PeerTag,
 }
 
+impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
     fn priority(&self) -> Priority {
         if self.timeline.is_playing() {
@@ -849,6 +854,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     struct FlippablePeer {
         timeline: crate::Timeline,
     }
+    impl Abr for FlippablePeer {}
     impl Peer for FlippablePeer {
         fn priority(&self) -> Priority {
             if self.timeline.is_playing() {

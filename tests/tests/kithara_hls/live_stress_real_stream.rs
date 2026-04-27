@@ -11,15 +11,16 @@ use std::{
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
-    events::{Event, HlsEvent},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    events::{AbrEvent, Event, HlsEvent},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::sleep;
-use kithara_platform::{time::Instant, tokio};
+use kithara_platform::{
+    time::{Instant, sleep},
+    tokio,
+};
 use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
@@ -177,6 +178,90 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 
+async fn build_live_audio(
+    server: &TestServerHelper,
+    path: &str,
+    cache_capacity: usize,
+    temp_dir: &TestTempDir,
+) -> Audio<Stream<Hls>> {
+    let url = server.asset(path);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"));
+    let hls_config = HlsConfig::new(url)
+        .with_store(store)
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+    audio
+}
+
+fn spawn_live_stats_task(
+    audio: &mut Audio<Stream<Hls>>,
+) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
+    let stats = Arc::new(Mutex::new(LiveStats::default()));
+    let stats_bg = Arc::clone(&stats);
+    let mut events = audio.events();
+    let events_task = spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            };
+            let mut locked = stats_bg.lock().expect("stats lock poisoned");
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                    if locked.initial_variant.is_none() {
+                        locked.initial_variant = Some(initial);
+                    }
+                    if locked.current_variant.is_none() {
+                        locked.current_variant = Some(initial);
+                    }
+                }
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
+                    locked.variant_switches = locked.variant_switches.saturating_add(1);
+                }
+                Event::Hls(HlsEvent::SegmentComplete {
+                    cached,
+                    segment_index,
+                    variant,
+                    ..
+                }) => {
+                    let key = (variant, segment_index);
+                    let map = if cached {
+                        &mut locked.cache_hits
+                    } else {
+                        &mut locked.network_hits
+                    };
+                    let entry = map.entry(key).or_insert(0);
+                    *entry = entry.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    });
+    (stats, events_task)
+}
+
+async fn warmup_until_variant_switch(
+    audio: &mut Audio<Stream<Hls>>,
+    stats: &Arc<Mutex<LiveStats>>,
+    stage_prefix: &str,
+) {
+    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
+    let stage = format!("{stage_prefix}_warmup");
+    while Instant::now() < warmup_deadline {
+        let _ = next_chunk_with_timeout(audio, Consts::next_chunk_timeout(), &stage).await;
+        if snapshot(stats).variant_switches > 0 {
+            break;
+        }
+    }
+}
+
 async fn next_chunk_with_timeout(
     audio: &mut Audio<Stream<Hls>>,
     timeout: Duration,
@@ -184,16 +269,15 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(chunk) = PcmReader::next_chunk(audio) {
-            return Some(chunk);
-        }
-        if audio.is_eof() {
-            return None;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
             Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}' (is_eof={})",
-            audio.is_eof()
+            "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(100)).await;
     }
@@ -217,10 +301,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
@@ -278,7 +359,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -288,10 +369,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -309,31 +387,26 @@ async fn live_ephemeral_revisit_sequence_regression(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits
@@ -429,87 +502,13 @@ async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
-
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
-        .await
-        .expect("audio creation");
-    audio.preload();
-
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
-                    }
-                }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
-                    variant,
-                    ..
-                } => {
-                    let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
-    while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Consts::next_chunk_timeout(),
-            "fixed_window_warmup",
-        )
-        .await;
-        if snapshot(&stats).variant_switches > 0 {
-            break;
-        }
-    }
+    warmup_until_variant_switch(&mut audio, &stats, "fixed_window").await;
 
     let seek_positions = [
         29.928_167_827,
@@ -552,87 +551,13 @@ async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
-
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
-        .await
-        .expect("audio creation");
-    audio.preload();
-
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
-                    }
-                }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
-                    variant,
-                    ..
-                } => {
-                    let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-    });
-
-    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
-    while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Consts::next_chunk_timeout(),
-            "rng_prefix_warmup",
-        )
-        .await;
-        if snapshot(&stats).variant_switches > 0 {
-            break;
-        }
-    }
+    warmup_until_variant_switch(&mut audio, &stats, "rng_prefix").await;
 
     let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
     let max_seek_secs =
@@ -682,10 +607,7 @@ async fn live_real_stream_seek_resume_native(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -757,7 +679,7 @@ async fn live_stress_real_stream_seek_read_cache(
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
-    abr_fast: AbrOptions,
+    abr_fast: kithara_abr::AbrSettings,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -777,10 +699,7 @@ async fn live_stress_real_stream_seek_read_cache(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -797,32 +716,26 @@ async fn live_stress_real_stream_seek_read_cache(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let Event::Hls(hls_event) = event else {
-                continue;
-            };
-
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match hls_event {
-                HlsEvent::VariantsDiscovered {
-                    initial_variant, ..
-                } => {
+            match event {
+                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial_variant);
+                        locked.initial_variant = Some(initial);
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial_variant);
+                        locked.current_variant = Some(initial);
                     }
                 }
-                HlsEvent::VariantApplied { to_variant, .. } => {
-                    locked.current_variant = Some(to_variant);
+                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                HlsEvent::SegmentComplete {
+                Event::Hls(HlsEvent::SegmentComplete {
                     cached,
                     segment_index,
                     variant,
                     ..
-                } => {
+                }) => {
                     let key = (variant, segment_index);
                     let map = if cached {
                         &mut locked.cache_hits
@@ -1074,10 +987,7 @@ async fn live_ephemeral_small_cache_playback(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
@@ -1148,10 +1058,7 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
     let mut audio = Audio::<Stream<Hls>>::new(config)

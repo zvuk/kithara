@@ -273,7 +273,8 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 /// FFI-friendly mirror of [`kithara_events::TrackStatus`].
 ///
 /// Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
-/// loaded -> consumed, or `failed` on error.
+/// loaded -> consumed, or `failed` on error. `Cancelled` covers
+/// loads that were overridden by a later `select` of a different track.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
@@ -283,6 +284,7 @@ pub enum FfiTrackStatus {
     Loaded,
     Failed { reason: String },
     Consumed,
+    Cancelled,
 }
 
 impl From<kithara_events::TrackStatus> for FfiTrackStatus {
@@ -293,6 +295,7 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
             TS::Loaded => Self::Loaded,
             TS::Failed(reason) => Self::Failed { reason },
             TS::Consumed => Self::Consumed,
+            TS::Cancelled => Self::Cancelled,
             // `TrackStatus` is `#[non_exhaustive]`; fall back to `Pending`
             // for `Pending` itself + any future variants.
             _ => Self::Pending,

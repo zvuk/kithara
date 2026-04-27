@@ -51,9 +51,15 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 ## Decoder recreate strategy
 
 - `create_for_recreate` is used for seek-time decoder rebuild.
-- First attempt: create from `MediaInfo` hints (codec/container from stream metadata).
-- Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
-- If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
+- It is a thin wrapper over `create_from_media_info`: callers must
+  supply a `base_offset` that lines up with the container's init
+  region (for fMP4/MP4/WAV/MKV/CAF the `ftyp`/RIFF/EBML header; for
+  MPEG-ES / ADTS / FLAC / Ogg / MPEG-TS any valid packet start).
+- **No fallback**: when the metadata-driven path fails the error is
+  propagated verbatim. Probing mid-segment bytes at a mismatched
+  offset can silently match an unrelated codec (e.g. MP3 frame sync
+  in raw AAC-in-fMP4 bytes) and drive the rest of the pipeline off a
+  `session.media_info` the decoder never actually realised.
 
 ## Feature Flags
 
@@ -64,6 +70,27 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
 <tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
 </table>
+
+## Module layout
+
+- `src/backend/` — `HardwareBackend` trait + `current::Current` alias (one `type` per platform, picked by `cfg`).
+- `src/apple/` — `AppleBackend` impl lives next to `AppleConfig`/`AppleInner`/FFI.
+- `src/android/` — `AndroidBackend` impl next to `MediaCodec` FFI and capability matrix. Whole module gated once in `lib.rs`; no internal `#[cfg(target_os = "android")]`.
+- `src/symphonia/` — `Symphonia<C>` generic + probe/direct paths + `ReadSeekAdapter`.
+- `src/pcm/` — host-agnostic PCM conversion helpers (`pcm16_to_f32`, `pcm_float_to_pool`) and timeline math (`pcm_meta_from_pts_us`, `seek_trim_for_buffer`) shared across backends.
+- `src/factory/` — public `DecoderConfig` + `DecoderFactory` plus orchestrator pieces: `probe.rs` (hint → codec), `hardware.rs` (attempt flow), `symphonia_entry.rs` (software fallback).
+
+## Cross-decoder protocol test
+
+`tests/decoder_protocol.rs` (integration test) decodes the same MP3 with
+every available backend and asserts agreement on `spec()`, `duration()`,
+total frame count, post-seek timestamp, EOF semantics, and — when the
+`apple` feature is enabled on macOS/iOS — the full-decode PCM L2 norm
+within 2 %. Run with:
+
+```
+cargo test -p kithara-decode --test decoder_protocol --features apple
+```
 
 ## Integration
 

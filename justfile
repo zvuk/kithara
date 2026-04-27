@@ -33,9 +33,25 @@ deny:
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
 
-# Validate workspace architecture.
+# Validate workspace architecture (all checks against baseline).
 arch:
-    cargo xtask quality arch
+    cargo xtask arch
+
+# Run a single architectural check by id.
+arch-check NAME:
+    cargo xtask arch --check {{NAME}}
+
+# Generate markdown architectural report at target/arch-report.md.
+arch-report:
+    cargo xtask arch --report target/arch-report.md
+
+# Re-write the architectural baseline to current observations.
+arch-baseline:
+    cargo xtask arch --update-baseline
+
+# Emit architectural results as JSON (for CI artifacts).
+arch-json:
+    cargo xtask arch --json
 
 # Generate and open API docs.
 doc:
@@ -61,7 +77,19 @@ test-doc:
 test-stress:
     cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile test-release
 
+# Run end-to-end tests that hit real networks (silvercomet.top, zvq.me) and real
+# audio hardware (cpal). Excluded from `just test` by cargo feature gating.
+# Pass extra filters after `just test-e2e`, e.g.
+#   just test-e2e kithara_play::silvercomet_seek_hang
+test-e2e *ARGS:
+    cargo nextest run -p kithara-integration-tests --features e2e --cargo-profile test-release --test suite_e2e --run-ignored all {{ARGS}}
+
 test-all: test test-doc
+
+# Selenium WebDriver tests (trunk + chromedriver, native target). Gated by the
+# `selenium` feature so plain `just test` doesn't try to spin them up.
+test-selenium *ARGS:
+    cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
 
 # Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
 test-ultimate:
@@ -69,7 +97,7 @@ test-ultimate:
     cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
     just test-doc
     just wasm-test
-    cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
+    just test-selenium
     just bench-build
     cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
     echo "==> all checks passed"
@@ -85,7 +113,7 @@ ast-grep-blocking:
       exit 1; \
     fi; \
     {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
-      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts)$'
+      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts|rust.no-error-string-match)$'
 
 ast-grep-advisory:
     @if [[ -z "{{ast-grep-bin}}" ]]; then \
@@ -140,6 +168,36 @@ lint-fast: fmt-check clippy ast-grep-blocking arch
 
 lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
 
+# --- CI cycle ---
+
+# Full CI cycle: lint + test + e2e + workspace-mutants.
+# Each stage writes its own stage-<name>.log and stage-<name>.exit under OUTPUT;
+# the pipeline continues even if earlier stages fail so the remote run still
+# produces mutant results for inspection.
+ci-full-run OUTPUT:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+    mkdir -p "{{OUTPUT}}"
+    echo "$RUN_ID" > "{{OUTPUT}}/run-id"
+    echo "=== ci-full-run $RUN_ID starting at $(date -u -Iseconds) ==="
+
+    run_stage() {
+        local name=$1; shift
+        echo ">>> stage $name started at $(date -u -Iseconds)"
+        "$@" > "{{OUTPUT}}/stage-$name.log" 2>&1
+        local rc=$?
+        echo "$rc" > "{{OUTPUT}}/stage-$name.exit"
+        echo ">>> stage $name finished with exit=$rc at $(date -u -Iseconds)"
+    }
+
+    run_stage lint    just lint-fast
+    run_stage test    just test
+    run_stage e2e     just test-e2e
+    run_stage mutants just mutants-ci "{{OUTPUT}}/mutants"
+
+    echo "=== ci-full-run $RUN_ID done at $(date -u -Iseconds) ==="
+
 # --- coverage ---
 
 coverage:
@@ -155,6 +213,94 @@ coverage:
       --fail-under-lines "$COVERAGE_MIN"; \
     echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
     echo "==> line coverage threshold: $COVERAGE_MIN%"
+
+# Show lines not executed by any test (dead / uncovered code).
+# Accumulates coverage across unit/integration (+ rodio feature) and e2e
+# (real network + cpal hardware) runs.
+dead:
+    cargo llvm-cov clean --workspace
+    cargo llvm-cov nextest --no-report --workspace --exclude kithara-fuzz \
+      --features kithara-audio/rodio \
+      --cargo-profile test-release --no-fail-fast || true
+    cargo llvm-cov nextest --no-report \
+      -p kithara-integration-tests --features e2e \
+      --cargo-profile test-release \
+      --test suite_e2e --run-ignored all --no-fail-fast || true
+    cargo llvm-cov report \
+      --ignore-filename-regex '(tests/|examples/|benches/)' \
+      --show-missing-lines
+
+# Find near-duplicate functions (AST similarity) across production code.
+# Default threshold catches structural twins; raise it to narrow the signal.
+similarity *ARGS:
+    similarity-rs --threshold 0.85 --min-lines 10 \
+      --exclude target --exclude .claude \
+      $(find crates -maxdepth 2 -name src -type d | sort) {{ARGS}}
+
+# Mutation-testing: mutate each branch and check whether any test fails.
+# Survived mutants = either dead code or untested branch — either way, a
+# concrete refactor/test target. Run against one crate at a time:
+#   just mutants kithara-audio
+# Use `just mutants-all` for the full workspace (slow — hours on 20+ crates).
+mutants crate *ARGS:
+    cargo mutants -p {{crate}} --test-workspace=true --profile test-release \
+      --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+
+mutants-all *ARGS:
+    cargo mutants --workspace --test-workspace=true --profile test-release \
+      --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+
+# Workspace-wide mutants with CI flags (full cycle, hours on large servers).
+# --baseline=skip assumes baseline is verified out-of-band (e.g. prior `just test`
+# stage). MUTANTS_JOBS controls parallelism: set it to cap cargo-mutants workers
+# (cargo-mutants itself recommends <= 8 because each worker spawns a full cargo
+# + nextest, and they contend for rustc threads, sccache daemon, and test-runner
+# CPU). Default = min(12, nproc-1).
+mutants-ci OUTPUT:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    DEFAULT_JOBS=$(( $(nproc) - 1 ))
+    if [ "$DEFAULT_JOBS" -gt 12 ]; then DEFAULT_JOBS=12; fi
+    if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
+    JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
+    mkdir -p "{{OUTPUT}}"
+    # Resume from a prior incomplete run if outcomes.json is present
+    # (e.g. previous invocation crashed or the host rebooted).
+    # OUTPUT is passed by ci-full-run as "$CI_OUT/mutants"; cargo-mutants
+    # writes its state into "$OUTPUT/mutants.out/".
+    RESUME_FLAG=""
+    if [ -f "{{OUTPUT}}/mutants.out/outcomes.json" ]; then
+        RESUME_FLAG="--resume"
+        echo "==> resuming from previous run at {{OUTPUT}}/mutants.out"
+    fi
+    # Only mutate production library code. Excluded crates (by file glob —
+    # cargo-mutants 27 has no --exclude-package flag):
+    #   - kithara-test-utils / kithara-test-macros: test-only helpers
+    #   - kithara-integration-tests: integration test harness
+    #   - kithara-fuzz: fuzzing harness
+    #   - xtask: developer tooling
+    #   - kithara-ffi: FFI bindings (glue, not logic)
+    #   - kithara-app: application assembly (tui/gui wiring, no logic)
+    #   - kithara-wasm / kithara-wasm-macros: WASM bindings and proc-macros
+    #   - kithara-hang-detector / kithara-hang-detector-macros: diagnostic
+    #     tooling, not part of the runtime contract
+    # --exclude-re additionally skips per-file test fixtures inside prod crates
+    # (e.g. kithara-platform/src/test_env.rs).
+    cargo mutants --workspace --test-workspace=true --baseline=skip \
+      --test-tool=nextest --profile test-release \
+      --exclude 'crates/kithara-test-utils/**' \
+      --exclude 'crates/kithara-test-macros/**' \
+      --exclude 'tests/**' \
+      --exclude 'crates/kithara-ffi/**' \
+      --exclude 'crates/kithara-app/**' \
+      --exclude 'crates/kithara-wasm/**' \
+      --exclude 'crates/kithara-wasm-macros/**' \
+      --exclude 'crates/kithara-hang-detector/**' \
+      --exclude 'crates/kithara-hang-detector-macros/**' \
+      --exclude 'xtask/**' \
+      --exclude-re 'src/.*test.*\.rs' \
+      -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
+      --no-shuffle $RESUME_FLAG --output "{{OUTPUT}}"
 
 # --- perf & benchmarks ---
 

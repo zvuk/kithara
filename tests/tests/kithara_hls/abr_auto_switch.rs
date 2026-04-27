@@ -15,9 +15,9 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::EventBus,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -76,7 +76,10 @@ fn create_pcm_segments() -> Vec<u8> {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOptions) {
+async fn abr_auto_switch_during_playback(
+    temp_dir: TestTempDir,
+    _abr_fast: kithara_abr::AbrSettings,
+) {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
@@ -135,10 +138,7 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_events(bus.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)), // start on V0
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)
@@ -156,14 +156,14 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         let timeout = Duration::from_secs(5);
 
         while start.elapsed() < timeout {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                if audio.is_eof() {
-                    break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
                 }
-                continue;
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
-            total_samples += n as u64;
         }
 
         info!(total_samples, "playback finished");

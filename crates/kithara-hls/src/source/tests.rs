@@ -1,7 +1,10 @@
 use std::{
     num::NonZeroUsize,
     path::Path,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::Duration as StdDuration,
 };
@@ -18,9 +21,13 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
     dl::{Downloader, DownloaderConfig, PeerHandle},
 };
+
+fn nz_bytes(n: usize) -> ReadOutcome {
+    ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
+}
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
@@ -43,6 +50,7 @@ fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     dl.register(Arc::new(crate::peer::HlsPeer::new(
         kithara_stream::Timeline::new(),
+        kithara_abr::AbrMode::Auto(None),
     )))
 }
 
@@ -155,6 +163,12 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -198,6 +212,12 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -666,7 +686,7 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
         coord.condvar.notify_all();
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
     join.join()
         .expect("clear-pending helper thread must complete");
 
@@ -696,7 +716,7 @@ fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
         seek_epoch: 0,
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
@@ -750,6 +770,12 @@ fn demand_range_queues_request_for_unloaded_offset() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -802,6 +828,12 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -903,7 +935,7 @@ fn set_seek_epoch_keeps_exact_eof_visible_until_seek_lands() {
 
     source.set_seek_epoch(NEW_EPOCH);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -922,7 +954,7 @@ fn wait_range_uses_known_total_bytes_for_exact_eof() {
     source.coord.timeline().set_byte_position(total);
     source.coord.timeline().set_eof(false);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -984,7 +1016,7 @@ fn read_at_does_not_advance_timeline_position() {
     let mut buf = vec![0u8; media_len as usize];
     let read = source.read_at(0, &mut buf).unwrap();
 
-    assert_eq!(read, ReadOutcome::Data(10));
+    assert_eq!(read, nz_bytes(10));
     assert_eq!(
         source.coord.timeline().byte_position(),
         0,
@@ -1026,6 +1058,12 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1047,7 +1085,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
 
     assert_eq!(
         read,
-        ReadOutcome::Retry,
+        ReadOutcome::Pending(PendingReason::Retry),
         "layout hole before effective total must trigger retry instead of synthetic EOF"
     );
 }
@@ -1080,7 +1118,10 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
         },
     );
 
-    let result = source.wait_range(RANGE_START..RANGE_END, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(
+        RANGE_START..RANGE_END,
+        Some(Duration::from_millis(TIMEOUT_MS)),
+    );
 
     assert!(
         matches!(result, Ok(WaitOutcome::Ready)),
@@ -1113,6 +1154,12 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1152,7 +1199,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     for payload in &segments {
         let mut buf = vec![0u8; payload.len()];
         let read = source.read_at(offset, &mut buf).expect("read_at");
-        assert_eq!(read, ReadOutcome::Data(payload.len()));
+        assert_eq!(read, nz_bytes(payload.len()));
         assert_eq!(buf, *payload);
         offset += payload.len() as u64;
     }
@@ -1404,7 +1451,7 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     // Sanity: first read succeeds against the committed resource.
     let mut buf = vec![0u8; READ_SIZE];
     let first = source.read_at(0, &mut buf).expect("first read_at");
-    assert_eq!(first, ReadOutcome::Data(READ_SIZE));
+    assert_eq!(first, nz_bytes(READ_SIZE));
 
     // Step 2: simulate scheduler-driven re-fetch — a second DRM acquire
     // on the same key. Cache-hit branch must recognise the cached entry
@@ -1424,8 +1471,8 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
         .expect("read_at must not return hard error after reacquire");
     assert_eq!(
         outcome,
-        ReadOutcome::Data(READ_SIZE),
-        "expected Data({READ_SIZE}) after committed DRM reacquire — cache-hit must \
+        nz_bytes(READ_SIZE),
+        "expected Bytes({READ_SIZE}) after committed DRM reacquire — cache-hit must \
          not reactivate a Committed resource"
     );
 }
@@ -1534,6 +1581,12 @@ fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         bus,
         kithara_stream::Timeline::new(),

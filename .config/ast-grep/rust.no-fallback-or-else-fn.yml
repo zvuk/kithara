@@ -1,0 +1,19 @@
+id: rust.no-fallback-or-else-fn
+message: |
+  Fallback chain detected: `.or_else(|| other())`. Per AGENTS.md
+  "Non-Negotiables": no `try A, else B, else C` patterns to paper over
+  state-resolution bugs. If the primary path has no correct answer,
+  the state contract is broken — fix the contract, not the symptom.
+  If the fallback is legitimate (user-facing default, optional config,
+  degraded-mode operation) justify it in the owning crate README.md
+  and silence this rule locally.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  any:
+    - pattern: $X.or_else(|| $FN($$$))
+    - pattern: $X.or_else($FN)
+  not:
+    regex: '\.or_else\(\|\|\s*(None|Ok\(|Err\(|Some\()'

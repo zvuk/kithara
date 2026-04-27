@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "abr")]
+use crate::AbrEvent;
 #[cfg(feature = "app")]
 use crate::AppEvent;
 #[cfg(feature = "audio")]
@@ -56,6 +58,9 @@ pub enum Event {
     /// Queue-level event (track added/removed/status/current/ended).
     #[cfg(feature = "queue")]
     Queue(QueueEvent),
+    /// ABR controller event.
+    #[cfg(feature = "abr")]
+    Abr(AbrEvent),
 }
 
 #[cfg(feature = "downloader")]
@@ -135,6 +140,13 @@ impl From<QueueEvent> for Event {
     }
 }
 
+#[cfg(feature = "abr")]
+impl From<AbrEvent> for Event {
+    fn from(e: AbrEvent) -> Self {
+        Self::Abr(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -166,28 +178,8 @@ mod tests {
     }
 
     #[cfg(feature = "hls")]
-    fn hls_is_variant_applied_upswitch(event: &HlsEvent) -> bool {
-        matches!(
-            event,
-            HlsEvent::VariantApplied {
-                from_variant: 0,
-                to_variant: 1,
-                reason: kithara_abr::AbrReason::UpSwitch,
-            }
-        )
-    }
-
-    #[cfg(feature = "hls")]
     #[kithara::test]
     #[case(HlsEvent::EndOfStream, hls_is_end_of_stream)]
-    #[case(
-        HlsEvent::VariantApplied {
-            from_variant: 0,
-            to_variant: 1,
-            reason: kithara_abr::AbrReason::UpSwitch,
-        },
-        hls_is_variant_applied_upswitch
-    )]
     fn hls_event_into_event(#[case] hls_event: HlsEvent, #[case] check: fn(&HlsEvent) -> bool) {
         let event: Event = hls_event.into();
         assert!(matches!(event, Event::Hls(inner) if check(&inner)));

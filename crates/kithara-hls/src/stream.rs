@@ -8,8 +8,8 @@ use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::{Mutex, time::Instant};
+use kithara_events::EventBus;
+use kithara_platform::Mutex;
 use kithara_stream::{
     StreamContext, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
@@ -76,38 +76,11 @@ impl StreamType for Hls {
             Downloader::new(dl_config)
         });
 
-        // Build DRM process function for ProcessingAssets
-        let drm_process_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-                aes128_cbc_process_chunk(input, output, ctx, is_last)
-            });
         let invalidation_target = Arc::new(StdMutex::new(None));
-        let on_invalidated = make_invalidation_callback(
-            Arc::clone(&invalidation_target),
-            config.store.on_invalidated.clone(),
-        );
-
-        let mut builder = AssetStoreBuilder::new()
-            .process_fn(drm_process_fn)
-            .asset_root(Some(asset_root.as_str()))
-            .cancel(cancel.clone())
-            .on_invalidated(on_invalidated)
-            .root_dir(&config.store.cache_dir)
-            .evict_config(config.store.to_evict_config())
-            .ephemeral(config.store.ephemeral);
-        if let Some(ref pool) = config.pool {
-            builder = builder.pool(pool.clone());
-        }
-        if let Some(cap) = config.store.cache_capacity {
-            builder = builder.cache_capacity(cap);
-        }
-        if let Some(n) = config.store.checkpoint_every {
-            builder = builder.checkpoint_every(n);
-        }
-        let backend: AssetStore<DecryptContext> = builder.build();
+        let backend = build_asset_store(&config, &asset_root, cancel.clone(), &invalidation_target);
 
         let timeline = Timeline::new();
-        let hls_peer = Arc::new(HlsPeer::new(timeline.clone()));
+        let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
@@ -149,14 +122,15 @@ impl StreamType for Hls {
             &media_playlists,
         ));
 
-        let initial_variant = config.abr.as_ref().map_or(0, |abr| {
-            let now = Instant::now();
-            let decision = abr.decide(now);
-            if decision.changed {
-                abr.apply(&decision, now);
-            }
-            abr.get_current_variant_index()
-        });
+        // Build the variant list and hand it to the peer's ABR state.
+        // Populate per-segment durations so `HlsPeer::progress` can map
+        // `reader_segment` / `committed_segment` back into playback time
+        // for the ABR controller's buffer-ahead gate.
+        hls_peer.set_abr_variants(build_abr_variants(&master.variants, &media_playlists));
+        let initial_variant = hls_peer
+            .abr()
+            .current_variant_index()
+            .min(master.variants.len().saturating_sub(1));
 
         prefetch_init_and_keys(&loader, &key_manager, &media_playlists).await;
 
@@ -169,17 +143,19 @@ impl StreamType for Hls {
         )
         .await;
 
-        let variant_info = variant_info_from_master(&master);
-        bus.publish(HlsEvent::VariantsDiscovered {
-            variants: variant_info,
-            initial_variant,
-        });
+        // `VariantsRegistered` is now emitted by the shared `AbrController`
+        // as `AbrEvent::VariantsRegistered` once the bus is attached.
+        let _ = initial_variant;
+        let _ = variant_info_from_master;
 
         let (hls_downloader, mut source) = build_pair(
             backend,
             peer_handle.clone(),
             &master.variants,
             &config,
+            Arc::clone(hls_peer.abr()),
+            hls_peer.reader_segment_cursor(),
+            hls_peer.committed_segment_cursor(),
             Arc::clone(&playlist_state),
             bus,
             timeline,
@@ -225,19 +201,7 @@ async fn prefetch_init_and_keys(
         })
         .collect();
 
-    let mut key_urls: HashSet<url::Url> = HashSet::new();
-    for (media_url, playlist) in media_playlists {
-        for segment in &playlist.segments {
-            if let Some(ref seg_key) = segment.key
-                && matches!(seg_key.method, EncryptionMethod::Aes128)
-                && let Some(ref key_info) = seg_key.key_info
-                && let Ok(seg_url) = media_url.join(&segment.uri)
-                && let Ok(key_url) = KeyManager::resolve_key_url(key_info, &seg_url)
-            {
-                key_urls.insert(key_url);
-            }
-        }
-    }
+    let key_urls = collect_aes128_key_urls(media_playlists);
 
     let key_futs: Vec<_> = key_urls
         .into_iter()
@@ -259,4 +223,82 @@ async fn prefetch_init_and_keys(
             tracing::warn!(url = %url, error = %e, "failed to pre-fetch DRM key");
         }
     }
+}
+
+fn collect_aes128_key_urls(
+    media_playlists: &[(url::Url, crate::parsing::MediaPlaylist)],
+) -> HashSet<url::Url> {
+    let mut key_urls: HashSet<url::Url> = HashSet::new();
+    for (media_url, playlist) in media_playlists {
+        for segment in &playlist.segments {
+            if let Some(ref seg_key) = segment.key
+                && matches!(seg_key.method, EncryptionMethod::Aes128)
+                && let Some(ref key_info) = seg_key.key_info
+                && let Ok(seg_url) = media_url.join(&segment.uri)
+                && let Ok(key_url) = KeyManager::resolve_key_url(key_info, &seg_url)
+            {
+                key_urls.insert(key_url);
+            }
+        }
+    }
+    key_urls
+}
+
+fn build_asset_store(
+    config: &HlsConfig,
+    asset_root: &str,
+    cancel: tokio_util::sync::CancellationToken,
+    invalidation_target: &Arc<StdMutex<Option<InvalidationTarget>>>,
+) -> AssetStore<DecryptContext> {
+    let drm_process_fn: ProcessChunkFn<DecryptContext> =
+        Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
+            aes128_cbc_process_chunk(input, output, ctx, is_last)
+        });
+    let on_invalidated = make_invalidation_callback(
+        Arc::clone(invalidation_target),
+        config.store.on_invalidated.clone(),
+    );
+
+    let mut builder = AssetStoreBuilder::new()
+        .process_fn(drm_process_fn)
+        .asset_root(Some(asset_root))
+        .cancel(cancel)
+        .on_invalidated(on_invalidated)
+        .root_dir(&config.store.cache_dir)
+        .evict_config(config.store.to_evict_config())
+        .ephemeral(config.store.ephemeral);
+    if let Some(ref pool) = config.pool {
+        builder = builder.pool(pool.clone());
+    }
+    if let Some(cap) = config.store.cache_capacity {
+        builder = builder.cache_capacity(cap);
+    }
+    if let Some(n) = config.store.checkpoint_every {
+        builder = builder.checkpoint_every(n);
+    }
+    builder.build()
+}
+
+fn build_abr_variants(
+    master_variants: &[crate::parsing::VariantStream],
+    media_playlists: &[(url::Url, crate::parsing::MediaPlaylist)],
+) -> Vec<kithara_events::AbrVariant> {
+    master_variants
+        .iter()
+        .zip(media_playlists.iter())
+        .map(|(v, (_, playlist))| {
+            let durations: Vec<kithara_platform::time::Duration> =
+                playlist.segments.iter().map(|s| s.duration).collect();
+            let duration = if durations.is_empty() {
+                kithara_events::VariantDuration::Unknown
+            } else {
+                kithara_events::VariantDuration::Segmented(durations)
+            };
+            kithara_events::AbrVariant {
+                variant_index: v.id.0,
+                bandwidth_bps: v.bandwidth.unwrap_or(0),
+                duration,
+            }
+        })
+        .collect()
 }

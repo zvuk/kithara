@@ -16,7 +16,8 @@ bytes = { workspace = true }
 delegate = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
-kithara-events = { workspace = true, features = ["downloader"] }
+kithara-abr = { workspace = true }
+kithara-events = { workspace = true, features = ["abr", "downloader"] }
 kithara-net = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }

@@ -325,13 +325,11 @@ fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-/// Generate extra attributes for selenium tests (`#[ignore]`).
-fn make_selenium_attrs(args: &TestArgs) -> TokenStream2 {
-    if args.is_selenium {
-        quote! { #[ignore = "requires selenium"] }
-    } else {
-        quote! {}
-    }
+/// Selenium tests no longer auto-inject `#[ignore]` — the suite runs only
+/// when the wasm-target test driver picks them up (`just test-selenium`),
+/// so plain `cargo test` already skips them by virtue of platform gating.
+fn make_selenium_attrs(_args: &TestArgs) -> TokenStream2 {
+    quote! {}
 }
 
 /// Emit a native async test with a **manual tokio runtime** (no timeout).
@@ -1012,232 +1010,227 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     let cases = extract_cases(&func.attrs)?;
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
     let params = extract_params(&func);
-    let is_async = func.sig.asyncness.is_some();
-    let vis = &func.vis;
-    let fn_name = &func.sig.ident;
-    let ret_type = &func.sig.output;
-    let body_stmts = &func.block.stmts;
+    let ctx = GenCtx {
+        args: &args,
+        params: &params,
+        remaining_attrs: &remaining_attrs,
+        cases: &cases,
+        is_async: func.sig.asyncness.is_some(),
+        vis: &func.vis,
+        fn_name: &func.sig.ident,
+        ret_type: &func.sig.output,
+        body_stmts: &func.block.stmts,
+    };
 
-    // wasm-only: cfg(wasm32) + wasm_bindgen_test, no native counterpart.
-    // Also emits `run_in_dedicated_worker` config so the test runner uses a
-    // browser-based Web Worker instead of Node.js (required by wasm-bindgen-rayon).
     if args.is_wasm_only {
-        let worker_config = make_dedicated_worker_config();
-        if cases.is_empty() {
-            let preamble = make_preamble(&params, None);
-            let tracing_init = make_tracing_init(&args);
-            let full = quote! { { #tracing_init #preamble #(#body_stmts)* } };
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
-            let wrapped = finalize_body(&with_timeout, &args, fn_name, true);
-            return Ok(quote! {
-                #worker_config
-                #(#remaining_attrs)*
-                #[cfg(target_arch = "wasm32")]
-                #[wasm_bindgen_test::wasm_bindgen_test]
-                #vis async fn #fn_name() #ret_type #wrapped
-            });
-        }
-        let mut tests = TokenStream2::new();
-        tests.extend(worker_config);
-        for (i, case) in cases.iter().enumerate() {
-            let case_name = match &case.name {
-                Some(name) => format_ident!("{}_{}", fn_name, name),
-                None => format_ident!("{}_case_{}", fn_name, i + 1),
-            };
-            let preamble = make_preamble(&params, Some(&case.values));
-            let tracing_init = make_tracing_init(&args);
-            let full = quote! { { #tracing_init #preamble #(#body_stmts)* } };
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, true, &case_name);
-            let wrapped = finalize_body(&with_timeout, &args, &case_name, true);
-            tests.extend(quote! {
-                #(#remaining_attrs)*
-                #[cfg(target_arch = "wasm32")]
-                #[wasm_bindgen_test::wasm_bindgen_test]
-                #vis async fn #case_name() #ret_type #wrapped
-            });
-        }
-        return Ok(tests);
+        return Ok(generate_wasm_only(&ctx));
     }
-
-    // native-only (without browser): cfg(not(wasm32)) + #[test] or #[tokio::test]
     if args.is_native_only && !args.is_browser {
-        let native_is_async = is_async || args.is_tokio;
-        let serial_attr = make_serial_attr(&args);
-
-        if cases.is_empty() {
-            let preamble = make_preamble(&params, None);
-            let tracing_init = make_tracing_init(&args);
-            let full = quote! { #tracing_init #preamble #(#body_stmts)* };
-
-            // Async + timeout: manual runtime
-            if native_is_async && args.timeout.is_some() {
-                return Ok(emit_async_timeout_test(
-                    fn_name,
-                    vis,
-                    ret_type,
-                    &remaining_attrs,
-                    &full,
-                    &args,
-                    &serial_attr,
-                ));
-            }
-
-            // Async without timeout: manual runtime
-            if native_is_async {
-                return Ok(emit_async_runtime_test(
-                    fn_name,
-                    vis,
-                    ret_type,
-                    &remaining_attrs,
-                    &full,
-                    &args,
-                    &serial_attr,
-                ));
-            }
-
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, false, fn_name);
-            let wrapped = finalize_body(&with_timeout, &args, fn_name, false);
-            return Ok(quote! {
-                #(#remaining_attrs)*
-                #serial_attr
-                #[cfg(not(target_arch = "wasm32"))]
-                #[test]
-                #vis fn #fn_name() #ret_type #wrapped
-            });
-        }
-
-        let mut tests = TokenStream2::new();
-        for (i, case) in cases.iter().enumerate() {
-            let case_name = match &case.name {
-                Some(name) => format_ident!("{}_{}", fn_name, name),
-                None => format_ident!("{}_case_{}", fn_name, i + 1),
-            };
-            let preamble = make_preamble(&params, Some(&case.values));
-            let tracing_init = make_tracing_init(&args);
-            let full = quote! { #tracing_init #preamble #(#body_stmts)* };
-
-            // Async + timeout: manual runtime (per case)
-            if native_is_async && args.timeout.is_some() {
-                tests.extend(emit_async_timeout_test(
-                    &case_name,
-                    vis,
-                    ret_type,
-                    &remaining_attrs,
-                    &full,
-                    &args,
-                    &serial_attr,
-                ));
-                continue;
-            }
-
-            // Async without timeout: manual runtime (per case)
-            if native_is_async {
-                tests.extend(emit_async_runtime_test(
-                    &case_name,
-                    vis,
-                    ret_type,
-                    &remaining_attrs,
-                    &full,
-                    &args,
-                    &serial_attr,
-                ));
-                continue;
-            }
-
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, false, &case_name);
-            let wrapped = finalize_body(&with_timeout, &args, &case_name, false);
-            tests.extend(quote! {
-                #(#remaining_attrs)*
-                #serial_attr
-                #[cfg(not(target_arch = "wasm32"))]
-                #[test]
-                #vis fn #case_name() #ret_type #wrapped
-            });
-        }
-        return Ok(tests);
+        return Ok(generate_native_only(&ctx));
     }
-
-    // browser: WASM with tokio::ensure_thread_pool init, optionally dual-platform
-    //   browser alone      → wasm-only + init
-    //   native, browser    → sync native + browser wasm
-    //   tokio, browser     → async native + browser wasm
     if args.is_browser {
-        let browser_only = !args.is_tokio && !args.is_native_only;
-        if cases.is_empty() {
-            let preamble = make_preamble(&params, None);
-            return Ok(emit_browser_test(
-                fn_name,
-                vis,
-                ret_type,
-                &remaining_attrs,
-                is_async,
-                &preamble,
-                body_stmts,
-                &args,
-                browser_only,
-            ));
-        }
-        let mut tests = TokenStream2::new();
-        for (i, case) in cases.iter().enumerate() {
-            let case_name = match &case.name {
-                Some(name) => format_ident!("{}_{}", fn_name, name),
-                None => format_ident!("{}_case_{}", fn_name, i + 1),
-            };
-            let preamble = make_preamble(&params, Some(&case.values));
-            tests.extend(emit_browser_test(
-                &case_name,
-                vis,
-                ret_type,
-                &remaining_attrs,
-                is_async,
-                &preamble,
-                body_stmts,
-                &args,
-                browser_only,
-            ));
-        }
-        return Ok(tests);
+        return Ok(generate_browser(&ctx));
     }
+    Ok(generate_default(&ctx))
+}
 
-    let test_attrs = make_sync_test_attrs();
+/// Shared context for the `generate*` per-branch helpers.
+struct GenCtx<'a> {
+    args: &'a TestArgs,
+    params: &'a [ParamInfo],
+    remaining_attrs: &'a [&'a Attribute],
+    cases: &'a [Case],
+    is_async: bool,
+    vis: &'a syn::Visibility,
+    fn_name: &'a Ident,
+    ret_type: &'a syn::ReturnType,
+    body_stmts: &'a [syn::Stmt],
+}
 
-    if cases.is_empty() {
-        // Single test — inject fixtures only
-        let preamble = make_preamble(&params, None);
-        Ok(emit_one_test(
-            fn_name,
+/// Case-name convention: `{fn_name}_{case.name}` or `{fn_name}_case_{i+1}`.
+fn case_ident(fn_name: &Ident, case: &Case, index: usize) -> Ident {
+    match &case.name {
+        Some(name) => format_ident!("{}_{}", fn_name, name),
+        None => format_ident!("{}_case_{}", fn_name, index + 1),
+    }
+}
+
+/// wasm-only: `cfg(wasm32)` + `wasm_bindgen_test`, no native counterpart.
+/// Also emits `run_in_dedicated_worker` config so the test runner uses a
+/// browser-based Web Worker instead of Node.js (required by wasm-bindgen-rayon).
+fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
+    let worker_config = make_dedicated_worker_config();
+    let mut tests = TokenStream2::new();
+    tests.extend(worker_config);
+
+    let emit = |name: &Ident, case_values: Option<&[Expr]>| -> TokenStream2 {
+        let preamble = make_preamble(ctx.params, case_values);
+        let tracing_init = make_tracing_init(ctx.args);
+        let body_stmts = ctx.body_stmts;
+        let full = quote! { { #tracing_init #preamble #(#body_stmts)* } };
+        let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
+        let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
+        let remaining_attrs = ctx.remaining_attrs;
+        let vis = ctx.vis;
+        let ret_type = ctx.ret_type;
+        quote! {
+            #(#remaining_attrs)*
+            #[cfg(target_arch = "wasm32")]
+            #[wasm_bindgen_test::wasm_bindgen_test]
+            #vis async fn #name() #ret_type #wrapped
+        }
+    };
+
+    if ctx.cases.is_empty() {
+        tests.extend(emit(ctx.fn_name, None));
+    } else {
+        for (i, case) in ctx.cases.iter().enumerate() {
+            let case_name = case_ident(ctx.fn_name, case, i);
+            tests.extend(emit(&case_name, Some(&case.values)));
+        }
+    }
+    tests
+}
+
+/// native-only (without browser): `cfg(not(wasm32))` + `#[test]` or `#[tokio::test]`.
+fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
+    let native_is_async = ctx.is_async || ctx.args.is_tokio;
+    let serial_attr = make_serial_attr(ctx.args);
+    let mut tests = TokenStream2::new();
+
+    let mut emit_one = |name: &Ident, case_values: Option<&[Expr]>| {
+        let preamble = make_preamble(ctx.params, case_values);
+        let tracing_init = make_tracing_init(ctx.args);
+        let body_stmts = ctx.body_stmts;
+        let full = quote! { #tracing_init #preamble #(#body_stmts)* };
+        tests.extend(emit_native_only_one(
+            ctx,
+            name,
+            &full,
+            &serial_attr,
+            native_is_async,
+        ));
+    };
+
+    if ctx.cases.is_empty() {
+        emit_one(ctx.fn_name, None);
+    } else {
+        for (i, case) in ctx.cases.iter().enumerate() {
+            let case_name = case_ident(ctx.fn_name, case, i);
+            emit_one(&case_name, Some(&case.values));
+        }
+    }
+    tests
+}
+
+fn emit_native_only_one(
+    ctx: &GenCtx<'_>,
+    name: &Ident,
+    full: &TokenStream2,
+    serial_attr: &TokenStream2,
+    native_is_async: bool,
+) -> TokenStream2 {
+    let remaining_attrs = ctx.remaining_attrs;
+    let vis = ctx.vis;
+    let ret_type = ctx.ret_type;
+    let args = ctx.args;
+
+    if native_is_async && args.timeout.is_some() {
+        return emit_async_timeout_test(
+            name,
             vis,
             ret_type,
-            &remaining_attrs,
-            &test_attrs,
-            is_async,
-            &preamble,
-            body_stmts,
-            &args,
-        ))
-    } else {
-        // One test per case
-        let mut tests = TokenStream2::new();
-        for (i, case) in cases.iter().enumerate() {
-            let case_name = match &case.name {
-                Some(name) => format_ident!("{}_{}", fn_name, name),
-                None => format_ident!("{}_case_{}", fn_name, i + 1),
-            };
-            let preamble = make_preamble(&params, Some(&case.values));
-            tests.extend(emit_one_test(
-                &case_name,
-                vis,
-                ret_type,
-                &remaining_attrs,
-                &test_attrs,
-                is_async,
-                &preamble,
-                body_stmts,
-                &args,
-            ));
-        }
-        Ok(tests)
+            remaining_attrs,
+            full,
+            args,
+            serial_attr,
+        );
     }
+    if native_is_async {
+        return emit_async_runtime_test(
+            name,
+            vis,
+            ret_type,
+            remaining_attrs,
+            full,
+            args,
+            serial_attr,
+        );
+    }
+    let with_timeout = wrap_with_timeout(full, &args.timeout, false, name);
+    let wrapped = finalize_body(&with_timeout, args, name, false);
+    quote! {
+        #(#remaining_attrs)*
+        #serial_attr
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        #vis fn #name() #ret_type #wrapped
+    }
+}
+
+/// browser: WASM with `tokio::ensure_thread_pool` init, optionally dual-platform.
+///   browser alone      → wasm-only + init
+///   native, browser    → sync native + browser wasm
+///   tokio, browser     → async native + browser wasm
+fn generate_browser(ctx: &GenCtx<'_>) -> TokenStream2 {
+    let browser_only = !ctx.args.is_tokio && !ctx.args.is_native_only;
+    let mut tests = TokenStream2::new();
+
+    let mut emit = |name: &Ident, case_values: Option<&[Expr]>| {
+        let preamble = make_preamble(ctx.params, case_values);
+        tests.extend(emit_browser_test(
+            name,
+            ctx.vis,
+            ctx.ret_type,
+            ctx.remaining_attrs,
+            ctx.is_async,
+            &preamble,
+            ctx.body_stmts,
+            ctx.args,
+            browser_only,
+        ));
+    };
+
+    if ctx.cases.is_empty() {
+        emit(ctx.fn_name, None);
+    } else {
+        for (i, case) in ctx.cases.iter().enumerate() {
+            let case_name = case_ident(ctx.fn_name, case, i);
+            emit(&case_name, Some(&case.values));
+        }
+    }
+    tests
+}
+
+/// Default branch: sync native + WASM, or single-platform when async. One test per case.
+fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
+    let test_attrs = make_sync_test_attrs();
+    let mut tests = TokenStream2::new();
+
+    let mut emit = |name: &Ident, case_values: Option<&[Expr]>| {
+        let preamble = make_preamble(ctx.params, case_values);
+        tests.extend(emit_one_test(
+            name,
+            ctx.vis,
+            ctx.ret_type,
+            ctx.remaining_attrs,
+            &test_attrs,
+            ctx.is_async,
+            &preamble,
+            ctx.body_stmts,
+            ctx.args,
+        ));
+    };
+
+    if ctx.cases.is_empty() {
+        emit(ctx.fn_name, None);
+    } else {
+        for (i, case) in ctx.cases.iter().enumerate() {
+            let case_name = case_ident(ctx.fn_name, case, i);
+            emit(&case_name, Some(&case.values));
+        }
+    }
+    tests
 }
 
 /// Fixture marker — resolves dependencies from function parameters.

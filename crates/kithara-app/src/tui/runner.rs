@@ -295,7 +295,7 @@ fn apply_seek(queue: &Queue, delta_seconds: f64, dashboard: &mut Dashboard) -> S
     let current = queue.position_seconds().unwrap_or(0.0).max(0.0);
     let target = (current + delta_seconds).max(0.0);
     match queue.seek(target) {
-        Ok(()) => {
+        Ok(_outcome) => {
             dashboard.set_note(format!("seek {}", format_seconds(target)));
             dashboard.set_position(Duration::from_secs_f64(target));
             format!("seek target={}", format_seconds(target))

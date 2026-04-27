@@ -300,6 +300,13 @@ pub enum PlayerEvent {
         success: bool,
     },
     ItemDidPlayToEnd,
+    /// Current track aborted by an unrecoverable failure (decoder fault,
+    /// pcm channel closed, seek-out-of-range with no recovery). Distinct
+    /// from `ItemDidPlayToEnd` which is for natural EOF. Carries a
+    /// human-readable error string for surfacing to UI / Queue status.
+    TrackErrored {
+        error: String,
+    },
 }
 
 #[derive(Clone, Debug)]

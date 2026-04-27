@@ -41,6 +41,12 @@ pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 /// Per-command completion handler. Called when the fetch completes.
 pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&NetError>) + Send>;
 
+/// Optional response-header validator for a single `FetchCmd`.
+///
+/// Invoked with the response headers after a successful HTTP response.
+/// Returning `Err` rejects the response before the body is consumed.
+pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
+
 /// A single download command.
 ///
 /// Built by protocol code via [`FetchCmd::get`] / [`FetchCmd::head`]
@@ -74,15 +80,15 @@ pub struct FetchCmd {
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.
     #[setters(skip)]
-    pub validator: Option<fn(&Headers) -> NetResult<()>>,
+    pub validator: Option<ResponseValidator>,
 }
 
 impl FetchCmd {
-    /// HTTP GET command for the given URL.
-    #[must_use]
-    pub fn get(url: Url) -> Self {
+    /// Build a [`FetchCmd`] with the given method and URL; all other
+    /// fields start unset.
+    fn with_method(method: FetchMethod, url: Url) -> Self {
         Self {
-            method: FetchMethod::Stream,
+            method,
             url,
             range: None,
             headers: None,
@@ -93,19 +99,16 @@ impl FetchCmd {
         }
     }
 
+    /// HTTP GET command for the given URL.
+    #[must_use]
+    pub fn get(url: Url) -> Self {
+        Self::with_method(FetchMethod::Stream, url)
+    }
+
     /// HTTP HEAD command for the given URL.
     #[must_use]
     pub fn head(url: Url) -> Self {
-        Self {
-            method: FetchMethod::Head,
-            url,
-            range: None,
-            headers: None,
-            cancel: None,
-            writer: None,
-            on_complete: None,
-            validator: None,
-        }
+        Self::with_method(FetchMethod::Head, url)
     }
 
     /// Set the per-command body writer (streaming path).

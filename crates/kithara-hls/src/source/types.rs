@@ -33,16 +33,18 @@ pub(crate) struct ReadSegment {
 }
 
 impl ReadSegment {
-    /// Create from a `SegmentRef` (borrows from the lock — must copy).
-    pub(crate) fn from_ref(seg_ref: &SegmentRef<'_>) -> Self {
-        Self {
+    /// Snapshot a committed `SegmentRef`. Returns `None` for reserved
+    /// slots (segment has a byte-map entry but no data yet).
+    pub(crate) fn try_from_ref(seg_ref: &SegmentRef<'_>) -> Option<Self> {
+        let data = seg_ref.data?;
+        Some(Self {
             variant: seg_ref.variant,
             segment_index: seg_ref.segment_index,
             byte_offset: seg_ref.byte_offset,
-            init_len: seg_ref.data.init_len,
-            media_len: seg_ref.data.media_len,
-            init_url: seg_ref.data.init_url.clone(),
-            media_url: seg_ref.data.media_url.clone(),
-        }
+            init_len: data.init_len,
+            media_len: data.media_len,
+            init_url: data.init_url.clone(),
+            media_url: data.media_url.clone(),
+        })
     }
 }

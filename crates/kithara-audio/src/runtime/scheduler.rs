@@ -169,15 +169,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     loop {
         observer.on_event(SchedulerEvent::PassStart);
 
-        if cancel.is_cancelled() {
-            trace!("scheduler cancelled");
-            for slot in &mut slots {
-                slot.node.on_cancel();
-            }
-            return;
-        }
-
-        if drain_commands(cmd_rx, &mut slots, &mut needs_reorder) {
+        if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
             return;
         }
 
@@ -194,24 +186,44 @@ fn run_loop<N: Node, O: SchedulerObserver>(
             needs_reorder = true;
         }
 
-        match outcome {
-            PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
-            PassOutcome::Waiting => {}
-            PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
-        }
-
+        report_outcome(&mut observer, outcome);
         observer.on_event(SchedulerEvent::PassEnd);
+        park_after_outcome::<N, O>(wake, outcome);
+    }
+}
 
-        match outcome {
-            PassOutcome::Produced => {
-                yield_now();
-            }
-            PassOutcome::Waiting => {
-                wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
-            }
-            PassOutcome::Idle => {
-                wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
-            }
+fn cancel_and_drain<N: Node>(
+    cancel: &CancellationToken,
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> bool {
+    if cancel.is_cancelled() {
+        trace!("scheduler cancelled");
+        for slot in slots.iter_mut() {
+            slot.node.on_cancel();
+        }
+        return true;
+    }
+    drain_commands(cmd_rx, slots, needs_reorder)
+}
+
+fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) {
+    match outcome {
+        PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
+        PassOutcome::Waiting => {}
+        PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
+    }
+}
+
+fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outcome: PassOutcome) {
+    match outcome {
+        PassOutcome::Produced => yield_now(),
+        PassOutcome::Waiting => {
+            wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
+        }
+        PassOutcome::Idle => {
+            wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
         }
     }
 }

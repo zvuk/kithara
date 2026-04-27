@@ -1,0 +1,57 @@
+services:
+  ci-full:
+    image: kithara/ci:latest
+    build:
+      context: ..
+      dockerfile: docker/ci.Dockerfile
+    volumes:
+      - ../:/repo:rw
+      - /var/kithara-ci-results:/ci-out:rw
+      - kithara_target:/repo/target
+    working_dir: /repo
+    environment:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
+    command: just ci-full-run /ci-out
+    restart: "no"
+
+  # Same pipeline, but every rustc invocation goes through sccache so per-mutant
+  # cold-workspace rebuilds become cache hits after the first run. Started via
+  # `docker compose --profile fast up -d`; writes to /var/kithara-ci-results-fast
+  # so it does not collide with the plain `ci-full` service output.
+  ci-full-fast:
+    image: kithara/ci:latest
+    build:
+      context: ..
+      dockerfile: docker/ci.Dockerfile
+    profiles: ["fast"]
+    # Hard cap on host resources: leave headroom so we do not take the host
+    # down under sustained full-workspace rebuilds. Assumes a 32-core / ~124
+    # GiB server; scale down the caps if running elsewhere.
+    cpus: "24"
+    mem_limit: 80g
+    memswap_limit: 80g
+    volumes:
+      - ../:/repo:rw
+      - /var/kithara-ci-results-fast:/ci-out:rw
+      - kithara_target_fast:/repo/target
+      - sccache_cache:/sccache
+    working_dir: /repo
+    environment:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
+      RUSTC_WRAPPER: "sccache"
+      SCCACHE_DIR: "/sccache"
+      SCCACHE_CACHE_SIZE: "60G"
+      SCCACHE_IDLE_TIMEOUT: "0"
+      # Cap cargo-mutants parallelism to match host headroom.
+      MUTANTS_JOBS: "8"
+    command: just ci-full-run /ci-out
+    restart: "no"
+
+volumes:
+  kithara_target:
+  kithara_target_fast:
+  sccache_cache:
