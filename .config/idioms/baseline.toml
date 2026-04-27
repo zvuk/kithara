@@ -24,3 +24,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/hls_spec.rs:209:4" = 1
 "crates/kithara-test-utils/src/signal_spec.rs:142:4" = 1
 "crates/kithara-test-utils/src/signal_spec.rs:270:4" = 1
+
+[parallel_loops]
+"crates/kithara-stream/src/dl/registry.rs:144:8::self.peers" = 1

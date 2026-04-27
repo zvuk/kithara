@@ -103,6 +103,40 @@ pub(crate) fn self_ty_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// Stable string for "subject" expressions (paths, field chains, zero-arg
+/// method calls, references). Returns `None` for literals/calls/closures —
+/// expressions that cannot be a sensible canonical key for grouping or
+/// equality (e.g. for matching same-source loops or accumulator targets).
+pub(crate) fn canonical_subject(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Path(p) => Some(
+            p.path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::"),
+        ),
+        Expr::Field(fe) => {
+            let base = canonical_subject(&fe.base)?;
+            let m = match &fe.member {
+                Member::Named(n) => n.to_string(),
+                Member::Unnamed(i) => i.index.to_string(),
+            };
+            Some(format!("{base}.{m}"))
+        }
+        Expr::MethodCall(mc) if mc.args.is_empty() && mc.turbofish.is_none() => {
+            let recv = canonical_subject(&mc.receiver)?;
+            Some(format!("{recv}.{}()", mc.method))
+        }
+        Expr::Reference(r) => canonical_subject(&r.expr),
+        Expr::Paren(p) => canonical_subject(&p.expr),
+        Expr::Group(g) => canonical_subject(&g.expr),
+        Expr::Unary(u) => canonical_subject(&u.expr),
+        _ => None,
+    }
+}
+
 /// Whether a method's signature is publicly visible (`pub` or `pub(crate)`).
 pub(crate) fn is_pub_visibility(vis: &syn::Visibility) -> bool {
     matches!(

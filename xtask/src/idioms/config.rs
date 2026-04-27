@@ -27,6 +27,10 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) guard_cascade: GuardCascadeConfig,
     #[serde(default)]
     pub(crate) accumulator_loops: AccumulatorLoopsConfig,
+    #[serde(default)]
+    pub(crate) multi_accumulator_loop: MultiAccumulatorLoopConfig,
+    #[serde(default)]
+    pub(crate) parallel_loops: ParallelLoopsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +162,40 @@ fn default_accumulator_patterns() -> Vec<String> {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MultiAccumulatorLoopConfig {
+    /// Skip loops with `break`/`continue`/`return` inside.
+    #[serde(default = "default_true")]
+    pub(crate) ignore_with_break: bool,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for MultiAccumulatorLoopConfig {
+    fn default() -> Self {
+        Self {
+            ignore_with_break: true,
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ParallelLoopsConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for ParallelLoopsConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>

@@ -31,7 +31,7 @@ use syn::{
 use super::{Check, Context};
 use crate::{
     common::{
-        parse::parse_file,
+        parse::{canonical_subject, parse_file},
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
     },
@@ -238,38 +238,6 @@ fn bin_op_str(op: &BinOp) -> Option<&'static str> {
         BinOp::Ge(_) => ">=",
         _ => return None,
     })
-}
-
-/// Return a stable string for "subject" expressions (paths, field chains,
-/// 0-arg method calls), or `None` for literals/calls/complex expressions.
-fn canonical_subject(e: &Expr) -> Option<String> {
-    match e {
-        Expr::Path(p) => Some(
-            p.path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect::<Vec<_>>()
-                .join("::"),
-        ),
-        Expr::Field(fe) => {
-            let base = canonical_subject(&fe.base)?;
-            let m = match &fe.member {
-                syn::Member::Named(n) => n.to_string(),
-                syn::Member::Unnamed(i) => i.index.to_string(),
-            };
-            Some(format!("{base}.{m}"))
-        }
-        Expr::MethodCall(mc) if mc.args.is_empty() && mc.turbofish.is_none() => {
-            let recv = canonical_subject(&mc.receiver)?;
-            Some(format!("{recv}.{}()", mc.method))
-        }
-        Expr::Reference(r) => canonical_subject(&r.expr),
-        Expr::Paren(p) => canonical_subject(&p.expr),
-        Expr::Group(g) => canonical_subject(&g.expr),
-        Expr::Unary(u) => canonical_subject(&u.expr),
-        _ => None,
-    }
 }
 
 fn matches_macro_receiver(cond: &Expr) -> Option<String> {

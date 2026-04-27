@@ -16,6 +16,8 @@ use crate::common::violation::Violation;
 pub(crate) mod accumulator_loops;
 pub(crate) mod branch_chains;
 pub(crate) mod guard_cascade;
+pub(crate) mod multi_accumulator_loop;
+pub(crate) mod parallel_loops;
 
 #[expect(dead_code, reason = "fields consumed by upcoming idiom checks")]
 pub(crate) struct Context<'a> {
@@ -34,5 +36,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(branch_chains::BranchChains),
         Box::new(guard_cascade::GuardCascade),
         Box::new(accumulator_loops::AccumulatorLoops),
+        Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
+        Box::new(parallel_loops::ParallelLoops),
     ]
 }
