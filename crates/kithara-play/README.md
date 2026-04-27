@@ -234,8 +234,15 @@ This is different from `internal::offline::OfflinePlayer`: `OfflinePlayer`
 is a single-node helper for focused render tests, while `new_offline(...)`
 exercises the full engine/session orchestration path.
 
+For integration-style tests, prefer the shared harness under
+`tests/tests/common/offline_player_harness.rs` so player-facing scenarios can
+inject an offline engine without duplicating setup.
+
 `backend-offline` is test-only infrastructure. Do not use it in production
-runtime selection or app-facing engine setup.
+runtime selection or app-facing engine setup. The default runtime path
+(`EngineImpl::new(...)` with the default backend features) keeps using the
+normal session transport and should not change behavior because this testing
+backend is enabled.
 
 ## Invariants
 
