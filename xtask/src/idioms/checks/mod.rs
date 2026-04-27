@@ -14,6 +14,7 @@ use super::config::IdiomsConfig;
 use crate::common::violation::Violation;
 
 pub(crate) mod branch_chains;
+pub(crate) mod guard_cascade;
 
 #[expect(dead_code, reason = "fields consumed by upcoming idiom checks")]
 pub(crate) struct Context<'a> {
@@ -28,5 +29,8 @@ pub(crate) trait Check {
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
-    vec![Box::new(branch_chains::BranchChains)]
+    vec![
+        Box::new(branch_chains::BranchChains),
+        Box::new(guard_cascade::GuardCascade),
+    ]
 }
