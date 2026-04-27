@@ -435,11 +435,17 @@ pub(crate) fn collect_self_field_writes(
 /// in it. Used by checks that match impls against structs in the same module
 /// to avoid cross-module name aliasing.
 #[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "consts/fns consumed by upcoming style::const_locality"
+)]
 pub(crate) struct Scope<'a> {
     /// Module path components, e.g. `["foo", "bar"]`. Empty for file root.
     pub(crate) path: Vec<String>,
     pub(crate) structs: Vec<&'a syn::ItemStruct>,
     pub(crate) impls: Vec<&'a ItemImpl>,
+    pub(crate) consts: Vec<&'a syn::ItemConst>,
+    pub(crate) fns: Vec<&'a syn::ItemFn>,
 }
 
 /// Recursively collect one `Scope` per module level in the file.
@@ -452,11 +458,15 @@ pub(crate) fn collect_scopes(file: &File) -> Vec<Scope<'_>> {
 fn collect_scope_inner<'a>(items: &'a [Item], path: &mut Vec<String>, out: &mut Vec<Scope<'a>>) {
     let mut structs: Vec<&'a syn::ItemStruct> = Vec::new();
     let mut impls: Vec<&'a ItemImpl> = Vec::new();
+    let mut consts: Vec<&'a syn::ItemConst> = Vec::new();
+    let mut fns: Vec<&'a syn::ItemFn> = Vec::new();
     let mut sub_mods: Vec<(&'a syn::ItemMod, &'a [Item])> = Vec::new();
     for item in items {
         match item {
             Item::Struct(s) => structs.push(s),
             Item::Impl(im) => impls.push(im),
+            Item::Const(c) => consts.push(c),
+            Item::Fn(f) => fns.push(f),
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
                     sub_mods.push((m, inner));
@@ -469,6 +479,8 @@ fn collect_scope_inner<'a>(items: &'a [Item], path: &mut Vec<String>, out: &mut 
         path: path.clone(),
         structs,
         impls,
+        consts,
+        fns,
     });
     for (m, inner) in sub_mods {
         path.push(m.ident.to_string());
