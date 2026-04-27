@@ -7,7 +7,7 @@ use kithara_play::{
 };
 use kithara_test_utils::kithara;
 
-use crate::common::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::OfflinePlayerHarness;
 
 fn mock_spec() -> PcmSpec {
     PcmSpec {
