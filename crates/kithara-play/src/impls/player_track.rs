@@ -191,7 +191,7 @@ impl PlayerTrack {
 
                 self.check_notifications(notification_tx);
             }
-            Err(PlayError::Internal(msg)) if msg == "eof" => {
+            Err(PlayError::Eof) => {
                 self.handle_eof(notification_tx);
                 return;
             }

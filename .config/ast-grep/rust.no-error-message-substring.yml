@@ -1,0 +1,32 @@
+id: rust.no-error-message-substring
+message: |
+  Branching on an error/message substring
+  (`msg.contains("...")`, `err.to_string().starts_with("...")`,
+  `reason.ends_with("...")`).
+
+  Per AGENTS.md "Non-Negotiables": rely on typed status or a dedicated
+  error variant, not on the textual content of the message. The text is
+  formatting detail and can drift; substring checks form a brittle,
+  invisible contract.
+
+  Fix the error type instead:
+    - propagate a typed kind/variant from the producing layer, or
+    - expose a dedicated status accessor on the error.
+
+  If a substring check is unavoidable (parsing a third-party body we do
+  not own), justify it in the owning crate `README.md` and silence this
+  rule with a local `// ast-grep-ignore` comment.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  any:
+    - pattern: $X.contains($S)
+    - pattern: $X.starts_with($S)
+    - pattern: $X.ends_with($S)
+constraints:
+  X:
+    regex: '^(msg|message|err|error|reason|cause|text|body|err_str|err_string|http_err_str|err_msg|error_msg|error_string|error_str)$'
+  S:
+    kind: string_literal

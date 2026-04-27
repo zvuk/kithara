@@ -1,0 +1,46 @@
+id: rust.no-error-string-match
+message: |
+  Matching an error/option payload by comparing its inner string against
+  a literal in a `match`-arm guard
+  (e.g. `Err(MyError::Internal(msg)) if msg == "eof"`).
+
+  Per AGENTS.md "Non-Negotiables": code must depend on typed status or
+  dedicated error variants, not on the textual content of an error
+  message. The text is a logging detail and can change without notice;
+  callers that branch on it form a hidden contract that breaks silently.
+
+  Fix the error type instead:
+    - introduce a dedicated variant (`PlayError::Eof`, `Status::Cancelled`)
+      and match it directly, or
+    - return a typed status code/enum from the producing layer.
+
+  If a string check is genuinely required (parsing third-party text we
+  do not own), justify it in the owning crate `README.md` and silence
+  this rule with a local `// ast-grep-ignore` comment.
+severity: error
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+rule:
+  any:
+    - pattern:
+        context: 'match x { Err($V($X)) if $X == $S => () }'
+        selector: match_pattern
+    - pattern:
+        context: 'match x { Err($V($X)) if &*$X == $S => () }'
+        selector: match_pattern
+    - pattern:
+        context: 'match x { Err($V($X)) if $X.as_str() == $S => () }'
+        selector: match_pattern
+    - pattern:
+        context: 'match x { Err($V { $F }) if $F == $S => () }'
+        selector: match_pattern
+    - pattern:
+        context: 'match x { Some($V($X)) if $X == $S => () }'
+        selector: match_pattern
+    - pattern:
+        context: 'match x { Some($V { $F }) if $F == $S => () }'
+        selector: match_pattern
+constraints:
+  S:
+    kind: string_literal

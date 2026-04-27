@@ -80,8 +80,8 @@ impl PlayerResource {
     ///
     /// # Errors
     ///
-    /// Returns `PlayError::Internal` with "eof" if the resource has reached
-    /// end of file and no buffered data remains.
+    /// Returns `PlayError::Eof` if the resource has reached end of file and
+    /// no buffered data remains.
     pub(crate) fn read(
         &mut self,
         output: &mut [&mut [f32]],
@@ -156,7 +156,7 @@ impl PlayerResource {
 
             Ok(())
         } else if natural_eof {
-            Err(PlayError::Internal("eof".into()))
+            Err(PlayError::Eof)
         } else if let Some(err) = decode_err {
             tracing::warn!(
                 src = %self.src,
@@ -435,14 +435,14 @@ mod tests {
             kithara_bufpool::pcm_pool(),
         );
 
-        // Read until natural EOF surfaces as `PlayError::Internal("eof")`.
+        // Read until natural EOF surfaces as `PlayError::Eof`.
         let mut left = vec![0.0f32; 4096];
         let mut right = vec![0.0f32; 4096];
         for _ in 0..1024 {
             let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
             match pr.read(&mut output, 0..4096) {
                 Ok(()) => continue,
-                Err(PlayError::Internal(msg)) if &*msg == "eof" => return,
+                Err(PlayError::Eof) => return,
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
