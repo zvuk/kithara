@@ -26,6 +26,8 @@ impl StyleConfig {
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
+    #[serde(default)]
+    pub(crate) trait_item_order: TraitItemOrderConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +63,43 @@ fn default_visibility_order() -> Vec<String> {
 
 fn default_exempt_attrs() -> Vec<String> {
     ["repr"].iter().map(|s| (*s).to_string()).collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TraitItemOrderConfig {
+    /// Item kinds in the order they should appear inside a `trait` / `impl`.
+    /// Recognised tokens: `type`, `const`, `fn`, `macro`.
+    #[serde(default = "default_trait_kind_order")]
+    pub(crate) kind_order: Vec<String>,
+    /// Where to apply the rule: any combination of `trait` / `impl_inherent`
+    /// / `impl_trait`. Defaults cover both kinds of `impl` so methods stay
+    /// grouped near their associated types/consts.
+    #[serde(default = "default_trait_apply_to")]
+    pub(crate) apply_to: Vec<String>,
+}
+
+impl Default for TraitItemOrderConfig {
+    fn default() -> Self {
+        Self {
+            kind_order: default_trait_kind_order(),
+            apply_to: default_trait_apply_to(),
+        }
+    }
+}
+
+fn default_trait_kind_order() -> Vec<String> {
+    ["type", "const", "fn", "macro"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_trait_apply_to() -> Vec<String> {
+    ["trait", "impl_inherent", "impl_trait"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>
