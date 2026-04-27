@@ -949,13 +949,16 @@ mod tests {
 
         processor.drain_commands();
 
-        let seek_log = seek_log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recorded_seeks = {
+            let seek_log = seek_log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            seek_log.clone()
+        };
         // FadeIn skips seek(0.0) because position is already at 0.
         // Only the last seek epoch passes → 30000ms.
         // Seeks with stale epochs (1, 2) are dropped.
-        assert_eq!(seek_log.as_slice(), [30000]);
+        assert_eq!(recorded_seeks, [30000]);
         assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
     }
 }

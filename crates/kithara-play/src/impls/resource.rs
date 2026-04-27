@@ -238,13 +238,6 @@ impl Resource {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless,
-    reason = "test mock code; values are small and positive by construction"
-)]
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
