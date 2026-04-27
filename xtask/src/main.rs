@@ -6,6 +6,7 @@ mod android;
 mod apple;
 mod arch;
 mod common;
+mod idioms;
 mod perf_compare;
 mod publish;
 mod quality;
@@ -16,6 +17,7 @@ mod wasm;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use arch::ArchArgs;
+use idioms::IdiomsArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
 use style::StyleArgs;
@@ -59,6 +61,8 @@ enum Command {
     Arch(ArchArgs),
     /// Code-style fitness functions.
     Style(StyleArgs),
+    /// Idiomatic-construction fitness functions.
+    Idioms(IdiomsArgs),
     /// Code quality checks.
     Quality {
         #[command(subcommand)]
@@ -94,6 +98,7 @@ fn main() -> anyhow::Result<()> {
         } => perf_compare::run(&current, &baseline, threshold),
         Command::Arch(ref args) => arch::run(args),
         Command::Style(ref args) => style::run(args),
+        Command::Idioms(ref args) => idioms::run(args),
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),
