@@ -10381,6 +10381,7 @@ dependencies = [
  "clap",
  "glob",
  "kithara-workspace-hack",
+ "proc-macro2",
  "regex",
  "serde",
  "syn 2.0.117",

@@ -142,6 +142,44 @@ xtask = 1
 "crates/kithara-play/src/impls/player_track.rs" = 1
 "crates/kithara-queue/src/queue.rs" = 1
 
+[single_impl_size]
+"crates/kithara-abr/src/controller.rs::impl AbrController" = 1
+"crates/kithara-abr/src/state.rs::impl AbrState" = 1
+"crates/kithara-app/src/tui/dashboard.rs::impl Dashboard" = 1
+"crates/kithara-assets/src/cache.rs::impl CachedAssets" = 1
+"crates/kithara-assets/src/disk_store.rs::impl DiskAssetStore" = 1
+"crates/kithara-assets/src/index/availability.rs::impl AvailabilityIndex" = 1
+"crates/kithara-assets/src/store.rs::impl AssetStoreBuilder" = 1
+"crates/kithara-assets/src/unified.rs::impl AssetStore" = 1
+"crates/kithara-audio/src/audio.rs::impl Audio" = 2
+"crates/kithara-audio/src/effects/eq.rs::impl IsolatorEq" = 1
+"crates/kithara-audio/src/pipeline/source.rs::impl StreamAudioSource" = 3
+"crates/kithara-audio/src/resampler.rs::impl ResamplerProcessor" = 1
+"crates/kithara-decode/src/android/decoder.rs::impl Android" = 1
+"crates/kithara-decode/src/apple/inner.rs::impl AppleInner" = 1
+"crates/kithara-decode/src/symphonia/inner.rs::impl SymphoniaInner" = 1
+"crates/kithara-ffi/src/event_bridge.rs::impl EventBridge" = 1
+"crates/kithara-ffi/src/item_bridge.rs::impl ItemEventBridge" = 1
+"crates/kithara-ffi/src/player.rs::impl AudioPlayer" = 1
+"crates/kithara-hls/src/loading/segment_loader.rs::impl SegmentLoader" = 1
+"crates/kithara-hls/src/scheduler/plan.rs::impl HlsScheduler" = 1
+"crates/kithara-hls/src/scheduler/size_map.rs::impl HlsScheduler" = 1
+"crates/kithara-hls/src/scheduler/state.rs::impl HlsScheduler" = 1
+"crates/kithara-hls/src/source/core.rs::impl HlsSource" = 1
+"crates/kithara-hls/src/source/seek.rs::impl HlsSource" = 1
+"crates/kithara-hls/src/source/source_impl.rs::impl Source for HlsSource" = 1
+"crates/kithara-hls/src/stream_index.rs::impl StreamIndex" = 1
+"crates/kithara-play/src/impls/config.rs::impl ResourceConfig" = 1
+"crates/kithara-play/src/impls/player.rs::impl PlayerImpl" = 1
+"crates/kithara-play/src/impls/player_processor.rs::impl PlayerNodeProcessor" = 1
+"crates/kithara-play/src/impls/player_track.rs::impl PlayerTrack" = 1
+"crates/kithara-play/src/impls/resource.rs::impl Resource" = 1
+"crates/kithara-queue/src/queue.rs::impl Queue" = 1
+"crates/kithara-storage/src/driver.rs::impl ResourceExt for Resource" = 1
+"crates/kithara-stream/src/dl/registry.rs::impl Registry" = 1
+"crates/kithara-stream/src/timeline.rs::impl Timeline" = 1
+"crates/kithara-test-utils/src/test_server.rs::impl HlsFixtureBuilder" = 1
+
 [single_word_filenames]
 "crates/kithara-abr/tests/state_machine.rs" = 1
 "crates/kithara-app/src/tui/tracing_init.rs" = 1

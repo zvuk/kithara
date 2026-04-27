@@ -86,6 +86,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) redundant_accessors: RedundantAccessorsThreshold,
     #[serde(default)]
     pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
+    #[serde(default)]
+    pub(crate) single_impl_size: SingleImplSizeThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,6 +216,25 @@ pub(crate) enum AccessorSeverity {
     Off,
     Warn,
     Deny,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SingleImplSizeThreshold {
+    /// Soft threshold: warn at this many lines spanned by a single `impl`
+    /// block (own or trait impl).
+    pub(crate) warn_lines: usize,
+    /// Hard threshold: deny at this many lines.
+    pub(crate) deny_lines: usize,
+}
+
+impl Default for SingleImplSizeThreshold {
+    fn default() -> Self {
+        Self {
+            warn_lines: 200,
+            deny_lines: 400,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

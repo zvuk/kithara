@@ -155,6 +155,15 @@ expose_methods = [
     "into_inner",
 ]
 
+[single_impl_size]
+# LOC of a single `impl X` or `impl Trait for X` block. Catches god-impl
+# blocks that `file_density` misses when a file has many types but one of
+# them has an outsized impl. Example: `impl Source for FileSource` spanning
+# hundreds of lines should be split by responsibility (read/seek/state into
+# separate impls or extension traits).
+warn_lines = 200
+deny_lines = 400
+
 [single_word_filenames]
 # Filenames under `crates/*/src/` should be a single word — `peer.rs`,
 # `source.rs`, `stream.rs` — not `stream_type.rs` or `playlist_cache.rs`.
