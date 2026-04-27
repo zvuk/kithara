@@ -131,14 +131,46 @@ impl HlsScheduler {
         (count, cumulative_offset)
     }
 
-    pub(crate) fn populate_cached_segments_if_needed(&self, variant: usize) -> (usize, u64) {
-        Self::populate_cached_segments(
+    pub(crate) fn populate_cached_segments_if_needed(&mut self, variant: usize) -> (usize, u64) {
+        // Steady-state short-circuit: once the disk scan has discovered
+        // every committed segment for this variant, re-scanning is a no-op
+        // that re-commits identical `SegmentData` and fires
+        // `coord.condvar.notify_all()` — which wakes the audio worker, which
+        // re-polls, which calls this again. That feedback loop is what
+        // makes `live_stress_real_stream_seek_read_cache_drm_mmap` exceed
+        // its 60s budget under stress.
+        //
+        // The tracker is only meaningful for non-ephemeral backends:
+        // ephemeral stores short-circuit `populate_cached_segments`
+        // directly (no durable cache to scan). For non-ephemeral backends
+        // there is no LRU eviction, so a previously-populated count
+        // cannot become stale — fresh segments only ever push the count
+        // forward, and the live-playlist case (`num_segments` grows)
+        // re-enters the slow path because `prev_count < num_segments`.
+        if self.backend.is_ephemeral() {
+            return (0, 0);
+        }
+        let num_segments = self.playlist_state.num_segments(variant).unwrap_or(0);
+        if num_segments > 0
+            && self
+                .populated_cached_count
+                .get(&variant)
+                .copied()
+                .is_some_and(|prev| prev >= num_segments)
+        {
+            let cumulative_offset = self.segments.lock_sync().max_end_offset();
+            return (num_segments, cumulative_offset);
+        }
+
+        let (count, cumulative_offset) = Self::populate_cached_segments(
             &self.segments,
             &self.coord,
             &self.backend,
             &self.playlist_state,
             variant,
-        )
+        );
+        self.populated_cached_count.insert(variant, count);
+        (count, cumulative_offset)
     }
 
     pub(crate) fn apply_cached_segment_progress(

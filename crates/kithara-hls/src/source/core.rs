@@ -376,6 +376,7 @@ pub(crate) fn build_pair(
         filling_layout_gap: false,
         demand_throttle_until: None,
         announced_cached_count: HashMap::new(),
+        populated_cached_count: HashMap::new(),
         in_flight_segments: HashSet::new(),
         committed_segment,
     };

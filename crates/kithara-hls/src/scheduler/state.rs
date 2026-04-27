@@ -66,6 +66,17 @@ pub(crate) struct HlsScheduler {
     /// `apply_cached_segment_progress` from re-publishing the same events
     /// on every `poll_next` tick.
     pub(crate) announced_cached_count: HashMap<VariantIndex, usize>,
+    /// Highest cached-segment count already populated into `StreamIndex`
+    /// by `populate_cached_segments_if_needed` per variant. Prevents
+    /// repeated full-playlist disk scans on every `poll_next` tick — the
+    /// scan is heavy (per-segment `resource_state` + `commit_segment`)
+    /// and unconditionally fires `coord.condvar.notify_all()` which wakes
+    /// the audio worker, which polls again, which re-scans: a CPU-bound
+    /// hot loop that exhausts the test budget under stress.
+    ///
+    /// Only meaningful for non-ephemeral backends — ephemeral stores
+    /// short-circuit `populate_cached_segments` directly.
+    pub(crate) populated_cached_count: HashMap<VariantIndex, usize>,
     /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
     /// has not yet fired. Used by `process_demand` to skip rewinding the
     /// cursor onto an in-flight segment (which would issue a duplicate
