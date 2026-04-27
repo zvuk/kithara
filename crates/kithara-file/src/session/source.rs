@@ -2,25 +2,24 @@
 //!
 //! `FileSource` is the synchronous Read+Seek-style interface used by the
 //! decoder thread. The async download tasks in [`super::download`] mutate the
-//! shared `FileInner` behind `Arc<Mutex<…>>`; this file only reads from it.
+//! shared `FileInner` lock-free (atomics + `OnceLock`); this file only reads
+//! from it.
 
 use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::Headers;
-use kithara_platform::{Mutex, time::Duration, tokio::task};
+use kithara_platform::{time::Duration, tokio::task};
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{
-    AudioCodec, MediaInfo, ReadOutcome, SourcePhase, StreamError, Timeline, dl::PeerHandle,
-};
+use kithara_stream::{MediaInfo, ReadOutcome, SourcePhase, StreamError, Timeline, dl::PeerHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
 
 use super::{
     download::{run_full_download, run_range_watcher},
-    inner::{FileInner, FilePhase, FileStreamState},
+    inner::{FileInner, FileInnerParams, FilePhase, FileStreamState},
 };
 use crate::{coord::FileCoord, error::SourceError};
 
@@ -31,11 +30,10 @@ use crate::{coord::FileCoord, error::SourceError};
 /// by spawned async tasks that call [`PeerHandle::execute`].
 #[derive(Clone)]
 pub struct FileSource {
-    inner: Arc<Mutex<FileInner>>,
-    /// Shared coordination (outside Mutex for borrow-free access).
+    inner: Arc<FileInner>,
+    /// Shared coordination — held next to `inner` so the hot read paths
+    /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
-    /// Codec detected from HTTP Content-Type header.
-    content_type_codec: Option<AudioCodec>,
 }
 
 impl FileSource {
@@ -47,22 +45,20 @@ impl FileSource {
         backend: Arc<AssetStore>,
         key: ResourceKey,
     ) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(FileInner {
-                phase: FilePhase::Complete,
+        let inner = Arc::new(FileInner::new(
+            FileInnerParams {
                 coord: Arc::clone(&coord),
                 res,
                 bus,
                 cancel: CancellationToken::new(),
                 url: Url::parse("file:///local").expect("valid url"),
                 headers: None,
-                content_type_codec: None,
                 backend,
                 key,
-            })),
-            coord,
-            content_type_codec: None,
-        }
+            },
+            FilePhase::Complete,
+        ));
+        Self { inner, coord }
     }
 
     /// Create a source for a remote file and spawn download tasks.
@@ -81,18 +77,19 @@ impl FileSource {
         look_ahead_bytes: Option<u64>,
         peer: PeerHandle,
     ) -> Self {
-        let inner = Arc::new(Mutex::new(FileInner {
-            phase: FilePhase::Init,
-            coord: Arc::clone(&coord),
-            res: state.res.clone(),
-            bus: state.bus.clone(),
-            cancel: cancel.clone(),
-            url,
-            headers,
-            content_type_codec: None,
-            backend: Arc::clone(&state.backend),
-            key: state.key.clone(),
-        }));
+        let inner = Arc::new(FileInner::new(
+            FileInnerParams {
+                coord: Arc::clone(&coord),
+                res: state.res.clone(),
+                bus: state.bus.clone(),
+                cancel: cancel.clone(),
+                url,
+                headers,
+                backend: Arc::clone(&state.backend),
+                key: state.key.clone(),
+            },
+            FilePhase::Init,
+        ));
 
         // Spawn full-file download task.
         let dl_inner = Arc::clone(&inner);
@@ -108,11 +105,7 @@ impl FileSource {
             run_range_watcher(rng_inner, peer, rng_coord, cancel).await;
         });
 
-        Self {
-            inner,
-            coord,
-            content_type_codec: None,
-        }
+        Self { inner, coord }
     }
 }
 
@@ -142,25 +135,23 @@ impl kithara_stream::Source for FileSource {
             _ => {}
         }
 
-        let state = self.inner.lock_sync();
-        if range.start > state.coord.read_pos() {
-            state.coord.set_read_pos(range.start);
+        if range.start > self.coord.read_pos() {
+            self.coord.set_read_pos(range.start);
         }
 
         // Issue on-demand Range request when data is missing.
-        if !state.res.contains_range(range.clone()) {
+        if !self.inner.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,
                 range_end = range.end,
                 "file_source::wait_range requesting on-demand download"
             );
-            state.coord.request_range(range.clone());
+            self.coord.request_range(range.clone());
         }
 
-        let res = state.res.clone();
-        drop(state);
-
-        res.wait_range(range)
+        self.inner
+            .res
+            .wait_range(range)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
@@ -170,15 +161,12 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let state = self.inner.lock_sync();
-        let contains = state.res.contains_range(range.clone());
-        let res_len = state.res.len();
-        drop(state);
-
+        let contains = self.inner.res.contains_range(range.clone());
         if contains {
             return SourcePhase::Ready;
         }
 
+        let res_len = self.inner.res.len();
         let past_eof = self
             .coord
             .total_bytes()
@@ -200,8 +188,8 @@ impl kithara_stream::Source for FileSource {
         offset: u64,
         buf: &mut [u8],
     ) -> kithara_stream::StreamResult<ReadOutcome, SourceError> {
-        let state = self.inner.lock_sync();
-        let n = state
+        let n = self
+            .inner
             .res
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
@@ -210,13 +198,10 @@ impl kithara_stream::Source for FileSource {
             return Ok(ReadOutcome::Eof);
         };
 
-        let res_len = state.res.len();
-        let bus = state.bus.clone();
-        drop(state);
-
+        let res_len = self.inner.res.len();
         let new_pos = offset.saturating_add(n as u64);
         let total = self.coord.total_bytes().or(res_len);
-        bus.publish(FileEvent::ByteProgress {
+        self.inner.bus.publish(FileEvent::ByteProgress {
             position: new_pos,
             total,
         });
@@ -226,23 +211,21 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        self.coord
-            .total_bytes()
-            .or_else(|| self.inner.lock_sync().res.len())
+        self.coord.total_bytes().or_else(|| self.inner.res.len())
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let codec = self
+        self.inner
             .content_type_codec
-            .or(self.inner.lock_sync().content_type_codec);
-        codec.map(|c| MediaInfo::new(Some(c), None))
+            .get()
+            .copied()
+            .map(|c| MediaInfo::new(Some(c), None))
     }
 
     fn demand_range(&self, range: Range<u64>) {
-        let state = self.inner.lock_sync();
-        if state.res.contains_range(range.clone()) {
+        if self.inner.res.contains_range(range.clone()) {
             return;
         }
-        state.coord.request_range(range);
+        self.coord.request_range(range);
     }
 }

@@ -1,11 +1,16 @@
-//! Owned mutable state shared between `FileSource` and the async download tasks.
+//! Owned shared state of a session.
 //!
-//! `FileInner` lives behind `Arc<Mutex<…>>` in `FileSource` and is mutated by
-//! the download driver in [`super::download`]. `FileStreamState` is a creation
-//! helper: it acquires the cache resource and primes an event bus before the
-//! source is built.
+//! `FileInner` is **immutable after creation** in every meaningful sense:
+//! all fields are either plain owned data (URL, key) or already-thread-safe
+//! handles (`AssetResource`, `EventBus`, `CancellationToken`, `Arc<…>`). The
+//! two genuinely mutable bits — the FSM phase and the content-type codec —
+//! live in `AtomicU8` and `OnceLock` respectively, so the struct can be
+//! shared as `Arc<FileInner>` without a `Mutex` in front of it.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicU8, Ordering},
+};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::EventBus;
@@ -46,55 +51,91 @@ impl FileStreamState {
     }
 }
 
-/// File-streaming FSM phases.
+/// File-streaming FSM phases. Stored as `AtomicU8` for lock-free transitions
+/// from the download driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub(crate) enum FilePhase {
     /// Ready to start the initial full-file download.
-    Init,
+    Init = 0,
     /// Download in progress.
-    Downloading,
+    Downloading = 1,
     /// File fully downloaded (or local).
-    Complete,
+    Complete = 2,
 }
 
-/// Shared inner state for a remote `FileSource`. Held behind `Arc<Mutex<…>>`
-/// and mutated by both the `Source` trait methods and the spawned download
-/// tasks in [`super::download`].
-pub(crate) struct FileInner {
-    pub(crate) phase: FilePhase,
-
-    // Resources
+/// Immutable creation-time parameters for `FileInner::new`.
+pub(crate) struct FileInnerParams {
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
     pub(crate) cancel: CancellationToken,
-
-    // Request params
     pub(crate) url: Url,
     pub(crate) headers: Option<Headers>,
-
-    /// Codec discovered from HTTP Content-Type.
-    pub(crate) content_type_codec: Option<AudioCodec>,
-
-    /// Owning asset store — needed so a failed download can tear down the
-    /// pre-allocated mmap immediately instead of waiting for
-    /// `LeaseResource::Drop` to fire at `Stream<File>`-drop time (which is
-    /// typically app shutdown because `FileInner.res` holds a clone that
-    /// outlives every local transaction).
     pub(crate) backend: Arc<AssetStore>,
-    /// Cache key for `backend.remove_resource` on failure.
     pub(crate) key: ResourceKey,
 }
 
+/// Shared inner state for a `FileSource`. All fields are either immutable
+/// (set at construction) or self-synchronizing — there is no `Mutex`.
+pub(crate) struct FileInner {
+    // --- creation-time params (immutable) ---
+    pub(crate) coord: Arc<FileCoord>,
+    pub(crate) res: AssetResource,
+    pub(crate) bus: EventBus,
+    pub(crate) cancel: CancellationToken,
+    pub(crate) url: Url,
+    pub(crate) headers: Option<Headers>,
+    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) key: ResourceKey,
+
+    // --- mutable state (no Mutex needed) ---
+    /// FSM phase as `FilePhase as u8`. Lock-free transitions.
+    phase: AtomicU8,
+    /// Codec discovered from the HTTP `Content-Type` header on first connect.
+    /// Set at most once by the download driver.
+    pub(crate) content_type_codec: OnceLock<AudioCodec>,
+}
+
 impl FileInner {
+    pub(crate) fn new(params: FileInnerParams, initial_phase: FilePhase) -> Self {
+        let FileInnerParams {
+            coord,
+            res,
+            bus,
+            cancel,
+            url,
+            headers,
+            backend,
+            key,
+        } = params;
+        Self {
+            coord,
+            res,
+            bus,
+            cancel,
+            url,
+            headers,
+            backend,
+            key,
+            phase: AtomicU8::new(initial_phase as u8),
+            content_type_codec: OnceLock::new(),
+        }
+    }
+
+    /// Lock-free FSM transition.
+    pub(crate) fn set_phase(&self, phase: FilePhase) {
+        self.phase.store(phase as u8, Ordering::Release);
+    }
+
     /// Mark the resource failed and evict the pre-allocated cache file.
     ///
     /// Call on any terminal download error so the file is gone from disk
     /// before the task returns — without this the clone in `FileInner.res`
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
-    pub(crate) fn fail_and_evict(&mut self, reason: &str) {
-        self.phase = FilePhase::Complete;
+    pub(crate) fn fail_and_evict(&self, reason: &str) {
+        self.set_phase(FilePhase::Complete);
         self.res.fail(reason.to_string());
         self.backend.remove_resource(&self.key);
     }

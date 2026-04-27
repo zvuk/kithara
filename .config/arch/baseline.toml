@@ -137,7 +137,6 @@ xtask = 1
 [shared_state]
 "crates/kithara-app/src/gui/app.rs" = 1
 "crates/kithara-ffi/src/event_bridge.rs" = 1
-"crates/kithara-file/src/session/download.rs" = 1
 "crates/kithara-hls/src/peer.rs" = 1
 "crates/kithara-play/src/impls/player_processor.rs" = 1
 "crates/kithara-play/src/impls/player_track.rs" = 1
