@@ -1,0 +1,309 @@
+//! Async download driver: full-file streaming GET and on-demand range fills.
+//!
+//! Public to `session/`: [`run_full_download`] and [`run_range_watcher`] are
+//! spawned by `FileSource::remote`. All mutation of `FileInner` happens here;
+//! the synchronous `Source` trait methods only read.
+
+use std::{ops::Range, sync::Arc};
+
+use futures::StreamExt;
+use kithara_assets::AssetResource;
+use kithara_events::{EventBus, FileEvent};
+use kithara_net::{Headers, RangeSpec};
+use kithara_platform::{
+    Mutex,
+    time::Duration,
+    tokio,
+    tokio::{task, time as tokio_time},
+};
+use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_stream::{
+    AudioCodec,
+    dl::{FetchCmd, PeerHandle, reject_html_response},
+};
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
+
+use super::inner::{FileInner, FilePhase};
+use crate::coord::FileCoord;
+
+/// Backpressure pause when download is too far ahead of reader.
+const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
+
+/// Full-file streaming download.
+///
+/// Builds a GET command, executes via [`PeerHandle`], streams body chunks
+/// to the resource, and commits on completion.
+pub(super) async fn run_full_download(
+    inner: Arc<Mutex<FileInner>>,
+    peer: PeerHandle,
+    look_ahead_bytes: Option<u64>,
+) {
+    let (url, headers, res, coord, bus, cancel) = {
+        let state = inner.lock_sync();
+        (
+            state.url.clone(),
+            state.headers.clone(),
+            state.res.clone(),
+            Arc::clone(&state.coord),
+            state.bus.clone(),
+            state.cancel.clone(),
+        )
+    };
+
+    inner.lock_sync().phase = FilePhase::Downloading;
+
+    let cmd = FetchCmd::get(url)
+        .headers(headers)
+        .with_validator(reject_html_response);
+
+    let resp = match peer.execute(cmd).await {
+        Ok(r) => r,
+        Err(e) => {
+            inner.lock_sync().fail_and_evict(&e.to_string());
+            bus.publish(FileEvent::DownloadError {
+                error: e.to_string(),
+            });
+            return;
+        }
+    };
+
+    // Process response headers.
+    let expected_len = process_response_headers(&inner, &resp.headers, &coord);
+
+    // Stream body to resource.
+    let result = stream_body_to_resource(resp.body, &res, &coord, &cancel, look_ahead_bytes).await;
+
+    match result {
+        Err(StreamBodyError::Write(e)) => {
+            debug!(?e, "write error during full download");
+            inner.lock_sync().fail_and_evict(&e.to_string());
+            bus.publish(FileEvent::DownloadError {
+                error: e.to_string(),
+            });
+        }
+        Err(StreamBodyError::Net(e, written)) => {
+            debug!("stream error during full download: {e}");
+            let mut state = inner.lock_sync();
+            // Only tear down the pre-allocated mmap when nothing was
+            // persisted — any written bytes are still useful to the
+            // reader and must not be discarded.
+            if written == 0 {
+                state.fail_and_evict(&e.to_string());
+            } else {
+                state.phase = FilePhase::Complete;
+            }
+            drop(state);
+            bus.publish(FileEvent::DownloadError {
+                error: e.to_string(),
+            });
+        }
+        Err(StreamBodyError::Cancelled) => {}
+        Ok(bytes_written) => {
+            commit_full_download(&inner, bytes_written, expected_len, &bus);
+        }
+    }
+}
+
+/// Extract content-length and content-type from response headers.
+fn process_response_headers(
+    inner: &Arc<Mutex<FileInner>>,
+    headers: &Headers,
+    coord: &Arc<FileCoord>,
+) -> Option<u64> {
+    let expected_len = headers
+        .get("content-length")
+        .or_else(|| headers.get("Content-Length"))
+        .and_then(|v| v.parse::<u64>().ok());
+    if let Some(len) = expected_len {
+        coord.set_total_bytes(Some(len));
+    }
+    if let Some(codec) = headers
+        .get("content-type")
+        .or_else(|| headers.get("Content-Type"))
+        .and_then(AudioCodec::from_mime)
+    {
+        inner.lock_sync().content_type_codec = Some(codec);
+    }
+    expected_len
+}
+
+enum StreamBodyError {
+    Write(kithara_storage::StorageError),
+    Net(kithara_net::NetError, u64),
+    Cancelled,
+}
+
+/// Stream body chunks into a resource, returning total bytes written.
+async fn stream_body_to_resource(
+    mut body: kithara_stream::dl::BodyStream,
+    res: &AssetResource,
+    coord: &Arc<FileCoord>,
+    cancel: &CancellationToken,
+    look_ahead_bytes: Option<u64>,
+) -> Result<u64, StreamBodyError> {
+    let mut written: u64 = 0;
+
+    while let Some(chunk) = body.next().await {
+        match chunk {
+            Ok(data) => {
+                let pos = written;
+                written += data.len() as u64;
+                if let Err(e) = res.write_at(pos, &data) {
+                    return Err(StreamBodyError::Write(e));
+                }
+                coord.set_download_pos(written);
+
+                if let Some(limit) = look_ahead_bytes {
+                    while written > 0 && written.saturating_sub(coord.read_pos()) > limit {
+                        if cancel.is_cancelled() {
+                            return Err(StreamBodyError::Cancelled);
+                        }
+                        tokio_time::sleep(THROTTLE_PAUSE).await;
+                    }
+                }
+            }
+            Err(e) => return Err(StreamBodyError::Net(e, written)),
+        }
+    }
+
+    Ok(written)
+}
+
+/// Commit a completed full download.
+fn commit_full_download(
+    inner: &Arc<Mutex<FileInner>>,
+    bytes_written: u64,
+    expected_len: Option<u64>,
+    bus: &EventBus,
+) {
+    let expected = expected_len.unwrap_or(bytes_written);
+    let mut state = inner.lock_sync();
+
+    if bytes_written >= expected {
+        if let Err(e) = state.res.commit(Some(bytes_written)) {
+            debug!(?e, "failed to commit file resource");
+        }
+        let _ = state.coord.take_range_request();
+        state.phase = FilePhase::Complete;
+        drop(state);
+        bus.publish(FileEvent::DownloadComplete {
+            total_bytes: bytes_written,
+        });
+    } else {
+        state.phase = FilePhase::Complete;
+        drop(state);
+        debug!(
+            bytes_written,
+            expected, "partial download, resource stays active"
+        );
+        bus.publish(FileEvent::DownloadError {
+            error: format!("incomplete: {bytes_written}/{expected} bytes"),
+        });
+    }
+}
+
+/// Watch for on-demand range requests and spawn range downloads.
+///
+/// Waits on the coordinator's demand signal. When a range is
+/// requested (e.g. by seek), spawns a range download task.
+pub(super) async fn run_range_watcher(
+    inner: Arc<Mutex<FileInner>>,
+    peer: PeerHandle,
+    coord: Arc<FileCoord>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = coord.demand_notify().notified() => {}
+        }
+
+        while let Some(range) = coord.take_range_request() {
+            let res_contains = inner.lock_sync().res.contains_range(range.clone());
+            if res_contains {
+                continue;
+            }
+            let task_inner = Arc::clone(&inner);
+            let task_peer = peer.clone();
+            task::spawn(async move {
+                run_range_download(task_inner, task_peer, range).await;
+            });
+        }
+    }
+}
+
+/// Download a byte range (on-demand seek fill).
+///
+/// Replaces the old `build_range_cmd` with its callback machinery.
+async fn run_range_download(inner: Arc<Mutex<FileInner>>, peer: PeerHandle, range: Range<u64>) {
+    let (url, headers, res, coord, bus) = {
+        let state = inner.lock_sync();
+        (
+            state.url.clone(),
+            state.headers.clone(),
+            state.res.clone(),
+            Arc::clone(&state.coord),
+            state.bus.clone(),
+        )
+    };
+
+    let range_spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
+    let cmd = FetchCmd::get(url)
+        .range(Some(range_spec))
+        .headers(headers)
+        .with_validator(reject_html_response);
+
+    let resp = match peer.execute(cmd).await {
+        Ok(r) => r,
+        Err(e) => {
+            let state = inner.lock_sync();
+            if !matches!(state.res.status(), ResourceStatus::Committed { .. }) {
+                state.res.fail(e.to_string());
+                drop(state);
+                bus.publish(FileEvent::DownloadError {
+                    error: e.to_string(),
+                });
+            }
+            return;
+        }
+    };
+
+    let mut written = range.start;
+    let mut body = resp.body;
+
+    while let Some(chunk) = body.next().await {
+        match chunk {
+            Ok(data) => {
+                let pos = written;
+                written += data.len() as u64;
+                match res.write_at(pos, &data) {
+                    Ok(()) => {
+                        coord.set_download_pos(written);
+                    }
+                    Err(e) => {
+                        // If the resource was committed (full download finished
+                        // while this range request was in flight), silently
+                        // succeed — data is already available.
+                        if !matches!(res.status(), ResourceStatus::Committed { .. }) {
+                            debug!(?e, "range write error");
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let state = inner.lock_sync();
+                if !matches!(state.res.status(), ResourceStatus::Committed { .. }) {
+                    state.res.fail(e.to_string());
+                    drop(state);
+                    bus.publish(FileEvent::DownloadError {
+                        error: e.to_string(),
+                    });
+                }
+                return;
+            }
+        }
+    }
+}
