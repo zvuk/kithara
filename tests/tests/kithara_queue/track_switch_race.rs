@@ -268,8 +268,7 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
                     .last()
                     .copied()
                     .flatten()
-                    .map(Some)
-                    .unwrap_or(None)
+                    .and_then(Some)
             {
                 current_history.push(cur);
             }

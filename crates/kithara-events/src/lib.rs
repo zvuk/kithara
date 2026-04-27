@@ -38,12 +38,12 @@ pub use app::AppEvent;
 pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 #[cfg(feature = "downloader")]
-pub use downloader::DownloaderEvent;
+pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use event::Event;
 #[cfg(feature = "file")]
-pub use file::FileEvent;
+pub use file::{FileError, FileEvent};
 #[cfg(feature = "hls")]
-pub use hls::HlsEvent;
+pub use hls::{HlsError, HlsEvent};
 #[cfg(feature = "player")]
 pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime, PlayerEvent,

@@ -10,7 +10,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
-    events::{Event, FileEvent},
+    events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -36,26 +36,26 @@ impl Consts {
 
 #[derive(Default)]
 struct LiveStats {
-    byte_progress_events: usize,
-    download_complete_events: usize,
-    download_progress_events: usize,
+    read_progress_events: usize,
+    request_started_events: usize,
+    request_completed_events: usize,
     errors: usize,
 }
 
 #[derive(Clone, Default)]
 struct LiveSnapshot {
-    byte_progress_events: usize,
-    download_complete_events: usize,
-    download_progress_events: usize,
+    read_progress_events: usize,
+    request_started_events: usize,
+    request_completed_events: usize,
     errors: usize,
 }
 
 impl LiveStats {
     fn snapshot(&self) -> LiveSnapshot {
         LiveSnapshot {
-            byte_progress_events: self.byte_progress_events,
-            download_complete_events: self.download_complete_events,
-            download_progress_events: self.download_progress_events,
+            read_progress_events: self.read_progress_events,
+            request_started_events: self.request_started_events,
+            request_completed_events: self.request_completed_events,
             errors: self.errors,
         }
     }
@@ -145,24 +145,22 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let mut events = audio.events();
     let events_task = spawn(async move {
         while let Ok(event) = events.recv().await {
-            let Event::File(file_event) = event else {
-                continue;
-            };
-
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match file_event {
-                FileEvent::ByteProgress { .. } => {
-                    locked.byte_progress_events = locked.byte_progress_events.saturating_add(1);
+            match event {
+                Event::File(FileEvent::ReadProgress { .. }) => {
+                    locked.read_progress_events = locked.read_progress_events.saturating_add(1);
                 }
-                FileEvent::DownloadProgress { .. } => {
-                    locked.download_progress_events =
-                        locked.download_progress_events.saturating_add(1);
+                Event::File(FileEvent::Error { .. }) => {
+                    locked.errors = locked.errors.saturating_add(1);
                 }
-                FileEvent::DownloadComplete { .. } => {
-                    locked.download_complete_events =
-                        locked.download_complete_events.saturating_add(1);
+                Event::Downloader(DownloaderEvent::RequestStarted { .. }) => {
+                    locked.request_started_events = locked.request_started_events.saturating_add(1);
                 }
-                FileEvent::DownloadError { .. } | FileEvent::Error { .. } => {
+                Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
+                    locked.request_completed_events =
+                        locked.request_completed_events.saturating_add(1);
+                }
+                Event::Downloader(DownloaderEvent::RequestFailed { .. }) => {
                     locked.errors = locked.errors.saturating_add(1);
                 }
                 _ => {}
@@ -310,9 +308,9 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         "expected no file download/read errors during stress"
     );
     let transfer_events = final_stats
-        .byte_progress_events
-        .saturating_add(final_stats.download_progress_events)
-        .saturating_add(final_stats.download_complete_events);
+        .read_progress_events
+        .saturating_add(final_stats.request_started_events)
+        .saturating_add(final_stats.request_completed_events);
     if transfer_events == 0 {
         info!("MP3 stress: no transfer events observed");
     }

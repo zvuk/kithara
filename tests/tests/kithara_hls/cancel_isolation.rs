@@ -12,7 +12,7 @@
 //!
 //! The hypothesis under audit (see `feedback_*` memory entries):
 //!     "When the Downloader receives one invalid response (e.g. text/html
-//!      instead of media), it cascades-cancels every in-flight FetchCmd
+//!      instead of media), it cascades-cancels every in-flight `FetchCmd`
 //!      across every registered track."
 //!
 //! Cancel hierarchy (per audit of `crates/kithara-stream/src/dl/`):
@@ -29,7 +29,7 @@
 //!     touches `peer_cancel` or `epoch_cancel`.
 //!
 //! Expected behaviour: `text/html` on segment 3 must not cancel siblings.
-//! `HlsPeer::on_complete` for that fetch removes its in_flight slot and
+//! `HlsPeer::on_complete` for that fetch removes its `in_flight` slot and
 //! rewinds the cursor onto seg 3; siblings 0..2 / 4..5 must still complete.
 
 use std::{

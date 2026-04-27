@@ -235,6 +235,8 @@ impl<T: StreamType> Stream<T> {
             pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>>;
             /// Commit the actual post-seek landing after `decoder.seek(...)`.
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
+            /// Build a fresh reader-side hooks instance from the inner source.
+            pub fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks>;
         }
     }
 

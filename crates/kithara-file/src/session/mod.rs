@@ -11,6 +11,7 @@
 mod download;
 mod inner;
 mod peer;
+mod reader_hooks;
 mod source;
 #[cfg(test)]
 mod tests;

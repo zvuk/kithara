@@ -30,10 +30,10 @@
 //! delaying process exit past leak-timeout.
 //!
 //! RED strategy
-//! Exercise the same Audio<Stream<Hls>>::new + preload + seek() cycle with
+//! Exercise the same Audio<Stream<Hls>>`::new` + preload + `seek()` cycle with
 //! DRM, then drop everything. Count kithara-owned named threads (exposed
 //! by `kithara_platform::thread::active_named_thread_count`) across N
-//! iterations against a SHARED Downloader + SHARED TestServer — the
+//! iterations against a SHARED Downloader + SHARED `TestServer` — the
 //! server-side artifact is amortised, and any growth per iteration is
 //! thread/task leakage tied to a single session.
 //!
@@ -128,7 +128,7 @@ async fn run_drm_seek_resume_cycle(
 }
 
 /// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared AudioWorkerHandle, the count of kithara-named threads must
+/// and shared `AudioWorkerHandle`, the count of kithara-named threads must
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.

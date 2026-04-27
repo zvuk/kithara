@@ -67,6 +67,8 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
+            /// Build a fresh reader-side hooks instance from the inner source.
+            pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::SharedHooks>;
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.

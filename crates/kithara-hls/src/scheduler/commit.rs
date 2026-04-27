@@ -1,7 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::HlsEvent;
-
 use super::{helpers::first_missing_segment, state::HlsScheduler};
 use crate::{loading::SegmentMeta, playlist::PlaylistAccess, stream_index::SegmentData};
 
@@ -13,17 +11,12 @@ impl HlsScheduler {
         media: &SegmentMeta,
         init_len: u64,
         init_url: Option<url::Url>,
-        duration: std::time::Duration,
+        _duration: std::time::Duration,
     ) {
-        // Bandwidth recording now happens automatically in the
-        // Downloader after each fetch completes — no HLS-level hook.
-        self.bus.publish(HlsEvent::SegmentComplete {
-            variant,
-            segment_index: seg_idx,
-            bytes_transferred: media.len,
-            cached: false,
-            duration,
-        });
+        // Bandwidth recording happens automatically in the Downloader
+        // after each fetch completes. Download-fact events live in
+        // `DownloaderEvent`; this layer only mutates HLS-side
+        // bookkeeping (committed segment count, virtual-stream length).
 
         let actual_init_len = if init_len == 0 {
             let segments = self.segments.lock_sync();
@@ -91,11 +84,6 @@ impl HlsScheduler {
         if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
             self.segments.lock_sync().set_expected_sizes(variant, sizes);
         }
-
-        self.bus.publish(HlsEvent::DownloadProgress {
-            offset: next_download,
-            total: None,
-        });
 
         self.coord.condvar.notify_all();
     }

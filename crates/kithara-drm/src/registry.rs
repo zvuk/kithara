@@ -150,7 +150,7 @@ mod tests {
     use super::*;
 
     fn noop_processor() -> KeyProcessor {
-        Arc::new(|key| Ok(key))
+        Arc::new(Ok)
     }
 
     fn reverse_processor() -> KeyProcessor {

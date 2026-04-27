@@ -1,6 +1,6 @@
 //! Local mirror of `track_plays_end_to_end` from `real_playlist.rs`.
 //!
-//! Runs the full Queue → PlayerImpl → OfflineBackend pipeline against
+//! Runs the full Queue → `PlayerImpl` → `OfflineBackend` pipeline against
 //! `TestServerHelper` fixtures (raw MP3, packaged AAC HLS, packaged
 //! AAC HLS+AES128) instead of silvercomet/zvuk live URLs. Shape of the
 //! scenario is identical: load → play with monotonic progress → 3

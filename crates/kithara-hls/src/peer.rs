@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_abr::{Abr, AbrState};
-use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, HlsEvent, VariantDuration};
+use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, VariantDuration};
 use kithara_net::NetError;
 use kithara_platform::{
     Mutex,
@@ -18,10 +18,10 @@ use kithara_platform::{
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
-    dl::{FetchCmd, OnCompleteFn, Peer, Priority, WriterFn},
+    dl::{FetchCmd, OnCompleteFn, Peer, RequestPriority, WriterFn},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{
     ids::SegmentId,
@@ -216,11 +216,11 @@ impl Peer for HlsPeer {
     /// Priority reflects the audio FSM's decode-activity flag on the
     /// shared `Timeline`. Cheap, lock-free — called by Registry on
     /// every `poll_peers` pass.
-    fn priority(&self) -> Priority {
+    fn priority(&self) -> RequestPriority {
         if self.timeline.is_playing() {
-            Priority::High
+            RequestPriority::High
         } else {
-            Priority::Low
+            RequestPriority::Low
         }
     }
 
@@ -366,11 +366,22 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
         return DemandResult::None;
     }
 
+    // Snapshot `active_seek_epoch` BEFORE consuming the demand — the
+    // request-fetch path (`next_valid_demand_request`) calls
+    // `reset_for_seek_epoch` internally, which mutates
+    // `active_seek_epoch` to match `req.seek_epoch`. By the time we
+    // get the request back the field already equals the new epoch,
+    // so comparing `req.seek_epoch` against the post-update
+    // `sched.active_seek_epoch` is a no-op and the cancellation path
+    // below would never fire (this is the bug that left in-flight
+    // fetches of the prior epoch hogging Downloader slots after a
+    // user seek).
+    let active_before = sched.active_seek_epoch;
     let Some(req) = sched.next_valid_demand_request() else {
         return DemandResult::None;
     };
 
-    if req.seek_epoch != sched.active_seek_epoch {
+    if req.seek_epoch != active_before {
         reset_for_new_epoch(state, &req);
         cx.waker().wake_by_ref();
         return DemandResult::ResetAndPend;
@@ -584,11 +595,9 @@ fn build_batch(
             continue;
         }
 
-        state.scheduler.bus.publish(HlsEvent::SegmentStart {
-            variant,
-            segment_index: seg_idx,
-            byte_offset: state.scheduler.coord.timeline().download_position(),
-        });
+        // Segment-read events are reader-side now (published from
+        // `source_impl::read_at` on segment-boundary crossings). The
+        // download-fact equivalent lives in `DownloaderEvent`.
 
         let plan_need_init = has_init
             && crate::scheduler::helpers::should_request_init(need_init, SegmentId::Media(seg_idx));
@@ -624,6 +633,16 @@ fn build_batch(
             continue;
         }
 
+        trace!(
+            target: "hls_seek_diag",
+            seek_epoch,
+            variant,
+            seg_idx,
+            batch_i,
+            is_demanded,
+            demand_segment = ?demand_segment,
+            "build_batch: emitting FetchCmd"
+        );
         // Build self-contained FetchCmd for network download.
         let cmd = build_fetch_cmd(
             state,
@@ -1056,11 +1075,11 @@ mod tests {
         );
     }
 
-    /// RED test #5 (integration: live_stress_real_stream_seek_read_cache_drm_ephemeral)
+    /// RED test #5 (integration: `live_stress_real_stream_seek_read_cache_drm_ephemeral`)
     ///
     /// `process_demand` calls `next_valid_demand_request` (which `take()`s
     /// the demand slot) BEFORE the flushing gate runs. If the timeline is
-    /// flushing (new seek just started), poll_next returns `Poll::Pending`
+    /// flushing (new seek just started), `poll_next` returns `Poll::Pending`
     /// after the demand was already drained — so no `FetchCmd` is emitted
     /// and the reader never gets data: deadlock.
     ///
@@ -1109,7 +1128,7 @@ mod tests {
         );
     }
 
-    /// RED test #7 (integration: live_ephemeral_small_cache_playback_hls)
+    /// RED test #7 (integration: `live_ephemeral_small_cache_playback_hls`)
     ///
     /// With a small ephemeral LRU cache, once the downloader has fetched
     /// every segment of the playlist, older segments are invalidated as
@@ -1201,7 +1220,7 @@ mod tests {
         );
     }
 
-    /// RED test #9 (integration: stress_seek_lifecycle_with_zero_reset_ephemeral)
+    /// RED test #9 (integration: `stress_seek_lifecycle_with_zero_reset_ephemeral`)
     ///
     /// Phase 3 of the stress test: after 2000 random seeks (which cause
     /// ABR to up/down-switch repeatedly), the reader seeks back to 0 and
@@ -1229,13 +1248,13 @@ mod tests {
     /// download_variant=0, 0, ephemeral=true)` — which points BEHIND
     /// the reader at the oldest LRU-evicted seg on variant 0.
     ///
-    /// Then build_batch runs on variant 1, where seg 27..40 are all
+    /// Then `build_batch` runs on variant 1, where seg 27..40 are all
     /// loaded (LRU kept them), so every seg is skipped. cursor sweeps
     /// 27..40 again. Tail. Rewind. Loop.
     ///
     /// Invariant under test: when the layout variant has all segments
     /// committed (no missing in the reader's forward window) and the
-    /// cursor is at the tail, a subsequent poll_next must NOT reopen
+    /// cursor is at the tail, a subsequent `poll_next` must NOT reopen
     /// the cursor onto an LRU-evicted segment strictly behind the
     /// reader's byte position. Doing so spins the scheduler on already
     /// played-back data while the reader starves for the next segment
@@ -1375,13 +1394,13 @@ mod tests {
         );
     }
 
-    /// RED test #6 (integration: stress_seek_lifecycle_with_zero_reset_mmap)
+    /// RED test #6 (integration: `stress_seek_lifecycle_with_zero_reset_mmap`)
     ///
     /// `process_demand` unconditionally rewinds the cursor when
     /// `req.segment_index < current_segment_index`, even if that segment
-    /// is already committed in the StreamIndex. This drives a hot loop:
-    /// demand → rewind → `build_batch` re-issues FetchCmd → commit
-    /// (on_complete wakes reader) → reader re-demands → rewind → ...
+    /// is already committed in the `StreamIndex`. This drives a hot loop:
+    /// demand → rewind → `build_batch` re-issues `FetchCmd` → commit
+    /// (`on_complete` wakes reader) → reader re-demands → rewind → ...
     ///
     /// Invariant under test: when the demand targets an already-committed
     /// segment, the cursor must NOT regress.
@@ -1419,7 +1438,7 @@ mod tests {
         );
     }
 
-    /// RED test #8 (integration: stress_seek_lifecycle_with_zero_reset_mmap).
+    /// RED test #8 (integration: `stress_seek_lifecycle_with_zero_reset_mmap`).
     ///
     /// The existing fix at peer.rs:272..297 (commit `38d51adfb`) covers only
     /// the case where the demanded segment is already committed in the
@@ -1442,7 +1461,7 @@ mod tests {
     /// 55.956343Z poll_next: returning 3 FetchCmds variant=0 count=3 cursor=16
     /// ```
     ///
-    /// At 55.431134 the scheduler issued the FIRST FetchCmd for segment 12
+    /// At 55.431134 the scheduler issued the FIRST `FetchCmd` for segment 12
     /// and advanced `cursor` to 13. `count=12` in the preceding `size_map`
     /// event confirms segment 12 is NOT yet committed — the fetch is in
     /// flight, writing into a freshly acquired `AssetResource`. Between
@@ -1534,7 +1553,7 @@ mod tests {
         );
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_hls).
+    /// RED test (integration: `live_ephemeral_small_cache_playback_hls`).
     ///
     /// Reproduces the flake observed under CPU contention when running
     /// `live_ephemeral_small_cache_playback_hls` with 8-way parallel
@@ -1562,7 +1581,7 @@ mod tests {
     /// 4. `build_batch` starts re-downloading segments 0, 1, 2, … which
     ///    evicts the reader's live window. Reader starves → `wait_range`
     ///    exceeds its 3-second budget → `next_chunk_with_timeout` fires
-    ///    the assert at tests/tests/kithara_hls/live_stress_real_stream.rs:190.
+    ///    the assert at `tests/tests/kithara_hls/live_stress_real_stream.rs:190`.
     ///
     /// Invariant under test: with forward-only playback on an ephemeral
     /// LRU store, an ABR up-switch at the tail must NOT rewind the
@@ -1707,18 +1726,18 @@ mod tests {
     }
 
     /// RED test: stale `on_complete` callback from a cancelled prior-epoch
-    /// FetchCmd advances the **new** epoch's cursor forward.
+    /// `FetchCmd` advances the **new** epoch's cursor forward.
     ///
-    /// Scenario reproduced from the production "wait_range EOF after seek"
+    /// Scenario reproduced from the production "`wait_range` EOF after seek"
     /// hang report:
     ///
     /// 1. Reader playing forward on variant 0; downloader emitted a
-    ///    `FetchCmd` for segment 22 in seek_epoch=0. The FetchCmd's
+    ///    `FetchCmd` for segment 22 in `seek_epoch=0`. The `FetchCmd`'s
     ///    `on_complete` closure captured `seek_epoch = 0`, `(variant=0,
     ///    seg_idx=22)`, and an `Arc<Mutex<HlsState>>`.
     /// 2. User seeks BACKWARD to ~segment 10. `process_demand` (peer.rs:281)
     ///    fires `state.epoch_cancel.cancel()`, which cancels every
-    ///    in-flight FetchCmd in the old epoch — the Downloader's body
+    ///    in-flight `FetchCmd` in the old epoch — the Downloader's body
     ///    stream wrapper (response.rs:144) yields `NetError::Cancelled` and
     ///    `deliver()` (batch.rs:191-214) calls `on_complete(0,
     ///    Some(&NetError::Cancelled))` for each cancelled fetch.
@@ -1740,8 +1759,8 @@ mod tests {
     ///    cycle (cursor is already past them). Reader at byte position
     ///    inside segment 10 receives `wait_range: EOF` because
     ///    `loaded_total = max_end_offset()` doesn't yet cover segment 10
-    ///    (no FetchCmd was emitted for it in the new epoch), and
-    ///    `known_total` may be missing too if the size_map is variant-
+    ///    (no `FetchCmd` was emitted for it in the new epoch), and
+    ///    `known_total` may be missing too if the `size_map` is variant-
     ///    specific.
     ///
     /// Invariant under test: a stale `on_complete` from a prior seek
@@ -1954,7 +1973,7 @@ mod tests {
         let peer = HlsPeer::new(timeline, AbrMode::default());
         assert_eq!(
             peer.priority(),
-            crate::peer::Priority::Low,
+            crate::peer::RequestPriority::Low,
             "fresh HlsPeer with PLAYING=false must report Low"
         );
     }
@@ -1963,19 +1982,19 @@ mod tests {
     fn priority_tracks_set_playing_without_activation() {
         let timeline = Timeline::new();
         let peer = HlsPeer::new(timeline.clone(), AbrMode::default());
-        assert_eq!(peer.priority(), crate::peer::Priority::Low);
+        assert_eq!(peer.priority(), crate::peer::RequestPriority::Low);
 
         timeline.set_playing(true);
         assert_eq!(
             peer.priority(),
-            crate::peer::Priority::High,
+            crate::peer::RequestPriority::High,
             "set_playing(true) must flip priority to High even before activate()"
         );
 
         timeline.set_playing(false);
         assert_eq!(
             peer.priority(),
-            crate::peer::Priority::Low,
+            crate::peer::RequestPriority::Low,
             "set_playing(false) must return priority to Low"
         );
     }
@@ -1992,7 +2011,7 @@ mod tests {
         timeline.set_playing(true);
         assert_eq!(
             peer.priority(),
-            crate::peer::Priority::High,
+            crate::peer::RequestPriority::High,
             "priority() must not contend on the state mutex"
         );
     }
@@ -2010,7 +2029,7 @@ mod tests {
         assert!(other_handle.is_playing());
         assert_eq!(
             peer.priority(),
-            crate::peer::Priority::High,
+            crate::peer::RequestPriority::High,
             "peer's Timeline clone must observe writes to sibling clones"
         );
     }

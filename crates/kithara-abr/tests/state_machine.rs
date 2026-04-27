@@ -1,7 +1,7 @@
 //! Property-based invariants for `AbrState`.
 //!
-//! Drives the state through random sequences of operations (PushBandwidth,
-//! SetMode, Lock, Unlock, Tick) and checks the hard invariants called out
+//! Drives the state through random sequences of operations (`PushBandwidth`,
+//! `SetMode`, Lock, Unlock, Tick) and checks the hard invariants called out
 //! in the ABR projection §12 Tier 5 and §16.3:
 //!
 //!   1. `lock_count >= 0` (enforced structurally — `unlock` in isolation

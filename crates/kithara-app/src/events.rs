@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kithara::{
-    events::AbrEvent,
+    events::{AbrEvent, DownloaderEvent},
     prelude::{AudioEvent, Event, FileEvent, HlsEvent},
 };
 
@@ -10,12 +10,9 @@ pub fn is_progress_event(event: &Event) -> bool {
     matches!(
         event,
         Event::Audio(AudioEvent::PlaybackProgress { .. })
-            | Event::File(FileEvent::DownloadProgress { .. })
-            | Event::File(FileEvent::ByteProgress { .. })
-            | Event::File(FileEvent::PlaybackProgress { .. })
-            | Event::Hls(HlsEvent::DownloadProgress { .. })
-            | Event::Hls(HlsEvent::ByteProgress { .. })
-            | Event::Hls(HlsEvent::PlaybackProgress { .. })
+            | Event::File(FileEvent::ReadProgress { .. })
+            | Event::Hls(HlsEvent::ReadProgress { .. })
+            | Event::Downloader(DownloaderEvent::RequestCompleted { .. })
     )
 }
 
@@ -42,9 +39,9 @@ pub fn source_note(source: &str, event: &Event) -> Option<String> {
             "{source} decoder ready offset={base_offset} v{v}",
             v = variant.map_or("?".to_string(), |v| v.to_string())
         )),
-        Event::File(FileEvent::DownloadComplete { total_bytes }) => {
-            Some(format!("{source} dl done {total_bytes} bytes"))
-        }
+        Event::Downloader(DownloaderEvent::RequestCompleted {
+            bytes_transferred, ..
+        }) => Some(format!("{source} dl done {bytes_transferred} bytes")),
         _ => None,
     }
 }

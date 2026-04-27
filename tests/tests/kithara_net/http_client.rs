@@ -962,7 +962,7 @@ async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[ca
 
     match result {
         Err(NetError::Timeout) => (),
-        Ok(_) => panic!("Expected Timeout error, got Ok"),
+        Ok(()) => panic!("Expected Timeout error, got Ok"),
         Err(e) => panic!("Expected Timeout error, got {:?}", e),
     }
 }

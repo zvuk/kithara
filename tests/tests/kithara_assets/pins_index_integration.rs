@@ -38,7 +38,7 @@ fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore
         temp_dir.path(),
         "test-asset",
         CancellationToken::new(),
-        kithara_assets::byte_pool(),
+        byte_pool(),
     )
 }
 

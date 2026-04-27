@@ -156,6 +156,19 @@ impl Timeline {
         self.byte_position.store(position, Ordering::Release);
     }
 
+    /// Cheap clone of the shared atomic byte cursor — for hooks that
+    /// need to read it without holding a Timeline.
+    #[must_use]
+    pub fn byte_position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_position)
+    }
+
+    /// Cheap clone of the shared atomic seek epoch — same use case.
+    #[must_use]
+    pub fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.seek_epoch)
+    }
+
     #[must_use]
     pub fn segment_position(&self) -> u64 {
         self.segment_position.load(Ordering::Acquire)

@@ -76,7 +76,7 @@ impl Loader {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
-                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow)) {
+                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
                     tracks.set_status(id, TrackStatus::Slow);
                     break;
                 }

@@ -588,7 +588,7 @@ where
 
 /// Drive `AppConfig::DEFAULT_TRACKS` (all 10 URLs including DRM) end-
 /// to-end: play first, pause/resume, seek, manual crossfade, auto-
-/// advance through the rest, QueueEnded on the last. Per-track
+/// advance through the rest, `QueueEnded` on the last. Per-track
 /// failures are collected and reported in a structured final panic
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
@@ -602,7 +602,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         return;
     }
     let ctx = shared_test_ctx().await;
-    let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.iter().copied().collect();
+    let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     // Short crossfade so transitions don't dominate wall-clock.

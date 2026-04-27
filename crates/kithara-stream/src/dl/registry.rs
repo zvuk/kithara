@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_abr::AbrPeerId;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, RequestPriority};
 use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;
@@ -16,9 +16,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     batch::BatchGroup,
-    cmd::Priority,
     downloader::{DownloaderInner, RegisteredPeerEntry},
-    peer::{InternalCmd, Peer, ResponseTarget},
+    peer::{InternalCmd, Peer, ResponseTarget, SlotEntry},
 };
 
 const SLOT_COUNT: usize = 4;
@@ -62,12 +61,12 @@ enum Slot {
 
 /// Map (`peer_priority`, `cmd_priority`) → slot index.
 /// Processing order: 0 → 1 → 2 → 3.
-fn slot_index(peer_prio: Priority, cmd_prio: Priority) -> usize {
+fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
     match (peer_prio, cmd_prio) {
-        (Priority::High, Priority::High) => Slot::HighHigh as usize,
-        (Priority::High, Priority::Low) => Slot::HighLow as usize,
-        (Priority::Low, Priority::High) => Slot::LowHigh as usize,
-        (Priority::Low, Priority::Low) => Slot::LowLow as usize,
+        (RequestPriority::High, RequestPriority::High) => Slot::HighHigh as usize,
+        (RequestPriority::High, RequestPriority::Low) => Slot::HighLow as usize,
+        (RequestPriority::Low, RequestPriority::High) => Slot::LowHigh as usize,
+        (RequestPriority::Low, RequestPriority::Low) => Slot::LowLow as usize,
     }
 }
 
@@ -91,7 +90,7 @@ struct PeerEntry {
 /// and drives batch execution.
 pub(super) struct Registry {
     peers: Arena<PeerEntry>,
-    slots: [VecDeque<InternalCmd>; SLOT_COUNT],
+    slots: [VecDeque<SlotEntry>; SLOT_COUNT],
     urgent_notify: Arc<Notify>,
 }
 
@@ -147,7 +146,21 @@ impl Registry {
                 let peer_prio = entry.peer.priority();
                 let slot = slot_index(peer_prio, cmd.priority);
                 cmd.peer = Some(idx);
-                self.slots[slot].push_back(cmd);
+                let entry_slot = SlotEntry {
+                    cmd,
+                    peer_cancel: entry.peer_cancel.clone(),
+                };
+                // RequestEnqueued for imperative path: bus is taken
+                // from cmd.bus snapshot at submission time.
+                if let Some(ref b) = entry_slot.cmd.bus {
+                    b.publish(kithara_events::DownloaderEvent::RequestEnqueued {
+                        request_id: entry_slot.cmd.request_id,
+                        url: entry_slot.cmd.cmd.url.clone(),
+                        method: entry_slot.cmd.cmd.method,
+                        priority: entry_slot.cmd.priority,
+                    });
+                }
+                self.slots[slot].push_back(entry_slot);
                 stats.drained_cmds += 1;
                 if slot <= 1 {
                     self.urgent_notify.notify_one();
@@ -168,14 +181,32 @@ impl Registry {
                     let peer_prio = entry.peer.priority();
                     let bus = entry.bus.lock_sync_read().clone();
                     let batch_had_cmds = !batch.is_empty();
-                    for mut cmd in batch {
-                        let epoch_cancel = cmd.cancel.take();
+                    for cmd in batch {
+                        // Clone (not take) so the original epoch_cancel
+                        // stays in `cmd.cancel` for later
+                        // `CancelReason::EpochCancel` discrimination in
+                        // `deliver`.
+                        let epoch_cancel = cmd.cancel.clone();
                         let cancel = match epoch_cancel {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
                             None => CancelGroup::new(vec![entry.peer_cancel.child_token()]),
                         };
-                        let cmd_prio = Priority::Low;
+                        let cmd_prio = RequestPriority::Low;
                         let slot = slot_index(peer_prio, cmd_prio);
+                        let request_id = inner.next_request_id();
+                        let enqueued_at = kithara_platform::time::Instant::now();
+                        // Publish RequestEnqueued BEFORE the cmd can be
+                        // picked up by BatchGroup::process — guarantees
+                        // subscribers see the carcass-of-fetch event
+                        // before any subsequent lifecycle events.
+                        if let Some(ref b) = bus {
+                            b.publish(kithara_events::DownloaderEvent::RequestEnqueued {
+                                request_id,
+                                url: cmd.url.clone(),
+                                method: cmd.method,
+                                priority: cmd_prio,
+                            });
+                        }
                         let internal = InternalCmd {
                             cmd,
                             cancel,
@@ -184,8 +215,13 @@ impl Registry {
                             peer: Some(idx),
                             bus: bus.clone(),
                             peer_id: entry.peer_id,
+                            request_id,
+                            enqueued_at,
                         };
-                        self.slots[slot].push_back(internal);
+                        self.slots[slot].push_back(SlotEntry {
+                            cmd: internal,
+                            peer_cancel: entry.peer_cancel.clone(),
+                        });
                         if slot <= 1 {
                             self.urgent_notify.notify_one();
                         }
@@ -262,7 +298,7 @@ impl Registry {
         let mut dispatched: usize = 0;
 
         // 1. Urgent: drain slots [0],[1].
-        let mut urgent_cmds: Vec<InternalCmd> = Vec::new();
+        let mut urgent_cmds: Vec<SlotEntry> = Vec::new();
         urgent_cmds.extend(self.slots[0].drain(..));
         urgent_cmds.extend(self.slots[1].drain(..));
         let urgent_batch = BatchGroup::from_iter(urgent_cmds.into_iter());
@@ -292,7 +328,7 @@ impl Registry {
             }
         }
 
-        let mut demand_cmds: Vec<InternalCmd> = Vec::new();
+        let mut demand_cmds: Vec<SlotEntry> = Vec::new();
         demand_cmds.extend(self.slots[Slot::LowHigh as usize].drain(..));
         demand_cmds.extend(self.slots[Slot::LowLow as usize].drain(..));
         let demand_batch = BatchGroup::from_iter(demand_cmds.into_iter());
@@ -319,7 +355,8 @@ impl Registry {
         let mut cancels: Vec<(usize, usize)> = Vec::new();
 
         for slot_idx in 0..SLOT_COUNT {
-            for (i, cmd) in self.slots[slot_idx].iter().enumerate() {
+            for (i, slot_entry) in self.slots[slot_idx].iter().enumerate() {
+                let cmd = &slot_entry.cmd;
                 let Some(peer_idx) = cmd.peer else {
                     continue;
                 };
@@ -336,15 +373,16 @@ impl Registry {
 
         cancels.sort_by(|a, b| b.1.cmp(&a.1));
         for (slot_idx, i) in cancels {
-            if let Some(cmd) = self.slots[slot_idx].remove(i) {
-                super::batch::deliver_cancelled(cmd.response, cmd.cmd);
+            if let Some(slot_entry) = self.slots[slot_idx].remove(i) {
+                let SlotEntry { cmd, peer_cancel } = slot_entry;
+                super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
             }
         }
 
         moves.sort_by(|a, b| b.1.cmp(&a.1));
         for (from_slot, i, to_slot) in moves {
-            if let Some(cmd) = self.slots[from_slot].remove(i) {
-                self.slots[to_slot].push_back(cmd);
+            if let Some(slot_entry) = self.slots[from_slot].remove(i) {
+                self.slots[to_slot].push_back(slot_entry);
                 if to_slot <= 1 {
                     self.urgent_notify.notify_one();
                 }

@@ -13,7 +13,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
-    events::{AbrEvent, Event, HlsEvent},
+    events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -98,6 +98,20 @@ struct LiveStats {
     initial_variant: Option<usize>,
     network_hits: HashMap<(usize, usize), usize>,
     variant_switches: usize,
+    /// Maps in-flight `RequestId` → parsed (variant, `seg_idx`) so we can
+    /// classify completions without looking at the URL again.
+    pending_requests: HashMap<RequestId, (usize, usize)>,
+}
+
+fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
+    // /stream/{spec}/seg/v{variant}_{segment}.m4s
+    let segs_marker = "/seg/v";
+    let after = url.split(segs_marker).nth(1)?;
+    let stem = after.split(".m4s").next()?;
+    let mut parts = stem.split('_');
+    let variant = parts.next()?.parse().ok()?;
+    let segment = parts.next()?.parse().ok()?;
+    Some((variant, segment))
 }
 
 #[derive(Clone, Default)]
@@ -225,20 +239,29 @@ fn spawn_live_stats_task(
                     locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Hls(HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if let Some(key) = parse_segment_url(url.as_str()) {
+                        locked.pending_requests.insert(request_id, key);
+                    }
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    if let Some(key) = locked.pending_requests.remove(&request_id) {
+                        let entry = locked.network_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
+                }
+                Event::Hls(HlsEvent::SegmentReadStart {
                     variant,
+                    segment_index,
                     ..
                 }) => {
                     let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
+                    if !locked.network_hits.contains_key(&key) {
+                        let entry = locked.cache_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
                 }
                 _ => {}
             }
@@ -359,7 +382,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] prefer_hardware: bool,
     temp_dir: TestTempDir,
-    abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -401,20 +424,29 @@ async fn live_ephemeral_revisit_sequence_regression(
                     locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Hls(HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if let Some(key) = parse_segment_url(url.as_str()) {
+                        locked.pending_requests.insert(request_id, key);
+                    }
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    if let Some(key) = locked.pending_requests.remove(&request_id) {
+                        let entry = locked.network_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
+                }
+                Event::Hls(HlsEvent::SegmentReadStart {
                     variant,
+                    segment_index,
                     ..
                 }) => {
                     let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
+                    if !locked.network_hits.contains_key(&key) {
+                        let entry = locked.cache_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
                 }
                 _ => {}
             }
@@ -502,7 +534,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
@@ -551,7 +583,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
@@ -679,7 +711,7 @@ async fn live_stress_real_stream_seek_read_cache(
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
-    abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -730,20 +762,29 @@ async fn live_stress_real_stream_seek_read_cache(
                     locked.current_variant = Some(to);
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Hls(HlsEvent::SegmentComplete {
-                    cached,
-                    segment_index,
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if let Some(key) = parse_segment_url(url.as_str()) {
+                        locked.pending_requests.insert(request_id, key);
+                    }
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    if let Some(key) = locked.pending_requests.remove(&request_id) {
+                        let entry = locked.network_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
+                }
+                Event::Hls(HlsEvent::SegmentReadStart {
                     variant,
+                    segment_index,
                     ..
                 }) => {
                     let key = (variant, segment_index);
-                    let map = if cached {
-                        &mut locked.cache_hits
-                    } else {
-                        &mut locked.network_hits
-                    };
-                    let entry = map.entry(key).or_insert(0);
-                    *entry = entry.saturating_add(1);
+                    if !locked.network_hits.contains_key(&key) {
+                        let entry = locked.cache_hits.entry(key).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
                 }
                 _ => {}
             }

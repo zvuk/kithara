@@ -3,37 +3,14 @@
 use std::io;
 
 use derive_setters::Setters;
+use kithara_events::RequestMethod;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-/// Scheduling priority for download commands and peers.
-///
-/// Used in a 2×2 slot map: (peer priority) × (cmd priority).
-/// `High` commands and peers are processed before `Low`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Priority {
-    /// Latency-sensitive: demand segments, `execute`/`batch` calls, seek.
-    High = 0,
-    /// Background: prefetch, idle downloads.
-    #[default]
-    Low = 1,
-}
-
-/// HTTP method for a [`FetchCmd`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum FetchMethod {
-    /// HTTP GET, streaming delivery.
-    ///
-    /// Body delivered as an async [`BodyStream`](super::BodyStream).
-    /// Use for large downloads (segments, files) that write directly to storage.
-    #[default]
-    Stream,
-    /// HTTP HEAD — headers only, no body.
-    ///
-    /// Use for metadata queries (Content-Length).
-    Head,
-}
+// `RequestMethod` and `RequestPriority` are defined in `kithara-events`
+// (next to the lifecycle events that quote them). Re-exported below
+// under the same names so `kithara_stream::dl::*` callers keep working.
 
 /// Per-command body writer. Downloader calls it for each chunk.
 pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
@@ -57,9 +34,9 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 #[non_exhaustive]
 #[derive(Setters)]
 pub struct FetchCmd {
-    /// HTTP method (default: [`FetchMethod::Stream`]).
+    /// HTTP method (default: [`RequestMethod::Get`]).
     #[setters(skip)]
-    pub method: FetchMethod,
+    pub method: RequestMethod,
     /// URL to fetch.
     #[setters(skip)]
     pub url: Url,
@@ -86,7 +63,7 @@ pub struct FetchCmd {
 impl FetchCmd {
     /// Build a [`FetchCmd`] with the given method and URL; all other
     /// fields start unset.
-    fn with_method(method: FetchMethod, url: Url) -> Self {
+    fn with_method(method: RequestMethod, url: Url) -> Self {
         Self {
             method,
             url,
@@ -102,13 +79,13 @@ impl FetchCmd {
     /// HTTP GET command for the given URL.
     #[must_use]
     pub fn get(url: Url) -> Self {
-        Self::with_method(FetchMethod::Stream, url)
+        Self::with_method(RequestMethod::Get, url)
     }
 
     /// HTTP HEAD command for the given URL.
     #[must_use]
     pub fn head(url: Url) -> Self {
-        Self::with_method(FetchMethod::Head, url)
+        Self::with_method(RequestMethod::Head, url)
     }
 
     /// Set the per-command body writer (streaming path).

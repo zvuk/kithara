@@ -23,7 +23,7 @@ use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
-    SourceSeekAnchor, Stream, StreamError, StreamReadError, StreamResult, StreamType, Timeline,
+    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 

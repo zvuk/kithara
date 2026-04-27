@@ -11,13 +11,10 @@ use std::{
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_platform::{
     time::Duration,
-    tokio::{
-        sync::broadcast::error::TryRecvError,
-        time::{Duration as TokioDuration, timeout},
-    },
+    tokio::time::{Duration as TokioDuration, timeout},
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
@@ -1356,7 +1353,7 @@ fn queue_segment_request_resolves_offset_to_segment() {
     assert_eq!(req.segment_index, 0);
 }
 
-/// RED test #2 (integration: live_ephemeral_revisit_sequence_regression_drm_sw)
+/// RED test #2 (integration: `live_ephemeral_revisit_sequence_regression_drm_sw`)
 ///
 /// After DRM padding removal shrinks a variant's `size_map.total`, the
 /// decoder can land at a `byte_position` that is >= the new total. Both
@@ -1406,7 +1403,7 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     );
 }
 
-/// Regression test (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
+/// Regression test (integration: `live_ephemeral_revisit_sequence_regression_drm_hw`)
 ///
 /// When the scheduler re-acquires a DRM resource (via `acquire_resource_with_ctx`)
 /// for a previously-committed segment — e.g. after LRU eviction pressure —
@@ -1477,176 +1474,17 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     );
 }
 
-/// RED test (integration: live_stress_real_stream_seek_read_cache_drm_mmap)
-///
-/// Symptom: under DRM + non-ephemeral mmap, the random-seek phase
-/// (`RANDOM_PHASE_BUDGET_SECS = 5`, target ≥ `MIN_RANDOM_SEEKS = 50`)
-/// regularly underflows ("stress seek underflow: expected at least 50
-/// seek ops, got 29..48"). Profiling shows ~21k `apply_cached_segment_progress`
-/// + `populate_cached_segments_if_needed` invocations per run when only
-/// 37 cached segments exist on disk. Each `poll_next` pass re-emits one
-/// `HlsEvent::SegmentComplete { cached: true, .. }` per *already-cached*
-/// segment — there is no dedup of segments that have already been
-/// announced, so the bus is flooded with N × poll_next events and the
-/// listener task burns wall-clock time draining duplicates.
-///
-/// Contract under test: cached segments must be announced as
-/// `SegmentComplete { cached: true }` *once* across repeated
-/// `apply_cached_segment_progress` calls when the underlying
-/// `populate_cached_segments_if_needed` finds nothing new. Otherwise
-/// every poll_next on a steady state pays an O(N) event-publish cost,
-/// starving the test's 5-second seek budget under contention.
-///
-/// Construction stays unit-scope: a non-ephemeral disk-backed
-/// `AssetStore`, all 8 segments pre-committed on disk, then 5 back-to-back
-/// `populate + apply_cached_segment_progress` cycles. With the bug, the
-/// subscriber drains 8 × 5 = 40 cached-SegmentComplete events. With the
-/// dedup invariant, it drains exactly 8.
-#[kithara::test]
-fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
-    const NUM_SEGMENTS: usize = 8;
-    const SEGMENT_LEN: usize = 256;
-    const POLL_CYCLES: usize = 5;
-    const BUS_CAPACITY: usize = 1024;
-    const BANDWIDTH: u64 = 128_000;
-    const SEGMENT_SECS: u64 = 4;
-
-    let dir = tempdir().expect("temp dir");
-    let cancel = CancellationToken::new();
-
-    // Non-ephemeral disk backend with a real on-disk asset_root so
-    // populate_cached_segments_if_needed walks the disk path (not the
-    // ephemeral early-return at size_map.rs:21-23).
-    let noop_drm: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
-    let backend = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some("flaky-mmap-red-test"))
-        .cancel(cancel.clone())
-        .process_fn(noop_drm)
-        .build();
-    assert!(
-        !backend.is_ephemeral(),
-        "RED test must hit the disk populate path, not the ephemeral early-return"
-    );
-
-    // Pre-commit every segment to disk so populate_cached_segments_if_needed
-    // sees AssetResourceState::Committed for all of them on every call.
-    let payload = vec![0xCDu8; SEGMENT_LEN];
-    let base = Url::parse("https://example.com/").expect("base url");
-    let mut segment_urls = Vec::with_capacity(NUM_SEGMENTS);
-    for index in 0..NUM_SEGMENTS {
-        let url = base.join(&format!("seg-0-{index}.m4s")).expect("seg url");
-        let key = ResourceKey::from_url(&url);
-        let res = backend
-            .acquire_resource_with_ctx(&key, Some(DecryptContext::default()))
-            .expect("acquire seg");
-        res.write_at(0, &payload).expect("write seg");
-        res.commit(Some(payload.len() as u64)).expect("commit seg");
-        segment_urls.push(url);
-    }
-
-    // Build a matching playlist + scheduler.
-    let variant = VariantState {
-        id: 0,
-        uri: base.join("v0.m3u8").expect("playlist url"),
-        bandwidth: Some(BANDWIDTH),
-        codec: None,
-        container: None,
-        init_url: None,
-        segments: (0..NUM_SEGMENTS)
-            .map(|index| SegmentState {
-                index,
-                url: segment_urls[index].clone(),
-                duration: Duration::from_secs(SEGMENT_SECS),
-                key: None,
-            })
-            .collect(),
-        size_map: None,
-    };
-    let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
-    let parsed = parsed_variants(1);
-    let track = test_peer_handle(&cancel);
-    let config = HlsConfig {
-        cancel: Some(cancel.clone()),
-        ..HlsConfig::default()
-    };
-    let bus = EventBus::new(BUS_CAPACITY);
-    let mut events = bus.subscribe();
-    let (mut downloader, _source) = build_pair(
-        backend.clone(),
-        track,
-        &parsed,
-        &config,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
-        Arc::new(AtomicUsize::new(0)),
-        Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus,
-        kithara_stream::Timeline::new(),
-    );
-
-    // Drive POLL_CYCLES populate→apply cycles, mirroring what poll_next
-    // does on every wake. Steady state: nothing new is committed
-    // between cycles, yet the buggy code re-emits all NUM_SEGMENTS events.
-    for _ in 0..POLL_CYCLES {
-        let (cached_count, cached_end_offset) = downloader.populate_cached_segments_if_needed(0);
-        downloader.apply_cached_segment_progress(0, cached_count, cached_end_offset);
-    }
-
-    let mut cached_announces = 0usize;
-    loop {
-        match events.try_recv() {
-            Ok(Event::Hls(HlsEvent::SegmentComplete {
-                cached: true,
-                variant: 0,
-                ..
-            })) => cached_announces += 1,
-            Ok(_) => {}
-            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
-            Err(TryRecvError::Lagged(n)) => {
-                panic!(
-                    "broadcast receiver lagged by {n} events — the bus \
-                     buffer overflowed because cached SegmentComplete \
-                     events are being re-published every poll cycle, \
-                     which is exactly the bug under test"
-                );
-            }
-        }
-    }
-
-    assert_eq!(
-        cached_announces,
-        NUM_SEGMENTS,
-        "expected each of the {NUM_SEGMENTS} cached segments to be \
-         announced exactly once across {POLL_CYCLES} populate→apply \
-         cycles, got {cached_announces}. Today \
-         apply_cached_segment_progress republishes a SegmentComplete \
-         event for every segment in 0..cached_count on every call, so \
-         the count is NUM_SEGMENTS × POLL_CYCLES = {} — this O(N×polls) \
-         flood explains the seek-underflow flakiness in \
-         live_stress_real_stream_seek_read_cache_drm_mmap.",
-        NUM_SEGMENTS * POLL_CYCLES,
-    );
-}
-
 /// Regression guard for the ABR-stranded-layout seek hang.
 ///
 /// Production scenario captured on silvercomet:
 ///   - Playback starts on variant 0, peer fetches segments 0..N0
 ///   - ABR decides to up-switch to variant 1; peer pivots to variant 1
 ///     segments and stops fetching variant 0
-///   - Decoder is still mid-playback on variant 0 (format_change hasn't
+///   - Decoder is still mid-playback on variant 0 (`format_change` hasn't
 ///     fired yet — variant 0 data isn't exhausted)
 ///   - User seeks to a time past N0
 ///
-/// With the old policy (anchor = layout_variant ignoring ABR), the
+/// With the old policy (anchor = `layout_variant` ignoring ABR), the
 /// anchor resolves to variant 0 at a segment the downloader stopped
 /// fetching. `source_is_ready_for_apply_seek` stays `Waiting` because
 /// that byte range never arrives, and the track hangs silently.

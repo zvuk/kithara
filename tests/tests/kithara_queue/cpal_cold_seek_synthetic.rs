@@ -1,4 +1,4 @@
-//! Cold-cache mid-track HLS seek through the full Queue → PlayerImpl
+//! Cold-cache mid-track HLS seek through the full Queue → `PlayerImpl`
 //! pipeline against the synthetic `TestServerHelper` HLS fixture.
 //!
 //! Same shape as `cold_seek_cpal::cpal_cold_seek_silvercomet_hls` but

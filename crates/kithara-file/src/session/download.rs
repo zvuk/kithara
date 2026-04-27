@@ -8,7 +8,7 @@ use std::{ops::Range, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::AssetResource;
-use kithara_events::FileEvent;
+use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, RangeSpec};
 use kithara_platform::{
     time::Duration,
@@ -47,9 +47,17 @@ pub(super) async fn run_full_download(
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
         Err(e) => {
-            inner.fail_and_evict(&e.to_string());
-            inner.bus.publish(FileEvent::DownloadError {
-                error: e.to_string(),
+            // The Downloader emits `RequestFailed` only for the
+            // `Streaming` response target. `peer.execute` uses the
+            // `Channel` target, so the network-level error never lands
+            // on the bus from the Downloader side. Mirror it here as a
+            // file-side error so subscribers of the file stream's bus
+            // (UI, the html-error-cleanup test) still see a terminal
+            // signal.
+            let msg = e.to_string();
+            inner.fail_and_evict(&msg);
+            inner.bus.publish(FileEvent::Error {
+                error: FileError::Io(msg),
             });
             return;
         }
@@ -71,9 +79,10 @@ pub(super) async fn run_full_download(
     match result {
         Err(StreamBodyError::Write(e)) => {
             debug!(?e, "write error during full download");
-            inner.fail_and_evict(&e.to_string());
-            inner.bus.publish(FileEvent::DownloadError {
-                error: e.to_string(),
+            let msg = e.to_string();
+            inner.fail_and_evict(&msg);
+            inner.bus.publish(FileEvent::Error {
+                error: FileError::Io(msg),
             });
         }
         Err(StreamBodyError::Net(e, written)) => {
@@ -86,9 +95,8 @@ pub(super) async fn run_full_download(
             } else {
                 inner.set_phase(FilePhase::Complete);
             }
-            inner.bus.publish(FileEvent::DownloadError {
-                error: e.to_string(),
-            });
+            // The network-level error is already in
+            // `DownloaderEvent::RequestFailed` — no `FileEvent::Error`.
         }
         Err(StreamBodyError::Cancelled) => {}
         Ok(bytes_written) => {
@@ -168,17 +176,17 @@ fn commit_full_download(inner: &Arc<FileInner>, bytes_written: u64, expected_len
         }
         let _ = inner.coord.take_range_request();
         inner.set_phase(FilePhase::Complete);
-        inner.bus.publish(FileEvent::DownloadComplete {
-            total_bytes: bytes_written,
-        });
+        // Download completion is in `DownloaderEvent::RequestCompleted`;
+        // reader-side `FileEvent::EndOfStream` fires when the reader
+        // actually hits EOF.
     } else {
         inner.set_phase(FilePhase::Complete);
         debug!(
             bytes_written,
             expected, "partial download, resource stays active"
         );
-        inner.bus.publish(FileEvent::DownloadError {
-            error: format!("incomplete: {bytes_written}/{expected} bytes"),
+        inner.bus.publish(FileEvent::Error {
+            error: FileError::Io(format!("incomplete: {bytes_written}/{expected} bytes")),
         });
     }
 }
@@ -224,11 +232,10 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
         Err(e) => {
+            // Network failure is in `DownloaderEvent::RequestFailed`;
+            // mirror only the local resource teardown.
             if !matches!(inner.res.status(), ResourceStatus::Committed { .. }) {
                 inner.res.fail(e.to_string());
-                inner.bus.publish(FileEvent::DownloadError {
-                    error: e.to_string(),
-                });
             }
             return;
         }
@@ -260,9 +267,6 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
             Err(e) => {
                 if !matches!(inner.res.status(), ResourceStatus::Committed { .. }) {
                     inner.res.fail(e.to_string());
-                    inner.bus.publish(FileEvent::DownloadError {
-                        error: e.to_string(),
-                    });
                 }
                 return;
             }

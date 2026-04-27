@@ -72,8 +72,8 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     for f in 1..frames {
         let prev_phase = phase_from_f32(chunk.pcm[(f - 1) * channels]);
         let curr_phase = phase_from_f32(chunk.pcm[f * channels]);
-        let expected_asc = (prev_phase as usize + 1) % SawWav::SAW_PERIOD;
-        let expected_desc = (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+        let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
+        let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
             breaks += 1;
         }
@@ -486,9 +486,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 let curr_first = chunk.pcm[0]; // first sample (L channel)
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
-                let expected_asc = (prev_phase as usize + 1) % SawWav::SAW_PERIOD;
+                let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
                 let expected_desc =
-                    (prev_phase as usize + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                    (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {

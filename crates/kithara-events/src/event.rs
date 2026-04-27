@@ -157,15 +157,21 @@ mod tests {
         matches!(event, FileEvent::EndOfStream)
     }
 
-    fn file_is_download_complete_42(event: &FileEvent) -> bool {
-        matches!(event, FileEvent::DownloadComplete { total_bytes: 42 })
+    fn file_is_read_progress_42(event: &FileEvent) -> bool {
+        matches!(
+            event,
+            FileEvent::ReadProgress {
+                position: 42,
+                total: None,
+            }
+        )
     }
 
     #[kithara::test]
     #[case(FileEvent::EndOfStream, file_is_end_of_stream)]
     #[case(
-        FileEvent::DownloadComplete { total_bytes: 42 },
-        file_is_download_complete_42
+        FileEvent::ReadProgress { position: 42, total: None },
+        file_is_read_progress_42
     )]
     fn file_event_into_event(#[case] file_event: FileEvent, #[case] check: fn(&FileEvent) -> bool) {
         let event: Event = file_event.into();

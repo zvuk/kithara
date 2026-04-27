@@ -6,7 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
-use kithara_events::{EventBus, FileEvent};
+use kithara_events::EventBus;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
     StreamType, Timeline,
@@ -81,7 +81,9 @@ impl File {
         coord.set_total_bytes(len);
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
-        bus.publish(FileEvent::DownloadComplete { total_bytes: total });
+        // Local files have nothing to "complete" — the bytes are already
+        // on disk. Reader-side `FileEvent::EndOfStream` fires when the
+        // reader hits EOF.
 
         Ok(FileSource::local(res, coord, bus, store, key))
     }
@@ -135,9 +137,6 @@ impl File {
             tracing::debug!("file already cached, skipping download");
             let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
-            state
-                .bus
-                .publish(FileEvent::DownloadComplete { total_bytes: total });
 
             return Ok(FileSource::local(
                 state.res.clone(),

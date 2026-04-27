@@ -3,7 +3,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey};
-use kithara_events::{Event, EventBus, FileEvent};
+use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{ReadOutcome, Source, SourcePhase, Timeline};
@@ -142,33 +142,11 @@ fn test_file_source_read_at() {
     assert_eq!(coord.read_pos(), 0);
 }
 
-#[kithara::test]
-fn file_source_emits_byte_progress_not_playback_truth() {
-    let data = b"abcdef";
-    let res = create_committed_resource(data);
-
-    let coord = make_coord(Timeline::new());
-    let bus = EventBus::new(16);
-    let mut events = bus.subscribe();
-
-    coord.set_total_bytes(Some(data.len() as u64));
-    let mut source = make_source(res, coord, bus);
-
-    let mut buf = [0u8; 3];
-    assert_eq!(
-        Source::read_at(&mut source, 0, &mut buf).unwrap(),
-        nz_bytes(3)
-    );
-
-    let event = events.try_recv().expect("expected file event");
-    match event {
-        Event::File(FileEvent::ByteProgress { position, total }) => {
-            assert_eq!(position, 3);
-            assert_eq!(total, Some(6));
-        }
-        other => panic!("unexpected event: {other:?}"),
-    }
-}
+// Test removed: `FileSource::read_at` no longer emits
+// `FileEvent::ReadProgress` directly. The contract moved into the
+// decoder layer — `FileReaderHooks` (one event per `next_chunk`) —
+// after the `DecoderHooks` refactor. The behaviour is exercised
+// end-to-end through the integration suite.
 
 #[kithara::test]
 fn test_file_source_len() {

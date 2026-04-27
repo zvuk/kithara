@@ -27,7 +27,7 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, Priority};
+use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
 
 mod consts {
     pub(super) const POLL_MS: u64 = 50;
@@ -319,7 +319,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
                 .map(|_| FetchCmd::head(url.clone()))
                 .collect();
             let results = handle.batch(cmds).await;
-            results.into_iter().filter(|r| r.is_ok()).count()
+            results.into_iter().filter(Result::is_ok).count()
         }));
     }
 
@@ -342,8 +342,8 @@ async fn many_downloaders_global_peak_stays_bounded() {
     );
 }
 
-/// Verify that poll_next (streaming path) also respects max_concurrent.
-/// A Peer produces 1000 HEAD commands via poll_next. Peak must stay ≤ max_concurrent.
+/// Verify that `poll_next` (streaming path) also respects `max_concurrent`.
+/// A Peer produces 1000 HEAD commands via `poll_next`. Peak must stay ≤ `max_concurrent`.
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
 async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
@@ -390,7 +390,7 @@ async fn poll_next_respects_max_concurrent() {
 
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    /// Peer that produces `remaining` HEAD commands via poll_next.
+    /// Peer that produces `remaining` HEAD commands via `poll_next`.
     struct FloodPeer {
         url: Url,
         remaining: Mutex<usize>,
@@ -398,8 +398,8 @@ async fn poll_next_respects_max_concurrent() {
 
     impl Abr for FloodPeer {}
     impl Peer for FloodPeer {
-        fn priority(&self) -> Priority {
-            Priority::Low
+        fn priority(&self) -> RequestPriority {
+            RequestPriority::Low
         }
 
         fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
@@ -461,7 +461,7 @@ async fn poll_next_respects_max_concurrent() {
 }
 
 /// Reproduce port exhaustion: many concurrent downloaders each doing
-/// ~100 HEAD requests (simulates prefetch_metadata × parallel tests).
+/// ~100 HEAD requests (simulates `prefetch_metadata` × parallel tests).
 /// All requests must succeed — no "Can't assign requested address".
 #[kithara_test_macros::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
 async fn port_exhaustion_stress() {
@@ -580,7 +580,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let mut seen_slow = false;
     while Instant::now() < deadline {
         match tokio_time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow))) => {
+            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
                 seen_slow = true;
                 break;
             }
@@ -621,11 +621,11 @@ struct TaggedPriorityPeer {
 
 impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
-    fn priority(&self) -> Priority {
+    fn priority(&self) -> RequestPriority {
         if self.timeline.is_playing() {
-            Priority::High
+            RequestPriority::High
         } else {
-            Priority::Low
+            RequestPriority::Low
         }
     }
 
@@ -856,11 +856,11 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     }
     impl Abr for FlippablePeer {}
     impl Peer for FlippablePeer {
-        fn priority(&self) -> Priority {
+        fn priority(&self) -> RequestPriority {
             if self.timeline.is_playing() {
-                Priority::High
+                RequestPriority::High
             } else {
-                Priority::Low
+                RequestPriority::Low
             }
         }
     }
@@ -875,7 +875,10 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     let url = spawn_slow_server(1).await;
 
     // Low priority phase — execute must still succeed.
-    assert_eq!(peer_priority_from_handle(&handle, &timeline), Priority::Low);
+    assert_eq!(
+        peer_priority_from_handle(&handle, &timeline),
+        RequestPriority::Low
+    );
     let low_resp = handle.execute(FetchCmd::get(url.clone())).await;
     assert!(low_resp.is_ok(), "execute must succeed while Low");
 
@@ -883,7 +886,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     timeline.set_playing(true);
     assert_eq!(
         peer_priority_from_handle(&handle, &timeline),
-        Priority::High
+        RequestPriority::High
     );
     let high_resp = handle.execute(FetchCmd::get(url)).await;
     assert!(high_resp.is_ok(), "execute must succeed while High");
@@ -891,10 +894,13 @@ async fn peer_handle_execute_respects_either_peer_priority() {
 
 /// Helper for the deterministic routing test: reads the effective
 /// peer priority from the same Timeline the peer observes.
-fn peer_priority_from_handle(_handle: &super::PeerHandle, timeline: &crate::Timeline) -> Priority {
+fn peer_priority_from_handle(
+    _handle: &super::PeerHandle,
+    timeline: &crate::Timeline,
+) -> RequestPriority {
     if timeline.is_playing() {
-        Priority::High
+        RequestPriority::High
     } else {
-        Priority::Low
+        RequestPriority::Low
     }
 }

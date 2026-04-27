@@ -196,8 +196,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
             .filter(|p| {
                 p.file_name()
                     .and_then(|s| s.to_str())
-                    .map(|n| n.starts_with(prefix))
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.starts_with(prefix))
             })
             .collect(),
     };

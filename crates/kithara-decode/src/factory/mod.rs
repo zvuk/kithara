@@ -32,7 +32,7 @@ use std::{
 
 use derivative::Derivative;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{MediaInfo, StreamContext};
+use kithara_stream::{MediaInfo, SharedHooks, StreamContext};
 
 pub(crate) use self::probe::{CodecSelector, ProbeHint};
 use self::{
@@ -43,6 +43,7 @@ use crate::{
     InnerDecoder,
     backend::{BoxedSource, HardwareBackend, current::Current},
     error::{DecodeError, DecodeResult},
+    hooks::HookedDecoder,
 };
 
 /// Configuration for `DecoderFactory`.
@@ -78,6 +79,21 @@ pub struct DecoderConfig {
     /// slices packets out without per-packet allocations).  When `None`,
     /// the global `kithara_bufpool::byte_pool()` is used.
     pub byte_pool: Option<BytePool>,
+    /// Reader-side hooks injected into the resulting decoder via
+    /// [`HookedDecoder`]. The factory wraps the inner decoder in
+    /// `HookedDecoder` whenever this is `Some`. `None` keeps the
+    /// inner decoder unwrapped (mock sources, tests).
+    pub hooks: Option<SharedHooks>,
+}
+
+fn wrap_with_hooks(
+    inner: Box<dyn InnerDecoder>,
+    hooks: Option<SharedHooks>,
+) -> Box<dyn InnerDecoder> {
+    match hooks {
+        Some(hooks) => Box::new(HookedDecoder::new(inner, hooks)),
+        None => inner,
+    }
 }
 
 /// Factory for creating decoders with a single, strict backend selection.
@@ -117,7 +133,7 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        if config.prefer_hardware {
+        let inner = if config.prefer_hardware {
             match try_hardware_decoder::<B>(source, codec, container, config) {
                 HardwareAttempt::Decoded(decoder) => Ok(decoder),
                 HardwareAttempt::Skipped => {
@@ -145,7 +161,9 @@ impl DecoderFactory {
                 );
                 Err(DecodeError::UnsupportedCodec(codec))
             }
-        }
+        }?;
+
+        Ok(wrap_with_hooks(inner, config.hooks.clone()))
     }
 
     /// Create decoder from `MediaInfo` (kithara-audio entry point).
@@ -307,6 +325,7 @@ mod tests {
             epoch: 0,
             pcm_pool: None,
             byte_pool: None,
+            hooks: None,
         };
         assert!(config.prefer_hardware);
         assert!(config.byte_len_handle.is_some());

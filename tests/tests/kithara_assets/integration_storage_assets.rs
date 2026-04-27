@@ -45,7 +45,7 @@ fn read_pins_file(root: &Path) -> Option<Vec<String>> {
         rkyv::deserialize::<PinsIndexFile, rkyv::rancor::Error>(archived).unwrap();
 
     let mut pinned = Vec::new();
-    for (k, v) in pins_file.pinned.iter() {
+    for (k, v) in &pins_file.pinned {
         if *v {
             pinned.push(k.to_string());
         }

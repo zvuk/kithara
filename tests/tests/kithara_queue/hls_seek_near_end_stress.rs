@@ -239,16 +239,13 @@ async fn run_one_attempt(
         };
     }
 
-    let duration = match queue.duration_seconds() {
-        Some(d) => d,
-        None => {
-            tick_handle.abort();
-            return IterOutcome::Errored {
-                iter,
-                target: f64::NAN,
-                error: "duration unknown after Loaded".into(),
-            };
-        }
+    let duration = if let Some(d) = queue.duration_seconds() { d } else {
+        tick_handle.abort();
+        return IterOutcome::Errored {
+            iter,
+            target: f64::NAN,
+            error: "duration unknown after Loaded".into(),
+        };
     };
 
     let target = (duration - target_offset).max(0.0);

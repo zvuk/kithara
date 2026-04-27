@@ -194,29 +194,12 @@ impl HlsScheduler {
         }
         self.sent_init_for_variant.insert(variant);
 
-        let already_announced = self
-            .announced_cached_count
-            .get(&variant)
-            .copied()
-            .unwrap_or(0);
-        if cached_count <= already_announced {
-            return;
-        }
-
-        for seg_idx in already_announced..cached_count {
-            let bytes = self
-                .segments
-                .lock_sync()
-                .stored_segment(variant, seg_idx)
-                .map_or(0, |s| s.media_len + s.init_len);
-            self.bus.publish(kithara_events::HlsEvent::SegmentComplete {
-                variant,
-                segment_index: seg_idx,
-                bytes_transferred: bytes,
-                cached: true,
-                duration: std::time::Duration::ZERO,
-            });
-        }
-        self.announced_cached_count.insert(variant, cached_count);
+        // Cached-segment "completion" announcement was a download-fact
+        // dupe of `DownloaderEvent::RequestCompleted` and is no longer
+        // emitted from this layer. Reader-side `SegmentReadStart`/
+        // `SegmentReadComplete` come from `source_impl::read_at` once
+        // the reader actually crosses the segment boundary.
+        let _ = cached_count;
+        let _ = self.announced_cached_count.entry(variant);
     }
 }

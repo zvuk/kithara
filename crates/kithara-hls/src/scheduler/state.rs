@@ -9,7 +9,7 @@ use std::{
 use kithara_abr::{AbrDecision, AbrState};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{AbrReason, EventBus, HlsEvent, SeekEpoch};
+use kithara_events::{AbrReason, EventBus, HlsError as PublicHlsError, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use tracing::debug;
 
@@ -296,9 +296,15 @@ impl HlsScheduler {
 
     pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
-        self.bus.publish(HlsEvent::DownloadError {
-            error: format!("{context}: {error}"),
-        });
+        // Network errors are reported through `DownloaderEvent::RequestFailed`
+        // — do not duplicate them on `HlsEvent::Error`.
+        let public = match error {
+            HlsError::Net(_) => return,
+            HlsError::PlaylistParse(msg) => PublicHlsError::Playlist(format!("{context}: {msg}")),
+            HlsError::KeyProcessing(msg) => PublicHlsError::Decryption(format!("{context}: {msg}")),
+            other => PublicHlsError::Other(format!("{context}: {other}")),
+        };
+        self.bus.publish(HlsEvent::Error { error: public });
     }
 
     pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {

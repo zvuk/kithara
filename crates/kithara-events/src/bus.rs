@@ -156,7 +156,7 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "file")]
-    use crate::FileEvent;
+    use crate::{FileError, FileEvent};
 
     #[cfg(feature = "file")]
     fn assert_file_event(event: &Event, expected: &FileEvent) {
@@ -175,7 +175,7 @@ mod tests {
 
     #[cfg(feature = "file")]
     #[kithara::test(tokio)]
-    #[case(FileEvent::DownloadComplete { total_bytes: 42 })]
+    #[case(FileEvent::ReadProgress { position: 42, total: None })]
     #[case(FileEvent::EndOfStream)]
     async fn publish_and_subscribe(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
@@ -188,8 +188,8 @@ mod tests {
     #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     #[case(FileEvent::EndOfStream)]
-    #[case(FileEvent::DownloadError {
-        error: "network".to_string()
+    #[case(FileEvent::Error {
+        error: FileError::Io("network".to_string()),
     })]
     async fn multiple_subscribers_each_receive(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
@@ -206,8 +206,8 @@ mod tests {
         let bus = EventBus::new(2);
         let mut rx = bus.subscribe();
         for i in 0..10 {
-            bus.publish(FileEvent::DownloadProgress {
-                offset: i,
+            bus.publish(FileEvent::ReadProgress {
+                position: i,
                 total: None,
             });
         }
@@ -288,12 +288,21 @@ mod tests {
         let mut rx_a = child_a.subscribe();
 
         child_a.publish(FileEvent::EndOfStream);
-        child_b.publish(FileEvent::DownloadComplete { total_bytes: 99 });
+        child_b.publish(FileEvent::ReadProgress {
+            position: 99,
+            total: None,
+        });
 
         let e1 = rx_root.recv().await.unwrap();
         let e2 = rx_root.recv().await.unwrap();
         assert_file_event(&e1, &FileEvent::EndOfStream);
-        assert_file_event(&e2, &FileEvent::DownloadComplete { total_bytes: 99 });
+        assert_file_event(
+            &e2,
+            &FileEvent::ReadProgress {
+                position: 99,
+                total: None,
+            },
+        );
 
         let ea = rx_a.recv().await.unwrap();
         assert_file_event(&ea, &FileEvent::EndOfStream);

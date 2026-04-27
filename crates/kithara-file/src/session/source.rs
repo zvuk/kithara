@@ -8,7 +8,7 @@
 use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
-use kithara_events::{EventBus, FileEvent};
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{time::Duration, tokio::task};
 use kithara_storage::{ResourceExt, WaitOutcome};
@@ -198,13 +198,9 @@ impl kithara_stream::Source for FileSource {
             return Ok(ReadOutcome::Eof);
         };
 
-        let res_len = self.inner.res.len();
-        let new_pos = offset.saturating_add(n as u64);
-        let total = self.coord.total_bytes().or(res_len);
-        self.inner.bus.publish(FileEvent::ByteProgress {
-            position: new_pos,
-            total,
-        });
+        // Reader-side `FileEvent::ReadProgress` is fired by
+        // `FileReaderHooks` from the decoder layer — see
+        // `kithara-file/src/session/reader_hooks.rs`.
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
@@ -227,5 +223,15 @@ impl kithara_stream::Source for FileSource {
             return;
         }
         self.coord.request_range(range);
+    }
+
+    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
+        let hooks = super::reader_hooks::FileReaderHooks::new(
+            self.inner.bus.clone(),
+            Arc::clone(&self.coord),
+            self.coord.timeline().byte_position_handle(),
+            self.coord.timeline().seek_epoch_handle(),
+        );
+        Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 }

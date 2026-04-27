@@ -298,7 +298,6 @@ impl Source for HlsSource {
         if self.coord.timeline().seek_epoch() != read_epoch {
             return Ok(ReadOutcome::Pending(PendingReason::Retry));
         }
-        let new_pos = offset.saturating_add(count.get() as u64);
         if seg.segment_index != previous_hint {
             self.coord.reader_advanced.notify_one();
         }
@@ -306,11 +305,9 @@ impl Source for HlsSource {
         self.reader_segment
             .store(seg.segment_index, Ordering::Release);
 
-        let total = self.segments.lock_sync().max_end_offset();
-        self.bus.publish(HlsEvent::ByteProgress {
-            position: new_pos,
-            total: Some(total),
-        });
+        // Reader-side events (`HlsEvent::SegmentReadStart`/`Complete`/
+        // `ReadProgress`) are fired by `HlsReaderHooks` from the
+        // decoder layer — see `kithara-hls/src/source/reader_hooks.rs`.
 
         Ok(ReadOutcome::Bytes(count))
     }
@@ -478,6 +475,14 @@ impl Source for HlsSource {
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
         let seek_epoch = self.coord.timeline().seek_epoch();
         let landed_offset = self.coord.timeline().byte_position();
+        trace!(
+            target: "hls_seek_diag",
+            seek_epoch,
+            landed_offset,
+            anchor_segment = anchor.and_then(|a| a.segment_index).map(|i| i as usize),
+            anchor_byte_offset = anchor.map(|a| a.byte_offset),
+            "commit_seek_landing: enter"
+        );
         let fallback_variant = anchor
             .and_then(|resolved| resolved.variant_index)
             .unwrap_or_else(|| self.resolve_current_variant());
@@ -583,5 +588,15 @@ impl Source for HlsSource {
         }
         let seek_epoch = self.coord.timeline().seek_epoch();
         self.queue_segment_request_for_offset(range.start, seek_epoch);
+    }
+
+    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
+        let hooks = super::reader_hooks::HlsReaderHooks::new(
+            self.bus.clone(),
+            Arc::clone(&self.segments),
+            self.coord.timeline().byte_position_handle(),
+            self.coord.timeline().seek_epoch_handle(),
+        );
+        Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 }

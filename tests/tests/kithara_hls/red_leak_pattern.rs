@@ -17,7 +17,7 @@
 //!      (a cancel token). But that cancel token is **not the same token**
 //!      as the one Registry's `peer_cancel` is a child of. Registry's
 //!      `peer_cancel` is a child of `inner.cancel` (the whole-Downloader
-//!      cancel), not of the PeerHandle's cancel.
+//!      cancel), not of the `PeerHandle`'s cancel.
 //!
 //! → Registry never removes the `Arc<dyn Peer>` entry for this source.
 //! → The `Arc<HlsPeer>` lives forever (until the Downloader itself is

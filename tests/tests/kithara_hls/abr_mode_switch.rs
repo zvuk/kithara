@@ -11,7 +11,7 @@
 //!   segments served from disk, quality transitions visible from cache.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -21,7 +21,7 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    events::{AbrEvent, Event, EventBus, HlsEvent},
+    events::{AbrEvent, DownloaderEvent, Event, EventBus, HlsEvent, RequestId},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -62,7 +62,11 @@ fn segment_duration_secs() -> f64 {
     D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
 }
 
-/// Record of a `SegmentComplete` event.
+/// Record of a segment-level event.
+///
+/// Synthesised across `DownloaderEvent` (network fetches) and `HlsEvent`
+/// (reader-side reads): `cached = true` means the reader read the
+/// segment without a corresponding `RequestCompleted` (cache hit).
 #[derive(Clone, Debug)]
 struct SegmentRecord {
     variant: usize,
@@ -70,34 +74,59 @@ struct SegmentRecord {
     cached: bool,
 }
 
-/// Collect `SegmentComplete` and `VariantApplied` events from a bus.
+fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
+    // /stream/{spec}/seg/v{variant}_{segment}.m4s
+    let segs_marker = "/seg/v";
+    let after = url.split(segs_marker).nth(1)?;
+    let stem = after.split(".m4s").next()?;
+    let mut parts = stem.split('_');
+    let variant = parts.next()?.parse().ok()?;
+    let segment = parts.next()?.parse().ok()?;
+    Some((variant, segment))
+}
+
+/// Collect download/reader segment events from a bus.
 struct EventCollector {
-    segments: Arc<Mutex<Vec<SegmentRecord>>>,
+    /// Network fetches that completed (URL→variant/seg parsed at enqueue).
+    network_fetches: Arc<Mutex<HashSet<(usize, usize)>>>,
+    /// Reader-side reads (segment boundaries crossed in `read_at`).
+    reader_segments: Arc<Mutex<Vec<(usize, usize)>>>,
     switch_count: Arc<AtomicUsize>,
 }
 
 impl EventCollector {
     fn new(bus: &EventBus) -> Self {
-        let segments: Arc<Mutex<Vec<SegmentRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        let network_fetches: Arc<Mutex<HashSet<(usize, usize)>>> =
+            Arc::new(Mutex::new(HashSet::new()));
+        let reader_segments: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
         let switch_count = Arc::new(AtomicUsize::new(0));
 
-        let seg_bg = Arc::clone(&segments);
+        let net_bg = Arc::clone(&network_fetches);
+        let read_bg = Arc::clone(&reader_segments);
         let sw_bg = Arc::clone(&switch_count);
         let mut rx = bus.subscribe();
         spawn(async move {
+            let mut request_map: HashMap<RequestId, (usize, usize)> = HashMap::new();
             while let Ok(ev) = rx.recv().await {
                 match &ev {
-                    Event::Hls(HlsEvent::SegmentComplete {
+                    Event::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id, url, ..
+                    }) => {
+                        if let Some(seg) = parse_segment_url(url.as_str()) {
+                            request_map.insert(*request_id, seg);
+                        }
+                    }
+                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                        if let Some(seg) = request_map.remove(request_id) {
+                            net_bg.lock_sync().insert(seg);
+                        }
+                    }
+                    Event::Hls(HlsEvent::SegmentReadStart {
                         variant,
                         segment_index,
-                        cached,
                         ..
                     }) => {
-                        seg_bg.lock_sync().push(SegmentRecord {
-                            variant: *variant,
-                            segment_index: *segment_index,
-                            cached: *cached,
-                        });
+                        read_bg.lock_sync().push((*variant, *segment_index));
                     }
                     Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                         info!(to = to, ?reason, "VariantApplied");
@@ -109,13 +138,44 @@ impl EventCollector {
         });
 
         Self {
-            segments,
+            network_fetches,
+            reader_segments,
             switch_count,
         }
     }
 
+    /// Synthesised view: for every (variant, seg) the reader saw, decide
+    /// whether it came from the network (`RequestCompleted` seen) or from
+    /// the cache (no Completed event for that pair). Returns one record
+    /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
+    /// wins.
     fn segments(&self) -> Vec<SegmentRecord> {
-        self.segments.lock_sync().clone()
+        let net = self.network_fetches.lock_sync().clone();
+        let reads = self.reader_segments.lock_sync().clone();
+        let mut seen: HashSet<(usize, usize)> = HashSet::new();
+        let mut out = Vec::new();
+        for (v, s) in reads {
+            if !seen.insert((v, s)) {
+                continue;
+            }
+            out.push(SegmentRecord {
+                variant: v,
+                segment_index: s,
+                cached: !net.contains(&(v, s)),
+            });
+        }
+        // Network fetches that the reader never reached — also include
+        // them so per-variant-fetch counts stay correct.
+        for (v, s) in net {
+            if seen.insert((v, s)) {
+                out.push(SegmentRecord {
+                    variant: v,
+                    segment_index: s,
+                    cached: false,
+                });
+            }
+        }
+        out
     }
 
     fn switch_count(&self) -> usize {

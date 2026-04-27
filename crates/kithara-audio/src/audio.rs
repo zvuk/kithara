@@ -795,6 +795,7 @@ where
     ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
+        let hooks = shared_stream.take_reader_hooks();
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
@@ -802,6 +803,7 @@ where
             pcm_pool: Some(pcm_pool),
             byte_pool: Some(byte_pool),
             stream_ctx: Some(stream_ctx),
+            hooks,
             ..Default::default()
         };
         let hint_for_decoder = hint;
@@ -876,6 +878,7 @@ where
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
             let current_epoch = factory_epoch.load(Ordering::Acquire);
+            let hooks = stream.take_reader_hooks();
             let config = kithara_decode::DecoderConfig {
                 prefer_hardware,
                 byte_len_handle: Some(Arc::clone(&factory_byte_len)),
@@ -883,6 +886,7 @@ where
                 byte_pool: Some(factory_byte_pool.clone()),
                 stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
                 epoch: current_epoch,
+                hooks,
                 ..Default::default()
             };
             let make_source = || OffsetReader::new(stream.clone(), base_offset);

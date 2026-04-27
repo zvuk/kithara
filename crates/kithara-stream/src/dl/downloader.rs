@@ -79,6 +79,26 @@ pub(super) struct DownloaderInner {
     /// `register()` and fetch-completion hooks call
     /// `controller.record_bandwidth(...)` automatically.
     pub(super) abr: Arc<AbrController>,
+    /// Monotonic source of [`kithara_events::RequestId`]s assigned to
+    /// every command this Downloader accepts. Starts at 1 (`NonZero`
+    /// invariant); never wraps in practice (`u64`).
+    next_request_id: std::sync::atomic::AtomicU64,
+}
+
+impl DownloaderInner {
+    /// Allocate a fresh [`kithara_events::RequestId`].
+    pub(super) fn next_request_id(&self) -> kithara_events::RequestId {
+        let raw = self
+            .next_request_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Safety: `next_request_id` is initialised at 1, fetch_add returns
+        // the prior value and then increments — so `raw` is always >= 1
+        // and never zero in practice. We also guard with a `max(1)` to
+        // satisfy the NonZeroU64 invariant defensively.
+        let nz = std::num::NonZeroU64::new(raw.max(1))
+            .expect("next_request_id starts at 1, fetch_add never yields 0");
+        kithara_events::RequestId::new(nz)
+    }
 }
 
 impl Downloader {
@@ -114,6 +134,7 @@ impl Downloader {
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
                 abr,
+                next_request_id: std::sync::atomic::AtomicU64::new(1),
             }),
         }
     }

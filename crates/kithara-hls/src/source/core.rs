@@ -13,6 +13,7 @@ use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
 use kithara_stream::Timeline;
+use tracing::trace;
 
 use crate::{
     coord::HlsCoord,
@@ -268,12 +269,30 @@ impl HlsSource {
         seek_epoch: u64,
     ) -> bool {
         if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+            trace!(
+                target: "hls_seek_diag",
+                range_start,
+                seek_epoch,
+                variant,
+                segment_index,
+                via = "layout_segment_for_offset",
+                "queue_segment_request_for_offset: enqueue"
+            );
             self.push_segment_request(variant, segment_index, seek_epoch);
             return true;
         }
         let variant = self.resolve_current_variant();
         // Exact resolution: committed data or playlist metadata.
         if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
+            trace!(
+                target: "hls_seek_diag",
+                range_start,
+                seek_epoch,
+                variant,
+                segment_index,
+                via = "committed_segment_for_offset",
+                "queue_segment_request_for_offset: enqueue"
+            );
             self.push_segment_request(variant, segment_index, seek_epoch);
             return true;
         }
@@ -281,9 +300,24 @@ impl HlsSource {
             .playlist_state
             .find_segment_at_offset(variant, range_start)
         {
+            trace!(
+                target: "hls_seek_diag",
+                range_start,
+                seek_epoch,
+                variant,
+                segment_index,
+                via = "playlist.find_segment_at_offset",
+                "queue_segment_request_for_offset: enqueue"
+            );
             self.push_segment_request(variant, segment_index, seek_epoch);
             return true;
         }
+        trace!(
+            target: "hls_seek_diag",
+            range_start,
+            seek_epoch,
+            "queue_segment_request_for_offset: no resolution (size map not ready)"
+        );
         // No resolution path found — size map not ready yet.
         // The caller's condvar loop will retry once the scheduler
         // commits data and notifies.

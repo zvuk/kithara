@@ -322,6 +322,22 @@ pub trait Source: Send + 'static {
     ///
     /// Default no-op for sources that do not need post-seek reconciliation.
     fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
+
+    /// Build a fresh reader-side hooks instance.
+    ///
+    /// Returned by Source-impls that want to expose reader-side events
+    /// (`HlsSource`, `FileSource`). The audio pipeline takes the hook
+    /// at decoder creation/recreation time and threads it into the
+    /// `HookedDecoder` wrapper. Default `None` keeps mock and test
+    /// sources unhooked.
+    ///
+    /// `take_*` is a misnomer: each call must return a **fresh** hook
+    /// instance, because decoder recreation (ABR / format change)
+    /// rebuilds the wrapper and the new hook needs a clean state
+    /// cursor.
+    fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks> {
+        None
+    }
 }
 
 #[cfg(test)]

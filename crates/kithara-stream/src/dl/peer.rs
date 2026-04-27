@@ -7,7 +7,7 @@ use std::{
 
 use futures::future::join_all;
 use kithara_abr::{Abr, AbrHandle, AbrPeerId};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, RequestPriority};
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, RwLock,
@@ -15,11 +15,7 @@ use kithara_platform::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    cmd::{FetchCmd, Priority},
-    downloader::DownloaderInner,
-    response::FetchResponse,
-};
+use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
 
 /// Protocol-agnostic contract for download orchestration.
 ///
@@ -34,8 +30,8 @@ use super::{
 /// closures in [`FetchCmd`].
 pub trait Peer: Abr {
     /// Peer-level priority. `High` = active playback track.
-    fn priority(&self) -> Priority {
-        Priority::Low
+    fn priority(&self) -> RequestPriority {
+        RequestPriority::Low
     }
 
     /// Yield the next batch of commands for the Downloader to execute.
@@ -59,20 +55,41 @@ pub(super) enum ResponseTarget {
     Streaming,
 }
 
+/// Pair of an [`InternalCmd`] and the **peer-level** cancel token used
+/// to discriminate `CancelReason` later in `deliver`.
+///
+/// The peer-level token lives in [`PeerInner::cancel`] (and the
+/// Registry's `PeerEntry::peer_cancel`). Carrying a clone alongside
+/// the cmd through the slot queue lets the spawned fetch task report
+/// `CancelReason::PeerCancel` without holding a reference back into
+/// the Registry.
+pub(super) struct SlotEntry {
+    pub(super) cmd: InternalCmd,
+    pub(super) peer_cancel: CancellationToken,
+}
+
 /// Per-peer command sent through the channel to the downloader loop.
 pub(super) struct InternalCmd {
     pub(super) cmd: FetchCmd,
     pub(super) cancel: CancelGroup,
-    pub(super) priority: Priority,
+    pub(super) priority: RequestPriority,
     pub(super) response: ResponseTarget,
     /// Arena index of the owning peer. `None` when sent from `PeerHandle`
     /// (filled in by Registry on receipt).
     pub(super) peer: Option<thunderdome::Index>,
     /// Bus of the peer that issued this command. Downloader publishes
-    /// per-fetch `DownloaderEvent`s here (currently `LoadSlow`).
+    /// per-fetch `DownloaderEvent`s here.
     pub(super) bus: Option<EventBus>,
     /// ABR peer identifier for bandwidth accounting after fetch completes.
     pub(super) peer_id: AbrPeerId,
+    /// Stable id allocated by the Downloader on enqueue. Carried in
+    /// every `DownloaderEvent` for this fetch's lifecycle so subscribers
+    /// can correlate Enqueued → Started → Completed/Failed/Cancelled.
+    pub(super) request_id: kithara_events::RequestId,
+    /// Wall-clock instant the cmd was placed into a priority slot.
+    /// Used to compute `RequestStarted::wait_in_queue` later in the
+    /// pipeline.
+    pub(super) enqueued_at: kithara_platform::time::Instant,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
@@ -192,14 +209,18 @@ impl PeerHandle {
     ) {
         let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
         let (resp_tx, resp_rx) = oneshot::channel();
+        let request_id = self.inner._pool.next_request_id();
+        let enqueued_at = kithara_platform::time::Instant::now();
         let internal = InternalCmd {
             cmd,
             cancel,
-            priority: Priority::High,
+            priority: RequestPriority::High,
             response: ResponseTarget::Channel(resp_tx),
             peer: None,
             bus,
             peer_id,
+            request_id,
+            enqueued_at,
         };
         (internal, resp_rx)
     }

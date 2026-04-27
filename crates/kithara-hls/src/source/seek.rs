@@ -134,6 +134,17 @@ impl HlsSource {
         let seek_epoch = self.coord.timeline().seek_epoch();
         let previous_hint = self.current_segment_index().unwrap_or(0);
 
+        trace!(
+            target: "hls_seek_diag",
+            seek_epoch,
+            variant,
+            target_segment_index = segment_index,
+            target_byte_offset = anchor.byte_offset,
+            previous_hint,
+            layout = ?layout,
+            "apply_seek_plan: enter"
+        );
+
         // Always: drain stale requests. The authoritative post-seek demand
         // is issued later from `commit_seek_landing(...)` once the decoder
         // tells us where it actually landed.

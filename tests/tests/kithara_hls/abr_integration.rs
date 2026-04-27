@@ -52,7 +52,7 @@ fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<
 
 // Test Cases
 
-/// `AbrMode::Manual(idx)` is just a stateless enum payload — AbrController
+/// `AbrMode::Manual(idx)` is just a stateless enum payload — `AbrController`
 /// constructs and holds settings; actual decisions are covered in the
 /// scheduler / integration tests. We only verify the controller builds
 /// successfully for a range of selector indices (including out-of-bounds).

@@ -7,7 +7,7 @@
 use kithara_abr::Abr;
 use kithara_stream::{
     Timeline,
-    dl::{Peer, Priority},
+    dl::{Peer, RequestPriority},
 };
 
 pub(crate) struct FilePeer {
@@ -28,14 +28,14 @@ impl Abr for FilePeer {
 }
 
 impl Peer for FilePeer {
-    /// Priority reflects the audio FSM's decode-activity flag on the
+    /// `RequestPriority` reflects the audio FSM's decode-activity flag on the
     /// shared `Timeline`. Cheap, lock-free — called by Registry on
     /// every `poll_peers` pass.
-    fn priority(&self) -> Priority {
+    fn priority(&self) -> RequestPriority {
         if self.timeline.is_playing() {
-            Priority::High
+            RequestPriority::High
         } else {
-            Priority::Low
+            RequestPriority::Low
         }
     }
 }

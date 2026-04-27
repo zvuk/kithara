@@ -21,8 +21,8 @@
 //!   1. Inside the body: `_kithara_env_guard` acquired — takes
 //!      `kithara_platform::test_env_lock()` (a global `std::sync::Mutex<()>`
 //!      shared by **every** `env(...)` test in the process) and saves
-//!      previous values for up to 7 vars (NO_PROXY, HTTP_PROXY,
-//!      HTTPS_PROXY, ALL_PROXY, http_proxy, https_proxy, all_proxy).
+//!      previous values for up to 7 vars (`NO_PROXY`, `HTTP_PROXY`,
+//!      `HTTPS_PROXY`, `ALL_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`).
 //!
 //!   2. `wrap_with_timeout` (sync branch,
 //!      `crates/kithara-test-macros/src/lib.rs:422-459`) spawns a fresh

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kithara::abr::AbrMode;
-use kithara_events::{AbrEvent, AudioEvent, Event, FileEvent, HlsEvent};
+use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -124,16 +124,17 @@ impl ItemEventBridge {
     fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
         let duration_seconds = duration_seconds?;
         match event {
-            Event::File(FileEvent::DownloadProgress {
-                offset,
+            // Bytes consumed by the reader. Reader-side proxy for
+            // "the player has data up to this point". Not sink-truth.
+            Event::File(FileEvent::ReadProgress {
+                position,
                 total: Some(total),
             })
-            | Event::Hls(HlsEvent::DownloadProgress {
-                offset,
+            | Event::Hls(HlsEvent::ReadProgress {
+                position,
                 total: Some(total),
-            }) => Self::scaled_seconds(*offset, *total, duration_seconds),
-            Event::File(FileEvent::DownloadComplete { .. })
-            | Event::Hls(HlsEvent::DownloadComplete { .. }) => Some(duration_seconds),
+            }) => Self::scaled_seconds(*position, *total, duration_seconds),
+            Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => Some(duration_seconds),
             _ => None,
         }
     }
@@ -221,12 +222,17 @@ impl ItemEventBridge {
 
     fn error_from_event(event: &Event) -> Option<FfiError> {
         match event {
-            Event::File(FileEvent::DownloadError { error })
-            | Event::File(FileEvent::Error { error, .. })
-            | Event::Hls(HlsEvent::DownloadError { error })
-            | Event::Hls(HlsEvent::Error { error, .. }) => Some(FfiError::ItemFailed {
-                reason: error.clone(),
+            Event::File(FileEvent::Error { error }) => Some(FfiError::ItemFailed {
+                reason: error.to_string(),
             }),
+            Event::Hls(HlsEvent::Error { error }) => Some(FfiError::ItemFailed {
+                reason: error.to_string(),
+            }),
+            Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
+                Some(FfiError::ItemFailed {
+                    reason: error.to_string(),
+                })
+            }
             _ => None,
         }
     }
@@ -240,7 +246,7 @@ impl Drop for ItemEventBridge {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, FileEvent};
+    use kithara_events::{Event, FileError, FileEvent};
 
     use super::ItemEventBridge;
     use crate::types::FfiError;
@@ -258,9 +264,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn file_download_progress_maps_to_buffered_seconds() {
-        let event = Event::File(FileEvent::DownloadProgress {
-            offset: 50,
+    fn file_read_progress_maps_to_buffered_seconds() {
+        let event = Event::File(FileEvent::ReadProgress {
+            position: 50,
             total: Some(100),
         });
         let buffered = ItemEventBridge::buffered_seconds_from_event(&event, Some(12.0));
@@ -269,13 +275,13 @@ mod tests {
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
-        let event = Event::File(FileEvent::DownloadError {
-            error: "boom".into(),
+        let event = Event::File(FileEvent::Error {
+            error: FileError::Io("boom".into()),
         });
         let error = ItemEventBridge::error_from_event(&event);
         assert!(matches!(
             error,
-            Some(FfiError::ItemFailed { reason }) if reason == "boom"
+            Some(FfiError::ItemFailed { reason }) if reason == "io: boom"
         ));
     }
 }

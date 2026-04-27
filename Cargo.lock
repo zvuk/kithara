@@ -4106,11 +4106,13 @@ dependencies = [
  "delegate",
  "derivative",
  "kithara-events",
+ "kithara-net",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "portable-atomic",
  "smallvec",
+ "url",
  "wasm-bindgen-test",
 ]
 

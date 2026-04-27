@@ -1,6 +1,6 @@
 //! Reproduces the user-reported cold-cache mid-track seek hang against
 //! a local `PackagedTestServer` — the whole production pipeline (Queue,
-//! PlayerImpl, OfflineBackend) end-to-end, no real network.
+//! `PlayerImpl`, `OfflineBackend`) end-to-end, no real network.
 //!
 //! Scenario: two HLS tracks, caller selects the second, plays briefly,
 //! then seeks to the middle of an uncached range. The test asserts the

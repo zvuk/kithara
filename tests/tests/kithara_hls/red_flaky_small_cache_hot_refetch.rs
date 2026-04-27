@@ -7,7 +7,7 @@
 //! Observed pattern (from `.docs/test-run-rc2-fix1.log`):
 //!   * 37 segments commit in rapid succession (variant 0).
 //!   * LRU (cap=4) evicts segments the reader has NOT yet read because
-//!     the reader is stuck inside segment 0 at byte ~31_744 waiting for
+//!     the reader is stuck inside segment 0 at byte ~`31_744` waiting for
 //!     segment 0 to be `range_ready`.
 //!   * `rewind_to_first_missing_segment` clamps by `reader_segment_floor()`,
 //!     which returns 0 because the reader's `byte_position` never advanced
