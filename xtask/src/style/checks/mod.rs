@@ -14,6 +14,7 @@ use super::config::StyleConfig;
 use crate::common::violation::Violation;
 
 pub(crate) mod const_locality;
+pub(crate) mod struct_field_order;
 
 #[expect(dead_code, reason = "fields consumed by upcoming style checks")]
 pub(crate) struct Context<'a> {
@@ -28,5 +29,8 @@ pub(crate) trait Check {
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
-    vec![Box::new(const_locality::ConstLocality)]
+    vec![
+        Box::new(const_locality::ConstLocality),
+        Box::new(struct_field_order::StructFieldOrder),
+    ]
 }
