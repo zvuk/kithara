@@ -28,6 +28,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) struct_field_order: StructFieldOrderConfig,
     #[serde(default)]
     pub(crate) trait_item_order: TraitItemOrderConfig,
+    #[serde(default)]
+    pub(crate) struct_init_order: StructInitOrderConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +102,27 @@ fn default_trait_apply_to() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StructInitOrderConfig {
+    /// Whether shorthand fields (`Foo { x, y, .. }`) must precede explicit
+    /// fields (`Foo { z: expr }`).
+    #[serde(default = "default_shorthand_first")]
+    pub(crate) shorthand_first: bool,
+}
+
+impl Default for StructInitOrderConfig {
+    fn default() -> Self {
+        Self {
+            shorthand_first: default_shorthand_first(),
+        }
+    }
+}
+
+fn default_shorthand_first() -> bool {
+    true
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>

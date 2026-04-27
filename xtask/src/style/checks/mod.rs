@@ -15,6 +15,7 @@ use crate::common::violation::Violation;
 
 pub(crate) mod const_locality;
 pub(crate) mod struct_field_order;
+pub(crate) mod struct_init_order;
 pub(crate) mod trait_item_order;
 
 #[expect(dead_code, reason = "fields consumed by upcoming style checks")]
@@ -34,5 +35,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(const_locality::ConstLocality),
         Box::new(struct_field_order::StructFieldOrder),
         Box::new(trait_item_order::TraitItemOrder),
+        Box::new(struct_init_order::StructInitOrder),
     ]
 }
