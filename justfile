@@ -107,6 +107,9 @@ test-e2e *ARGS:
 test-selenium *ARGS:
     cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
 
+# Convenience: workspace tests + doc-tests in one run.
+test-all: test test-doc
+
 # --- ast-grep policy ---
 
 [private]

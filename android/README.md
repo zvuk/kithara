@@ -202,7 +202,7 @@ cd android
 Builds the Rust core for all supported ABIs and packages it into a release AAR:
 
 ```bash
-just android-aar
+just android aar
 ```
 
 Output: `android/lib/build/outputs/aar/lib-release.aar` with JNI slices for:
