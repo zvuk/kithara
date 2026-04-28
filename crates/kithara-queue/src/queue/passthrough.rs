@@ -2,7 +2,8 @@
 //! Pure delegation; no queue-level logic.
 
 use delegate::delegate;
-use kithara_play::PlayError;
+use kithara_events::EventBus;
+use kithara_play::{PlayError, PlayerStatus};
 
 use super::Queue;
 
@@ -21,6 +22,9 @@ impl Queue {
             pub fn crossfade_duration(&self) -> f32;
             /// Set the crossfade duration.
             pub fn set_crossfade_duration(&self, seconds: f32);
+            /// Live engine playback rate (player-reported, 0.0 when paused).
+            #[must_use]
+            pub fn rate(&self) -> f32;
             /// Default playback rate.
             #[must_use]
             pub fn default_rate(&self) -> f32;
@@ -36,6 +40,9 @@ impl Queue {
             pub fn is_muted(&self) -> bool;
             /// Set the mute flag.
             pub fn set_muted(&self, muted: bool);
+            /// Live engine playback status.
+            #[must_use]
+            pub fn status(&self) -> PlayerStatus;
             /// Number of EQ bands.
             #[must_use]
             pub fn eq_band_count(&self) -> usize;
@@ -55,6 +62,14 @@ impl Queue {
             /// Current track duration in seconds.
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;
+            /// Underlying [`EventBus`]. FFI/TUI bridges use `.scoped()` /
+            /// `.clone()` to wire their own subscriptions; typical callers
+            /// should prefer [`Self::subscribe`].
+            #[must_use]
+            pub fn bus(&self) -> &EventBus;
+            /// Drain pending player-side notifications. Called by FFI tick
+            /// loops after [`Self::tick`].
+            pub fn process_notifications(&self);
         }
     }
 }

@@ -96,9 +96,9 @@ impl EventBridge {
                 // `CurrentItemChanged` into QueueEvents for consistent
                 // handling below.
                 let _ = queue.tick();
-                queue.player().process_notifications();
+                queue.process_notifications();
                 let time = queue.position_seconds();
-                let duration = queue.player().duration_seconds();
+                let duration = queue.duration_seconds();
 
                 match time {
                     Some(t)

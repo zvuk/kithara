@@ -1,10 +1,7 @@
 //! Read-only API + navigation passthroughs (`subscribe`, `len`, `current`,
 //! `tracks`, `repeat_mode`, …). No state mutation lives here.
 
-use std::sync::Arc;
-
 use kithara_events::{EventReceiver, TrackId};
-use kithara_play::PlayerImpl;
 
 use super::Queue;
 use crate::{navigation::RepeatMode, track::TrackEntry};
@@ -49,13 +46,6 @@ impl Queue {
     #[must_use]
     pub fn len(&self) -> usize {
         self.lock_tracks().len()
-    }
-
-    /// Escape hatch — direct access to the underlying [`PlayerImpl`]. iOS /
-    /// Android SDK bindings should not need this.
-    #[must_use]
-    pub fn player(&self) -> &Arc<PlayerImpl> {
-        &self.player
     }
 
     /// Current repeat mode.

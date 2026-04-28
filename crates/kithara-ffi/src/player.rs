@@ -337,7 +337,7 @@ impl AudioPlayer {
     }
 
     pub fn rate(&self) -> f32 {
-        self.queue.player().rate()
+        self.queue.rate()
     }
 
     pub fn volume(&self) -> f32 {
@@ -386,15 +386,17 @@ impl AudioPlayer {
     /// Return a snapshot of the player's current state.
     #[must_use]
     pub fn snapshot(&self) -> FfiPlayerSnapshot {
-        let player = self.queue.player();
+        // `Queue::position_seconds` returns the cached, transient-zero-filtered
+        // value updated on every `tick()`; the live engine value would flash
+        // back to 0.0 on pause/resume.
         FfiPlayerSnapshot {
-            status: FfiPlayerStatus::from(player.status()),
-            current_time: player.position_seconds(),
-            duration: player.duration_seconds(),
-            rate: player.rate(),
-            default_rate: player.default_rate(),
-            volume: player.volume(),
-            muted: player.is_muted(),
+            status: FfiPlayerStatus::from(self.queue.status()),
+            current_time: self.queue.position_seconds(),
+            duration: self.queue.duration_seconds(),
+            rate: self.queue.rate(),
+            default_rate: self.queue.default_rate(),
+            volume: self.queue.volume(),
+            muted: self.queue.is_muted(),
         }
     }
 
@@ -447,7 +449,7 @@ impl AudioPlayer {
             config = config.with_headers(headers.into());
         }
 
-        let scoped = self.queue.player().bus().scoped();
+        let scoped = self.queue.bus().scoped();
         config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
 

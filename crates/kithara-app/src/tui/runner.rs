@@ -35,7 +35,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     queue.set_tracks(crate::sources::build_sources(config));
 
     let event_rx = queue.subscribe();
-    let bus = queue.player().bus().clone();
+    let bus = queue.bus().clone();
 
     let queue_for_loop = Arc::clone(&queue);
     let mut ui_handle =
