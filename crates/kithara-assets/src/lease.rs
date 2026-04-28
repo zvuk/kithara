@@ -367,7 +367,17 @@ where
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        if let Some(live) = self.live.lock_sync().get(key).and_then(Weak::upgrade) {
+        // The `Arc<LiveResource>` upgraded out of `self.live` must NOT drop
+        // while the registry mutex is still held: `LiveResource::Drop` re-locks
+        // the same mutex, and parking_lot's `Mutex` is non-reentrant — that
+        // path self-deadlocks the calling thread, which in turn freezes the
+        // tokio runtime shutdown and trips the test-macro hard-timeout
+        // watchdog (process::abort → SIGABRT) under `just test` contention.
+        // Bind the upgrade through a separate `let` so the guard temporary
+        // is dropped at the end of this statement, before any potential
+        // Arc-drop in the body below.
+        let live = self.live.lock_sync().get(key).and_then(Weak::upgrade);
+        if let Some(live) = live {
             return Ok(live.snapshot());
         }
         self.inner.resource_state(key)
