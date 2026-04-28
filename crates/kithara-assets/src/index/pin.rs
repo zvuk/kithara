@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
+    num::NonZeroU32,
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
@@ -19,15 +20,20 @@ use crate::error::{AssetsError, AssetsResult};
 ///
 /// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex):
 /// the `Arc` is encapsulated **inside** the type, [`Clone`] is cheap
-/// (atomic refcount bump), every mutation immediately flushes to the
-/// optional disk-backed [`Atomic`] tempfile.
+/// (atomic refcount bump), every mutation that crosses the
+/// pinned/unpinned boundary immediately flushes to the optional
+/// disk-backed [`Atomic`] tempfile.
+///
+/// Each `asset_root` is tracked by a refcount: concurrent leases on the
+/// same root increment it, drops decrement it. The on-disk pinned set
+/// only changes (and only flushes) on the 0→1 and 1→0 transitions —
+/// intermediate increments/decrements are pure in-memory updates.
 ///
 /// Persistence is **lazy**: the disk file is materialised only on the
 /// first [`Self::flush`]. A pre-existing on-disk file from a previous
 /// run is opened eagerly during [`Self::with_persist_at`] for
 /// hydration, but a fresh build does not touch the filesystem until a
-/// real pin/unpin happens. This matches the documented contract on
-/// `_index/pins.bin` ("yes, every pin/unpin").
+/// real pin/unpin transition happens.
 ///
 /// Three call-sites share a single instance per `cache_dir`:
 ///   * `LeaseAssets` (pin/unpin on resource lifecycle),
@@ -48,7 +54,7 @@ impl std::fmt::Debug for PinsIndex {
 }
 
 struct PinsInner {
-    pins: Mutex<HashSet<String>>,
+    pins: Mutex<HashMap<String, NonZeroU32>>,
     persist: Option<PinsPersist>,
 }
 
@@ -66,7 +72,7 @@ impl PinsIndex {
     pub(crate) fn ephemeral() -> Self {
         Self {
             inner: Arc::new(PinsInner {
-                pins: Mutex::new(HashSet::new()),
+                pins: Mutex::new(HashMap::new()),
                 persist: None,
             }),
         }
@@ -101,49 +107,79 @@ impl PinsIndex {
         }
     }
 
-    /// Snapshot of currently pinned `asset_root`s.
+    /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
     pub(crate) fn snapshot(&self) -> HashSet<String> {
-        self.inner.pins.lock_sync().clone()
+        self.inner.pins.lock_sync().keys().cloned().collect()
     }
 
-    /// Pin an `asset_root`. Returns `true` if newly pinned.
+    /// Pin an `asset_root`. Returns `true` on the 0→1 transition (newly pinned),
+    /// `false` when an existing pin's refcount was incremented.
     ///
-    /// Disk-backed instances flush the snapshot synchronously before
-    /// returning; an `Err` here means the pin is **not** durable.
-    /// Ephemeral instances cannot fail.
+    /// Disk-backed instances flush the snapshot synchronously on the 0→1
+    /// transition only; intermediate refcount increments stay in-memory.
+    /// An `Err` here means the pin is **not** durable. Ephemeral instances
+    /// cannot fail.
     ///
     /// # Errors
     ///
     /// Propagates the underlying [`AssetsError`] when the on-disk
     /// flush fails (mmap open, atomic swap, rkyv serialise).
     pub(crate) fn add(&self, asset_root: &str) -> AssetsResult<bool> {
-        let inserted = self.inner.pins.lock_sync().insert(asset_root.to_string());
-        if inserted {
+        use std::collections::hash_map::Entry;
+        let transitioned = match self.inner.pins.lock_sync().entry(asset_root.to_string()) {
+            Entry::Occupied(mut e) => {
+                let count = e.get_mut();
+                *count = count.saturating_add(1);
+                false
+            }
+            Entry::Vacant(e) => {
+                e.insert(NonZeroU32::MIN);
+                true
+            }
+        };
+        if transitioned {
             self.flush()?;
         }
-        Ok(inserted)
+        Ok(transitioned)
     }
 
-    /// Unpin an `asset_root`. Returns `true` if was previously pinned.
+    /// Unpin an `asset_root`. Returns `true` on the 1→0 transition (entry
+    /// removed), `false` when the refcount was decremented but the asset
+    /// is still pinned by other holders or was not pinned at all.
     ///
-    /// Same durability contract as [`Self::add`].
+    /// Same durability contract as [`Self::add`]: flush only fires on
+    /// 1→0 transitions.
     ///
     /// # Errors
     ///
     /// Propagates the underlying [`AssetsError`] when the on-disk
     /// flush fails.
     pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
-        let removed = self.inner.pins.lock_sync().remove(asset_root);
-        if removed {
+        let transitioned = {
+            let mut pins = self.inner.pins.lock_sync();
+            let next = pins.get(asset_root).map(|c| NonZeroU32::new(c.get() - 1));
+            match next {
+                None => false, // not pinned: no-op
+                Some(Some(decremented)) => {
+                    pins.insert(asset_root.to_string(), decremented);
+                    false
+                }
+                Some(None) => {
+                    pins.remove(asset_root);
+                    true
+                }
+            }
+        };
+        if transitioned {
             self.flush()?;
         }
-        Ok(removed)
+        Ok(transitioned)
     }
 
     /// Whether `asset_root` is currently pinned.
     #[cfg(test)]
     pub(crate) fn contains(&self, asset_root: &str) -> bool {
-        self.inner.pins.lock_sync().contains(asset_root)
+        self.inner.pins.lock_sync().contains_key(asset_root)
     }
 
     /// Persist the in-memory snapshot to disk (best-effort).
@@ -159,7 +195,7 @@ impl PinsIndex {
         let Some(persist) = self.inner.persist.as_ref() else {
             return Ok(());
         };
-        let snapshot = self.inner.pins.lock_sync().clone();
+        let snapshot: Vec<String> = self.inner.pins.lock_sync().keys().cloned().collect();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_pins(atomic, &snapshot)
     }
@@ -169,10 +205,10 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancellationToken,
     pool: &BytePool,
-) -> (HashSet<String>, Option<Atomic<MmapResource>>) {
+) -> (HashMap<String, NonZeroU32>, Option<Atomic<MmapResource>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
-        return (HashSet::new(), None);
+        return (HashMap::new(), None);
     }
     match persist::open_existing(path, cancel) {
         Ok(res) => {
@@ -182,17 +218,20 @@ fn hydrate_existing(
         }
         Err(e) => {
             tracing::debug!("open existing pins.bin failed: {e}");
-            (HashSet::new(), None)
+            (HashMap::new(), None)
         }
     }
 }
 
-fn read_pins(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<HashSet<String>> {
+fn read_pins(
+    res: &Atomic<MmapResource>,
+    pool: &BytePool,
+) -> AssetsResult<HashMap<String, NonZeroU32>> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
 
     if n == 0 {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
 
     let archived = match rkyv::access::<super::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(
@@ -201,20 +240,23 @@ fn read_pins(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<HashSe
         Ok(a) => a,
         Err(e) => {
             tracing::debug!("Failed to validate pins index: {}", e);
-            return Ok(HashSet::new());
+            return Ok(HashMap::new());
         }
     };
 
-    let mut pinned = HashSet::new();
+    // Hydrating from disk: every persisted pin starts at refcount 1. The disk
+    // format only records the pinned set (not refcounts) — fresh leases will
+    // re-increment as they take their guards.
+    let mut pinned = HashMap::new();
     for (k, v) in archived.pinned.iter() {
         if *v {
-            pinned.insert(k.as_str().to_string());
+            pinned.insert(k.as_str().to_string(), NonZeroU32::MIN);
         }
     }
     Ok(pinned)
 }
 
-fn write_pins(res: &Atomic<MmapResource>, pins: &HashSet<String>) -> AssetsResult<()> {
+fn write_pins(res: &Atomic<MmapResource>, pins: &[String]) -> AssetsResult<()> {
     let mut map = BTreeMap::new();
     for pin in pins {
         map.insert(pin.clone(), true);
@@ -259,20 +301,84 @@ mod tests {
         let idx =
             PinsIndex::with_persist_at(path.clone(), CancellationToken::new(), crate::byte_pool());
 
-        assert!(idx.add("asset_a").unwrap());
+        assert!(idx.add("asset_a").unwrap(), "first pin reports 0→1");
         assert!(path.exists(), "first add must materialise pins.bin");
-        assert!(idx.add("asset_b").unwrap());
+        assert!(idx.add("asset_b").unwrap(), "fresh root reports 0→1");
         assert!(
             !idx.add("asset_a").unwrap(),
-            "duplicate add should report false"
+            "second add of same root reports refcount-only update"
         );
         assert!(idx.contains("asset_a"));
         assert_eq!(idx.snapshot().len(), 2);
 
+        // asset_a refcount is 2; the first remove only decrements.
+        assert!(
+            !idx.remove("asset_a").unwrap(),
+            "decrement-only remove must not signal a 1→0 transition"
+        );
+        assert!(
+            idx.contains("asset_a"),
+            "still pinned by remaining refcount"
+        );
+        // The second remove crosses 1→0.
         assert!(idx.remove("asset_a").unwrap());
-        assert!(!idx.remove("asset_a").unwrap());
         assert!(!idx.contains("asset_a"));
+        // Removing an already-unpinned root is a no-op.
+        assert!(!idx.remove("asset_a").unwrap());
         assert!(idx.contains("asset_b"));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn refcount_coalesces_repeated_pins() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx =
+            PinsIndex::with_persist_at(path.clone(), CancellationToken::new(), crate::byte_pool());
+
+        // 5 adds: only the first crosses 0→1.
+        let mut transitions_in = 0;
+        for _ in 0..5 {
+            if idx.add("hot_asset").unwrap() {
+                transitions_in += 1;
+            }
+        }
+        assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
+        assert!(idx.contains("hot_asset"));
+
+        // 4 removes: refcount 5→1, no transition.
+        let mut transitions_out = 0;
+        for _ in 0..4 {
+            if idx.remove("hot_asset").unwrap() {
+                transitions_out += 1;
+            }
+        }
+        assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
+        assert!(idx.contains("hot_asset"), "refcount=1 keeps the pin alive");
+
+        // Final remove crosses 1→0.
+        assert!(idx.remove("hot_asset").unwrap());
+        assert!(!idx.contains("hot_asset"));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn concurrent_leases_keep_pin_alive() {
+        // Models the HLS pattern where multiple resources of the same
+        // asset_root are leased concurrently. Dropping one lease must
+        // not unpin the asset while others are still alive.
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), crate::byte_pool());
+
+        idx.add("playlist").unwrap(); // resource 1
+        idx.add("playlist").unwrap(); // resource 2
+
+        // Drop resource 1 → refcount 2→1, asset still pinned by resource 2.
+        assert!(!idx.remove("playlist").unwrap());
+        assert!(idx.contains("playlist"));
+
+        // Drop resource 2 → refcount 1→0, finally unpinned.
+        assert!(idx.remove("playlist").unwrap());
+        assert!(!idx.contains("playlist"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
