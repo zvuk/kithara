@@ -13,30 +13,25 @@
 //!
 //! The consumer-facing trait is [`ResourceExt`].
 
-mod atomic;
-mod atomic_chunked;
-mod driver;
+mod backend;
+mod decorator;
 mod error;
-mod memory;
-#[cfg(not(target_arch = "wasm32"))]
-mod mmap;
 mod resource;
 mod unified;
 
 #[cfg(feature = "internal")]
 pub mod internal;
-
-pub use atomic::Atomic;
-#[cfg(not(target_arch = "wasm32"))]
-pub use atomic::AtomicMmap;
-pub use atomic_chunked::{AtomicChunked, OpenIntent};
-pub use driver::{AvailabilityObserver, Driver, DriverIo, Resource};
-pub use error::{StorageError, StorageResult};
-pub use memory::{MemDriver, MemOptions, MemResource};
-#[cfg(not(target_arch = "wasm32"))]
-pub use mmap::{MmapDriver, MmapOptions, MmapResource};
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
+pub use backend::{
+    AvailabilityObserver, Driver, DriverIo, MemDriver, MemOptions, MemResource, Resource,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use backend::{MmapDriver, MmapOptions, MmapResource};
+#[cfg(not(target_arch = "wasm32"))]
+pub use decorator::AtomicMmap;
+pub use decorator::{Atomic, AtomicChunked, OpenIntent};
+pub use error::{StorageError, StorageResult};
 pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
 pub use unified::StorageResource;

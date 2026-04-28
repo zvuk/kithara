@@ -37,22 +37,22 @@ impl<R: ResourceExt> Atomic<R> {
 }
 
 impl<R: ResourceExt> ResourceExt for Atomic<R> {
-    delegate::delegate! {
-        to self.inner {
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
-            fn fail(&self, reason: String);
-            fn path(&self) -> Option<&Path>;
-            fn len(&self) -> Option<u64>;
-            fn status(&self) -> ResourceStatus;
-            fn reactivate(&self) -> StorageResult<()>;
-        }
-    }
-
     fn write_all(&self, data: &[u8]) -> StorageResult<()> {
         self.write_all_inner(data, false)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+            fn fail(&self, reason: String);
+            fn len(&self) -> Option<u64>;
+            fn path(&self) -> Option<&Path>;
+            fn reactivate(&self) -> StorageResult<()>;
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn status(&self) -> ResourceStatus;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 }
 

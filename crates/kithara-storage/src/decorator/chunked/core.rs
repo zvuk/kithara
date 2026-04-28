@@ -56,7 +56,7 @@ use crate::{
 /// Build the temp-file companion path for atomic chunked commits:
 /// `segments/0001.bin` → `segments/0001.bin.tmp`. Sibling in the
 /// same directory so `rename` is atomic on the same filesystem.
-fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
+pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
     let parent = canonical.parent()?;
     let name = canonical.file_name()?.to_str()?;
     Some(parent.join(format!("{name}.tmp")))
@@ -107,7 +107,6 @@ pub struct AtomicChunked<R: ResourceExt> {
     /// only held briefly to clone the Arc or to swap the inner on
     /// commit-rename.
     inner: Mutex<Arc<R>>,
-    canonical_path: PathBuf,
     /// `Some(<path>.tmp)` while writes are in flight; cleared on
     /// successful `commit`. `Drop` / `fail` use a still-set value to
     /// remove the orphaned temp file.
@@ -116,6 +115,7 @@ pub struct AtomicChunked<R: ResourceExt> {
     /// `None` when the wrapper was constructed in passthrough mode
     /// (no atomic rename to perform, no reopen needed).
     factory: Option<FactoryFn<R>>,
+    canonical_path: PathBuf,
 }
 
 impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
@@ -130,6 +130,17 @@ impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
 }
 
 impl<R: ResourceExt> AtomicChunked<R> {
+    /// Path the resource will land at on a successful commit.
+    pub fn canonical_path(&self) -> &Path {
+        &self.canonical_path
+    }
+
+    /// Clone the inner Arc — caller can call any `&self` method on
+    /// the returned handle without holding the outer mutex.
+    fn inner_clone(&self) -> Arc<R> {
+        Arc::clone(&self.inner.lock_sync())
+    }
+
     /// Open a fresh chunked-atomic resource at `canonical_path`.
     /// The provided `factory` opens the inner at a given filesystem
     /// path; it is called once with the temp path during this
@@ -157,8 +168,8 @@ impl<R: ResourceExt> AtomicChunked<R> {
         let _ = fs::remove_file(&tmp_path);
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
-            inner: Mutex::new(Arc::new(inner)),
             canonical_path,
+            inner: Mutex::new(Arc::new(inner)),
             tmp_path: Mutex::new(Some(tmp_path)),
             factory: Some(Box::new(factory)),
         })
@@ -170,62 +181,15 @@ impl<R: ResourceExt> AtomicChunked<R> {
     /// on disk.
     pub fn passthrough(inner: R, canonical_path: PathBuf) -> Self {
         Self {
-            inner: Mutex::new(Arc::new(inner)),
             canonical_path,
+            inner: Mutex::new(Arc::new(inner)),
             tmp_path: Mutex::new(None),
             factory: None,
         }
     }
-
-    /// Clone the inner Arc — caller can call any `&self` method on
-    /// the returned handle without holding the outer mutex.
-    fn inner_clone(&self) -> Arc<R> {
-        Arc::clone(&self.inner.lock_sync())
-    }
-
-    /// Path the resource will land at on a successful commit.
-    pub fn canonical_path(&self) -> &Path {
-        &self.canonical_path
-    }
 }
 
 impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.inner_clone().read_at(offset, buf)
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner_clone().write_at(offset, data)
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        // Don't hold the outer mutex across this potentially
-        // blocking call — clone the inner Arc and release the lock.
-        // Inner has its own Condvar for blocking-wake; the outer
-        // mutex is purely for swapping the inner on commit.
-        self.inner_clone().wait_range(range)
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.inner_clone().len()
-    }
-
-    fn status(&self) -> ResourceStatus {
-        self.inner_clone().status()
-    }
-
-    fn reactivate(&self) -> StorageResult<()> {
-        self.inner_clone().reactivate()
-    }
-
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        self.inner_clone().contains_range(range)
-    }
-
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.inner_clone().next_gap(from, limit)
-    }
-
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         // Step 1: finalize the inner on the tmp file. After this
         // call the inner is Committed and its mmap is RO on the tmp
@@ -271,11 +235,23 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
         Ok(())
     }
 
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.inner_clone().contains_range(range)
+    }
+
     fn fail(&self, reason: String) {
         self.inner_clone().fail(reason);
         if let Some(tmp) = self.tmp_path.lock_sync().take() {
             let _ = fs::remove_file(&tmp);
         }
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.inner_clone().len()
+    }
+
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        self.inner_clone().next_gap(from, limit)
     }
 
     fn path(&self) -> Option<&Path> {
@@ -284,6 +260,30 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
         // overridden because `inner.path()` would still return the
         // tmp path during the pre-commit window.
         Some(&self.canonical_path)
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        self.inner_clone().reactivate()
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.inner_clone().read_at(offset, buf)
+    }
+
+    fn status(&self) -> ResourceStatus {
+        self.inner_clone().status()
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        // Don't hold the outer mutex across this potentially
+        // blocking call — clone the inner Arc and release the lock.
+        // Inner has its own Condvar for blocking-wake; the outer
+        // mutex is purely for swapping the inner on commit.
+        self.inner_clone().wait_range(range)
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner_clone().write_at(offset, data)
     }
 }
 
@@ -296,170 +296,5 @@ impl<R: ResourceExt> Drop for AtomicChunked<R> {
         if let Some(tmp) = self.tmp_path.lock_sync().take() {
             let _ = fs::remove_file(&tmp);
         }
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
-
-    use kithara_platform::time::Duration;
-    use tempfile::TempDir;
-    use tokio_util::sync::CancellationToken;
-
-    use super::*;
-    use crate::{MmapOptions, MmapResource, OpenMode, Resource};
-
-    fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapResource>, PathBuf, PathBuf) {
-        let canonical = dir.path().join(name);
-        let cancel = CancellationToken::new();
-        let res = AtomicChunked::<MmapResource>::open(canonical.clone(), move |target, intent| {
-            let mode = match intent {
-                OpenIntent::Fresh => OpenMode::ReadWrite,
-                OpenIntent::Reopen => OpenMode::ReadOnly,
-            };
-            Resource::open(
-                cancel.clone(),
-                MmapOptions {
-                    path: target.to_path_buf(),
-                    initial_len: None,
-                    mode,
-                },
-            )
-        })
-        .unwrap();
-        let tmp = make_tmp_path(&canonical).unwrap();
-        (res, canonical, tmp)
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn canonical_invisible_until_commit() {
-        let dir = TempDir::new().unwrap();
-        let (res, canonical, tmp) = open_chunked(&dir, "seg.bin");
-
-        res.write_at(0, b"chunk-1-").unwrap();
-        res.write_at(8, b"chunk-2!").unwrap();
-
-        assert!(
-            !canonical.exists(),
-            "canonical must not exist before commit"
-        );
-        assert!(tmp.exists(), "tmp file must hold in-flight bytes");
-
-        res.commit(Some(16)).unwrap();
-        assert!(canonical.exists(), "canonical materialised on commit");
-        assert!(!tmp.exists(), "tmp consumed by atomic rename");
-
-        let bytes = fs::read(&canonical).unwrap();
-        assert_eq!(&bytes, b"chunk-1-chunk-2!");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn drop_without_commit_cleans_tmp() {
-        let dir = TempDir::new().unwrap();
-        let (res, canonical, tmp) = open_chunked(&dir, "abandoned.bin");
-
-        res.write_at(0, b"will-not-commit").unwrap();
-        assert!(tmp.exists());
-        drop(res);
-
-        assert!(!tmp.exists(), "Drop must remove the orphaned tmp");
-        assert!(!canonical.exists(), "canonical must never appear");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn fail_cleans_tmp() {
-        let dir = TempDir::new().unwrap();
-        let (res, canonical, tmp) = open_chunked(&dir, "failed.bin");
-
-        res.write_at(0, b"oops").unwrap();
-        res.fail("test".into());
-
-        assert!(!tmp.exists(), "fail() must remove the tmp");
-        assert!(!canonical.exists());
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn open_wipes_stale_tmp_from_previous_run() {
-        let dir = TempDir::new().unwrap();
-        let canonical = dir.path().join("survivor.bin");
-        let stale_tmp = make_tmp_path(&canonical).unwrap();
-        // Simulate a crashed previous writer that left orphan bytes.
-        fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
-
-        let cancel = CancellationToken::new();
-        let res = AtomicChunked::<MmapResource>::open(canonical.clone(), move |target, intent| {
-            let mode = match intent {
-                OpenIntent::Fresh => OpenMode::ReadWrite,
-                OpenIntent::Reopen => OpenMode::ReadOnly,
-            };
-            Resource::open(
-                cancel.clone(),
-                MmapOptions {
-                    path: target.to_path_buf(),
-                    initial_len: None,
-                    mode,
-                },
-            )
-        })
-        .unwrap();
-        res.write_at(0, b"fresh").unwrap();
-        res.commit(Some(5)).unwrap();
-        let bytes = fs::read(&canonical).unwrap();
-        assert_eq!(&bytes, b"fresh");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn read_after_commit_returns_payload_via_decorator() {
-        // Smoke: write chunks, commit, then read back THROUGH the
-        // decorator (not direct fs::read). Pins that the inner mmap
-        // remains usable after the rename — reads must surface the
-        // committed payload exactly.
-        let dir = TempDir::new().unwrap();
-        let (res, _, _) = open_chunked(&dir, "post-commit-read.bin");
-        res.write_at(0, b"chunk-1-").unwrap();
-        res.write_at(8, b"chunk-2!").unwrap();
-        res.commit(Some(16)).unwrap();
-
-        let mut buf = [0u8; 16];
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 16, "post-commit read must return all bytes");
-        assert_eq!(&buf, b"chunk-1-chunk-2!");
-
-        // Read of the tail (last byte) — exact same condition Apple's
-        // probe hits in the failing integration test.
-        let mut tail = [0u8; 1];
-        let n = res.read_at(15, &mut tail).unwrap();
-        assert_eq!(n, 1);
-        assert_eq!(tail[0], b'!');
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn read_during_writes_observes_inner_state() {
-        let dir = TempDir::new().unwrap();
-        let (res, _, _) = open_chunked(&dir, "live.bin");
-        res.write_at(0, b"live-bytes").unwrap();
-        let mut buf = [0u8; 10];
-        let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 10);
-        assert_eq!(&buf, b"live-bytes");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn passthrough_for_memory_inner_has_no_tmp() {
-        // For mem-backed inners (no filesystem), the decorator
-        // delegates straight through and never creates a tmp file.
-        let mem = crate::MemResource::new(CancellationToken::new());
-        let res = AtomicChunked::passthrough(mem, PathBuf::from("virtual"));
-        res.write_at(0, b"in-mem").unwrap();
-        res.commit(Some(6)).unwrap();
-        let mut buf = [0u8; 6];
-        res.read_at(0, &mut buf).unwrap();
-        assert_eq!(&buf, b"in-mem");
-        // path() reports canonical; nothing on disk.
-        assert_eq!(res.path(), Some(Path::new("virtual")));
     }
 }
