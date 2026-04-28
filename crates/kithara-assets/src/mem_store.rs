@@ -217,7 +217,7 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::Mem((*res).clone()));
+            return Ok(StorageResource::from((*res).clone()));
         }
 
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
@@ -238,7 +238,7 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::Mem((*res).clone()));
+            return Ok(StorageResource::from((*res).clone()));
         }
 
         let mut options = MemOptions::default();
@@ -258,7 +258,7 @@ impl Assets for MemAssetStore {
         self.active_resources
             .insert(cache_key, Arc::downgrade(&shared));
 
-        Ok(StorageResource::Mem((*shared).clone()))
+        Ok(StorageResource::from((*shared).clone()))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {

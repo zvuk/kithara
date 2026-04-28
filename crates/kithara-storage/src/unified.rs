@@ -2,38 +2,68 @@
 
 //! Unified storage resource: disk (mmap) or memory backend.
 
-use std::{ops::Range, path::Path};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::MmapResource;
 use crate::{
-    MemResource, StorageResult,
+    AtomicChunked, MemResource, StorageResult,
     resource::{ResourceExt, ResourceStatus, WaitOutcome},
 };
 
 /// Unified resource: disk (mmap) or memory backend.
 ///
-/// Dispatches all [`ResourceExt`] operations to the inner variant.
-/// Use [`From<MmapResource>`] or [`From<MemResource>`] for construction.
+/// Every variant wraps its inner in an [`AtomicChunked`] decorator.
+/// Fresh segment writes use the decorator in **atomic** mode (writes
+/// land at `<canonical>.tmp`, atomic-renamed on commit); re-opens of
+/// already-committed files and memory-backed inners use it in
+/// **passthrough** mode (no atomicity, zero overhead beyond the Arc).
+/// Uniform wrapping means every code path that observes a
+/// `StorageResource` sees the same atomic-on-commit guarantees, and
+/// no caller can accidentally bypass the protection.
+///
+/// `Arc` makes the variants cheaply cloneable, matching the original
+/// `Resource<D>` contract — the previous direct-`Resource` enum was
+/// also Clone via internal `Arc<DriverState>`.
 #[derive(Clone, Debug)]
 pub enum StorageResource {
-    /// File-backed mmap resource.
+    /// File-backed mmap resource (atomic or passthrough decorator).
     #[cfg(not(target_arch = "wasm32"))]
-    Mmap(MmapResource),
-    /// In-memory resource.
-    Mem(MemResource),
+    Mmap(Arc<AtomicChunked<MmapResource>>),
+    /// In-memory resource (always passthrough — memory has no
+    /// torn-write hazard).
+    Mem(Arc<AtomicChunked<MemResource>>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl From<MmapResource> for StorageResource {
     fn from(r: MmapResource) -> Self {
-        Self::Mmap(r)
+        // `MmapResource::path()` is always `Some` (file-backed). Use
+        // it as the canonical path for the passthrough decorator.
+        let path = r.path().map(Path::to_path_buf).unwrap_or_default();
+        Self::Mmap(Arc::new(AtomicChunked::passthrough(r, path)))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<AtomicChunked<MmapResource>> for StorageResource {
+    fn from(r: AtomicChunked<MmapResource>) -> Self {
+        Self::Mmap(Arc::new(r))
     }
 }
 
 impl From<MemResource> for StorageResource {
     fn from(r: MemResource) -> Self {
-        Self::Mem(r)
+        // Memory inners have no filesystem path. The passthrough
+        // canonical path is meaningful only when `path()` is queried,
+        // and for mem we want it to remain `None`. Use an empty
+        // PathBuf as placeholder; `StorageResource::path()` overrides
+        // for the Mem variant to return `None` regardless.
+        Self::Mem(Arc::new(AtomicChunked::passthrough(r, PathBuf::default())))
     }
 }
 
@@ -82,7 +112,9 @@ impl ResourceExt for StorageResource {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.path(),
-            Self::Mem(r) => r.path(),
+            // Memory inners have no filesystem path; the passthrough
+            // wrapper carries an empty placeholder we never expose.
+            Self::Mem(_) => None,
         }
     }
 
@@ -97,7 +129,7 @@ impl ResourceExt for StorageResource {
     fn contains_range(&self, range: Range<u64>) -> bool {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.contains_range(range.clone()),
+            Self::Mmap(r) => r.contains_range(range),
             Self::Mem(r) => r.contains_range(range),
         }
     }

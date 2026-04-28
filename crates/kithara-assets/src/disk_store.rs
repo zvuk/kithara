@@ -9,8 +9,8 @@ use std::{
 };
 
 use kithara_storage::{
-    AvailabilityObserver, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt,
-    ResourceStatus, StorageError, StorageResource,
+    AtomicChunked, AvailabilityObserver, MmapOptions, MmapResource, OpenIntent, OpenMode, Resource,
+    ResourceExt, ResourceStatus, StorageError, StorageResource,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -269,6 +269,46 @@ impl DiskAssetStore {
             },
         )?)
     }
+
+    /// Open a fresh segment as an `AtomicChunked<MmapResource>`. The
+    /// inner mmap is bound to `<path>.tmp`; on `commit()` the tmp
+    /// file is `sync_data`'d and renamed atomically to `path`. The
+    /// availability observer is attached to the inner mmap so
+    /// `record_write` / `record_commit` fire as bytes arrive — same
+    /// contract as the non-atomic path.
+    fn open_atomic_chunked_resource(
+        &self,
+        key: &ResourceKey,
+        path: PathBuf,
+    ) -> AssetsResult<AtomicChunked<MmapResource>> {
+        let observer = self.scoped_observer(key);
+        let cancel = self.cancel.clone();
+        // Factory is `Fn + Send + Sync + 'static`: called twice — once
+        // here on the temp path, and again from `AtomicChunked::commit`
+        // on the canonical path after the atomic rename — so the
+        // closure captures by move and remains usable after.
+        let chunked = AtomicChunked::open(path, move |target, intent| {
+            // Fresh open at tmp path: ReadWrite so writers can fill
+            // the segment. Reopen at canonical post-rename: ReadOnly
+            // so the resource reports `Committed` status (otherwise
+            // `LeaseResource::drop` would mistake it for an
+            // abandoned writer and delete the just-renamed file).
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open_with_observer(
+                cancel.clone(),
+                MmapOptions {
+                    path: target.to_path_buf(),
+                    initial_len: None,
+                    mode,
+                },
+                Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
+            )
+        })?;
+        Ok(chunked)
+    }
 }
 
 impl Assets for DiskAssetStore {
@@ -302,8 +342,10 @@ impl Assets for DiskAssetStore {
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
+        // Re-open of an already-committed resource: passthrough mode
+        // (no atomicity needed — bytes are durable on disk).
         let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
-        Ok(StorageResource::Mmap(mmap))
+        Ok(mmap.into())
     }
 
     fn acquire_resource_with_ctx(
@@ -312,13 +354,24 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        let mode = if key.is_absolute() {
-            OpenMode::ReadOnly
-        } else {
-            OpenMode::Auto
-        };
-        let mmap = self.open_storage_resource(key, path, mode)?;
-        Ok(StorageResource::Mmap(mmap))
+        // Absolute keys (local files) and re-opens of existing
+        // canonical files: passthrough mode (read-only / already
+        // durable).
+        if key.is_absolute() || (path.exists() && path.metadata().is_ok_and(|m| m.len() > 0)) {
+            let mode = if key.is_absolute() {
+                OpenMode::ReadOnly
+            } else {
+                OpenMode::Auto
+            };
+            let mmap = self.open_storage_resource(key, path, mode)?;
+            return Ok(mmap.into());
+        }
+        // Fresh segment write: wrap with `AtomicChunked` so writes
+        // land at `<canonical>.tmp` and are atomic-renamed on
+        // commit. Slow-path observers of the canonical path see
+        // either no file or fully durable bytes — never partial.
+        let chunked = self.open_atomic_chunked_resource(key, path)?;
+        Ok(StorageResource::from(chunked))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
