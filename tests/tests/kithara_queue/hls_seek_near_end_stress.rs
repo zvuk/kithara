@@ -239,7 +239,9 @@ async fn run_one_attempt(
         };
     }
 
-    let duration = if let Some(d) = queue.duration_seconds() { d } else {
+    let duration = if let Some(d) = queue.duration_seconds() {
+        d
+    } else {
         tick_handle.abort();
         return IterOutcome::Errored {
             iter,

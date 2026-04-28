@@ -200,7 +200,7 @@ impl kithara_stream::Source for FileSource {
 
         // Reader-side `FileEvent::ReadProgress` is fired by
         // `FileReaderHooks` from the decoder layer — see
-        // `kithara-file/src/session/reader_hooks.rs`.
+        // `kithara-file/src/session/reader.rs`.
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
@@ -226,7 +226,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
-        let hooks = super::reader_hooks::FileReaderHooks::new(
+        let hooks = super::reader::FileReaderHooks::new(
             self.inner.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline().byte_position_handle(),

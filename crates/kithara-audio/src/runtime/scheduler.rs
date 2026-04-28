@@ -411,9 +411,10 @@ mod tests {
     impl Node for DummyNode {
         fn tick(&mut self) -> TickResult {
             if let Some(p) = self.panic_at
-                && self.ticks == p {
-                    panic!("dummy panic");
-                }
+                && self.ticks == p
+            {
+                panic!("dummy panic");
+            }
             if self.ticks >= self.max_ticks {
                 TickResult::Done
             } else {

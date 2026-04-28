@@ -14,7 +14,7 @@ schema_version = 1
 [guard_cascade]
 "crates/kithara-abr/src/controller.rs:413:8" = 1
 "crates/kithara-abr/src/state.rs:156:8" = 1
-"crates/kithara-audio/src/pipeline/source.rs:1173:8" = 1
+"crates/kithara-audio/src/pipeline/source.rs:1175:8" = 1
 "crates/kithara-decode/src/android/source.rs:111:4" = 1
 "crates/kithara-decode/src/apple/audiofile.rs:420:8" = 1
 "crates/kithara-hls/src/loading/segment_loader.rs:186:8" = 1
@@ -26,4 +26,4 @@ schema_version = 1
 "crates/kithara-test-utils/src/signal_spec.rs:270:4" = 1
 
 [parallel_loops]
-"crates/kithara-stream/src/dl/registry.rs:144:8::self.peers" = 1
+"crates/kithara-stream/src/dl/registry.rs:143:8::self.peers" = 1

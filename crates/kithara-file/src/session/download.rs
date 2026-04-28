@@ -26,9 +26,6 @@ use tracing::debug;
 use super::inner::{FileInner, FilePhase};
 use crate::coord::FileCoord;
 
-/// Backpressure pause when download is too far ahead of reader.
-const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
-
 /// Full-file streaming download.
 ///
 /// Builds a GET command, executes via [`PeerHandle`], streams body chunks
@@ -138,6 +135,9 @@ async fn stream_body_to_resource(
     cancel: &CancellationToken,
     look_ahead_bytes: Option<u64>,
 ) -> Result<u64, StreamBodyError> {
+    /// Backpressure pause when download is too far ahead of reader.
+    const THROTTLE_PAUSE: Duration = Duration::from_millis(10);
+
     let mut written: u64 = 0;
 
     while let Some(chunk) = body.next().await {

@@ -19,8 +19,5 @@ mod error;
 mod session;
 mod stream;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 pub use config::{FileConfig, FileSrc};
 pub use stream::File;

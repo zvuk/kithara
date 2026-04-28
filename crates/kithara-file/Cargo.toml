@@ -30,14 +30,12 @@ hotpath = { workspace = true, optional = true }
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
-internal = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
-kithara-file = { path = ".", default-features = false, features = ["internal"] }
 tempfile = { workspace = true }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }

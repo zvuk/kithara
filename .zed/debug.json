@@ -11,7 +11,7 @@
     "args": ["--mode", "auto"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
-      "RUST_LOG": "trace",
+      "RUST_LOG": "debug",
       "RUST_BACKTRACE": "1",
     },
     "sourceLanguages": ["rust"],
@@ -28,7 +28,7 @@
     "args": ["--mode", "tui"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
-      "RUST_LOG": "trace",
+      "RUST_LOG": "debug",
       "RUST_BACKTRACE": "1",
     },
     "sourceLanguages": ["rust"],
@@ -47,6 +47,7 @@
     "env": {
       "RUST_LOG": "kithara_audio=trace,kithara_hls=trace,kithara_stream=trace",
       "RUST_BACKTRACE": "1",
+      "KITHARA_LOG_FILE": "$ZED_WORKTREE_ROOT/app.log",
     },
     "sourceLanguages": ["rust"],
   },

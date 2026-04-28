@@ -4167,7 +4167,6 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-events",
- "kithara-file",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",

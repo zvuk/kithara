@@ -263,13 +263,7 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
         let mut barged = false;
         while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
             let cur = queue.current().map(|e| e.id);
-            if cur
-                != current_history
-                    .last()
-                    .copied()
-                    .flatten()
-                    .and_then(Some)
-            {
+            if cur != current_history.last().copied().flatten().and_then(Some) {
                 current_history.push(cur);
             }
             if cur == Some(slow_id) {

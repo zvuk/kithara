@@ -20,7 +20,7 @@ use super::{
     core::HlsSource,
     types::{ReadSegment, WAIT_RANGE_HANG_TIMEOUT_FLOOR, WAIT_RANGE_SLEEP_MS},
 };
-use crate::{HlsError, coord::SegmentRequest, playlist::PlaylistAccess};
+use crate::{HlsError, coord::SegmentRequest, ids::VariantIndex, playlist::PlaylistAccess};
 
 fn wait_range_hang_timeout(timeout: Option<Duration>) -> Duration {
     // Hang-detector budget: when a caller waits unboundedly (`None`),
@@ -486,50 +486,9 @@ impl Source for HlsSource {
         let fallback_variant = anchor
             .and_then(|resolved| resolved.variant_index)
             .unwrap_or_else(|| self.resolve_current_variant());
-        let landed_segment = self
-            .layout_segment_for_offset(landed_offset)
-            .filter(|&(variant, segment_index)| {
-                !anchor.is_some_and(|resolved| {
-                    let Some(anchor_variant) = resolved.variant_index else {
-                        return false;
-                    };
-                    let Some(anchor_segment) = resolved.segment_index.map(|index| index as usize)
-                    else {
-                        return false;
-                    };
-                    landed_offset < resolved.byte_offset
-                        && variant == anchor_variant
-                        && segment_index >= anchor_segment
-                })
-            })
-            .or_else(|| {
-                self.resolve_segment_for_offset(landed_offset, fallback_variant)
-                    .map(|seg_idx| (fallback_variant, seg_idx))
-            });
-        // `apply_seek_plan(...)` already established the authoritative layout
-        // for this seek. Rewriting `variant_map` again at the landed offset
-        // collapses mixed auto-switch layouts during replay from the prefix.
-        //
-        // When `landed_segment` is None the landed byte position couldn't be
-        // mapped to any known segment — this happens after DRM padding
-        // removal shrinks the size map below the decoder's byte position.
-        // Without recovery the reader has no segment to demand and stalls
-        // until timeout. Fall back to the anchor's authoritative
-        // (variant, segment_index) so the reader can resume.
-        let landed_segment = landed_segment.or_else(|| {
-            let anchor = anchor?;
-            let variant = anchor.variant_index?;
-            let segment_index = anchor.segment_index? as usize;
-            debug!(
-                seek_epoch,
-                variant,
-                segment_index,
-                landed_offset,
-                "commit_seek_landing: landed offset unresolvable, falling back to anchor"
-            );
-            Some((variant, segment_index))
-        });
-        let Some((variant, segment_index)) = landed_segment else {
+        let Some((variant, segment_index)) =
+            self.resolve_landed_segment(anchor, landed_offset, fallback_variant, seek_epoch)
+        else {
             debug!(
                 seek_epoch,
                 variant = fallback_variant,
@@ -540,10 +499,40 @@ impl Source for HlsSource {
             self.coord.reader_advanced.notify_one();
             return;
         };
+        self.apply_landed_segment(variant, segment_index, landed_offset, seek_epoch);
+    }
+
+    fn demand_range(&self, range: Range<u64>) {
+        if range.is_empty() {
+            return;
+        }
+        let seek_epoch = self.coord.timeline().seek_epoch();
+        self.queue_segment_request_for_offset(range.start, seek_epoch);
+    }
+
+    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
+        let hooks = super::reader_hooks::HlsReaderHooks::new(
+            self.bus.clone(),
+            Arc::clone(&self.segments),
+            self.coord.timeline().byte_position_handle(),
+            self.coord.timeline().seek_epoch_handle(),
+        );
+        Some(Arc::new(std::sync::Mutex::new(hooks)))
+    }
+}
+
+impl HlsSource {
+    fn apply_landed_segment(
+        &mut self,
+        variant: VariantIndex,
+        segment_index: usize,
+        landed_offset: u64,
+        seek_epoch: u64,
+    ) {
         self.variant_fence = Some(variant);
         let segment_ready = self.loaded_segment_ready(variant, segment_index);
-
         let previous_hint = self.current_segment_index().unwrap_or(segment_index);
+
         self.coord.clear_segment_requests();
         if !segment_ready {
             self.coord.enqueue_segment_request(SegmentRequest {
@@ -582,21 +571,72 @@ impl Source for HlsSource {
         );
     }
 
-    fn demand_range(&self, range: Range<u64>) {
-        if range.is_empty() {
-            return;
-        }
-        let seek_epoch = self.coord.timeline().seek_epoch();
-        self.queue_segment_request_for_offset(range.start, seek_epoch);
+    // `apply_seek_plan(...)` already established the authoritative layout
+    // for this seek. Rewriting `variant_map` again at the landed offset
+    // collapses mixed auto-switch layouts during replay from the prefix.
+    //
+    // When the landed offset can't be mapped (e.g. DRM padding removal
+    // shrinks the size map below the decoder's byte position), fall back
+    // to the anchor's authoritative (variant, segment_index) so the
+    // reader can resume.
+    fn resolve_landed_segment(
+        &self,
+        anchor: Option<SourceSeekAnchor>,
+        landed_offset: u64,
+        fallback_variant: VariantIndex,
+        seek_epoch: u64,
+    ) -> Option<(VariantIndex, usize)> {
+        let primary = self
+            .layout_segment_for_offset(landed_offset)
+            .filter(|&(variant, segment_index)| {
+                !Self::layout_match_shadowed_by_anchor(
+                    anchor,
+                    landed_offset,
+                    variant,
+                    segment_index,
+                )
+            })
+            .or_else(|| {
+                self.resolve_segment_for_offset(landed_offset, fallback_variant)
+                    .map(|seg_idx| (fallback_variant, seg_idx))
+            });
+        primary.or_else(|| Self::anchor_fallback(anchor, landed_offset, seek_epoch))
     }
 
-    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
-        let hooks = super::reader_hooks::HlsReaderHooks::new(
-            self.bus.clone(),
-            Arc::clone(&self.segments),
-            self.coord.timeline().byte_position_handle(),
-            self.coord.timeline().seek_epoch_handle(),
+    fn layout_match_shadowed_by_anchor(
+        anchor: Option<SourceSeekAnchor>,
+        landed_offset: u64,
+        variant: VariantIndex,
+        segment_index: usize,
+    ) -> bool {
+        anchor.is_some_and(|resolved| {
+            let Some(anchor_variant) = resolved.variant_index else {
+                return false;
+            };
+            let Some(anchor_segment) = resolved.segment_index.map(|index| index as usize) else {
+                return false;
+            };
+            landed_offset < resolved.byte_offset
+                && variant == anchor_variant
+                && segment_index >= anchor_segment
+        })
+    }
+
+    fn anchor_fallback(
+        anchor: Option<SourceSeekAnchor>,
+        landed_offset: u64,
+        seek_epoch: u64,
+    ) -> Option<(VariantIndex, usize)> {
+        let anchor = anchor?;
+        let variant = anchor.variant_index?;
+        let segment_index = anchor.segment_index? as usize;
+        debug!(
+            seek_epoch,
+            variant,
+            segment_index,
+            landed_offset,
+            "commit_seek_landing: landed offset unresolvable, falling back to anchor"
         );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
+        Some((variant, segment_index))
     }
 }
