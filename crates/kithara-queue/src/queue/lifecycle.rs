@@ -20,6 +20,24 @@ impl Queue {
         self.insert_entry(source.into(), Placement::Append)
     }
 
+    /// Remove all tracks from the queue.
+    pub fn clear(&self) {
+        let ids: Vec<TrackId> = {
+            let mut guard = self.lock_tracks_mut();
+            let ids = guard.iter().map(|e| e.id).collect();
+            guard.clear();
+            ids
+        };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.player.remove_all_items();
+        for id in ids {
+            self.bus.publish(QueueEvent::TrackRemoved { id });
+        }
+    }
+
     /// Insert a track after the given id, or at the head when `after` is
     /// `None`. Loading starts immediately.
     ///
@@ -135,24 +153,6 @@ impl Queue {
             }
         }
         Ok(())
-    }
-
-    /// Remove all tracks from the queue.
-    pub fn clear(&self) {
-        let ids: Vec<TrackId> = {
-            let mut guard = self.lock_tracks_mut();
-            let ids = guard.iter().map(|e| e.id).collect();
-            guard.clear();
-            ids
-        };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
-        self.player.remove_all_items();
-        for id in ids {
-            self.bus.publish(QueueEvent::TrackRemoved { id });
-        }
     }
 
     /// Replace the entire queue with the given sources.

@@ -14,6 +14,96 @@ use super::{
 use crate::{error::QueueError, track::TrackSource};
 
 impl Queue {
+    /// Advance to the next track per navigation rules. Returns the newly
+    /// selected id, or `None` when the queue has ended (and
+    /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
+    pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
+        let len = self.len();
+        // `TrackStatus::Cancelled` slots stay populated in the queue
+        // but their resource was never planted (load was overridden
+        // by a later explicit select), so auto-advance must not flip
+        // `current()` onto them. Loop until we find a playable slot
+        // or run off the end of the queue. An explicit
+        // [`Self::select`] of a Cancelled track is honoured via the
+        // `Cancelled | Consumed | Failed` branch in `select`.
+        loop {
+            let Some(idx) = self.lock_navigation_mut().next(len) else {
+                self.bus.publish(QueueEvent::QueueEnded);
+                return None;
+            };
+            let Some((id, status)) = self
+                .lock_tracks()
+                .get(idx)
+                .map(|e| (e.id, e.status.clone()))
+            else {
+                continue;
+            };
+            if matches!(status, TrackStatus::Cancelled) {
+                debug!(
+                    id = id.as_u64(),
+                    "advance_to_next: skipping cancelled track"
+                );
+                continue;
+            }
+            if let Err(e) = self.select(id, transition) {
+                warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
+            }
+            return Some(id);
+        }
+    }
+
+    /// Synchronous-select counterpart to [`Self::override_pending_select`]:
+    /// the user picked a `Loaded` track, so any other in-flight load is
+    /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
+    /// so its `spawn_apply_after_load` completion path does not barge
+    /// in on top of the just-selected track.
+    pub(super) fn cancel_stale_pending(&self, applying_id: TrackId) {
+        let stale = {
+            let mut p = self.lock_pending_select_mut();
+            let result = match *p {
+                Some(prev) if prev.id != applying_id => Some(prev.id),
+                _ => None,
+            };
+            *p = None;
+            result
+        };
+        if let Some(stale_id) = stale {
+            self.set_status(stale_id, TrackStatus::Cancelled);
+        }
+    }
+
+    /// Replace `pending_select` with a new selection. If the previous
+    /// pending track is different from `new`, mark it
+    /// [`TrackStatus::Cancelled`] so the in-flight load — when it
+    /// finishes — does not silently plant its resource into the queue
+    /// and "barge in" via auto-advance. `TrackStatus::Cancelled` is the
+    /// single source of truth for this: `spawn_apply_after_load` reads
+    /// it on completion and `advance_to_next` reads it when iterating.
+    /// See Bug B reproducer (`tests/.../track_switch_race.rs`).
+    pub(super) fn override_pending_select(&self, new: PendingSelect) {
+        let mut p = self.lock_pending_select_mut();
+        let prev_id = match *p {
+            Some(prev) if prev.id != new.id => Some(prev.id),
+            _ => None,
+        };
+        *p = Some(new);
+        drop(p);
+        if let Some(prev_id) = prev_id {
+            self.set_status(prev_id, TrackStatus::Cancelled);
+        }
+    }
+
+    /// Go back to the previous track. Returns the newly selected id, or
+    /// `None` at index 0.
+    pub fn return_to_previous(&self, transition: Transition) -> Option<TrackId> {
+        let prev_idx = self.lock_navigation_mut().prev()?;
+        let id = self.lock_tracks().get(prev_idx).map(|e| e.id)?;
+        if let Err(e) = self.select(id, transition) {
+            warn!(id = id.as_u64(), error = %e, "return_to_previous: select failed");
+        }
+        Some(id)
+    }
+
     /// Select a track by id, applying the given [`Transition`]. If the
     /// track is still loading or pending, both the id and the
     /// transition are stashed and applied when loading finishes.
@@ -90,96 +180,6 @@ impl Queue {
                 Ok(())
             }
             _ => Err(QueueError::NotReady(id)),
-        }
-    }
-
-    /// Advance to the next track per navigation rules. Returns the newly
-    /// selected id, or `None` when the queue has ended (and
-    /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
-    pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
-        let len = self.len();
-        // `TrackStatus::Cancelled` slots stay populated in the queue
-        // but their resource was never planted (load was overridden
-        // by a later explicit select), so auto-advance must not flip
-        // `current()` onto them. Loop until we find a playable slot
-        // or run off the end of the queue. An explicit
-        // [`Self::select`] of a Cancelled track is honoured via the
-        // `Cancelled | Consumed | Failed` branch in `select`.
-        loop {
-            let Some(idx) = self.lock_navigation_mut().next(len) else {
-                self.bus.publish(QueueEvent::QueueEnded);
-                return None;
-            };
-            let Some((id, status)) = self
-                .lock_tracks()
-                .get(idx)
-                .map(|e| (e.id, e.status.clone()))
-            else {
-                continue;
-            };
-            if matches!(status, TrackStatus::Cancelled) {
-                debug!(
-                    id = id.as_u64(),
-                    "advance_to_next: skipping cancelled track"
-                );
-                continue;
-            }
-            if let Err(e) = self.select(id, transition) {
-                warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
-            }
-            return Some(id);
-        }
-    }
-
-    /// Go back to the previous track. Returns the newly selected id, or
-    /// `None` at index 0.
-    pub fn return_to_previous(&self, transition: Transition) -> Option<TrackId> {
-        let prev_idx = self.lock_navigation_mut().prev()?;
-        let id = self.lock_tracks().get(prev_idx).map(|e| e.id)?;
-        if let Err(e) = self.select(id, transition) {
-            warn!(id = id.as_u64(), error = %e, "return_to_previous: select failed");
-        }
-        Some(id)
-    }
-
-    /// Replace `pending_select` with a new selection. If the previous
-    /// pending track is different from `new`, mark it
-    /// [`TrackStatus::Cancelled`] so the in-flight load — when it
-    /// finishes — does not silently plant its resource into the queue
-    /// and "barge in" via auto-advance. `TrackStatus::Cancelled` is the
-    /// single source of truth for this: `spawn_apply_after_load` reads
-    /// it on completion and `advance_to_next` reads it when iterating.
-    /// See Bug B reproducer (`tests/.../track_switch_race.rs`).
-    pub(super) fn override_pending_select(&self, new: PendingSelect) {
-        let mut p = self.lock_pending_select_mut();
-        let prev_id = match *p {
-            Some(prev) if prev.id != new.id => Some(prev.id),
-            _ => None,
-        };
-        *p = Some(new);
-        drop(p);
-        if let Some(prev_id) = prev_id {
-            self.set_status(prev_id, TrackStatus::Cancelled);
-        }
-    }
-
-    /// Synchronous-select counterpart to [`Self::override_pending_select`]:
-    /// the user picked a `Loaded` track, so any other in-flight load is
-    /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
-    /// so its `spawn_apply_after_load` completion path does not barge
-    /// in on top of the just-selected track.
-    pub(super) fn cancel_stale_pending(&self, applying_id: TrackId) {
-        let stale = {
-            let mut p = self.lock_pending_select_mut();
-            let result = match *p {
-                Some(prev) if prev.id != applying_id => Some(prev.id),
-                _ => None,
-            };
-            *p = None;
-            result
-        };
-        if let Some(stale_id) = stale {
-            self.set_status(stale_id, TrackStatus::Cancelled);
         }
     }
 

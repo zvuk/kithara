@@ -28,27 +28,15 @@ use crate::{
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
 pub struct Queue {
-    pub(super) player: Arc<PlayerImpl>,
-    pub(super) loader: Arc<Loader>,
-    pub(super) next_id: AtomicU64,
-    /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
-    /// through `Arc<Tracks>`; every status transition goes through
-    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
-    /// and the event stream stay in sync.
-    pub(super) tracks: Arc<Tracks>,
-    pub(super) navigation: Arc<Mutex<NavigationState>>,
-    pub(super) pending_select: Arc<Mutex<Option<PendingSelect>>>,
-    /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
-    /// on re-selection (user tapping a previously-played track). The
-    /// original `TrackSource::Config` — including DRM keys and custom
-    /// net/headers — is preserved; a bare URL wouldn't be enough to
-    /// reconstruct a DRM-protected source.
-    pub(super) sources: Arc<Mutex<HashMap<TrackId, TrackSource>>>,
-    pub(super) bus: EventBus,
-    /// Subscription to the shared bus; drained in `tick()` to convert
-    /// engine events into queue-level side-effects (auto-advance / current
-    /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver>,
+    /// Authoritative playback position updated on every `tick`. Filters
+    /// transient 0.0 blips the engine reports on pause/resume —
+    /// downstream UIs should read from this field rather than polling
+    /// the engine directly.
+    ///
+    /// Stored as `f64::to_bits` in `AtomicU64`; a `NaN` bit pattern
+    /// represents "no value" so `Option<f64>` semantics are preserved
+    /// without a `Mutex`.
+    pub(super) cached_position: Arc<AtomicU64>,
     /// Tracks the id of the track whose crossfade-advance has already
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
@@ -59,15 +47,27 @@ pub struct Queue {
     /// "not armed" — readers and writers run lock-free from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: Arc<AtomicU64>,
-    /// Authoritative playback position updated on every `tick`. Filters
-    /// transient 0.0 blips the engine reports on pause/resume —
-    /// downstream UIs should read from this field rather than polling
-    /// the engine directly.
-    ///
-    /// Stored as `f64::to_bits` in `AtomicU64`; a `NaN` bit pattern
-    /// represents "no value" so `Option<f64>` semantics are preserved
-    /// without a `Mutex`.
-    pub(super) cached_position: Arc<AtomicU64>,
+    pub(super) loader: Arc<Loader>,
+    pub(super) navigation: Arc<Mutex<NavigationState>>,
+    pub(super) pending_select: Arc<Mutex<Option<PendingSelect>>>,
+    pub(super) player: Arc<PlayerImpl>,
+    /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
+    /// on re-selection (user tapping a previously-played track). The
+    /// original `TrackSource::Config` — including DRM keys and custom
+    /// net/headers — is preserved; a bare URL wouldn't be enough to
+    /// reconstruct a DRM-protected source.
+    pub(super) sources: Arc<Mutex<HashMap<TrackId, TrackSource>>>,
+    /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
+    /// through `Arc<Tracks>`; every status transition goes through
+    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
+    /// and the event stream stay in sync.
+    pub(super) tracks: Arc<Tracks>,
+    pub(super) next_id: AtomicU64,
+    pub(super) bus: EventBus,
+    /// Subscription to the shared bus; drained in `tick()` to convert
+    /// engine events into queue-level side-effects (auto-advance / current
+    /// track change forwarding).
+    pub(super) player_rx: Mutex<EventReceiver>,
 }
 
 impl Queue {
@@ -106,59 +106,16 @@ impl Queue {
         Self {
             player,
             loader,
-            next_id: AtomicU64::new(0),
             tracks,
+            bus,
+            next_id: AtomicU64::new(0),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
             sources: Arc::new(Mutex::new(HashMap::new())),
-            bus,
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
         }
-    }
-
-    pub(super) fn read_armed_for(&self) -> Option<TrackId> {
-        let v = self.crossfade_armed_for.load(Ordering::Acquire);
-        if v == Self::NO_ARMED_TRACK {
-            None
-        } else {
-            Some(TrackId(v))
-        }
-    }
-
-    pub(super) fn write_armed_for(&self, value: Option<TrackId>) {
-        let bits = value.map_or(Self::NO_ARMED_TRACK, |TrackId(v)| v);
-        self.crossfade_armed_for.store(bits, Ordering::Release);
-    }
-
-    pub(super) fn take_armed_for(&self) -> Option<TrackId> {
-        let prev = self
-            .crossfade_armed_for
-            .swap(Self::NO_ARMED_TRACK, Ordering::AcqRel);
-        if prev == Self::NO_ARMED_TRACK {
-            None
-        } else {
-            Some(TrackId(prev))
-        }
-    }
-
-    pub(super) fn read_cached_position(&self) -> Option<f64> {
-        let f = f64::from_bits(self.cached_position.load(Ordering::Acquire));
-        if f.is_nan() { None } else { Some(f) }
-    }
-
-    pub(super) fn write_cached_position(&self, value: Option<f64>) {
-        let bits = value.unwrap_or(f64::NAN).to_bits();
-        self.cached_position.store(bits, Ordering::Release);
-    }
-
-    pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
-        self.tracks.lock()
-    }
-
-    pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
-        self.tracks.lock()
     }
 
     pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
@@ -181,8 +138,51 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+        self.tracks.lock()
+    }
+
+    pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+        self.tracks.lock()
+    }
+
+    pub(super) fn read_armed_for(&self) -> Option<TrackId> {
+        let v = self.crossfade_armed_for.load(Ordering::Acquire);
+        if v == Self::NO_ARMED_TRACK {
+            None
+        } else {
+            Some(TrackId(v))
+        }
+    }
+
+    pub(super) fn read_cached_position(&self) -> Option<f64> {
+        let f = f64::from_bits(self.cached_position.load(Ordering::Acquire));
+        if f.is_nan() { None } else { Some(f) }
+    }
+
     pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus) {
         self.tracks.set_status(id, status);
+    }
+
+    pub(super) fn take_armed_for(&self) -> Option<TrackId> {
+        let prev = self
+            .crossfade_armed_for
+            .swap(Self::NO_ARMED_TRACK, Ordering::AcqRel);
+        if prev == Self::NO_ARMED_TRACK {
+            None
+        } else {
+            Some(TrackId(prev))
+        }
+    }
+
+    pub(super) fn write_armed_for(&self, value: Option<TrackId>) {
+        let bits = value.map_or(Self::NO_ARMED_TRACK, |TrackId(v)| v);
+        self.crossfade_armed_for.store(bits, Ordering::Release);
+    }
+
+    pub(super) fn write_cached_position(&self, value: Option<f64>) {
+        let bits = value.unwrap_or(f64::NAN).to_bits();
+        self.cached_position.store(bits, Ordering::Release);
     }
 }
 

@@ -11,69 +11,18 @@ use super::{Queue, types::Transition};
 use crate::error::QueueError;
 
 impl Queue {
-    /// Seek within the currently-playing track.
-    ///
-    /// Seek-hang detection is not handled here: the audio pipeline's
-    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-    /// `Stream::read`, `decode_next_chunk`) already panics with a
-    /// stacktrace and context dump when no progress is observed. Adding
-    /// a second Queue-level watchdog would just duplicate those panics.
-    ///
-    /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
-    /// `Landed` with the requested target (the actual landed position is
-    /// reconciled by the worker after applying the seek; this call returns
-    /// the optimistic outcome) or `PastEof` if the target is beyond the
-    /// known track duration.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] if the player reports a seek failure.
-    pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
-        self.player.seek_seconds(seconds).map_err(QueueError::from)
-    }
-
-    /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-    /// events to act on `ItemDidPlayToEnd` (filtered) and forward
-    /// `CurrentItemChanged` as
-    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from `PlayerImpl::tick`.
-    pub fn tick(&self) -> Result<(), QueueError> {
-        self.player.tick()?;
-        self.drain_player_events();
-        self.update_cached_position();
-        self.maybe_arm_crossfade();
-        Ok(())
-    }
-
-    /// Latest monotonic playback position for the current track in
-    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-    /// samples the engine produces on pause/resume so downstream UIs
-    /// see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position()
-    }
-
-    fn update_cached_position(&self) {
-        /// Minimum position threshold used to suppress spurious 0.0 reports
-        /// on pause/resume. Values above this are considered a valid
-        /// non-zero position.
-        const MIN_STABLE_POSITION_SECS: f64 = 0.5;
-
-        let Some(t) = self.player.position_seconds() else {
-            return;
-        };
-        // Engine briefly reports 0.0 on pause/resume; keep the last
-        // sane value so slider bindings don't flash back to the start.
-        if t == 0.0
-            && self
-                .read_cached_position()
-                .is_some_and(|prev| prev > MIN_STABLE_POSITION_SECS)
-        {
-            return;
+    fn drain_player_events(&self) {
+        let mut rx = self
+            .player_rx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        loop {
+            match rx.try_recv() {
+                Ok(ev) => self.process_player_event(&ev),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
         }
-        self.write_cached_position(Some(t));
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the
@@ -103,18 +52,13 @@ impl Queue {
         let _ = self.advance_to_next(transition);
     }
 
-    fn drain_player_events(&self) {
-        let mut rx = self
-            .player_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        loop {
-            match rx.try_recv() {
-                Ok(ev) => self.process_player_event(&ev),
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue,
-            }
-        }
+    /// Latest monotonic playback position for the current track in
+    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+    /// samples the engine produces on pause/resume so downstream UIs
+    /// see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.read_cached_position()
     }
 
     fn process_player_event(&self, ev: &Event) {
@@ -161,6 +105,62 @@ impl Queue {
             }
             _ => {}
         }
+    }
+
+    /// Seek within the currently-playing track.
+    ///
+    /// Seek-hang detection is not handled here: the audio pipeline's
+    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
+    /// `Stream::read`, `decode_next_chunk`) already panics with a
+    /// stacktrace and context dump when no progress is observed. Adding
+    /// a second Queue-level watchdog would just duplicate those panics.
+    ///
+    /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
+    /// `Landed` with the requested target (the actual landed position is
+    /// reconciled by the worker after applying the seek; this call returns
+    /// the optimistic outcome) or `PastEof` if the target is beyond the
+    /// known track duration.
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] if the player reports a seek failure.
+    pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
+        self.player.seek_seconds(seconds).map_err(QueueError::from)
+    }
+
+    /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
+    /// events to act on `ItemDidPlayToEnd` (filtered) and forward
+    /// `CurrentItemChanged` as
+    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+    ///
+    /// # Errors
+    /// Forwards `PlayError` from `PlayerImpl::tick`.
+    pub fn tick(&self) -> Result<(), QueueError> {
+        self.player.tick()?;
+        self.drain_player_events();
+        self.update_cached_position();
+        self.maybe_arm_crossfade();
+        Ok(())
+    }
+
+    fn update_cached_position(&self) {
+        /// Minimum position threshold used to suppress spurious 0.0 reports
+        /// on pause/resume. Values above this are considered a valid
+        /// non-zero position.
+        const MIN_STABLE_POSITION_SECS: f64 = 0.5;
+
+        let Some(t) = self.player.position_seconds() else {
+            return;
+        };
+        // Engine briefly reports 0.0 on pause/resume; keep the last
+        // sane value so slider bindings don't flash back to the start.
+        if t == 0.0
+            && self
+                .read_cached_position()
+                .is_some_and(|prev| prev > MIN_STABLE_POSITION_SECS)
+        {
+            return;
+        }
+        self.write_cached_position(Some(t));
     }
 }
 

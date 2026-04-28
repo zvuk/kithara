@@ -35,8 +35,8 @@ impl Loader {
     ) -> Self {
         Self {
             player,
-            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
+            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -171,10 +171,11 @@ mod tests {
             let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
+            let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
             LoaderFixture {
-                loader: Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks))),
                 tracks,
                 bus,
+                loader,
             }
         }
     }
@@ -252,8 +253,8 @@ mod tests {
         let fx = LoaderBuilder::default().build();
         fx.tracks.lock().push(TrackEntry {
             id: TrackId(42),
-            name: String::new(),
             url: None,
+            name: String::new(),
             status: TrackStatus::Pending,
         });
         let mut rx = fx.bus.subscribe();

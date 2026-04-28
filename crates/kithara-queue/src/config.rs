@@ -31,14 +31,14 @@ const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct QueueConfig {
+    /// Max concurrent `Loader` in-flight loads. Default: 3.
+    #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
+    pub max_concurrent_loads: NonZeroUsize,
+
     /// Externally-owned player. `None` means Queue builds a default.
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub player: Option<Arc<PlayerImpl>>,
-
-    /// Max concurrent `Loader` in-flight loads. Default: 3.
-    #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
-    pub max_concurrent_loads: NonZeroUsize,
 }
 
 impl QueueConfig {

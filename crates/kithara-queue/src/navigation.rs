@@ -1,8 +1,5 @@
 use std::collections::VecDeque;
 
-/// Maximum history entries retained for [`NavigationState::prev`].
-const MAX_HISTORY_SIZE: usize = 100;
-
 /// Behavior when the queue reaches the last track.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -24,9 +21,9 @@ pub enum RepeatMode {
 #[derive(Debug, Default)]
 pub struct NavigationState {
     current_index: Option<usize>,
+    repeat_mode: RepeatMode,
     history: VecDeque<usize>,
     shuffle_enabled: bool,
-    repeat_mode: RepeatMode,
 }
 
 impl NavigationState {
@@ -47,34 +44,6 @@ impl NavigationState {
     #[must_use]
     pub fn is_shuffle_enabled(&self) -> bool {
         self.shuffle_enabled
-    }
-
-    /// Current repeat mode.
-    #[must_use]
-    pub fn repeat_mode(&self) -> RepeatMode {
-        self.repeat_mode
-    }
-
-    /// Enable / disable shuffle.
-    pub fn set_shuffle(&mut self, on: bool) {
-        self.shuffle_enabled = on;
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&mut self, mode: RepeatMode) {
-        self.repeat_mode = mode;
-    }
-
-    /// Record an explicit selection. If the previously-current track is
-    /// different, it is pushed onto history (deduped against the tail).
-    pub fn select(&mut self, idx: usize) {
-        if let Some(current) = self.current_index
-            && current != idx
-            && self.history.back() != Some(&current)
-        {
-            add_to_history(&mut self.history, current);
-        }
-        self.current_index = Some(idx);
     }
 
     /// Advance to the next track.
@@ -117,9 +86,40 @@ impl NavigationState {
         self.current_index = Some(prev);
         Some(prev)
     }
+
+    /// Current repeat mode.
+    #[must_use]
+    pub fn repeat_mode(&self) -> RepeatMode {
+        self.repeat_mode
+    }
+
+    /// Record an explicit selection. If the previously-current track is
+    /// different, it is pushed onto history (deduped against the tail).
+    pub fn select(&mut self, idx: usize) {
+        if let Some(current) = self.current_index
+            && current != idx
+            && self.history.back() != Some(&current)
+        {
+            add_to_history(&mut self.history, current);
+        }
+        self.current_index = Some(idx);
+    }
+
+    /// Set repeat mode.
+    pub fn set_repeat(&mut self, mode: RepeatMode) {
+        self.repeat_mode = mode;
+    }
+
+    /// Enable / disable shuffle.
+    pub fn set_shuffle(&mut self, on: bool) {
+        self.shuffle_enabled = on;
+    }
 }
 
 fn add_to_history(history: &mut VecDeque<usize>, track_idx: usize) {
+    /// Maximum history entries retained for [`NavigationState::prev`].
+    const MAX_HISTORY_SIZE: usize = 100;
+
     if history.back() == Some(&track_idx) {
         return;
     }
@@ -225,12 +225,13 @@ mod tests {
 
     #[kithara::test]
     fn history_caps_at_max() {
+        const MAX: usize = 100;
         let mut nav = NavigationState::new();
         nav.select(0);
-        for i in 1..=(MAX_HISTORY_SIZE + 10) {
+        for i in 1..=(MAX + 10) {
             nav.select(i);
         }
-        assert_eq!(nav.history.len(), MAX_HISTORY_SIZE);
+        assert_eq!(nav.history.len(), MAX);
     }
 
     #[kithara::test]
