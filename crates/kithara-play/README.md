@@ -153,6 +153,17 @@ Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engi
 <tr><td><code>DjEvent</code></td><td>BPM detection, beat tick, sync engage/disengage</td></tr>
 </table>
 
+## Queue Auto-Advance
+
+Inside `kithara-play`, queue auto-advance uses a single near-end trigger:
+`TrackRequested`. The processor emits it once per playback cycle when
+`position + crossfade_duration >= duration`, with an EOF backstop for
+`crossfade_duration == 0` or any missed floating-point boundary. Terminal track
+completion is reported internally via `TrackPlaybackStopped { reason: Eof }`,
+while explicit interruption paths use `TrackPlaybackStopped { reason: Stop }`.
+This keeps the orchestration contract internal to `kithara-play` without
+changing the public player API.
+
 ## Engine Lifecycle
 
 1. `Engine::start()` -- activate audio output

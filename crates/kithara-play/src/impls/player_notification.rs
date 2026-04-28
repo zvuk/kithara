@@ -10,6 +10,14 @@ use crate::error::PlayError;
 /// Notifications emitted by the player processor on the audio thread.
 ///
 /// All variants carry an `Arc<str>` identifier for the track they refer to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrackPlaybackStopReason {
+    /// Playback stopped because the track naturally reached EOF.
+    Eof,
+    /// Playback stopped because the track was explicitly stopped or interrupted.
+    Stop,
+}
+
 #[expect(dead_code, reason = "fields read when player polls notification_rx")]
 #[expect(
     clippy::enum_variant_names,
@@ -23,17 +31,14 @@ pub(crate) enum PlayerNotification {
     TrackLoaded(Arc<str>),
     /// A track was removed from the processor arena.
     TrackUnloaded(Arc<str>),
-    /// A track is approaching its end (threshold-based).
-    TrackAboutToEnd(Arc<str>),
     /// A track started audible playback (fade-in completed or `play()`).
     TrackPlaybackStarted(Arc<str>),
-    /// A track naturally reached EOF.
-    TrackNaturalEnd {
+    /// A track stopped playback.
+    TrackPlaybackStopped {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
+        reason: TrackPlaybackStopReason,
     },
-    /// A track stopped playback (EOF or `stop()`).
-    TrackPlaybackStopped(Arc<str>),
     /// A track was paused (fade-out completed).
     TrackPlaybackPaused(Arc<str>),
     /// The next track should be queued (position reached fade duration before end).
@@ -64,6 +69,15 @@ mod tests {
         PlayerNotification::TrackRequested(Arc::from("queued.mp3")),
         "TrackRequested",
         "queued.mp3"
+    )]
+    #[case(
+        PlayerNotification::TrackPlaybackStopped {
+            src: Arc::from("ended.mp3"),
+            item_id: Some(Arc::from("item-1")),
+            reason: TrackPlaybackStopReason::Eof,
+        },
+        "TrackPlaybackStopped",
+        "ended.mp3"
     )]
     fn notification_debug_format(
         #[case] n: PlayerNotification,

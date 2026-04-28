@@ -31,7 +31,10 @@ use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::PlayerEvent,
-    impls::{player_notification::PlayerNotification, resource::Resource},
+    impls::{
+        player_notification::{PlayerNotification, TrackPlaybackStopReason},
+        resource::Resource,
+    },
     types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
 
@@ -41,6 +44,17 @@ const MIN_PLAYBACK_RATE: f32 = 0.01;
 struct QueuedResource {
     item_id: Option<Arc<str>>,
     resource: Resource,
+}
+
+/// Internal auto-advance state for the next queue item.
+///
+/// `PlayerImpl` remains the single orchestration owner for queue promotion:
+/// the queue still owns `current_index`, while `PendingNext` only tracks the
+/// already-enqueued successor and whether it has been activated.
+struct PendingNext {
+    index: usize,
+    src: Arc<str>,
+    activated: bool,
 }
 
 /// Configuration for the player.
@@ -99,6 +113,7 @@ pub struct PlayerImpl {
     pcm_pool: PcmPool,
     /// Shared playback rate propagated to the audio pipeline resampler.
     playback_rate_shared: Arc<AtomicF32>,
+    pending_next: Mutex<Option<PendingNext>>,
     rate: AtomicF32,
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
@@ -164,6 +179,7 @@ impl PlayerImpl {
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
+            pending_next: Mutex::new(None),
             rate: AtomicF32::new(0.0), // starts paused
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
@@ -261,6 +277,8 @@ impl PlayerImpl {
     /// Remove item at index. Returns the removed resource, or `None` if out of bounds
     /// or already consumed.
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
+        self.clear_pending_next(Some(self.current_index.load(Ordering::Relaxed)));
+
         let mut items = self.items.lock_sync();
         if index >= items.len() {
             return None;
@@ -280,6 +298,7 @@ impl PlayerImpl {
 
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
+        self.clear_pending_next(Some(self.current_index.load(Ordering::Relaxed)));
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
@@ -557,11 +576,29 @@ impl PlayerImpl {
             return;
         };
 
+        let mut notifications = Vec::new();
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
-            if let Some(event) = player_event_from_notification(notification.clone()) {
-                self.bus.publish(event);
-            } else {
-                tracing::trace!(?notification, "unhandled player notification");
+            notifications.push(notification);
+        }
+
+        for notification in notifications {
+            match notification.clone() {
+                PlayerNotification::TrackRequested(src) => {
+                    self.handle_track_requested(src, self.crossfade_duration() > 0.0);
+                }
+                PlayerNotification::TrackPlaybackStopped {
+                    reason: TrackPlaybackStopReason::Eof,
+                    ..
+                } => {
+                    self.handle_track_playback_stopped(notification);
+                }
+                _ => {
+                    if let Some(event) = player_event_from_notification(notification.clone()) {
+                        self.bus.publish(event);
+                    } else {
+                        tracing::trace!(?notification, "unhandled player notification");
+                    }
+                }
             }
         }
     }
@@ -628,6 +665,7 @@ impl PlayerImpl {
 
         self.ensure_engine_started()?;
         self.ensure_slot()?;
+        self.clear_pending_next(Some(index));
         self.current_index.store(index, Ordering::Relaxed);
         self.bus.publish(PlayerEvent::CurrentItemChanged);
 
@@ -718,33 +756,161 @@ impl PlayerImpl {
         }
     }
 
+    fn clear_pending_next(&self, current_index: Option<usize>) {
+        let pending = self.pending_next.lock_sync().take();
+        let Some(pending) = pending else {
+            return;
+        };
+
+        let preserve_active_current =
+            current_index.is_some_and(|index| pending.activated && pending.index == index);
+        if !preserve_active_current {
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
+        }
+    }
+
+    fn handle_track_requested(&self, track_src: Arc<str>, activate_now: bool) {
+        if self.action_at_item_end() == ActionAtItemEnd::Pause {
+            return;
+        }
+
+        let current_index = self.current_index.load(Ordering::Relaxed);
+        let next_index = current_index + 1;
+        let next_len = self.items.lock_sync().len();
+        if next_index >= next_len {
+            return;
+        }
+
+        let mut pending = self.pending_next.lock_sync();
+        if pending.as_ref().is_some_and(|pending| {
+            pending.activated
+                && pending.index == current_index
+                && pending.src.as_ref() != track_src.as_ref()
+        }) {
+            return;
+        }
+
+        let needs_preload = pending
+            .as_ref()
+            .is_none_or(|pending| pending.index != next_index);
+        if needs_preload {
+            let has_next_item = self
+                .items
+                .lock_sync()
+                .get(next_index)
+                .is_some_and(Option::is_some);
+            if !has_next_item {
+                return;
+            }
+
+            let previous_pending = pending.take();
+            drop(pending);
+
+            if let Some(previous_pending) = previous_pending
+                && !(previous_pending.activated && previous_pending.index == current_index)
+            {
+                let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
+                    src: previous_pending.src,
+                });
+            }
+
+            let Some(src) = self.enqueue_to_processor(next_index) else {
+                return;
+            };
+
+            pending = self.pending_next.lock_sync();
+            *pending = Some(PendingNext {
+                index: next_index,
+                src,
+                activated: false,
+            });
+        }
+
+        if !activate_now {
+            return;
+        }
+
+        let Some(pending_next) = pending.as_mut() else {
+            return;
+        };
+        if pending_next.activated {
+            return;
+        }
+
+        let src = Arc::clone(&pending_next.src);
+        pending_next.activated = true;
+        drop(pending);
+
+        self.start_playback(Arc::clone(&src));
+        self.current_index.store(next_index, Ordering::Relaxed);
+        self.bus.publish(PlayerEvent::CurrentItemChanged);
+    }
+
+    fn handle_track_playback_stopped(&self, notification: PlayerNotification) {
+        if let Some(event) = player_event_from_notification(notification) {
+            self.bus.publish(event);
+        }
+
+        if self.crossfade_duration() == 0.0 {
+            self.activate_pending_next();
+        }
+
+        let current_index = self.current_index.load(Ordering::Relaxed);
+        let should_clear = self
+            .pending_next
+            .lock_sync()
+            .as_ref()
+            .is_some_and(|pending| pending.activated && pending.index == current_index);
+        if should_clear {
+            *self.pending_next.lock_sync() = None;
+        }
+    }
+
+    fn activate_pending_next(&self) {
+        let current_index = self.current_index.load(Ordering::Relaxed);
+        let mut pending = self.pending_next.lock_sync();
+        let Some(pending_next) = pending.as_mut() else {
+            return;
+        };
+        if pending_next.activated {
+            return;
+        }
+
+        let src = Arc::clone(&pending_next.src);
+        let next_index = pending_next.index;
+        pending_next.activated = true;
+        drop(pending);
+
+        self.start_playback(src);
+        if next_index != current_index {
+            self.current_index.store(next_index, Ordering::Relaxed);
+            self.bus.publish(PlayerEvent::CurrentItemChanged);
+        }
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in [`PlayerResource`], and sends `LoadTrack` + `FadeIn` to the processor.
     fn load_current_item(&self) {
-        let mut items = self.items.lock_sync();
         let index = self.current_index.load(Ordering::Relaxed);
+        if let Some(src) = self.enqueue_to_processor(index) {
+            self.start_playback(src);
+        }
+    }
+
+    fn enqueue_to_processor(&self, index: usize) -> Option<Arc<str>> {
+        let mut items = self.items.lock_sync();
         if index >= items.len() {
-            return;
+            return None;
         }
 
-        // Take the resource out of the queue (if not already consumed).
-        let Some(queued) = items[index].take() else {
-            return; // Already loaded
-        };
+        let queued = items[index].take()?;
         let QueuedResource { item_id, resource } = queued;
 
-        // Propagate current playback rate to the resource's audio pipeline.
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
 
-        // Propagate host sample rate so the resampler is already initialised
-        // with the correct ratio.  Without this, the resampler starts in
-        // passthrough (host_sr = 0) and is recreated on the first worker
-        // step when the real host rate becomes visible — the expensive
-        // `make_sincs` call blocks the worker thread and starves other
-        // tracks during crossfade.
         let host_sr = self.engine.master_sample_rate();
         if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
             resource.set_host_sample_rate(sr);
@@ -755,23 +921,29 @@ impl PlayerImpl {
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 
-        // Send LoadTrack and FadeIn to the processor.
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             resource: arc_resource,
             item_id,
             src: Arc::clone(&src),
         });
+
+        Some(src)
+    }
+
+    fn start_playback(&self, src: Arc<str>) {
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
     }
 }
 
 fn player_event_from_notification(notification: PlayerNotification) -> Option<PlayerEvent> {
     match notification {
-        PlayerNotification::TrackNaturalEnd { item_id, .. } => {
-            Some(PlayerEvent::ItemDidPlayToEnd {
-                item_id: item_id.map(|id| id.to_string()),
-            })
-        }
+        PlayerNotification::TrackPlaybackStopped {
+            item_id,
+            reason: TrackPlaybackStopReason::Eof,
+            ..
+        } => Some(PlayerEvent::ItemDidPlayToEnd {
+            item_id: item_id.map(|id| id.to_string()),
+        }),
         _ => None,
     }
 }
@@ -796,12 +968,15 @@ impl crate::traits::dj::eq::Equalizer for PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_events::Event;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{EngineConfig, impls::offline_backend::OfflineConfig};
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -834,7 +1009,54 @@ mod tests {
     }
 
     fn make_resource(duration_secs: f64) -> Resource {
-        Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs))
+        Resource::from_reader_with_src(
+            TestPcmReader::new(mock_spec(), duration_secs),
+            Arc::from(format!("test-resource-{duration_secs}")),
+        )
+    }
+
+    fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource, Arc<str>) {
+        let item_id = Arc::<str>::from(item_id);
+        (
+            Resource::from_reader_with_src(
+                TestPcmReader::new(mock_spec(), duration_secs),
+                Arc::from(format!("memory://{item_id}")),
+            ),
+            item_id,
+        )
+    }
+
+    fn make_offline_player(crossfade_duration: f32, block_frames: u32) -> PlayerImpl {
+        let config = PlayerConfig::default().with_crossfade_duration(crossfade_duration);
+        let engine = EngineImpl::new_offline(
+            EngineConfig {
+                eq_layout: config.eq_layout.clone(),
+                max_slots: config.max_slots,
+                pcm_pool: config.pcm_pool.clone(),
+                ..EngineConfig::default()
+            },
+            config.bus.clone().unwrap_or_default(),
+            OfflineConfig {
+                sample_rate: 44_100,
+                block_frames,
+            },
+        );
+        PlayerImpl::with_engine(config, engine)
+    }
+
+    fn drain_player_events(
+        player: &PlayerImpl,
+        rx: &mut kithara_events::EventReceiver,
+    ) -> Vec<PlayerEvent> {
+        player.process_notifications();
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Player(event) = event {
+                events.push(event);
+            }
+        }
+        events
     }
 
     #[kithara::test]
@@ -1144,10 +1366,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn natural_end_notification_maps_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::TrackNaturalEnd {
+    fn eof_playback_stopped_notification_maps_to_item_end_event() {
+        let event = player_event_from_notification(PlayerNotification::TrackPlaybackStopped {
             src: Arc::from("track.mp3"),
             item_id: Some(Arc::from("item-1")),
+            reason: TrackPlaybackStopReason::Eof,
         });
         assert!(matches!(
             event,
@@ -1157,9 +1380,179 @@ mod tests {
 
     #[kithara::test]
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::TrackPlaybackStopped(
-            Arc::from("track.mp3"),
-        ));
+        let event = player_event_from_notification(PlayerNotification::TrackPlaybackStopped {
+            src: Arc::from("track.mp3"),
+            item_id: Some(Arc::from("item-1")),
+            reason: TrackPlaybackStopReason::Stop,
+        });
         assert!(event.is_none());
+    }
+
+    #[kithara::test]
+    fn queue_auto_advance_cf_zero_emits_terminal_before_current_changed() {
+        let player = make_offline_player(0.0, 64);
+        let mut rx = player.subscribe();
+        let (first, first_id) = make_tagged_resource("item-1", 0.05);
+        let (second, _second_id) = make_tagged_resource("item-2", 0.05);
+        player.insert_tagged(first, Some(Arc::clone(&first_id)), None);
+        player.insert_tagged(second, Some(Arc::from("item-2")), None);
+
+        player.play();
+        let _ = drain_player_events(&player, &mut rx);
+
+        let mut phase_events = Vec::new();
+        for _ in 0..128 {
+            let _ = player.engine().render_offline(64).unwrap();
+            phase_events.extend(drain_player_events(&player, &mut rx));
+            if phase_events.iter().any(|event| {
+                matches!(
+                    event,
+                    PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+                )
+            }) && phase_events
+                .iter()
+                .any(|event| matches!(event, PlayerEvent::CurrentItemChanged))
+            {
+                break;
+            }
+        }
+
+        let item_end_index = phase_events.iter().position(|event| {
+            matches!(
+                event,
+                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+            )
+        });
+        let current_changed_index = phase_events
+            .iter()
+            .position(|event| matches!(event, PlayerEvent::CurrentItemChanged));
+
+        assert!(
+            item_end_index.is_some() && current_changed_index.is_some(),
+            "{phase_events:?}"
+        );
+        let item_end_index = item_end_index.unwrap();
+        let current_changed_index = current_changed_index.unwrap();
+
+        assert!(item_end_index < current_changed_index);
+        assert_eq!(player.current_index(), 1);
+    }
+
+    #[kithara::test]
+    fn queue_auto_advance_cf_one_activates_before_first_terminal_event() {
+        let player = make_offline_player(1.0, 64);
+        let mut rx = player.subscribe();
+        let (first, _first_id) = make_tagged_resource("item-1", 0.05);
+        let (second, _second_id) = make_tagged_resource("item-2", 0.05);
+        player.insert_tagged(first, Some(Arc::from("item-1")), None);
+        player.insert_tagged(second, Some(Arc::from("item-2")), None);
+
+        player.play();
+        let _ = drain_player_events(&player, &mut rx);
+
+        let mut phase_events = Vec::new();
+        for _ in 0..128 {
+            let _ = player.engine().render_offline(64).unwrap();
+            phase_events.extend(drain_player_events(&player, &mut rx));
+            if phase_events.iter().any(|event| {
+                matches!(
+                    event,
+                    PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+                )
+            }) {
+                break;
+            }
+        }
+
+        let current_changed_index = phase_events
+            .iter()
+            .position(|event| matches!(event, PlayerEvent::CurrentItemChanged));
+        let item_end_index = phase_events.iter().position(|event| {
+            matches!(
+                event,
+                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+            )
+        });
+
+        assert!(
+            current_changed_index.is_some() && item_end_index.is_some(),
+            "{phase_events:?}"
+        );
+        let current_changed_index = current_changed_index.unwrap();
+        let item_end_index = item_end_index.unwrap();
+
+        assert!(current_changed_index < item_end_index);
+        assert_eq!(player.current_index(), 1);
+    }
+
+    #[kithara::test]
+    fn select_item_clears_pending_next_and_unloads_preloaded_track() {
+        let player = make_offline_player(1.0, 64);
+        let (first, _first_id) = make_tagged_resource("item-1", 0.05);
+        let (second, _second_id) = make_tagged_resource("item-2", 0.05);
+        let (third, _third_id) = make_tagged_resource("item-3", 0.05);
+        player.insert_tagged(first, Some(Arc::from("item-1")), None);
+        player.insert_tagged(second, Some(Arc::from("item-2")), None);
+        player.insert_tagged(third, Some(Arc::from("item-3")), None);
+
+        player.ensure_engine_started().unwrap();
+        player.ensure_slot().unwrap();
+        let src = player.enqueue_to_processor(1).unwrap();
+        *player.pending_next.lock_sync() = Some(PendingNext {
+            index: 1,
+            src: Arc::clone(&src),
+            activated: false,
+        });
+
+        player.select_item(2, true).unwrap();
+        let _ = player.engine().render_offline(64).unwrap();
+        let notifications = player.drain_notifications();
+
+        assert!(player.pending_next.lock_sync().is_none());
+        assert!(notifications.iter().any(|notification| {
+            notification.contains("TrackUnloaded") && notification.contains(src.as_ref())
+        }));
+        assert_eq!(player.current_index(), 2);
+    }
+
+    #[kithara::test]
+    fn pause_at_item_end_keeps_terminal_event_without_auto_advance() {
+        let player = make_offline_player(1.0, 64);
+        let mut rx = player.subscribe();
+        let (first, _first_id) = make_tagged_resource("item-1", 0.05);
+        let (second, _second_id) = make_tagged_resource("item-2", 0.05);
+        player.insert_tagged(first, Some(Arc::from("item-1")), None);
+        player.insert_tagged(second, Some(Arc::from("item-2")), None);
+        player.set_action_at_item_end(ActionAtItemEnd::Pause);
+
+        player.play();
+        let _ = drain_player_events(&player, &mut rx);
+
+        let mut phase_events = Vec::new();
+        for _ in 0..128 {
+            let _ = player.engine().render_offline(64).unwrap();
+            phase_events.extend(drain_player_events(&player, &mut rx));
+            if phase_events.iter().any(|event| {
+                matches!(
+                    event,
+                    PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+                )
+            }) {
+                break;
+            }
+        }
+
+        assert!(phase_events.iter().any(|event| {
+            matches!(
+                event,
+                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id) } if id == "item-1"
+            )
+        }));
+        assert!(
+            !phase_events
+                .iter()
+                .any(|event| matches!(event, PlayerEvent::CurrentItemChanged))
+        );
+        assert_eq!(player.current_index(), 0);
     }
 }

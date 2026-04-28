@@ -18,18 +18,12 @@ use kithara_platform::Mutex;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
-    player_notification::PlayerNotification,
+    player_notification::{PlayerNotification, TrackPlaybackStopReason},
     player_resource::{PlayerResource, ReadOutcome},
 };
 
 /// Minimum number of channels required for stereo processing.
 const MIN_STEREO_CHANNELS: usize = 2;
-
-/// Default fade duration in seconds.
-pub(crate) const DEFAULT_FADE_DURATION: f32 = 1.0;
-
-/// Default threshold (fraction of duration) for "about to end" notification.
-pub(crate) const DEFAULT_TRACK_END_THRESHOLD: f32 = 0.8;
 
 /// State machine for a single track's lifecycle.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -86,8 +80,8 @@ pub(crate) enum TrackReadOutcome {
     },
     /// Only the first `frames` samples were written; EOF was reached in-block.
     ///
-    /// `PlayerTrack::read` emits `TrackNaturalEnd`/`TrackPlaybackStopped` in
-    /// the same call so notification ordering matches the last written frame.
+    /// `PlayerTrack::read` emits EOF `TrackPlaybackStopped` in the same call
+    /// so notification ordering matches the last written frame.
     Partial {
         /// Number of frames written into the destination block.
         frames: usize,
@@ -110,10 +104,11 @@ pub(crate) struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
     state: TrackState,
     state_dirty: bool,
-    notified_about_to_end: bool,
     notified_track_requested: bool,
     mix: MixDSP,
     fade_curve: FadeCurve,
+    /// Current crossfade duration used for near-end trigger checks.
+    fade_duration: f32,
     /// Last observed playback position snapshot.
     ///
     /// This is a fallback value only. Source of truth is `PlayerResource`.
@@ -147,10 +142,10 @@ impl PlayerTrack {
             resource,
             state: TrackState::Preloading,
             state_dirty: false,
-            notified_about_to_end: false,
             notified_track_requested: false,
             mix: MixDSP::new(Mix::FULLY_WET, fade_curve, fade_conf, sample_rate),
             fade_curve,
+            fade_duration,
             observed_position: 0.0,
             observed_duration: 0.0,
             item_id,
@@ -169,7 +164,7 @@ impl PlayerTrack {
     /// 4. Detects fade completion and updates state.
     ///
     /// On [`TrackReadOutcome::Partial`], the last written frame belongs to this
-    /// track and natural-end notifications are emitted immediately in the same
+    /// track and EOF stop notifications are emitted immediately in the same
     /// call. The caller owns any remaining tail in the destination block.
     ///
     /// `range` selects the destination subrange inside `scratch_bufs` and
@@ -302,19 +297,15 @@ impl PlayerTrack {
         if self.state == TrackState::Finished {
             return;
         }
+        self.emit_track_requested(notification_tx);
         self.set_state(TrackState::Finished);
         notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackNaturalEnd {
+            .try_push(PlayerNotification::TrackPlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Eof,
             })
-            .ok();
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
-                &self.src,
-            )))
             .ok();
         self.state_dirty = false;
     }
@@ -335,9 +326,11 @@ impl PlayerTrack {
             .ok();
         notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
-                &self.src,
-            )))
+            .try_push(PlayerNotification::TrackPlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Stop,
+            })
             .ok();
         self.state_dirty = false;
     }
@@ -361,31 +354,23 @@ impl PlayerTrack {
             reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
         )]
         let dur = duration as f32;
-        let fade = DEFAULT_FADE_DURATION;
+        if pos + self.fade_duration >= dur {
+            self.emit_track_requested(notification_tx);
+        }
+    }
 
-        // TrackAboutToEnd
-        if !self.notified_about_to_end {
-            let threshold = (dur * DEFAULT_TRACK_END_THRESHOLD) - fade;
-            if pos >= threshold.max(0.0) {
-                notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
-                    .ok();
-                self.notified_about_to_end = true;
-            }
+    /// Emit the canonical near-end trigger once per playback cycle.
+    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.notified_track_requested {
+            return;
         }
 
-        // TrackRequested
-        if !self.notified_track_requested {
-            let threshold = dur - fade;
-            if pos >= threshold.max(0.0)
-                && notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
-                    .is_ok()
-            {
-                self.notified_track_requested = true;
-            }
+        if notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
+            .is_ok()
+        {
+            self.notified_track_requested = true;
         }
     }
 
@@ -417,7 +402,11 @@ impl PlayerTrack {
             TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
             TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
             TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
+            TrackState::Finished => PlayerNotification::TrackPlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Stop,
+            },
         };
 
         if notification_tx.lock_sync().try_push(notification).is_ok() {
@@ -460,7 +449,6 @@ impl PlayerTrack {
     pub(crate) fn fade_in(&mut self) {
         self.set_state(TrackState::FadingIn);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.notified_about_to_end = false;
         self.notified_track_requested = false;
     }
 
@@ -475,7 +463,6 @@ impl PlayerTrack {
         self.set_state(TrackState::Playing);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
         self.mix.reset_to_target();
-        self.notified_about_to_end = false;
         self.notified_track_requested = false;
     }
 
@@ -543,6 +530,7 @@ impl PlayerTrack {
             Mix::FULLY_WET
         };
         self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
+        self.fade_duration = fade_duration;
     }
 
     /// Update the fade curve used for future fade operations.
@@ -602,6 +590,16 @@ mod tests {
 
     fn make_track() -> PlayerTrack {
         make_track_with(60.0, None)
+    }
+
+    fn collect_notifications(
+        rx: &mut impl Consumer<Item = PlayerNotification>,
+    ) -> Vec<PlayerNotification> {
+        let mut notifications = Vec::new();
+        while let Some(notification) = rx.try_pop() {
+            notifications.push(notification);
+        }
+        notifications
     }
 
     #[kithara::test(tokio)]
@@ -665,7 +663,7 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn track_natural_end_notification_carries_item_id() {
+    async fn eof_playback_stopped_notification_carries_item_id() {
         let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(8).split();
         let notification_tx = Mutex::new(tx);
@@ -678,22 +676,27 @@ mod tests {
 
         track.play();
 
-        let mut saw_natural_end = false;
+        let mut saw_eof_stop = false;
         for _ in 0..4 {
             let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
             while let Some(notification) = rx.try_pop() {
-                if let PlayerNotification::TrackNaturalEnd { item_id, .. } = notification {
-                    saw_natural_end = matches!(item_id, Some(id) if id.as_ref() == "item-1");
+                if let PlayerNotification::TrackPlaybackStopped {
+                    item_id,
+                    reason: TrackPlaybackStopReason::Eof,
+                    ..
+                } = notification
+                {
+                    saw_eof_stop = matches!(item_id, Some(id) if id.as_ref() == "item-1");
                 }
             }
 
-            if saw_natural_end {
+            if saw_eof_stop {
                 break;
             }
         }
 
-        assert!(saw_natural_end);
+        assert!(saw_eof_stop);
     }
 
     #[kithara::test(tokio)]
@@ -737,7 +740,7 @@ mod tests {
 
         let mut saw_partial = false;
         let mut saw_eof_after_partial = false;
-        let mut natural_end_count = 0;
+        let mut eof_stop_count = 0;
 
         for _ in 0..8 {
             let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
@@ -758,25 +761,193 @@ mod tests {
             }
 
             while let Some(notification) = rx.try_pop() {
-                if let PlayerNotification::TrackNaturalEnd { item_id, .. } = notification {
-                    assert!(saw_partial, "TrackNaturalEnd must not precede Partial");
+                if let PlayerNotification::TrackPlaybackStopped {
+                    item_id,
+                    reason: TrackPlaybackStopReason::Eof,
+                    ..
+                } = notification
+                {
+                    assert!(saw_partial, "EOF stop must not precede Partial");
                     assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
-                    natural_end_count += 1;
+                    eof_stop_count += 1;
                 }
             }
         }
 
         while let Some(notification) = rx.try_pop() {
-            if let PlayerNotification::TrackNaturalEnd { item_id, .. } = notification {
-                assert!(saw_partial, "TrackNaturalEnd must not precede Partial");
+            if let PlayerNotification::TrackPlaybackStopped {
+                item_id,
+                reason: TrackPlaybackStopReason::Eof,
+                ..
+            } = notification
+            {
+                assert!(saw_partial, "EOF stop must not precede Partial");
                 assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
-                natural_end_count += 1;
+                eof_stop_count += 1;
             }
         }
 
         assert!(saw_partial, "expected a Partial outcome before EOF");
         assert!(saw_eof_after_partial, "expected EOF after Partial");
-        assert_eq!(natural_end_count, 1, "expected exactly one TrackNaturalEnd");
+        assert_eq!(
+            eof_stop_count, 1,
+            "expected exactly one EOF stop notification"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_requested_emits_once_when_position_crosses_fade_threshold() {
+        let mut track = make_track_with(10.0, None);
+        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        track.update_fade_duration(0.2, sample_rate);
+        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let notification_tx = Mutex::new(tx);
+        let mut scratch_l = [0.0; 512];
+        let mut scratch_r = [0.0; 512];
+        let mut mix_l = [0.0; 512];
+        let mut mix_r = [0.0; 512];
+        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+        track.play();
+        track.seek(9.79);
+
+        let mut requested_count = 0;
+        let mut saw_eof_stop = false;
+
+        for _ in 0..4 {
+            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+            for notification in collect_notifications(&mut rx) {
+                match notification {
+                    PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3" => {
+                        requested_count += 1;
+                    }
+                    PlayerNotification::TrackPlaybackStopped {
+                        src,
+                        reason: TrackPlaybackStopReason::Eof,
+                        ..
+                    } if src.as_ref() == "test.mp3" => {
+                        saw_eof_stop = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            if requested_count > 0 {
+                break;
+            }
+        }
+
+        assert_eq!(requested_count, 1);
+        assert!(
+            !saw_eof_stop,
+            "threshold-triggered TrackRequested should precede EOF"
+        );
+
+        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let notifications = collect_notifications(&mut rx);
+        assert!(
+            notifications.iter().all(|notification| !matches!(
+                notification,
+                PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
+            )),
+            "TrackRequested must not be emitted twice in one playback cycle"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_requested_backstops_eof_when_threshold_was_not_reached_earlier() {
+        let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        track.update_fade_duration(0.0, sample_rate);
+        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let notification_tx = Mutex::new(tx);
+        let mut scratch_l = [0.0; 512];
+        let mut scratch_r = [0.0; 512];
+        let mut mix_l = [0.0; 512];
+        let mut mix_r = [0.0; 512];
+        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+        track.play();
+
+        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
+
+        let notifications = collect_notifications(&mut rx);
+        let requested_count = notifications
+            .iter()
+            .filter(|notification| {
+                matches!(notification, PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3")
+            })
+            .count();
+        let eof_stop_count = notifications
+            .iter()
+            .filter(|notification| {
+                matches!(
+                    notification,
+                    PlayerNotification::TrackPlaybackStopped {
+                        src,
+                        item_id,
+                        reason: TrackPlaybackStopReason::Eof,
+                    }
+                    if src.as_ref() == "test.mp3"
+                        && matches!(item_id, Some(id) if id.as_ref() == "item-1")
+                )
+            })
+            .count();
+
+        assert_eq!(requested_count, 1);
+        assert_eq!(eof_stop_count, 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_requested_is_not_duplicated_at_eof_after_early_trigger() {
+        let mut track = make_track_with(5.0, Some(Arc::from("item-1")));
+        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        track.update_fade_duration(0.2, sample_rate);
+        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
+        let notification_tx = Mutex::new(tx);
+        let mut scratch_l = [0.0; 512];
+        let mut scratch_r = [0.0; 512];
+        let mut mix_l = [0.0; 512];
+        let mut mix_r = [0.0; 512];
+        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+        track.play();
+
+        let mut requested_count = 0;
+        let mut eof_stop_count = 0;
+
+        for _ in 0..600 {
+            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+
+            for notification in collect_notifications(&mut rx) {
+                match notification {
+                    PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3" => {
+                        requested_count += 1;
+                    }
+                    PlayerNotification::TrackPlaybackStopped {
+                        src,
+                        item_id,
+                        reason: TrackPlaybackStopReason::Eof,
+                    } if src.as_ref() == "test.mp3"
+                        && matches!(&item_id, Some(id) if id.as_ref() == "item-1") =>
+                    {
+                        eof_stop_count += 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            if eof_stop_count == 1 {
+                break;
+            }
+        }
+
+        assert_eq!(requested_count, 1);
+        assert_eq!(eof_stop_count, 1);
     }
 
     #[kithara::test(tokio)]
