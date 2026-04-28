@@ -38,9 +38,11 @@ use std::{
     },
 };
 
+#[cfg(test)]
+use kithara_platform::thread::sleep;
 use kithara_platform::{
     Condvar, Mutex,
-    thread::{JoinHandle, sleep, spawn_named},
+    thread::{JoinHandle, spawn_named},
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -222,25 +224,40 @@ impl FlushHub {
     fn run(self: Arc<Self>) {
         loop {
             // 1. Wait for a pending signal or cancellation.
-            let force = {
-                let mut guard = self.state.lock_sync();
-                while !guard.pending {
-                    if self.cancel.is_cancelled() {
-                        drop(guard);
-                        let _g = self.flush_lock.lock_sync();
-                        let _ = self.flush_dirty();
-                        return;
-                    }
-                    let deadline = Instant::now() + self.policy.poll_interval;
-                    let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
-                    guard = next;
+            let mut guard = self.state.lock_sync();
+            while !guard.pending {
+                if self.cancel.is_cancelled() {
+                    drop(guard);
+                    let _g = self.flush_lock.lock_sync();
+                    let _ = self.flush_dirty();
+                    return;
                 }
-                guard.op_count >= self.policy.force_every_n_ops.get()
-            };
+                let deadline = Instant::now() + self.policy.poll_interval;
+                let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
+                guard = next;
+            }
+            drop(guard);
 
-            // 2. Debounce unless we're past the force-flush threshold.
-            if !force {
-                sleep(self.policy.debounce);
+            // 2. Debounce window. Wait on the condvar so additional
+            //    signals can either wake us early when the force-flush
+            //    threshold is reached or extend coalescing within the
+            //    same window. Cancellation also breaks out early.
+            let debounce_deadline = Instant::now() + self.policy.debounce;
+            loop {
+                let guard = self.state.lock_sync();
+                if guard.op_count >= self.policy.force_every_n_ops.get() {
+                    break;
+                }
+                if self.cancel.is_cancelled() {
+                    drop(guard);
+                    let _g = self.flush_lock.lock_sync();
+                    let _ = self.flush_dirty();
+                    return;
+                }
+                if Instant::now() >= debounce_deadline {
+                    break;
+                }
+                let (_next, _) = self.cv.wait_sync_timeout(guard, debounce_deadline);
             }
 
             // 3. Reset counters and flush under flush_lock.

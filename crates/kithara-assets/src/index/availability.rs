@@ -5,15 +5,28 @@
 //! `Availability` is a single resource's snapshot of which byte ranges
 //! have been written and whether it has been committed.
 
-use std::{collections::BTreeMap, ops::Range, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    path::PathBuf,
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use dashmap::DashMap;
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, AvailabilityObserver, ResourceExt, StorageError};
+use kithara_storage::{Atomic, AvailabilityObserver, MmapResource, ResourceExt, StorageError};
 use rangemap::RangeSet;
 use rkyv::option::ArchivedOption;
+use tokio_util::sync::CancellationToken;
 
-use super::schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile};
+use super::{
+    flush::{FlushHub, Flushable},
+    persist,
+    schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
+};
 use crate::{
     error::{AssetsError, AssetsResult},
     key::ResourceKey,
@@ -62,6 +75,25 @@ type AssetMap = DashMap<String, Arc<DashMap<String, Arc<Mutex<Availability>>>>>;
 struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     assets: AssetMap,
+    /// Disk-backed persist target. Set once via
+    /// [`AvailabilityIndex::enable_persistence`]; later flushes reuse
+    /// the cached `Atomic<MmapResource>` handle.
+    persist: OnceLock<AvailabilityPersist>,
+    /// Set by [`AvailabilityIndex::attach_to`]. While `None`,
+    /// `ScopedAvailabilityObserver` falls back to the legacy
+    /// "explicit checkpoint only" contract — every observer event
+    /// just marks `dirty` so the next call to
+    /// [`AvailabilityIndex::flush`] writes the snapshot.
+    hub: OnceLock<Arc<FlushHub>>,
+    /// `true` when the in-memory aggregate has uncommitted writes
+    /// since the last successful flush.
+    dirty: AtomicBool,
+}
+
+struct AvailabilityPersist {
+    path: PathBuf,
+    cancel: CancellationToken,
+    res: OnceLock<Atomic<MmapResource>>,
 }
 
 impl AvailabilityIndex {
@@ -69,8 +101,70 @@ impl AvailabilityIndex {
         Self {
             inner: Arc::new(InnerIndex {
                 assets: DashMap::new(),
+                persist: OnceLock::new(),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Bind this aggregate to a [`FlushHub`] for coordinated flushing.
+    /// Called once per `AssetStore` build; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        if self.inner.hub.set(Arc::clone(hub)).is_err() {
+            return;
+        }
+        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+    }
+
+    /// Enable disk persistence rooted at `path`. Hydrates the
+    /// in-memory aggregate from the existing on-disk snapshot (if
+    /// any), then caches the `Atomic<MmapResource>` for subsequent
+    /// flushes. Idempotent: subsequent calls are no-ops.
+    ///
+    /// Failures (open, load) collapse silently — the aggregate
+    /// stays empty and the persist resource is materialised lazily
+    /// on first flush.
+    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancellationToken) {
+        let opened = if path.exists() {
+            match persist::open_existing(&path, &cancel) {
+                Ok(res) => {
+                    let atomic = Atomic::new(res);
+                    let _ = self.load_from(&atomic);
+                    Some(atomic)
+                }
+                Err(e) => {
+                    tracing::debug!("open existing availability.bin failed: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let _ = self.inner.persist.set(AvailabilityPersist {
+            path,
+            cancel,
+            res: opened.map_or_else(OnceLock::new, |a| {
+                let cell = OnceLock::new();
+                cell.set(a)
+                    .unwrap_or_else(|_| unreachable!("freshly created cell"));
+                cell
+            }),
+        });
+    }
+
+    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
+    /// when a hub is attached, or runs the inline serialise+write path
+    /// otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first per-source flush error encountered.
+    pub(crate) fn flush(&self) -> AssetsResult<()> {
+        self.inner
+            .hub
+            .get()
+            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
     }
 
     pub(crate) fn record_write(&self, asset_root: &str, key: &ResourceKey, range: Range<u64>) {
@@ -80,12 +174,14 @@ impl AvailabilityIndex {
         let (root, path) = Self::resolve_refs(asset_root, key);
         let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().insert(range);
+        self.inner.dirty.store(true, Ordering::Release);
     }
 
     pub(crate) fn record_commit(&self, asset_root: &str, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(asset_root, key);
         let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().mark_committed(final_len);
+        self.inner.dirty.store(true, Ordering::Release);
     }
 
     pub(crate) fn available_ranges(&self, asset_root: &str, key: &ResourceKey) -> RangeSet<u64> {
@@ -226,48 +322,69 @@ impl AvailabilityIndex {
         Ok(())
     }
 
-    /// Persist the aggregate index to storage atomically.
+    /// Persist the aggregate index to a caller-supplied storage
+    /// resource. Used by the cross-instance roundtrip tests; the
+    /// production flush path goes through [`Flushable::flush`].
+    #[cfg(test)]
     pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
-        let mut availability_file = AvailabilityFile {
-            version: 1,
-            assets: BTreeMap::new(),
+        write_aggregate(&self.inner, res)
+    }
+}
+
+impl Flushable for InnerIndex {
+    fn name(&self) -> &'static str {
+        "availability"
+    }
+
+    fn dirty(&self) -> &AtomicBool {
+        &self.dirty
+    }
+
+    fn flush(&self) -> AssetsResult<()> {
+        let Some(p) = self.persist.get() else {
+            self.dirty.store(false, Ordering::Release);
+            return Ok(());
         };
-
-        // Dump memory state into the file representation
-        for entry in &self.inner.assets {
-            let root = entry.key();
-            let memory_asset = entry.value();
-
-            let disk_asset = availability_file
-                .assets
-                .entry(root.clone())
-                .or_insert_with(|| AssetAvailabilityFile {
-                    resources: BTreeMap::new(),
-                });
-
-            for res_entry in &**memory_asset {
-                let path = res_entry.key();
-                let avail = res_entry.value().lock_sync();
-
-                let ranges = avail.ranges.iter().map(|r| (r.start, r.end)).collect();
-
-                disk_asset.resources.insert(
-                    path.clone(),
-                    ResourceAvailabilityFile {
-                        ranges,
-                        final_len: avail.final_len,
-                        committed: avail.committed,
-                    },
-                );
-            }
-        }
-
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&availability_file)
-            .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-        res.write_all(&bytes)?;
-
+        let atomic = persist::init_atomic(&p.res, &p.path, &p.cancel)?;
+        write_aggregate(self, atomic)?;
+        self.dirty.store(false, Ordering::Release);
         Ok(())
     }
+}
+
+/// Serialise the aggregate into an `Atomic`-wrapped storage resource.
+fn write_aggregate<R: ResourceExt>(inner: &InnerIndex, res: &Atomic<R>) -> AssetsResult<()> {
+    let mut file = AvailabilityFile {
+        version: 1,
+        assets: BTreeMap::new(),
+    };
+    for entry in &inner.assets {
+        let root = entry.key();
+        let memory_asset = entry.value();
+        let disk_asset = file
+            .assets
+            .entry(root.clone())
+            .or_insert_with(|| AssetAvailabilityFile {
+                resources: BTreeMap::new(),
+            });
+        for res_entry in &**memory_asset {
+            let path = res_entry.key();
+            let avail = res_entry.value().lock_sync();
+            let ranges = avail.ranges.iter().map(|r| (r.start, r.end)).collect();
+            disk_asset.resources.insert(
+                path.clone(),
+                ResourceAvailabilityFile {
+                    ranges,
+                    final_len: avail.final_len,
+                    committed: avail.committed,
+                },
+            );
+        }
+    }
+    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
+    res.write_all(&bytes)?;
+    Ok(())
 }
 
 impl Default for AvailabilityIndex {
@@ -290,29 +407,14 @@ pub(crate) struct ScopedAvailabilityObserver {
     asset_root: String,
     key: ResourceKey,
     index: AvailabilityIndex,
-    /// Optional signal shared with [`crate::disk_store::DiskAssetStore`]'s
-    /// auto-flush background task. `None` disables the commit-debounce
-    /// trigger (historical behaviour: callers drive `checkpoint()`
-    /// explicitly).
-    #[cfg(not(target_arch = "wasm32"))]
-    signal: Option<Arc<super::super::disk_store::CheckpointSignal>>,
 }
 
 impl ScopedAvailabilityObserver {
-    pub(crate) fn new(
-        asset_root: String,
-        key: ResourceKey,
-        index: AvailabilityIndex,
-        #[cfg(not(target_arch = "wasm32"))] signal: Option<
-            Arc<super::super::disk_store::CheckpointSignal>,
-        >,
-    ) -> Arc<Self> {
+    pub(crate) fn new(asset_root: String, key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
         Arc::new(Self {
             asset_root,
             key,
             index,
-            #[cfg(not(target_arch = "wasm32"))]
-            signal,
         })
     }
 }
@@ -320,14 +422,22 @@ impl ScopedAvailabilityObserver {
 impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_write(&self, range: Range<u64>) {
         self.index.record_write(&self.asset_root, &self.key, range);
+        // `record_write` already set `dirty`. Don't run a sync flush
+        // here — Availability follows an "explicit checkpoint only"
+        // contract by default (matches the legacy `spawn_auto_flush`
+        // behaviour: no runtime → no auto-flush). When a worker is
+        // attached, ping it so the dirty bit becomes a debounced
+        // background flush.
+        if let Some(hub) = self.index.inner.hub.get() {
+            hub.signal();
+        }
     }
 
     fn on_commit(&self, final_len: u64) {
         self.index
             .record_commit(&self.asset_root, &self.key, final_len);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(ref signal) = self.signal {
-            signal.on_commit();
+        if let Some(hub) = self.index.inner.hub.get() {
+            hub.signal();
         }
     }
 }

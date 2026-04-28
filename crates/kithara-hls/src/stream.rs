@@ -273,8 +273,8 @@ fn build_asset_store(
     if let Some(cap) = config.store.cache_capacity {
         builder = builder.cache_capacity(cap);
     }
-    if let Some(n) = config.store.checkpoint_every {
-        builder = builder.checkpoint_every(n);
+    if let Some(ref hub) = config.store.flush_hub {
+        builder = builder.flush_hub(Arc::clone(hub));
     }
     builder.build()
 }
