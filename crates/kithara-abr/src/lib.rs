@@ -18,7 +18,6 @@
 mod abr;
 mod controller;
 mod estimator;
-mod ewma;
 mod handle;
 mod state;
 mod types;

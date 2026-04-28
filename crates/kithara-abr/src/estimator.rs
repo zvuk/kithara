@@ -3,7 +3,43 @@ use kithara_platform::{Mutex, time::Duration};
 #[cfg(any(test, feature = "internal"))]
 use unimock::unimock;
 
-use crate::ewma::Ewma;
+#[derive(Clone, Debug)]
+struct Ewma {
+    alpha: f64,
+    last_estimate: f64,
+    total_weight: f64,
+}
+
+impl Ewma {
+    const HALF_LIFE_BASE: f64 = 0.5;
+    const MIN_HALF_LIFE_SECS: f64 = 0.001;
+    const MIN_ZERO_FACTOR: f64 = 1e-6;
+
+    fn new(half_life_secs: f64) -> Self {
+        Self {
+            alpha: f64::exp(
+                Self::HALF_LIFE_BASE.ln() / half_life_secs.max(Self::MIN_HALF_LIFE_SECS),
+            ),
+            last_estimate: 0.0,
+            total_weight: 0.0,
+        }
+    }
+
+    fn add_sample(&mut self, weight: f64, val: f64) {
+        let adj_alpha = self.alpha.powf(weight.max(0.0));
+        self.last_estimate = val * (1.0 - adj_alpha) + adj_alpha * self.last_estimate;
+        self.total_weight += weight.max(0.0);
+    }
+
+    fn get_estimate(&self) -> f64 {
+        if self.total_weight <= 0.0 {
+            0.0
+        } else {
+            let zero_factor = 1.0 - self.alpha.powf(self.total_weight);
+            self.last_estimate / zero_factor.max(Self::MIN_ZERO_FACTOR)
+        }
+    }
+}
 
 /// Trait for throughput estimation strategies.
 ///
@@ -33,13 +69,13 @@ struct ThroughputInner {
 }
 
 impl ThroughputEstimator {
+    const BITS_PER_BYTE_MS: f64 = 8000.0;
+    const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
     const FAST_HALF_LIFE_SECS: f64 = 2.0;
-    const SLOW_HALF_LIFE_SECS: f64 = 10.0;
     const MIN_CHUNK_BYTES: u64 = 16_000;
     const MIN_DURATION_MS: f64 = 0.5;
     const MS_PER_SEC: f64 = 1000.0;
-    const BITS_PER_BYTE_MS: f64 = 8000.0;
-    const CACHE_INITIAL_BPS: f64 = 100_000_000.0;
+    const SLOW_HALF_LIFE_SECS: f64 = 10.0;
 
     #[must_use]
     pub fn new() -> Self {

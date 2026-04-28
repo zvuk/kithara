@@ -78,11 +78,11 @@ fn make_view<'a>(
     settings: &'a AbrSettings,
 ) -> AbrView<'a> {
     AbrView {
+        variants,
+        settings,
         estimate_bps: bps,
         buffer_ahead: None,
         bytes_downloaded: 10 * 1024 * 1024,
-        variants,
-        settings,
     }
 }
 

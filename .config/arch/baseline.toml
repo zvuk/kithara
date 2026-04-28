@@ -72,7 +72,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/test_server.rs" = 1
 
 [flat_directory]
-"crates/kithara-abr/src" = 1
 "crates/kithara-app/src" = 1
 "crates/kithara-app/src/gui" = 1
 "crates/kithara-assets/src" = 1
@@ -193,7 +192,6 @@ xtask = 1
 "crates/kithara-test-utils/src/test_server.rs::impl HlsFixtureBuilder" = 1
 
 [single_word_filenames]
-"crates/kithara-abr/tests/state_machine.rs" = 1
 "crates/kithara-app/src/tui/tracing_init.rs" = 1
 "crates/kithara-assets/src/disk_store.rs" = 1
 "crates/kithara-assets/src/mem_store.rs" = 1
