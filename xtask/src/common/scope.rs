@@ -148,8 +148,14 @@ impl Scope {
                     out.push(c.clone());
                 }
                 if out.is_empty() {
-                    out.push("--workspace".into());
+                    return vec!["--workspace".into()];
                 }
+                // `--no-deps` keeps clippy focused on the target crate(s).
+                // Without it, dead-code in a dependency (e.g. items behind
+                // a non-default feature like kithara-hls's `internal`)
+                // surfaces as errors during a per-crate audit. Workspace
+                // clippy stays in `just lint-fast`.
+                out.push("--no-deps".into());
                 out
             }
             Tool::Fmt => {
@@ -294,7 +300,10 @@ mod tests {
     #[test]
     fn crate_scope_flags() {
         let s = Scope::new(vec!["kithara-queue".into()], vec![]);
-        assert_eq!(s.flags_for(Tool::Clippy), vec!["-p", "kithara-queue"]);
+        assert_eq!(
+            s.flags_for(Tool::Clippy),
+            vec!["-p", "kithara-queue", "--no-deps"]
+        );
         assert_eq!(s.flags_for(Tool::Fmt), vec!["-p", "kithara-queue"]);
         assert_eq!(s.flags_for(Tool::Xtask), vec!["--crate", "kithara-queue"]);
         assert_eq!(s.flags_for(Tool::AstGrep), vec!["crates/kithara-queue"]);
@@ -303,7 +312,10 @@ mod tests {
     #[test]
     fn crate_path_extracts_crate_name_for_clippy() {
         let s = Scope::new(vec![], vec!["crates/kithara-abr/src".into()]);
-        assert_eq!(s.flags_for(Tool::Clippy), vec!["-p", "kithara-abr"]);
+        assert_eq!(
+            s.flags_for(Tool::Clippy),
+            vec!["-p", "kithara-abr", "--no-deps"]
+        );
         assert_eq!(
             s.flags_for(Tool::Xtask),
             vec!["--path", "crates/kithara-abr/src"]
