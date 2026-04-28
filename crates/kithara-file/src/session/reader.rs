@@ -16,15 +16,15 @@ use kithara_stream::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
 use crate::coord::FileCoord;
 
 pub(crate) struct FileReaderHooks {
-    bus: EventBus,
-    coord: Arc<FileCoord>,
     byte_cursor: Arc<AtomicU64>,
+    coord: Arc<FileCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
-    last_cursor: u64,
+    bus: EventBus,
+    initial_seek_published: bool,
     /// See `HlsReaderHooks::initial_cursor` — same recreate-after-
     /// seek-failure scenario.
     initial_cursor: u64,
-    initial_seek_published: bool,
+    last_cursor: u64,
 }
 
 impl FileReaderHooks {
@@ -37,10 +37,10 @@ impl FileReaderHooks {
         let last_cursor = byte_cursor.load(Ordering::Relaxed);
         Self {
             bus,
-            coord,
             byte_cursor,
-            seek_epoch_handle,
+            coord,
             last_cursor,
+            seek_epoch_handle,
             initial_cursor: last_cursor,
             initial_seek_published: false,
         }
@@ -56,9 +56,9 @@ impl FileReaderHooks {
             return;
         }
         self.bus.publish(FileEvent::ReaderSeek {
+            seek_epoch,
             from_offset: self.initial_cursor,
             to_offset: cursor,
-            seek_epoch,
         });
     }
 }
@@ -89,9 +89,9 @@ impl DecoderHooks for FileReaderHooks {
         self.last_cursor = to;
         let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
         self.bus.publish(FileEvent::ReaderSeek {
+            seek_epoch,
             from_offset: from,
             to_offset: to,
-            seek_epoch,
         });
     }
 }

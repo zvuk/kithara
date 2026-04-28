@@ -37,14 +37,22 @@ impl From<PathBuf> for FileSrc {
 #[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct FileConfig {
-    /// Cancellation token for graceful shutdown.
-    pub cancel: Option<CancellationToken>,
-    /// Event bus channel capacity (used when `bus` is not provided).
-    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
-    pub event_channel_capacity: usize,
+    /// File source (remote URL or local path).
+    #[derivative(Default(
+        value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
+    ))]
+    pub src: FileSrc,
     /// Event bus (optional - if not provided, one is created internally).
     #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
+    /// Cancellation token for graceful shutdown.
+    pub cancel: Option<CancellationToken>,
+    /// Shared downloader (created lazily if not provided).
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub downloader: Option<Downloader>,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
@@ -57,19 +65,11 @@ pub struct FileConfig {
     /// cache directory.
     #[setters(skip)]
     pub name: Option<String>,
-    /// Additional HTTP headers to include in all requests.
-    pub headers: Option<Headers>,
-    /// File source (remote URL or local path).
-    #[derivative(Default(
-        value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
-    ))]
-    pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
-    /// Shared downloader (created lazily if not provided).
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub downloader: Option<Downloader>,
+    /// Event bus channel capacity (used when `bus` is not provided).
+    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
+    pub event_channel_capacity: usize,
 }
 
 impl FileConfig {
@@ -82,12 +82,6 @@ impl FileConfig {
         }
     }
 
-    /// Set name for cache disambiguation.
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
     /// Set shared downloader.
     ///
     /// When not provided, a private downloader is created and spawned
@@ -95,6 +89,12 @@ impl FileConfig {
     #[must_use]
     pub fn with_downloader(mut self, dl: Downloader) -> Self {
         self.downloader = Some(dl);
+        self
+    }
+
+    /// Set name for cache disambiguation.
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.name = Some(name.into());
         self
     }
 }

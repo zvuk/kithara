@@ -26,9 +26,9 @@ use crate::{coord::FileCoord, error::SourceError};
 /// before constructing a remote `FileSource`.
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
+    pub(crate) backend: Arc<AssetStore>,
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
-    pub(crate) backend: Arc<AssetStore>,
     pub(crate) key: ResourceKey,
 }
 
@@ -43,10 +43,10 @@ impl FileStreamState {
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
         Ok(Self {
-            res,
             bus,
-            backend: Arc::clone(assets),
             key,
+            res,
+            backend: Arc::clone(assets),
         })
     }
 }
@@ -66,66 +66,61 @@ pub(crate) enum FilePhase {
 
 /// Immutable creation-time parameters for `FileInner::new`.
 pub(crate) struct FileInnerParams {
+    pub(crate) backend: Arc<AssetStore>,
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) res: AssetResource,
-    pub(crate) bus: EventBus,
     pub(crate) cancel: CancellationToken,
-    pub(crate) url: Url,
+    pub(crate) bus: EventBus,
     pub(crate) headers: Option<Headers>,
-    pub(crate) backend: Arc<AssetStore>,
     pub(crate) key: ResourceKey,
+    pub(crate) url: Url,
 }
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing — there is no `Mutex`.
 pub(crate) struct FileInner {
     // --- creation-time params (immutable) ---
+    pub(crate) backend: Arc<AssetStore>,
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) res: AssetResource,
-    pub(crate) bus: EventBus,
     pub(crate) cancel: CancellationToken,
-    pub(crate) url: Url,
+    pub(crate) bus: EventBus,
+    /// Codec discovered from the HTTP `Content-Type` header on first connect.
+    /// Set at most once by the download driver.
+    pub(crate) content_type_codec: OnceLock<AudioCodec>,
     pub(crate) headers: Option<Headers>,
-    pub(crate) backend: Arc<AssetStore>,
     pub(crate) key: ResourceKey,
+    pub(crate) url: Url,
 
     // --- mutable state (no Mutex needed) ---
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
-    /// Codec discovered from the HTTP `Content-Type` header on first connect.
-    /// Set at most once by the download driver.
-    pub(crate) content_type_codec: OnceLock<AudioCodec>,
 }
 
 impl FileInner {
     pub(crate) fn new(params: FileInnerParams, initial_phase: FilePhase) -> Self {
         let FileInnerParams {
+            backend,
             coord,
             res,
-            bus,
             cancel,
-            url,
+            bus,
             headers,
-            backend,
             key,
+            url,
         } = params;
         Self {
-            coord,
-            res,
+            backend,
             bus,
             cancel,
-            url,
+            coord,
             headers,
-            backend,
             key,
-            phase: AtomicU8::new(initial_phase as u8),
+            res,
+            url,
             content_type_codec: OnceLock::new(),
+            phase: AtomicU8::new(initial_phase as u8),
         }
-    }
-
-    /// Lock-free FSM transition.
-    pub(crate) fn set_phase(&self, phase: FilePhase) {
-        self.phase.store(phase as u8, Ordering::Release);
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.
@@ -138,5 +133,10 @@ impl FileInner {
         self.set_phase(FilePhase::Complete);
         self.res.fail(reason.to_string());
         self.backend.remove_resource(&self.key);
+    }
+
+    /// Lock-free FSM transition.
+    pub(crate) fn set_phase(&self, phase: FilePhase) {
+        self.phase.store(phase as u8, Ordering::Release);
     }
 }

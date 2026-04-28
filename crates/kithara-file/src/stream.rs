@@ -26,13 +26,9 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
-    type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;
-
-    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
-        config.bus.clone()
-    }
+    type Source = FileSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let cancel = config.cancel.clone().unwrap_or_default();
@@ -44,6 +40,10 @@ impl StreamType for File {
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel),
         })
         .await
+    }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.bus.clone()
     }
 }
 

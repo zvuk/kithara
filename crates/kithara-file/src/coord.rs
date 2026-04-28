@@ -13,12 +13,12 @@ use kithara_stream::{DemandSlot, Timeline};
 use platform_tokio::sync::Notify;
 
 pub(crate) struct FileCoord {
+    read_pos: Arc<AtomicU64>,
+    total_bytes: Arc<AtomicU64>,
     demand: DemandSlot<Range<u64>>,
     downloader_wake: Notify,
     reader_advanced: Notify,
-    read_pos: Arc<AtomicU64>,
     timeline: Timeline,
-    total_bytes: Arc<AtomicU64>,
 }
 
 impl FileCoord {
@@ -27,48 +27,23 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn new(timeline: Timeline) -> Self {
         Self {
+            timeline,
             demand: DemandSlot::new(),
             downloader_wake: Notify::new(),
-            reader_advanced: Notify::new(),
             read_pos: Arc::new(AtomicU64::new(0)),
-            timeline,
+            reader_advanced: Notify::new(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
+    }
+
+    /// Borrow the demand notify — callers await `.notified()` directly.
+    pub(crate) fn demand_notify(&self) -> &Notify {
+        &self.downloader_wake
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn read_pos(&self) -> u64 {
         self.read_pos.load(Ordering::Acquire)
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub(crate) fn set_read_pos(&self, value: u64) {
-        self.read_pos.store(value, Ordering::Release);
-        self.reader_advanced.notify_one();
-    }
-
-    pub(crate) fn set_download_pos(&self, value: u64) {
-        self.timeline.set_download_position(value);
-    }
-
-    #[must_use]
-    pub(crate) fn total_bytes(&self) -> Option<u64> {
-        let total = self.total_bytes.load(Ordering::Acquire);
-        if total == Self::NO_TOTAL_BYTES {
-            None
-        } else {
-            Some(total)
-        }
-    }
-
-    pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
-        self.total_bytes
-            .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
-    }
-
-    #[must_use]
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
     }
 
     pub(crate) fn request_range(&self, range: Range<u64>) -> bool {
@@ -79,13 +54,38 @@ impl FileCoord {
         inserted
     }
 
+    pub(crate) fn set_download_pos(&self, value: u64) {
+        self.timeline.set_download_position(value);
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    pub(crate) fn set_read_pos(&self, value: u64) {
+        self.read_pos.store(value, Ordering::Release);
+        self.reader_advanced.notify_one();
+    }
+
+    pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
+        self.total_bytes
+            .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
+    }
+
     pub(crate) fn take_range_request(&self) -> Option<Range<u64>> {
         self.demand.take()
     }
 
-    /// Borrow the demand notify — callers await `.notified()` directly.
-    pub(crate) fn demand_notify(&self) -> &Notify {
-        &self.downloader_wake
+    #[must_use]
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    #[must_use]
+    pub(crate) fn total_bytes(&self) -> Option<u64> {
+        let total = self.total_bytes.load(Ordering::Acquire);
+        if total == Self::NO_TOTAL_BYTES {
+            None
+        } else {
+            Some(total)
+        }
     }
 }
 

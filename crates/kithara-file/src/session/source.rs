@@ -30,10 +30,10 @@ use crate::{coord::FileCoord, error::SourceError};
 /// by spawned async tasks that call [`PeerHandle::execute`].
 #[derive(Clone)]
 pub struct FileSource {
-    inner: Arc<FileInner>,
     /// Shared coordination — held next to `inner` so the hot read paths
     /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
+    inner: Arc<FileInner>,
 }
 
 impl FileSource {
@@ -47,18 +47,18 @@ impl FileSource {
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileInnerParams {
-                coord: Arc::clone(&coord),
-                res,
-                bus,
-                cancel: CancellationToken::new(),
-                url: Url::parse("file:///local").expect("valid url"),
-                headers: None,
                 backend,
+                bus,
                 key,
+                res,
+                cancel: CancellationToken::new(),
+                coord: Arc::clone(&coord),
+                headers: None,
+                url: Url::parse("file:///local").expect("valid url"),
             },
             FilePhase::Complete,
         ));
-        Self { inner, coord }
+        Self { coord, inner }
     }
 
     /// Create a source for a remote file and spawn download tasks.
@@ -79,14 +79,14 @@ impl FileSource {
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileInnerParams {
-                coord: Arc::clone(&coord),
-                res: state.res.clone(),
+                headers,
+                url,
+                backend: Arc::clone(&state.backend),
                 bus: state.bus.clone(),
                 cancel: cancel.clone(),
-                url,
-                headers,
-                backend: Arc::clone(&state.backend),
+                coord: Arc::clone(&coord),
                 key: state.key.clone(),
+                res: state.res.clone(),
             },
             FilePhase::Init,
         ));
@@ -105,54 +105,30 @@ impl FileSource {
             run_range_watcher(rng_inner, peer, rng_coord, cancel).await;
         });
 
-        Self { inner, coord }
+        Self { coord, inner }
     }
 }
 
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
-    fn timeline(&self) -> Timeline {
-        self.coord.timeline()
+    fn demand_range(&self, range: Range<u64>) {
+        if self.inner.res.contains_range(range.clone()) {
+            return;
+        }
+        self.coord.request_range(range);
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        timeout: Option<Duration>,
-    ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
-        // The file backend's `Resource::wait_range` blocks on its own
-        // condvar / cancel signals; the source-level `timeout` is a hint
-        // that does not gate the inner wait. Both `Some` and `None`
-        // collapse to "wait until ready or cancel" here.
-        let _ = timeout;
+    fn len(&self) -> Option<u64> {
+        self.coord.total_bytes().or_else(|| self.inner.res.len())
+    }
 
-        match self.phase_at(range.clone()) {
-            SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
-            SourcePhase::Eof => return Ok(WaitOutcome::Eof),
-            SourcePhase::Ready => return Ok(WaitOutcome::Ready),
-            _ => {}
-        }
-
-        if range.start > self.coord.read_pos() {
-            self.coord.set_read_pos(range.start);
-        }
-
-        // Issue on-demand Range request when data is missing.
-        if !self.inner.res.contains_range(range.clone()) {
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                "file_source::wait_range requesting on-demand download"
-            );
-            self.coord.request_range(range.clone());
-        }
-
+    fn media_info(&self) -> Option<MediaInfo> {
         self.inner
-            .res
-            .wait_range(range)
-            .map_err(|e| StreamError::Source(SourceError::Storage(e)))
+            .content_type_codec
+            .get()
+            .copied()
+            .map(|c| MediaInfo::new(Some(c), None))
     }
 
     fn phase(&self) -> SourcePhase {
@@ -206,25 +182,6 @@ impl kithara_stream::Source for FileSource {
         Ok(ReadOutcome::Bytes(count))
     }
 
-    fn len(&self) -> Option<u64> {
-        self.coord.total_bytes().or_else(|| self.inner.res.len())
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        self.inner
-            .content_type_codec
-            .get()
-            .copied()
-            .map(|c| MediaInfo::new(Some(c), None))
-    }
-
-    fn demand_range(&self, range: Range<u64>) {
-        if self.inner.res.contains_range(range.clone()) {
-            return;
-        }
-        self.coord.request_range(range);
-    }
-
     fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
         let hooks = super::reader::FileReaderHooks::new(
             self.inner.bus.clone(),
@@ -233,5 +190,48 @@ impl kithara_stream::Source for FileSource {
             self.coord.timeline().seek_epoch_handle(),
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))
+    }
+
+    fn timeline(&self) -> Timeline {
+        self.coord.timeline()
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
+        // The file backend's `Resource::wait_range` blocks on its own
+        // condvar / cancel signals; the source-level `timeout` is a hint
+        // that does not gate the inner wait. Both `Some` and `None`
+        // collapse to "wait until ready or cancel" here.
+        let _ = timeout;
+
+        match self.phase_at(range.clone()) {
+            SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
+            SourcePhase::Eof => return Ok(WaitOutcome::Eof),
+            SourcePhase::Ready => return Ok(WaitOutcome::Ready),
+            _ => {}
+        }
+
+        if range.start > self.coord.read_pos() {
+            self.coord.set_read_pos(range.start);
+        }
+
+        // Issue on-demand Range request when data is missing.
+        if !self.inner.res.contains_range(range.clone()) {
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                "file_source::wait_range requesting on-demand download"
+            );
+            self.coord.request_range(range.clone());
+        }
+
+        self.inner
+            .res
+            .wait_range(range)
+            .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 }

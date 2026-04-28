@@ -84,17 +84,32 @@ fn scan_items(
 struct ItemKey {
     idx: usize,
     kind_bucket: usize,
+    /// Within the `fn` kind, names listed in `priority_fn_names` get a low
+    /// bucket index and rank above the alphabetical tail. Other kinds always
+    /// share the same priority bucket so only `name` decides their order.
+    priority_bucket: usize,
     name: String,
 }
 
 fn cmp_item_key(a: &ItemKey, b: &ItemKey) -> Ordering {
     a.kind_bucket
         .cmp(&b.kind_bucket)
+        .then_with(|| a.priority_bucket.cmp(&b.priority_bucket))
         .then_with(|| a.name.cmp(&b.name))
 }
 
 fn kind_bucket(order: &[String], kind: &str) -> usize {
     order.iter().position(|k| k == kind).unwrap_or(order.len())
+}
+
+fn priority_bucket(priority_names: &[String], kind: &str, name: &str) -> usize {
+    if kind != "fn" {
+        return priority_names.len();
+    }
+    priority_names
+        .iter()
+        .position(|n| n == name)
+        .unwrap_or(priority_names.len())
 }
 
 fn check_trait(
@@ -116,6 +131,7 @@ fn check_trait(
             ItemKey {
                 idx,
                 kind_bucket: kind_bucket(&cfg.kind_order, kind),
+                priority_bucket: priority_bucket(&cfg.priority_fn_names, kind, &name),
                 name,
             }
         })
@@ -143,6 +159,7 @@ fn check_impl(
             ItemKey {
                 idx,
                 kind_bucket: kind_bucket(&cfg.kind_order, kind),
+                priority_bucket: priority_bucket(&cfg.priority_fn_names, kind, &name),
                 name,
             }
         })

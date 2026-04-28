@@ -79,6 +79,11 @@ pub(crate) struct TraitItemOrderConfig {
     /// grouped near their associated types/consts.
     #[serde(default = "default_trait_apply_to")]
     pub(crate) apply_to: Vec<String>,
+    /// Function names that must appear *first* within the `fn` kind bucket,
+    /// in the listed order. Conventional constructors (`new`) come before the
+    /// rest of the impl so a reader sees creation entry points up top.
+    #[serde(default = "default_priority_fn_names")]
+    pub(crate) priority_fn_names: Vec<String>,
 }
 
 impl Default for TraitItemOrderConfig {
@@ -86,6 +91,7 @@ impl Default for TraitItemOrderConfig {
         Self {
             kind_order: default_trait_kind_order(),
             apply_to: default_trait_apply_to(),
+            priority_fn_names: default_priority_fn_names(),
         }
     }
 }
@@ -102,6 +108,10 @@ fn default_trait_apply_to() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+fn default_priority_fn_names() -> Vec<String> {
+    ["new"].iter().map(|s| (*s).to_string()).collect()
 }
 
 #[derive(Debug, Deserialize)]
