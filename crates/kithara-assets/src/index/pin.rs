@@ -5,7 +5,10 @@ use std::{
     fs,
     num::NonZeroU32,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use kithara_bufpool::BytePool;
@@ -13,7 +16,11 @@ use kithara_platform::Mutex;
 use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
 use tokio_util::sync::CancellationToken;
 
-use super::{persist, schema::PinsIndexFile};
+use super::{
+    flush::{FlushHub, Flushable, signal_or_flush_sync},
+    persist,
+    schema::PinsIndexFile,
+};
 use crate::error::{AssetsError, AssetsResult};
 
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
@@ -56,6 +63,12 @@ impl std::fmt::Debug for PinsIndex {
 struct PinsInner {
     pins: Mutex<HashMap<String, NonZeroU32>>,
     persist: Option<PinsPersist>,
+    /// Set by [`FlushHub::register`]. While `None`, mutators flush
+    /// synchronously through [`Flushable::flush`] directly — matches
+    /// the historical inline-flush path for ad-hoc tests that never
+    /// attach a hub.
+    hub: OnceLock<Arc<FlushHub>>,
+    dirty: AtomicBool,
 }
 
 struct PinsPersist {
@@ -74,6 +87,8 @@ impl PinsIndex {
             inner: Arc::new(PinsInner {
                 pins: Mutex::new(HashMap::new()),
                 persist: None,
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
             }),
         }
     }
@@ -103,6 +118,8 @@ impl PinsIndex {
                         cell
                     }),
                 }),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
             }),
         }
     }
@@ -138,7 +155,7 @@ impl PinsIndex {
             }
         };
         if transitioned {
-            self.flush()?;
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
         Ok(transitioned)
     }
@@ -171,7 +188,7 @@ impl PinsIndex {
             }
         };
         if transitioned {
-            self.flush()?;
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
         Ok(transitioned)
     }
@@ -182,22 +199,53 @@ impl PinsIndex {
         self.inner.pins.lock_sync().contains_key(asset_root)
     }
 
-    /// Persist the in-memory snapshot to disk (best-effort).
-    ///
-    /// Materialises the on-disk file on first call, reuses the cached
-    /// [`Atomic`] handle on subsequent calls.
+    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
+    /// when a hub is attached (drains every dirty source) or runs the
+    /// inline serialise+write path otherwise. Used by explicit
+    /// checkpoint paths (`LeaseAssets::flush_pins`, `internal::*`).
     ///
     /// # Errors
     ///
-    /// Propagates [`AssetsError`] for mmap open / write failures and
-    /// rkyv serialisation errors.
+    /// Propagates the first per-source flush error encountered.
     pub(crate) fn flush(&self) -> AssetsResult<()> {
-        let Some(persist) = self.inner.persist.as_ref() else {
+        self.inner
+            .hub
+            .get()
+            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
+    }
+
+    /// Bind this index to a [`FlushHub`] for coordinated flushing.
+    /// Called once per index instance; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        if self.inner.hub.set(Arc::clone(hub)).is_err() {
+            return;
+        }
+        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+    }
+}
+
+impl Flushable for PinsInner {
+    fn name(&self) -> &'static str {
+        "pins"
+    }
+
+    fn dirty(&self) -> &AtomicBool {
+        &self.dirty
+    }
+
+    /// Serialise the current pinned set to `_index/pins.bin`. Refcount
+    /// is collapsed to mere set-membership on disk — the persisted
+    /// format only records keys.
+    fn flush(&self) -> AssetsResult<()> {
+        let Some(persist) = self.persist.as_ref() else {
+            self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot: Vec<String> = self.inner.pins.lock_sync().keys().cloned().collect();
+        let snapshot: Vec<String> = self.pins.lock_sync().keys().cloned().collect();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_pins(atomic, &snapshot)
+        write_pins(atomic, &snapshot)?;
+        self.dirty.store(false, Ordering::Release);
+        Ok(())
     }
 }
 

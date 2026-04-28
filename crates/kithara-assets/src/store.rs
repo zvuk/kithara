@@ -30,7 +30,7 @@ use crate::disk_store::DiskAssetStore;
 use crate::{
     cache::CachedAssets,
     evict::EvictAssets,
-    index::{AvailabilityIndex, EvictConfig},
+    index::{AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
@@ -68,6 +68,17 @@ pub struct StoreOptions {
     /// `DiskAssetStore`. Data is never written to disk.
     /// Default: `false`.
     pub ephemeral: bool,
+    /// Shared flush coordinator for the on-disk indexes (`pins.bin`,
+    /// `lru.bin`, `availability.bin`).
+    ///
+    /// `None` — the builder creates a hub without a background worker;
+    /// every mutation flushes synchronously (historical behaviour).
+    /// `Some(hub)` — the caller-owned hub is reused, allowing several
+    /// `AssetStore`s to share a single worker. Use
+    /// [`FlushHub::with_worker`] in production for debounced /
+    /// coalesced background flushing.
+    #[setters(skip)]
+    pub flush_hub: Option<Arc<FlushHub>>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -84,6 +95,7 @@ impl fmt::Debug for StoreOptions {
             .field("cache_capacity", &self.cache_capacity)
             .field("checkpoint_every", &self.checkpoint_every)
             .field("ephemeral", &self.ephemeral)
+            .field("flush_hub", &self.flush_hub.as_ref().map(|_| "..."))
             .field("max_assets", &self.max_assets)
             .field("max_bytes", &self.max_bytes)
             .field(
@@ -104,6 +116,7 @@ impl Default for StoreOptions {
             cache_capacity: None,
             checkpoint_every: Some(Consts::DEFAULT_CHECKPOINT_EVERY),
             ephemeral: false,
+            flush_hub: None,
             max_assets: None,
             max_bytes: None,
             on_invalidated: None,
@@ -119,10 +132,22 @@ impl StoreOptions {
             cache_capacity: None,
             checkpoint_every: Some(Consts::DEFAULT_CHECKPOINT_EVERY),
             ephemeral: false,
+            flush_hub: None,
             max_assets: None,
             max_bytes: None,
             on_invalidated: None,
         }
+    }
+
+    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
+    ///
+    /// Several stores can share the same hub — useful when one
+    /// process owns multiple [`AssetStore`]s and wants a single
+    /// background flush worker covering them all.
+    #[must_use]
+    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
     }
 
     /// Effective LRU cache capacity (explicit or default).
@@ -206,6 +231,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     checkpoint_every: Option<NonZeroUsize>,
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
+    flush_hub: Option<Arc<FlushHub>>,
     mem_resource_capacity: Option<usize>,
     on_invalidated: Option<OnInvalidatedFn>,
     pool: Option<BytePool>,
@@ -237,6 +263,7 @@ impl AssetStoreBuilder<()> {
             checkpoint_every: None,
             ephemeral: false,
             evict_config: None,
+            flush_hub: None,
             mem_resource_capacity: None,
             on_invalidated: None,
             pool: None,
@@ -358,6 +385,14 @@ where
         self
     }
 
+    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
+    /// See [`StoreOptions::with_flush_hub`].
+    #[must_use]
+    pub fn flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
+    }
+
     /// Set callback invoked when a cached resource is invalidated.
     #[must_use]
     pub fn on_invalidated(mut self, callback: OnInvalidatedFn) -> Self {
@@ -411,6 +446,16 @@ where
 
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
+        // FlushHub coordinates flushes for all three on-disk indexes.
+        // Either reuse a caller-supplied hub (shared across stores) or
+        // create one without a worker (every mutation flushes
+        // synchronously, matching the historical inline-flush
+        // behaviour).
+        let hub = self
+            .flush_hub
+            .clone()
+            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
+
         // Disk-backed pins/lru indexes shared across the decorator
         // stack: `LeaseAssets` mutates pins on resource lifecycle,
         // `EvictAssets` reads pins / mutates lru on touch & eviction,
@@ -419,6 +464,8 @@ where
         // `PinsIndex` / `LruIndex` handles.
         let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
         let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
+        pins.attach_to(&hub);
+        lru.attach_to(&hub);
 
         // Single canonical deleter — see [`crate::deleter`].
         let deleter: Arc<dyn crate::deleter::AssetDeleter> =
@@ -487,8 +534,14 @@ where
         // `MemAssetStore`, `EvictAssets`, and `LeaseAssets`. Mem
         // backend uses ephemeral pins/lru indexes — disk persistence
         // makes no sense without a backing file. See [`crate::deleter`].
+        let hub = self
+            .flush_hub
+            .clone()
+            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
+        pins.attach_to(&hub);
+        lru.attach_to(&hub);
         let active_resources = Arc::new(DashMap::new());
         let deleter: Arc<dyn crate::deleter::AssetDeleter> =
             Arc::new(crate::mem_store::MemAssetDeleter::new(
@@ -604,6 +657,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             checkpoint_every: self.checkpoint_every,
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
+            flush_hub: self.flush_hub,
             mem_resource_capacity: self.mem_resource_capacity,
             on_invalidated: self.on_invalidated,
             pool: self.pool,

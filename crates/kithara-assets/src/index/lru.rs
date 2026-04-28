@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use kithara_bufpool::BytePool;
@@ -13,6 +16,7 @@ use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
 use tokio_util::sync::CancellationToken;
 
 use super::{
+    flush::{FlushHub, Flushable, signal_or_flush_sync},
     persist,
     schema::{LruEntryFile, LruIndexFile},
 };
@@ -59,6 +63,11 @@ impl std::fmt::Debug for LruIndex {
 struct LruInner {
     state: Mutex<LruState>,
     persist: Option<LruPersist>,
+    /// Set by [`LruIndex::attach_to`]. While `None`, mutators flush
+    /// inline through [`Flushable::flush`] — matches the historical
+    /// inline-flush behaviour for ad-hoc tests.
+    hub: OnceLock<Arc<FlushHub>>,
+    dirty: AtomicBool,
 }
 
 struct LruPersist {
@@ -74,6 +83,8 @@ impl LruIndex {
             inner: Arc::new(LruInner {
                 state: Mutex::new(LruState::default()),
                 persist: None,
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
             }),
         }
     }
@@ -103,8 +114,19 @@ impl LruIndex {
                         cell
                     }),
                 }),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Bind this index to a [`FlushHub`] for coordinated flushing.
+    /// Called once per index instance; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        if self.inner.hub.set(Arc::clone(hub)).is_err() {
+            return;
+        }
+        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
     }
 
     /// Touch (mark as most-recent) an asset. Returns `true` if a new
@@ -122,7 +144,7 @@ impl LruIndex {
             let mut st = self.inner.state.lock_sync();
             st.touch(asset_root, bytes_hint)
         };
-        self.flush()?;
+        signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         Ok(created)
     }
 
@@ -139,7 +161,7 @@ impl LruIndex {
             st.remove(asset_root)
         };
         if removed {
-            self.flush()?;
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
         Ok(())
     }
@@ -165,23 +187,27 @@ impl LruIndex {
             .filter_map(|e| e.bytes)
             .sum()
     }
+}
 
-    /// Persist the in-memory snapshot to disk (best-effort).
-    ///
-    /// Materialises the on-disk file on first call, reuses the cached
-    /// [`Atomic`] handle on subsequent calls.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`AssetsError`] for mmap open / write failures and
-    /// rkyv serialisation errors.
-    pub(crate) fn flush(&self) -> AssetsResult<()> {
-        let Some(persist) = self.inner.persist.as_ref() else {
+impl Flushable for LruInner {
+    fn name(&self) -> &'static str {
+        "lru"
+    }
+
+    fn dirty(&self) -> &AtomicBool {
+        &self.dirty
+    }
+
+    fn flush(&self) -> AssetsResult<()> {
+        let Some(persist) = self.persist.as_ref() else {
+            self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot = self.inner.state.lock_sync().clone();
+        let snapshot = self.state.lock_sync().clone();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_state(atomic, &snapshot)
+        write_state(atomic, &snapshot)?;
+        self.dirty.store(false, Ordering::Release);
+        Ok(())
     }
 }
 
