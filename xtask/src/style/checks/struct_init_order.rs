@@ -1,8 +1,12 @@
 //! Fields in `Foo { ... }` literal expressions should follow:
 //!
 //! 1. Shorthand fields (`field_a` without `: value`) come first.
-//! 2. Explicit fields (`field_b: value`) come after, alphabetically by name.
-//! 3. The optional `..base` rest comes last (Rust syntax already enforces this).
+//! 2. Explicit fields (`field_b: value`) come after.
+//! 3. Within each bucket, relative order is unconstrained — clippy's
+//!    `inconsistent_struct_constructor` already enforces "match struct
+//!    definition order" for all-shorthand inits, and we let the developer
+//!    pick the most readable layout otherwise.
+//! 4. The optional `..base` rest comes last (Rust syntax already enforces this).
 //!
 //! Tuple-struct expressions (`Foo(a, b)`) and explicit-position struct exprs
 //! (`Foo { 0: a, 1: b }`) are skipped — they have no name to sort by.
@@ -77,7 +81,12 @@ struct InitKey {
 }
 
 fn cmp_init_key(a: &InitKey, b: &InitKey) -> Ordering {
-    a.bucket.cmp(&b.bucket).then_with(|| a.name.cmp(&b.name))
+    a.bucket
+        .cmp(&b.bucket)
+        // Stable within a bucket: keep the source-position order, so we don't
+        // collide with clippy's `inconsistent_struct_constructor` (which
+        // demands the all-shorthand case match struct definition order).
+        .then_with(|| a.idx.cmp(&b.idx))
 }
 
 fn classify(cfg: &StructInitOrderConfig, fv: &FieldValue) -> InitKey {
@@ -146,7 +155,7 @@ fn check_expr_struct(
         .collect::<Vec<_>>()
         .join(", ");
     let msg = format!(
-        "init `{type_name} {{ ... }}` should be (shorthand first, then explicit by name): \
+        "init `{type_name} {{ ... }}` should put shorthand fields before explicit ones: \
          expected [{expected_summary}], found [{actual_summary}]"
     );
     out.push(Violation::warn(ID, key, msg));

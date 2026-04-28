@@ -13,6 +13,28 @@
 //!   another method that writes to the same field via `store`/`set`/...
 //!   Both can mutate, defeating the encapsulation.
 //!
+//! ## How to fix P3
+//!
+//! The check counts **write-paths**, not their nominal visibility. There are
+//! exactly two acceptable fixes:
+//!
+//! 1. **Remove the accessor.** Replace the pull-model handle with a push event
+//!    fired by the legitimate setter (e.g. `bus.publish(VariantApplied { … })`)
+//!    so consumers update their own local state.
+//! 2. **Relocate ownership.** Move the field out of this type into the
+//!    consumer; the setter becomes a command/event the consumer handles. The
+//!    type is then a *decision engine* with no shared mutable state to leak.
+//!
+//! What does NOT fix it:
+//!
+//! - Wrapping the returned `Arc<Atomic*>` / `Arc<Mutex<_>>` in a "read-only"
+//!   newtype. The newtype hides the write API but still hands out a cloneable
+//!   `Arc` to the same atomic, which any holder can downcast or pattern-match
+//!   to recover write access. The check counts how many places can mutate the
+//!   field at runtime; a thin wrapper does not change that count.
+//! - Renaming the accessor or marking it `#[doc(hidden)]`. The mutability
+//!   capability is in the type returned, not in the symbol name.
+//!
 //! Findings are file-local; checking across files would need name resolution.
 
 use std::collections::BTreeMap;
@@ -258,7 +280,14 @@ fn detect_p3(
                 let msg = format!(
                     "P3: `{}` returns a handle to `self.{exposed_field}` (interior mutability) \
                      while `{}` already mutates the same field; external mutation through \
-                     the handle bypasses the setter",
+                     the handle bypasses the setter. \
+                     Fix the *count* of write-paths, not their visibility: \
+                     (a) delete this accessor and replace pull with a push event from the \
+                     legitimate setter, or (b) move ownership of `{exposed_field}` to the \
+                     consumer so the setter becomes a command. \
+                     A read-only newtype wrapper around the same `Arc` does NOT fix this — \
+                     it hides the second write-path behind a thin facade while the underlying \
+                     `Arc<Atomic*/Mutex<...>>` is still cloneable and writable.",
                     m.name, other.name
                 );
                 out.push(emit(cfg.p3_severity, key, msg));
