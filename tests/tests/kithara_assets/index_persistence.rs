@@ -212,14 +212,18 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "in-memory availability must reflect the committed range"
     );
 
-    // 4) Second resource touches LRU again: clock advances.
+    // 4) Second resource for the SAME asset_root: LRU recency must NOT
+    //    re-advance — the asset is already tracked. EvictAssets dedupes
+    //    via `mark_seen`, and segment commits go through `update_bytes`
+    //    (no clock bump) so byte accounting can update without skewing
+    //    eviction order.
     let key_b = ResourceKey::new("segment-b.bin");
     let res_b = store.acquire_resource(&key_b).expect("acquire segment-b");
     let clock_after_second = read_archived_lru_clock(&lru);
-    assert!(
-        clock_after_second > clock_after_first,
-        "lru clock must advance on subsequent acquire \
-         ({clock_after_second} <= {clock_after_first})"
+    assert_eq!(
+        clock_after_second, clock_after_first,
+        "lru clock must NOT re-advance for an already-tracked asset_root \
+         ({clock_after_second} != {clock_after_first})"
     );
     res_b.write_at(0, b"b-payload").expect("write b");
     res_b.commit(Some(9)).expect("commit b");

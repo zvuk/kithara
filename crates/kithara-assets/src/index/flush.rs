@@ -303,20 +303,18 @@ pub(crate) fn signal_or_flush_sync(
     source: &dyn Flushable,
 ) -> AssetsResult<()> {
     source.dirty().store(true, Ordering::Release);
-    match hub {
-        Some(h) if h.has_worker() => {
-            h.signal();
-            Ok(())
-        }
-        Some(h) => h.flush_now(),
-        None => {
-            let res = source.flush();
-            if res.is_ok() {
-                source.dirty().store(false, Ordering::Release);
-            }
-            res
-        }
+    if let Some(h) = hub
+        && h.has_worker()
+    {
+        h.signal();
+        return Ok(());
     }
+    // No worker — flush THIS source only. Do NOT call `hub.flush_now()`:
+    // that would flush every dirty source registered with the hub and
+    // break per-source durability semantics (e.g. Availability is
+    // explicit-checkpoint only — its observer marks dirty but must not
+    // be persisted by an unrelated Pins/LRU mutation).
+    source.flush()
 }
 
 #[cfg(test)]

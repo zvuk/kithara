@@ -166,6 +166,28 @@ impl LruIndex {
         Ok(())
     }
 
+    /// Update the cached size of an existing entry without bumping the
+    /// LRU clock. Use when the byte total changes but recency must not
+    /// (e.g. segment commits add bytes to an already-tracked asset).
+    ///
+    /// Returns `true` if the entry existed and the byte total actually
+    /// changed; only that path triggers a flush. If no entry exists or
+    /// the value is identical, this is a pure read.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
+        let changed = {
+            let mut st = self.inner.state.lock_sync();
+            st.update_bytes(asset_root, bytes)
+        };
+        if changed {
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+        }
+        Ok(changed)
+    }
+
     /// Compute eviction candidates in LRU order (oldest first) under
     /// the given config. Pure in-memory read — never fails.
     pub(crate) fn eviction_candidates(
@@ -301,6 +323,19 @@ impl LruState {
         }
     }
 
+    /// Returns `true` if the entry exists and `bytes` actually changed.
+    /// Does NOT touch the clock — recency stays exactly where it was.
+    pub(crate) fn update_bytes(&mut self, asset_root: &str, bytes: u64) -> bool {
+        let Some(entry) = self.by_root.get_mut(asset_root) else {
+            return false;
+        };
+        if entry.bytes == Some(bytes) {
+            return false;
+        }
+        entry.bytes = Some(bytes);
+        true
+    }
+
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -384,6 +419,71 @@ impl LruState {
             clock: self.clock,
             entries,
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests {
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn update_bytes_does_not_change_eviction_order() {
+        // touch(A), touch(B), update_bytes(A) — eviction must still pick A first.
+        let lru = LruIndex::ephemeral();
+        lru.touch("A", Some(100)).unwrap();
+        lru.touch("B", Some(200)).unwrap();
+        lru.update_bytes("A", 999).unwrap();
+
+        let cfg = EvictConfig {
+            max_assets: Some(1),
+            max_bytes: None,
+        };
+        let candidates = lru.eviction_candidates(&cfg, &HashSet::new());
+        assert_eq!(
+            candidates,
+            vec!["A".to_string()],
+            "update_bytes must not bump A past B in LRU order"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn update_bytes_unknown_root_is_noop() {
+        let lru = LruIndex::ephemeral();
+        let changed = lru.update_bytes("ghost", 4096).unwrap();
+        assert!(!changed, "no entry → no change");
+        assert_eq!(lru.total_bytes_best_effort(), 0);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn update_bytes_idempotent_when_value_matches() {
+        let lru = LruIndex::ephemeral();
+        lru.touch("A", Some(100)).unwrap();
+
+        let changed = lru.update_bytes("A", 100).unwrap();
+        assert!(!changed, "same value → no flush, no change");
+
+        let changed = lru.update_bytes("A", 200).unwrap();
+        assert!(changed, "different value → change");
+        assert_eq!(lru.total_bytes_best_effort(), 200);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn update_bytes_keeps_clock_unchanged() {
+        // Direct LruState assertion — clock must stay frozen across update_bytes.
+        let mut state = LruState::default();
+        state.touch("A", Some(10));
+        state.touch("B", Some(20));
+        let clock_before = state.clock;
+        let changed = state.update_bytes("A", 999);
+        assert!(changed);
+        assert_eq!(
+            state.clock, clock_before,
+            "update_bytes must not bump the LRU clock"
+        );
     }
 }
 

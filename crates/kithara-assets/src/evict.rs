@@ -99,10 +99,18 @@ where
 
     /// Record asset size for byte-based eviction.
     ///
+    /// Uses [`LruIndex::update_bytes`] — only the byte counter is
+    /// adjusted. Recency (LRU clock) is not bumped because the asset
+    /// already had its access tracked when the resource was opened;
+    /// re-bumping per segment commit would coalesce all bytes-bearing
+    /// assets to the same logical-time tail and skew eviction order.
+    /// If the asset is unknown to the LRU (e.g. evicted concurrently)
+    /// this is a no-op.
+    ///
     /// # Errors
     ///
     /// Returns `AssetsError` if the LRU index cannot persist the
-    /// touch — caller must decide whether the lost durability is
+    /// update — caller must decide whether the lost durability is
     /// acceptable for its scenario (the [`ByteRecorder`] adapter
     /// downgrades it to a `tracing::warn`).
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
@@ -110,7 +118,7 @@ where
             return Ok(());
         }
         tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
-        self.lru.touch(asset_root, Some(bytes))?;
+        self.lru.update_bytes(asset_root, bytes)?;
         tracing::debug!(asset_root = %asset_root, bytes, "Asset bytes recorded");
         Ok(())
     }
