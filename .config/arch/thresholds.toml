@@ -76,6 +76,11 @@ deny = 3
 #        Detection compares AST chains, not method names.
 #   P3 — handle exposing interior mutability AND a setter writing to the same
 #        field. External code can mutate via two paths.
+#   P4 — `pub fn x(&self) -> &T { &self.x }` (or `.clone()` flavour) AND a
+#        `delegate! { to self.x { … } }` block in the same impl. Both reach
+#        the same field from outside — one as a handle, one as forwarded
+#        methods. Detection scans `delegate!` macro tokens for
+#        `to self.<field>` patterns at the top level.
 #
 # Severities: "deny" (fail), "warn" (track via baseline), "off" (skip pattern).
 #
@@ -92,12 +97,14 @@ deny = 3
 #                     are scoped per module via `collect_scopes`; cross-module
 #                     name collisions don't create false positives
 #   - cross-impl aggregation: `impl X` + `impl Trait for X` are joined per type
-detect_field_passthrough = true
-detect_nested_shorthand  = true
-detect_mutation_handle   = true
+detect_field_passthrough    = true
+detect_nested_shorthand     = true
+detect_mutation_handle      = true
+detect_delegate_passthrough = true
 p1_severity = "warn"
 p2_severity = "warn"
 p3_severity = "deny"
+p4_severity = "warn"
 public_only = true
 ignore_deref = true
 

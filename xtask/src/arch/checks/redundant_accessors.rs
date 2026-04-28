@@ -1,6 +1,6 @@
 //! Detect redundant data-access paths inside one type.
 //!
-//! Three patterns, all driven by AST data-flow analysis (no name matching):
+//! Four patterns, all driven by AST data-flow analysis (no name matching):
 //!
 //! - **P1 — pub field + getter**: a struct exposes `pub x: T` and its `impl`
 //!   block also has `pub fn x(&self) -> &T { &self.x }` (or `.clone()` flavour).
@@ -12,6 +12,12 @@
 //!   interior-mutability container (`Atomic*`, `Mutex`, `RefCell`, ...) AND has
 //!   another method that writes to the same field via `store`/`set`/...
 //!   Both can mutate, defeating the encapsulation.
+//! - **P4 — accessor + `delegate!` passthrough**: an impl exposes
+//!   `pub fn x(&self) -> &T { &self.x }` (or `.clone()` flavour) AND has a
+//!   `delegate! { to self.x { … } }` block in the same target type. External
+//!   callers reach `self.x` both as a handle and as forwarded methods.
+//!   Detection scans `delegate!` macro tokens for `to self.<field>` patterns
+//!   at the top level (no macro expansion, no name matching).
 //!
 //! ## How to fix P3
 //!
@@ -46,9 +52,9 @@ use crate::{
     arch::config::AccessorSeverity,
     common::{
         parse::{
-            AccessKind, AccessPath, PassthroughOpts, Scope, collect_scopes,
-            collect_self_field_writes, extract_passthrough_with, is_strict_pub, parse_file,
-            pub_methods, returns_handle_type, self_ty_name,
+            AccessKind, AccessPath, PassthroughOpts, collect_scopes, collect_self_field_writes,
+            extract_passthrough_with, is_strict_pub, parse_file, pub_methods, returns_handle_type,
+            self_ty_name,
         },
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
@@ -65,6 +71,28 @@ struct MethodFacts<'a> {
     passthrough: Option<AccessPath>,
 }
 
+/// One impl block contributing to a target type's slice, plus where it came
+/// from (for diagnostic keys). A `target_type`'s full slice is the union of
+/// these across every workspace file that targets it.
+struct ImplSite<'a> {
+    impl_block: &'a syn::ItemImpl,
+    file_rel: String,
+    /// Module path of the scope the impl was found in, e.g. `queue::access`.
+    /// Used to build human-readable violation keys; not part of the
+    /// type-identity key (which is just the `target_type` ident).
+    mod_prefix: String,
+}
+
+/// `pub` named fields by struct ident, aggregated across the workspace. Used
+/// by P1 to pair `pub field` with a getter that returns it; ident-only
+/// keying mirrors how impl blocks are aggregated.
+type PubFieldsByType = BTreeMap<String, Vec<String>>;
+
+/// One method in a target type's slice, paired with the file and module
+/// path it was found in. Detectors use the file/module fields only to
+/// build human-readable violation keys.
+type MethodEntry<'a> = (MethodFacts<'a>, &'a str, &'a str);
+
 impl Check for RedundantAccessors {
     fn id(&self) -> &'static str {
         ID
@@ -76,8 +104,11 @@ impl Check for RedundantAccessors {
             wrapper_ctors: cfg.wrapper_ctors.clone(),
             expose_methods: cfg.expose_methods.clone(),
         };
-        let mut violations = Vec::new();
 
+        // Step 1: parse every file in scope and own the AST so impl blocks
+        // collected from different files outlive the per-file loop. All
+        // detectors operate on the union, not on per-file slivers.
+        let mut parsed: Vec<(String, syn::File)> = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
@@ -85,10 +116,62 @@ impl Check for RedundantAccessors {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            parsed.push((rel, file));
+        }
 
-            for scope in collect_scopes(&file) {
-                analyze_scope(cfg, &opts, &rel, &scope, &mut violations);
+        // Step 2: aggregate impl sites + pub fields across all files, keyed
+        // by type ident. Pre-existing P1/P2/P3 limitation about cross-module
+        // ident collisions stands — name resolution would be required.
+        let mut sites_by_type: BTreeMap<String, Vec<ImplSite<'_>>> = BTreeMap::new();
+        let mut pub_fields_by_type: PubFieldsByType = BTreeMap::new();
+        for (rel, file) in &parsed {
+            for scope in collect_scopes(file) {
+                let mod_prefix = if scope.path.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}::", scope.path.join("::"))
+                };
+                for s in &scope.structs {
+                    if let syn::Fields::Named(named) = &s.fields {
+                        for f in &named.named {
+                            if is_strict_pub(&f.vis)
+                                && let Some(id) = &f.ident
+                            {
+                                pub_fields_by_type
+                                    .entry(s.ident.to_string())
+                                    .or_default()
+                                    .push(id.to_string());
+                            }
+                        }
+                    }
+                }
+                for &im in &scope.impls {
+                    if cfg.ignore_deref && is_deref_impl(im) {
+                        continue;
+                    }
+                    let Some(name) = self_ty_name(&im.self_ty) else {
+                        continue;
+                    };
+                    sites_by_type.entry(name).or_default().push(ImplSite {
+                        impl_block: im,
+                        file_rel: rel.clone(),
+                        mod_prefix: mod_prefix.clone(),
+                    });
+                }
             }
+        }
+
+        // Step 3: run detectors over the workspace-wide slice of each type.
+        let mut violations = Vec::new();
+        for (target_type, sites) in &sites_by_type {
+            analyze_target_type(
+                cfg,
+                &opts,
+                target_type,
+                sites,
+                &pub_fields_by_type,
+                &mut violations,
+            );
         }
 
         violations.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.message.cmp(&b.message)));
@@ -97,71 +180,99 @@ impl Check for RedundantAccessors {
     }
 }
 
-fn analyze_scope(
+fn analyze_target_type(
     cfg: &crate::arch::config::RedundantAccessorsThreshold,
     opts: &PassthroughOpts,
-    rel: &str,
-    scope: &Scope<'_>,
+    target_type: &str,
+    sites: &[ImplSite<'_>],
+    pub_fields_by_type: &PubFieldsByType,
     out: &mut Vec<Violation>,
 ) {
-    // Build pub-fields map for structs in this scope.
-    let mut pub_fields_by_type: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for s in &scope.structs {
-        if let syn::Fields::Named(named) = &s.fields {
-            for f in &named.named {
-                if is_strict_pub(&f.vis)
-                    && let Some(id) = &f.ident
-                {
-                    pub_fields_by_type
-                        .entry(s.ident.to_string())
-                        .or_default()
-                        .push(id.to_string());
-                }
-            }
+    // Carry per-method origin (file_rel + mod_prefix) so violation keys
+    // stay precise across the cross-file aggregation.
+    let mut methods: Vec<MethodEntry<'_>> = Vec::new();
+    let mut delegate_sites: Vec<(String, &str)> = Vec::new();
+    for site in sites {
+        for facts in collect_method_facts(site.impl_block, cfg.public_only, opts) {
+            methods.push((facts, site.file_rel.as_str(), site.mod_prefix.as_str()));
+        }
+        for field in collect_delegate_targets(site.impl_block) {
+            delegate_sites.push((field, site.file_rel.as_str()));
         }
     }
 
-    // Aggregate impl blocks by target type — covers `impl X` + `impl Trait for X`.
-    let mut by_target: BTreeMap<String, Vec<&syn::ItemImpl>> = BTreeMap::new();
-    for &im in &scope.impls {
-        if cfg.ignore_deref && is_deref_impl(im) {
-            continue;
-        }
-        let Some(name) = self_ty_name(&im.self_ty) else {
+    if cfg.detect_field_passthrough {
+        detect_p1(cfg, target_type, pub_fields_by_type, &methods, out);
+    }
+    if cfg.detect_nested_shorthand {
+        detect_p2(cfg, target_type, &methods, out);
+    }
+    if cfg.detect_mutation_handle {
+        detect_p3(cfg, target_type, &methods, out);
+    }
+    if cfg.detect_delegate_passthrough {
+        detect_p4(cfg, target_type, &methods, &delegate_sites, out);
+    }
+}
+
+/// Scan an `impl` block for `delegate! { to self.<field> { … } }` macro
+/// invocations, returning the field names found at the top level. Recursion
+/// into the brace-delimited body group is unnecessary — the `delegate` crate
+/// places `to self.<field>` directly at the top of its macro body.
+fn collect_delegate_targets(im: &syn::ItemImpl) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in &im.items {
+        let syn::ImplItem::Macro(macro_item) = item else {
             continue;
         };
-        by_target.entry(name).or_default().push(im);
+        if !path_ends_with(&macro_item.mac.path, "delegate") {
+            continue;
+        }
+        scan_to_self_field(macro_item.mac.tokens.clone(), &mut out);
     }
+    out
+}
 
-    let mod_prefix = if scope.path.is_empty() {
-        String::new()
-    } else {
-        format!("{}::", scope.path.join("::"))
-    };
+fn path_ends_with(path: &syn::Path, name: &str) -> bool {
+    path.segments.last().is_some_and(|seg| seg.ident == name)
+}
 
-    for (target_type, impls) in by_target {
-        let methods: Vec<MethodFacts<'_>> = impls
-            .iter()
-            .flat_map(|im| collect_method_facts(im, cfg.public_only, opts))
-            .collect();
+fn scan_to_self_field(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    use proc_macro2::TokenTree;
 
-        if cfg.detect_field_passthrough {
-            detect_p1(
-                cfg,
-                rel,
-                &mod_prefix,
-                &target_type,
-                &pub_fields_by_type,
-                &methods,
-                out,
-            );
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, window) in toks.windows(4).enumerate() {
+        let TokenTree::Ident(to_kw) = &window[0] else {
+            continue;
+        };
+        if to_kw != "to" {
+            continue;
         }
-        if cfg.detect_nested_shorthand {
-            detect_p2(cfg, rel, &mod_prefix, &target_type, &methods, out);
+        let TokenTree::Ident(self_kw) = &window[1] else {
+            continue;
+        };
+        if self_kw != "self" {
+            continue;
         }
-        if cfg.detect_mutation_handle {
-            detect_p3(cfg, rel, &mod_prefix, &target_type, &methods, out);
+        let TokenTree::Punct(dot) = &window[2] else {
+            continue;
+        };
+        if dot.as_char() != '.' {
+            continue;
         }
+        let TokenTree::Ident(field) = &window[3] else {
+            continue;
+        };
+        // Reject chained paths like `to self.inner.player` — the `inner`
+        // field is not the delegate target, the leaf is. Pairing the leaf
+        // with an `inner()` accessor would also be wrong, so we just skip
+        // the whole chain.
+        if let Some(TokenTree::Punct(next)) = toks.get(i + 4)
+            && next.as_char() == '.'
+        {
+            continue;
+        }
+        out.push(field.to_string());
     }
 }
 
@@ -180,13 +291,16 @@ fn collect_method_facts<'a>(
         .collect()
 }
 
+fn method_key(target_type: &str, m: &MethodEntry<'_>) -> String {
+    let (facts, file_rel, mod_prefix) = m;
+    format!("{file_rel}::{mod_prefix}{target_type}::{}", facts.name)
+}
+
 fn detect_p1(
     cfg: &crate::arch::config::RedundantAccessorsThreshold,
-    rel: &str,
-    mod_prefix: &str,
     target_type: &str,
-    pub_fields_by_type: &BTreeMap<String, Vec<String>>,
-    methods: &[MethodFacts<'_>],
+    pub_fields_by_type: &PubFieldsByType,
+    methods: &[MethodEntry<'_>],
     out: &mut Vec<Violation>,
 ) {
     let Some(pub_fields) = pub_fields_by_type.get(target_type) else {
@@ -194,13 +308,13 @@ fn detect_p1(
     };
     for fname in pub_fields {
         for m in methods {
-            let Some(p) = &m.passthrough else { continue };
+            let Some(p) = &m.0.passthrough else { continue };
             if p.fields.as_slice() == [fname.clone()] {
-                let key = format!("{rel}::{mod_prefix}{target_type}::{}", m.name);
+                let key = method_key(target_type, m);
                 let msg = format!(
                     "P1: pub field `{fname}` is also exposed via `pub fn {}(&self)` ({:?}); \
                      pick one path",
-                    m.name, p.kind
+                    m.0.name, p.kind
                 );
                 out.push(emit(cfg.p1_severity, key, msg));
             }
@@ -210,23 +324,21 @@ fn detect_p1(
 
 fn detect_p2(
     cfg: &crate::arch::config::RedundantAccessorsThreshold,
-    rel: &str,
-    mod_prefix: &str,
     target_type: &str,
-    methods: &[MethodFacts<'_>],
+    methods: &[MethodEntry<'_>],
     out: &mut Vec<Violation>,
 ) {
-    let with_paths: Vec<(&str, &AccessPath)> = methods
+    let with_paths: Vec<(&MethodEntry<'_>, &AccessPath)> = methods
         .iter()
-        .filter_map(|m| m.passthrough.as_ref().map(|p| (m.name.as_str(), p)))
+        .filter_map(|m| m.0.passthrough.as_ref().map(|p| (m, p)))
         .collect();
 
-    for &(short_name, short_path) in &with_paths {
+    for &(short_m, short_path) in &with_paths {
         if short_path.fields.len() < 2 {
             continue;
         }
-        for &(container_name, container_path) in &with_paths {
-            if container_name == short_name {
+        for &(container_m, container_path) in &with_paths {
+            if container_m.0.name == short_m.0.name {
                 continue;
             }
             if container_path.fields.len() >= short_path.fields.len()
@@ -234,13 +346,14 @@ fn detect_p2(
             {
                 continue;
             }
-            let key = format!("{rel}::{mod_prefix}{target_type}::{short_name}");
+            let key = method_key(target_type, short_m);
             let chain = short_path.fields.join(".");
             let inner = container_path.fields.join(".");
             let tail = short_path.fields[container_path.fields.len()..].join(".");
             let msg = format!(
-                "P2: `{short_name}` is a shorthand for `{container_name}().{tail}` \
+                "P2: `{}` is a shorthand for `{}().{tail}` \
                  (data path `self.{chain}` extends `self.{inner}`); pick one path",
+                short_m.0.name, container_m.0.name,
             );
             out.push(emit(cfg.p2_severity, key, msg));
         }
@@ -249,14 +362,12 @@ fn detect_p2(
 
 fn detect_p3(
     cfg: &crate::arch::config::RedundantAccessorsThreshold,
-    rel: &str,
-    mod_prefix: &str,
     target_type: &str,
-    methods: &[MethodFacts<'_>],
+    methods: &[MethodEntry<'_>],
     out: &mut Vec<Violation>,
 ) {
     for m in methods {
-        let Some(p) = &m.passthrough else { continue };
+        let Some(p) = &m.0.passthrough else { continue };
         if p.fields.len() != 1
             || !matches!(
                 p.kind,
@@ -265,18 +376,18 @@ fn detect_p3(
         {
             continue;
         }
-        if !returns_handle_type(&m.fn_item.sig, &cfg.mutable_handle_types) {
+        if !returns_handle_type(&m.0.fn_item.sig, &cfg.mutable_handle_types) {
             continue;
         }
         let exposed_field = &p.fields[0];
 
         for other in methods {
-            if other.name == m.name {
+            if other.0.name == m.0.name {
                 continue;
             }
-            let writes = collect_self_field_writes(other.fn_item, &cfg.writer_methods);
+            let writes = collect_self_field_writes(other.0.fn_item, &cfg.writer_methods);
             if writes.iter().any(|w| w == exposed_field) {
-                let key = format!("{rel}::{mod_prefix}{target_type}::{}", m.name);
+                let key = method_key(target_type, m);
                 let msg = format!(
                     "P3: `{}` returns a handle to `self.{exposed_field}` (interior mutability) \
                      while `{}` already mutates the same field; external mutation through \
@@ -288,11 +399,48 @@ fn detect_p3(
                      A read-only newtype wrapper around the same `Arc` does NOT fix this — \
                      it hides the second write-path behind a thin facade while the underlying \
                      `Arc<Atomic*/Mutex<...>>` is still cloneable and writable.",
-                    m.name, other.name
+                    m.0.name, other.0.name
                 );
                 out.push(emit(cfg.p3_severity, key, msg));
                 break;
             }
+        }
+    }
+}
+
+fn detect_p4(
+    cfg: &crate::arch::config::RedundantAccessorsThreshold,
+    target_type: &str,
+    methods: &[MethodEntry<'_>],
+    delegate_sites: &[(String, &str)],
+    out: &mut Vec<Violation>,
+) {
+    for (field, delegate_file) in delegate_sites {
+        for m in methods {
+            let Some(p) = &m.0.passthrough else { continue };
+            if p.fields.as_slice() != [field.clone()] {
+                continue;
+            }
+            if !matches!(
+                p.kind,
+                AccessKind::Ref | AccessKind::Clone | AccessKind::Move
+            ) {
+                continue;
+            }
+            let key = method_key(target_type, m);
+            let cross_file_note = if m.1 == *delegate_file {
+                String::new()
+            } else {
+                format!(" (delegate lives in `{delegate_file}`)")
+            };
+            let msg = format!(
+                "P4: `{field}` is exposed both via `pub fn {}(&self)` and via \
+                 `delegate! {{ to self.{field} {{ … }} }}`{cross_file_note}; pick one path \
+                 (drop the accessor and keep `delegate!`, or drop the macro \
+                 and route external callers through the accessor)",
+                m.0.name
+            );
+            out.push(emit(cfg.p4_severity, key, msg));
         }
     }
 }
@@ -313,4 +461,272 @@ fn is_deref_impl(im: &syn::ItemImpl) -> bool {
         return false;
     };
     matches!(last.ident.to_string().as_str(), "Deref" | "DerefMut")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        arch::config::{AccessorSeverity, RedundantAccessorsThreshold},
+        common::{parse::collect_scopes, violation::Severity},
+    };
+
+    /// Run only the P4 detector across one or more synthetic source files,
+    /// returning the violations it produces. Pairs of `(file_rel, source)`
+    /// let cross-file scenarios assert that the workspace-wide aggregation
+    /// matches accessor and `delegate!` even when they live in different
+    /// files. Other detectors are switched off so assertions stay focused.
+    fn run_p4(sources: &[(&str, &str)]) -> Vec<Violation> {
+        let cfg = RedundantAccessorsThreshold {
+            detect_field_passthrough: false,
+            detect_nested_shorthand: false,
+            detect_mutation_handle: false,
+            detect_delegate_passthrough: true,
+            p1_severity: AccessorSeverity::Off,
+            p2_severity: AccessorSeverity::Off,
+            p3_severity: AccessorSeverity::Off,
+            p4_severity: AccessorSeverity::Warn,
+            ..RedundantAccessorsThreshold::default()
+        };
+        let opts = PassthroughOpts {
+            wrapper_ctors: cfg.wrapper_ctors.clone(),
+            expose_methods: cfg.expose_methods.clone(),
+        };
+        let parsed: Vec<(String, syn::File)> = sources
+            .iter()
+            .map(|(rel, src)| {
+                (
+                    (*rel).to_string(),
+                    syn::parse_str(src).expect("parse source"),
+                )
+            })
+            .collect();
+
+        let mut sites_by_type: BTreeMap<String, Vec<ImplSite<'_>>> = BTreeMap::new();
+        let mut pub_fields_by_type: PubFieldsByType = BTreeMap::new();
+        for (rel, file) in &parsed {
+            for scope in collect_scopes(file) {
+                let mod_prefix = if scope.path.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}::", scope.path.join("::"))
+                };
+                for s in &scope.structs {
+                    if let syn::Fields::Named(named) = &s.fields {
+                        for f in &named.named {
+                            if is_strict_pub(&f.vis)
+                                && let Some(id) = &f.ident
+                            {
+                                pub_fields_by_type
+                                    .entry(s.ident.to_string())
+                                    .or_default()
+                                    .push(id.to_string());
+                            }
+                        }
+                    }
+                }
+                for &im in &scope.impls {
+                    if cfg.ignore_deref && is_deref_impl(im) {
+                        continue;
+                    }
+                    let Some(name) = self_ty_name(&im.self_ty) else {
+                        continue;
+                    };
+                    sites_by_type.entry(name).or_default().push(ImplSite {
+                        impl_block: im,
+                        file_rel: rel.clone(),
+                        mod_prefix: mod_prefix.clone(),
+                    });
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        for (target_type, sites) in &sites_by_type {
+            analyze_target_type(
+                &cfg,
+                &opts,
+                target_type,
+                sites,
+                &pub_fields_by_type,
+                &mut out,
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn p4_flags_accessor_paired_with_delegate_same_file() {
+        let v = run_p4(&[(
+            "test.rs",
+            r#"
+            use std::sync::Arc;
+            pub struct Q { player: Arc<P> }
+            impl Q {
+                pub fn player(&self) -> &Arc<P> { &self.player }
+                delegate::delegate! {
+                    to self.player {
+                        pub fn play(&self);
+                        pub fn pause(&self);
+                    }
+                }
+            }
+        "#,
+        )]);
+        assert_eq!(v.len(), 1, "expected exactly one P4 violation, got {v:?}");
+        assert_eq!(v[0].severity, Severity::Warn);
+        assert!(
+            v[0].message.contains("P4:") && v[0].message.contains("`player`"),
+            "unexpected message: {}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn p4_flags_accessor_paired_with_delegate_cross_file() {
+        // Real-world shape: Queue's accessor lives in `access.rs`, the
+        // `delegate!` block lives in `passthrough.rs`. A per-file pass
+        // would miss this — the cross-file aggregation must catch it.
+        let v = run_p4(&[
+            (
+                "crates/x/src/access.rs",
+                r#"
+                use std::sync::Arc;
+                pub struct Q { player: Arc<P> }
+                impl Q {
+                    pub fn player(&self) -> &Arc<P> { &self.player }
+                }
+            "#,
+            ),
+            (
+                "crates/x/src/passthrough.rs",
+                r#"
+                impl Q {
+                    delegate::delegate! {
+                        to self.player {
+                            pub fn play(&self);
+                        }
+                    }
+                }
+            "#,
+            ),
+        ]);
+        assert_eq!(v.len(), 1, "expected one cross-file P4, got {v:?}");
+        assert!(
+            v[0].message
+                .contains("delegate lives in `crates/x/src/passthrough.rs`"),
+            "diagnostic should pinpoint the delegate file: {}",
+            v[0].message
+        );
+        assert!(
+            v[0].key.contains("crates/x/src/access.rs"),
+            "violation key should anchor to the accessor's file: {}",
+            v[0].key
+        );
+    }
+
+    #[test]
+    fn p4_silent_when_only_delegate() {
+        assert!(
+            run_p4(&[(
+                "test.rs",
+                r#"
+                    pub struct Q { player: u32 }
+                    impl Q {
+                        delegate::delegate! {
+                            to self.player {
+                                pub fn play(&self);
+                            }
+                        }
+                    }
+                "#,
+            )])
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn p4_silent_when_only_accessor() {
+        assert!(
+            run_p4(&[(
+                "test.rs",
+                r#"
+                    use std::sync::Arc;
+                    pub struct Q { player: Arc<P> }
+                    impl Q {
+                        pub fn player(&self) -> &Arc<P> { &self.player }
+                    }
+                "#,
+            )])
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn p4_flags_only_matching_target_in_multi_target_delegate() {
+        let v = run_p4(&[(
+            "test.rs",
+            r#"
+                use std::sync::Arc;
+                pub struct Q { a: Arc<A>, b: Arc<B> }
+                impl Q {
+                    pub fn a(&self) -> &Arc<A> { &self.a }
+                    delegate::delegate! {
+                        to self.a {
+                            pub fn alpha(&self);
+                        }
+                        to self.b {
+                            pub fn beta(&self);
+                        }
+                    }
+                }
+            "#,
+        )]);
+        assert_eq!(v.len(), 1, "expected one P4 (for `a` only), got {v:?}");
+        assert!(v[0].message.contains("`a`"));
+    }
+
+    #[test]
+    fn p4_silent_for_chained_delegate_target() {
+        let v = run_p4(&[(
+            "test.rs",
+            r#"
+                use std::sync::Arc;
+                pub struct Q { inner: Arc<I> }
+                impl Q {
+                    pub fn inner(&self) -> &Arc<I> { &self.inner }
+                    delegate::delegate! {
+                        to self.inner.player {
+                            pub fn play(&self);
+                        }
+                    }
+                }
+            "#,
+        )]);
+        assert!(
+            v.is_empty(),
+            "chained `to self.inner.player` should not pair with `inner` accessor: {v:?}"
+        );
+    }
+
+    #[test]
+    fn p4_silent_for_non_delegate_macro_with_to_self_tokens() {
+        // A non-`delegate` macro that happens to contain `to self.x` tokens
+        // must not trigger P4 — we only scan macros whose path tail is
+        // `delegate`.
+        let v = run_p4(&[(
+            "test.rs",
+            r#"
+                pub struct Q { x: u32 }
+                impl Q {
+                    pub fn x(&self) -> &u32 { &self.x }
+                    some_other_macro! { to self.x { } }
+                }
+            "#,
+        )]);
+        assert!(
+            v.is_empty(),
+            "non-delegate macro must not produce P4: {v:?}"
+        );
+    }
 }
