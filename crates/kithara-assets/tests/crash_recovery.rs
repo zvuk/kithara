@@ -328,6 +328,145 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
     assert!(rebuilt_b.contains_range(&key, 0..12));
 }
 
+// ----------------------------------------------------------------
+// RED TESTS — demonstrate the contracts that S3 (atomic mmap commit
+// for segments) is meant to enforce. These currently FAIL because
+// segments are written directly to their canonical path: there is
+// no temp-file-then-rename guarantee and no fsync before commit
+// returns. After S3 they must turn green.
+// ----------------------------------------------------------------
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
+    // Contract (post-S3): while a writer is filling a segment, its
+    // canonical path on disk must not exist or must contain no
+    // observable bytes. Readers using slow-path `fs::metadata` /
+    // direct file open must see "no file" until `commit()` runs the
+    // atomic rename.
+    //
+    // Current behaviour (RED): segment is mmap'd directly at the
+    // canonical path. After even one `write_at`, the file is visible
+    // with partial bytes — any external scanner / parallel reader
+    // hitting it can deserialise garbage.
+    let dir = tempdir().unwrap();
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some(Consts::ASSET_ROOT))
+        .build();
+    let key = ResourceKey::new(Consts::KEY_NAME);
+    let res = store.acquire_resource(&key).unwrap();
+    res.write_at(0, b"partial-bytes").unwrap();
+    // explicitly NO commit yet — writer still in flight
+
+    let canonical = segment_path(dir.path());
+    let canonical_visible_with_bytes = canonical.metadata().map(|m| m.len() > 0).unwrap_or(false);
+    assert!(
+        !canonical_visible_with_bytes,
+        "segment must not be observable at its canonical path before commit; \
+         current state leaks partial bytes to any external reader"
+    );
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
+    // Contract (post-S3): a writer killed (kill -9) mid-write must
+    // not leave a file at the canonical path. The temp file may
+    // exist for a startup cleanup pass to sweep, but the canonical
+    // path must be empty so slow-path `resource_state` correctly
+    // reports the resource as missing.
+    //
+    // Current behaviour (RED): writer's mmap is bound to the
+    // canonical path. `mem::forget` simulates kill -9 by skipping
+    // `LeaseResource::drop` cleanup. Result: canonical file with
+    // partial bytes lingers and a fresh store sees it as a Committed
+    // resource via slow-path.
+    let dir = tempdir().unwrap();
+    {
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some(Consts::ASSET_ROOT))
+            .build();
+        let key = ResourceKey::new(Consts::KEY_NAME);
+        let res = store.acquire_resource(&key).unwrap();
+        res.write_at(0, b"partial-bytes-from-killed-writer")
+            .unwrap();
+        // Simulate kill -9: skip LeaseResource::drop cleanup.
+        std::mem::forget(res);
+        std::mem::forget(store);
+    }
+
+    let canonical = segment_path(dir.path());
+    if canonical.exists() {
+        let len = canonical.metadata().unwrap().len();
+        assert_eq!(
+            len, 0,
+            "kill -9 mid-write must not leave a non-empty canonical segment file; \
+             found {len} bytes at {canonical:?}"
+        );
+    }
+
+    // Fresh store rebuild — slow-path must NOT classify the leaked
+    // file as a Committed resource the reader will trust.
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some(Consts::ASSET_ROOT))
+        .build();
+    let key = ResourceKey::new(Consts::KEY_NAME);
+    assert_eq!(
+        store.final_len(&key),
+        None,
+        "after kill -9 mid-write, no resource state must claim the partial file"
+    );
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding() {
+    // Contract (post-S3): after commit, the file at the canonical path
+    // is exactly `final_len` bytes — neither padded with mmap initial
+    // size nor truncated. This is the natural side-effect of
+    // tempfile + rename: the temp file is grown via mmap, then on
+    // commit the data is sync'd and the temp file (sized exactly to
+    // `final_len` via ftruncate before rename) replaces the canonical.
+    //
+    // Current behaviour (RED): without atomic commit the mmap is
+    // bound directly to the canonical path. The mmap is grown to a
+    // power-of-two ≥ final_len; commit truncates back. But there is
+    // no atomicity guarantee, and intermediate scanners that hit the
+    // file during writes see partial data plus mmap-zero padding.
+    let dir = tempdir().unwrap();
+    let payload = b"exactly-12-b";
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir.path())
+        .asset_root(Some(Consts::ASSET_ROOT))
+        .build();
+    let key = ResourceKey::new(Consts::KEY_NAME);
+    let res = store.acquire_resource(&key).unwrap();
+    res.write_at(0, payload).unwrap();
+
+    // Mid-write: the canonical path must not contain anything yet.
+    let canonical = segment_path(dir.path());
+    let mid_write_size = canonical.metadata().map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        mid_write_size, 0,
+        "mid-write the canonical path must contain zero observable bytes (got {mid_write_size})"
+    );
+
+    res.commit(Some(payload.len() as u64)).unwrap();
+    drop(res);
+
+    let on_disk = fs::read(&canonical).expect("canonical exists post-commit");
+    assert_eq!(
+        on_disk.len(),
+        payload.len(),
+        "post-commit canonical file must be exactly final_len bytes (no mmap padding)"
+    );
+    assert_eq!(on_disk.as_slice(), payload);
+}
+
+// ----------------------------------------------------------------
+// END RED TESTS
+// ----------------------------------------------------------------
+
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
     // Worst case: every index file is mangled (truncated, garbage,
