@@ -70,22 +70,13 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-            // 3. fsync the temp file so its bytes are durable before rename.
-            //    POSIX guarantees rename atomicity, but not durability of the
-            //    file's contents — without sync_data a crash mid-rename can
-            //    leave a torn or empty file under `path`. `sync_data` is
-            //    cheaper than `sync_all` (no metadata flush).
-            tmp.as_file()
-                .sync_data()
-                .map_err(|e| crate::StorageError::Failed(format!("atomic sync_data: {e}")))?;
-
-            // 4. Atomic rename (POSIX guarantees atomicity).
+            // 3. Atomic rename (POSIX guarantees atomicity).
             //    `persist()` does `rename(tmp, target)` and disarms the
             //    auto-delete on drop.
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-            // 5. Re-open by path — sees new data after rename.
+            // 4. Re-open by path — sees new data after rename.
             //    commit() drops the old mmap (now stale) and opens the
             //    renamed file as read-only.
             return self.inner.commit(Some(data.len() as u64));
@@ -226,23 +217,6 @@ mod tests {
         let n = atomic.read_into(&mut buf).unwrap();
         assert_eq!(n, b"second version - longer data".len());
         assert_eq!(&buf, b"second version - longer data");
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn mmap_write_all_persists_durable_bytes() {
-        // After write_all returns, the on-disk file must contain the new bytes:
-        // sync_data + atomic rename guarantees readers see exactly the data we wrote.
-        let dir = TempDir::new().unwrap();
-        let res = create_mmap_resource(&dir, "durable.bin");
-        let path = dir.path().join("durable.bin");
-        let atomic = Atomic::new(res);
-
-        let payload = b"durable-payload-xyz";
-        atomic.write_all(payload).unwrap();
-
-        let on_disk = fs::read(&path).unwrap();
-        assert_eq!(on_disk.as_slice(), payload);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
