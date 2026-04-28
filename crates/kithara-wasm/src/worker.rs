@@ -57,7 +57,7 @@ async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
     match cmd {
         WorkerCmd::SelectTrack { url, request_id } => {
             let result = handle_select_track(player, &url).await;
-            crate::js_channel::send_reply(request_id, result);
+            crate::js::send_reply(request_id, result);
         }
         WorkerCmd::Play => {
             player.play();

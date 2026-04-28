@@ -9,11 +9,11 @@ mod bindings;
 #[cfg(target_arch = "wasm32")]
 mod commands;
 #[cfg(target_arch = "wasm32")]
-mod js_channel;
+mod js;
 #[cfg(target_arch = "wasm32")]
 mod player;
 #[cfg(target_arch = "wasm32")]
-mod worker_entry;
+mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub use bindings::build_info;
