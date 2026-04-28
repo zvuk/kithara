@@ -221,13 +221,23 @@ impl Flushable for LruInner {
     }
 
     fn flush(&self) -> AssetsResult<()> {
+        self.flush_with_durability(false)
+    }
+
+    fn flush_durable(&self) -> AssetsResult<()> {
+        self.flush_with_durability(true)
+    }
+}
+
+impl LruInner {
+    fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(persist) = self.persist.as_ref() else {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
         let snapshot = self.state.lock_sync().clone();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_state(atomic, &snapshot)?;
+        write_state(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
     }
@@ -276,11 +286,15 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
     Ok(LruState::from_file(file))
 }
 
-fn write_state(res: &Atomic<MmapResource>, state: &LruState) -> AssetsResult<()> {
+fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> AssetsResult<()> {
     let file = state.to_file();
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    res.write_all(&bytes)?;
+    if durable {
+        res.write_all_durable(&bytes)?;
+    } else {
+        res.write_all(&bytes)?;
+    }
     Ok(())
 }
 

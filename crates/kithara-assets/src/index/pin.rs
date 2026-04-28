@@ -237,13 +237,23 @@ impl Flushable for PinsInner {
     /// is collapsed to mere set-membership on disk — the persisted
     /// format only records keys.
     fn flush(&self) -> AssetsResult<()> {
+        self.flush_with_durability(false)
+    }
+
+    fn flush_durable(&self) -> AssetsResult<()> {
+        self.flush_with_durability(true)
+    }
+}
+
+impl PinsInner {
+    fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(persist) = self.persist.as_ref() else {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
         let snapshot: Vec<String> = self.pins.lock_sync().keys().cloned().collect();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_pins(atomic, &snapshot)?;
+        write_pins(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
     }
@@ -304,7 +314,7 @@ fn read_pins(
     Ok(pinned)
 }
 
-fn write_pins(res: &Atomic<MmapResource>, pins: &[String]) -> AssetsResult<()> {
+fn write_pins(res: &Atomic<MmapResource>, pins: &[String], durable: bool) -> AssetsResult<()> {
     let mut map = BTreeMap::new();
     for pin in pins {
         map.insert(pin.clone(), true);
@@ -316,7 +326,11 @@ fn write_pins(res: &Atomic<MmapResource>, pins: &[String]) -> AssetsResult<()> {
 
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    res.write_all(&bytes)?;
+    if durable {
+        res.write_all_durable(&bytes)?;
+    } else {
+        res.write_all(&bytes)?;
+    }
     Ok(())
 }
 

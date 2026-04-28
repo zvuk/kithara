@@ -58,7 +58,22 @@ use crate::error::AssetsResult;
 pub(crate) trait Flushable: Send + Sync {
     fn name(&self) -> &'static str;
     fn dirty(&self) -> &AtomicBool;
+    /// Best-effort flush. Atomic at the directory-entry level (POSIX
+    /// rename), but does NOT `sync_data` — payload pages may still be
+    /// in the OS page cache when this returns. Used on the per-
+    /// mutation hot path where throughput trumps strict durability.
     fn flush(&self) -> AssetsResult<()>;
+    /// Durable flush. Forces payload pages to physical disk BEFORE
+    /// the atomic rename, so any process that observes the canonical
+    /// path post-return either sees no file or sees the fully durable
+    /// committed bytes — survives power-loss.
+    ///
+    /// Default forwards to [`Self::flush`]; disk-backed inners
+    /// override to call `Atomic::write_all_durable`. Used only on the
+    /// explicit `checkpoint()` path (rare; throughput is irrelevant).
+    fn flush_durable(&self) -> AssetsResult<()> {
+        self.flush()
+    }
 }
 
 /// Tunables for [`FlushHub`].
@@ -204,10 +219,14 @@ impl FlushHub {
             s.pending = false;
             s.op_count = 0;
         }
-        self.flush_dirty()
+        // `flush_now` is the explicit-checkpoint path — caller wants
+        // post-return durability, so route through `flush_durable`
+        // (sync_data + atomic rename). The background worker uses the
+        // cheaper non-durable variant.
+        self.flush_dirty(/* durable */ true)
     }
 
-    fn flush_dirty(&self) -> AssetsResult<()> {
+    fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
         let alive: Vec<Arc<dyn Flushable>> = {
             let mut g = self.sources.lock_sync();
             g.retain(|w| w.strong_count() > 0);
@@ -218,7 +237,12 @@ impl FlushHub {
             if !src.dirty().swap(false, Ordering::AcqRel) {
                 continue;
             }
-            if let Err(e) = src.flush() {
+            let result = if durable {
+                src.flush_durable()
+            } else {
+                src.flush()
+            };
+            if let Err(e) = result {
                 tracing::warn!(
                     source = src.name(),
                     error = %e,
@@ -241,7 +265,10 @@ impl FlushHub {
                 if self.cancel.is_cancelled() {
                     drop(guard);
                     let _g = self.flush_lock.lock_sync();
-                    let _ = self.flush_dirty();
+                    // Worker path: cheap, non-durable flush. Hot path coalescing
+                    // doesn't pay the sync_data fence — that's reserved for the
+                    // explicit `flush_now` (= `checkpoint()`) caller.
+                    let _ = self.flush_dirty(/* durable */ false);
                     return;
                 }
                 let deadline = Instant::now() + self.policy.poll_interval;
@@ -263,7 +290,10 @@ impl FlushHub {
                 if self.cancel.is_cancelled() {
                     drop(guard);
                     let _g = self.flush_lock.lock_sync();
-                    let _ = self.flush_dirty();
+                    // Worker path: cheap, non-durable flush. Hot path coalescing
+                    // doesn't pay the sync_data fence — that's reserved for the
+                    // explicit `flush_now` (= `checkpoint()`) caller.
+                    let _ = self.flush_dirty(/* durable */ false);
                     return;
                 }
                 if Instant::now() >= debounce_deadline {
@@ -279,7 +309,10 @@ impl FlushHub {
                 guard.op_count = 0;
             }
             let _g = self.flush_lock.lock_sync();
-            let _ = self.flush_dirty();
+            // Worker path: cheap, non-durable flush. Hot path coalescing
+            // doesn't pay the sync_data fence — that's reserved for the
+            // explicit `flush_now` (= `checkpoint()`) caller.
+            let _ = self.flush_dirty(/* durable */ false);
         }
     }
 }
@@ -338,13 +371,14 @@ mod tests {
 
     use super::*;
 
-    /// Counts `flush()` invocations and reports a configurable name.
+    /// Counts `flush()` and `flush_durable()` invocations separately.
     /// Used to validate hub invariants without depending on real disk
     /// I/O.
     struct CountingSource {
         name: &'static str,
         dirty: AtomicBool,
         flushes: AtomicUsize,
+        durable_flushes: AtomicUsize,
     }
 
     impl CountingSource {
@@ -353,11 +387,16 @@ mod tests {
                 name,
                 dirty: AtomicBool::new(false),
                 flushes: AtomicUsize::new(0),
+                durable_flushes: AtomicUsize::new(0),
             })
         }
 
         fn flush_count(&self) -> usize {
             self.flushes.load(Ordering::Acquire)
+        }
+
+        fn durable_flush_count(&self) -> usize {
+            self.durable_flushes.load(Ordering::Acquire)
         }
     }
 
@@ -370,6 +409,10 @@ mod tests {
         }
         fn flush(&self) -> AssetsResult<()> {
             self.flushes.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+        fn flush_durable(&self) -> AssetsResult<()> {
+            self.durable_flushes.fetch_add(1, Ordering::AcqRel);
             Ok(())
         }
     }
@@ -405,11 +448,41 @@ mod tests {
         // Manually mark dirty without going through signal_or_flush_sync.
         src.dirty.store(true, Ordering::Release);
         hub.flush_now().unwrap();
-        assert_eq!(src.flush_count(), 1);
+        assert_eq!(
+            src.durable_flush_count(),
+            1,
+            "flush_now is the explicit-checkpoint path → durable variant"
+        );
+        assert_eq!(
+            src.flush_count(),
+            0,
+            "flush_now must not call the non-durable variant"
+        );
         assert!(!src.dirty.load(Ordering::Acquire), "dirty cleared on flush");
 
         hub.flush_now().unwrap();
-        assert_eq!(src.flush_count(), 1, "second flush is no-op when clean");
+        assert_eq!(
+            src.durable_flush_count(),
+            1,
+            "second flush is no-op when clean"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(2)))]
+    fn signal_or_flush_sync_uses_non_durable_variant() {
+        // The hot mutator path takes the cheap variant — durability is
+        // reserved for `flush_now` (= explicit `checkpoint()`).
+        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let src = CountingSource::new("src");
+        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+
+        signal_or_flush_sync(Some(&hub), &*src).unwrap();
+        assert_eq!(src.flush_count(), 1, "mutator path → non-durable");
+        assert_eq!(
+            src.durable_flush_count(),
+            0,
+            "mutator path must NOT pay the sync_data fence"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

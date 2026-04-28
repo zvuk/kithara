@@ -327,7 +327,7 @@ impl AvailabilityIndex {
     /// production flush path goes through [`Flushable::flush`].
     #[cfg(test)]
     pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
-        write_aggregate(&self.inner, res)
+        write_aggregate(&self.inner, res, false)
     }
 }
 
@@ -341,19 +341,33 @@ impl Flushable for InnerIndex {
     }
 
     fn flush(&self) -> AssetsResult<()> {
+        self.flush_with_durability(false)
+    }
+
+    fn flush_durable(&self) -> AssetsResult<()> {
+        self.flush_with_durability(true)
+    }
+}
+
+impl InnerIndex {
+    fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(p) = self.persist.get() else {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
         let atomic = persist::init_atomic(&p.res, &p.path, &p.cancel)?;
-        write_aggregate(self, atomic)?;
+        write_aggregate(self, atomic, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
     }
 }
 
 /// Serialise the aggregate into an `Atomic`-wrapped storage resource.
-fn write_aggregate<R: ResourceExt>(inner: &InnerIndex, res: &Atomic<R>) -> AssetsResult<()> {
+fn write_aggregate<R: ResourceExt>(
+    inner: &InnerIndex,
+    res: &Atomic<R>,
+    durable: bool,
+) -> AssetsResult<()> {
     let mut file = AvailabilityFile {
         version: 1,
         assets: BTreeMap::new(),
@@ -383,7 +397,11 @@ fn write_aggregate<R: ResourceExt>(inner: &InnerIndex, res: &Atomic<R>) -> Asset
     }
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    res.write_all(&bytes)?;
+    if durable {
+        res.write_all_durable(&bytes)?;
+    } else {
+        res.write_all(&bytes)?;
+    }
     Ok(())
 }
 

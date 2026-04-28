@@ -52,6 +52,34 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
     }
 
     fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+        self.write_all_inner(data, false)
+    }
+}
+
+impl<R: ResourceExt> Atomic<R> {
+    /// Write the whole payload atomically AND durably: like
+    /// [`ResourceExt::write_all`] but also `sync_data`s the temp file
+    /// before the atomic rename. Returns only after the bytes are
+    /// physically on disk.
+    ///
+    /// Use this on explicit checkpoint paths where the caller wants
+    /// post-return durability. Per-mutation flushes should keep using
+    /// the cheaper [`ResourceExt::write_all`] (best-effort, atomic
+    /// rename only).
+    ///
+    /// For memory-backed inners (no filesystem path) durability is
+    /// meaningless; the call falls back to the same passthrough as
+    /// `write_all`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates filesystem errors from temp creation, write,
+    /// `sync_data`, rename, or the inner's post-rename `commit`.
+    pub fn write_all_durable(&self, data: &[u8]) -> StorageResult<()> {
+        self.write_all_inner(data, true)
+    }
+
+    fn write_all_inner(&self, data: &[u8], durable: bool) -> StorageResult<()> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.inner.path() {
             let path = path.to_path_buf();
@@ -70,19 +98,34 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-            // 3. Atomic rename (POSIX guarantees atomicity).
+            // 3. Optional durability fence: `sync_data` forces the
+            //    payload pages to physical disk before rename.
+            //    POSIX guarantees rename atomicity, but not data
+            //    durability of the renamed file's contents — without
+            //    this fence a power loss between rename and the
+            //    kernel's lazy flush leaves a torn file under `path`.
+            if durable {
+                tmp.as_file()
+                    .sync_data()
+                    .map_err(|e| crate::StorageError::Failed(format!("atomic sync_data: {e}")))?;
+            }
+
+            // 4. Atomic rename (POSIX guarantees atomicity).
             //    `persist()` does `rename(tmp, target)` and disarms the
             //    auto-delete on drop.
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-            // 4. Re-open by path — sees new data after rename.
+            // 5. Re-open by path — sees new data after rename.
             //    commit() drops the old mmap (now stale) and opens the
             //    renamed file as read-only.
             return self.inner.commit(Some(data.len() as u64));
         }
 
         // In-memory or wasm32: reactivate committed resources before overwrite.
+        // Durability is meaningless without a filesystem; both paths fall
+        // through to the same passthrough.
+        let _ = durable;
         self.inner.reactivate()?;
         self.inner.write_all(data)
     }
