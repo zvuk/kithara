@@ -51,7 +51,7 @@ use crate::{
             pub_methods, returns_handle_type, self_ty_name,
         },
         violation::Violation,
-        walker::{relative_to, workspace_rs_files},
+        walker::{relative_to, workspace_rs_files_scoped},
     },
 };
 
@@ -78,7 +78,7 @@ impl Check for RedundantAccessors {
         };
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
             };

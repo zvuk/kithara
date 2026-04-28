@@ -11,7 +11,7 @@ use anyhow::Result;
 use cargo_metadata::Metadata;
 
 use super::config::StyleConfig;
-use crate::common::violation::Violation;
+use crate::common::{scope::Scope, violation::Violation};
 
 pub(crate) mod const_locality;
 pub(crate) mod struct_field_order;
@@ -23,6 +23,7 @@ pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
     pub(crate) metadata: &'a Metadata,
     pub(crate) config: &'a StyleConfig,
+    pub(crate) scope: &'a Scope,
 }
 
 pub(crate) trait Check {

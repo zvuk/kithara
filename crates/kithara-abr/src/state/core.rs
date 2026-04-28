@@ -5,6 +5,7 @@ use std::sync::{
 
 use kithara_events::{AbrMode, AbrVariant};
 use kithara_platform::{Mutex, time::Instant};
+use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, error::AbrError, view::AbrView};
 
@@ -97,11 +98,12 @@ impl AbrState {
         super::decision::evaluate(self, view, now)
     }
 
-    #[expect(clippy::cast_possible_truncation)]
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
-            .as_nanos() as u64;
+            .as_nanos()
+            .to_u64()
+            .unwrap_or(u64::MAX);
         nanos.max(1)
     }
 

@@ -48,6 +48,27 @@ impl Baseline {
         toml::from_str(&text).with_context(|| format!("parse baseline: {}", path.display()))
     }
 
+    /// Return a copy of this baseline with only entries whose key passes
+    /// the predicate. Used to drop out-of-scope baseline entries before
+    /// ratchet diffing on a scoped run.
+    pub(crate) fn filter_keys(&self, predicate: impl Fn(&str) -> bool) -> Self {
+        let mut out = Self {
+            schema_version: self.schema_version,
+            checks: BTreeMap::new(),
+        };
+        for (check, keys) in &self.checks {
+            let kept: BTreeMap<String, u64> = keys
+                .iter()
+                .filter(|(k, _)| predicate(k.as_str()))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            if !kept.is_empty() {
+                out.checks.insert(check.clone(), kept);
+            }
+        }
+        out
+    }
+
     /// Build a fresh baseline from the report's current observations.
     pub(crate) fn from_report(report: &Report) -> Self {
         let mut checks: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();

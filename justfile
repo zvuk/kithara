@@ -1,7 +1,5 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-ast-grep-bin := "$(command -v ast-grep || command -v sg || true)"
-
 # Show available commands.
 default:
     @just --list
@@ -35,17 +33,11 @@ machete:
 
 # AST-grep policy scan. Default: blocking rules (CI-deny).
 # Pass `advisory` for the warning-level full set.
+# Filter list and ast-grep invocation live in `cargo xtask ast-grep`.
 #   just ast-grep
 #   just ast-grep advisory
 ast-grep MODE="blocking":
-    @if [[ -z "{{ast-grep-bin}}" ]]; then \
-      echo "FAILED: ast-grep is required but not installed."; exit 1; fi; \
-    if [[ "{{MODE}}" == "advisory" ]]; then \
-      {{ast-grep-bin}} scan --config sgconfig.yml --report-style short --warning; \
-    else \
-      {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
-        --filter '^(style.no-items-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts|rust.no-error-string-match)$'; \
-    fi
+    cargo xtask ast-grep --mode={{MODE}}
 
 # Workspace linters: arch, style, idioms.
 #   just lint                       # all three
@@ -115,6 +107,36 @@ test-all: test test-doc
 [private]
 ast-grep-blocking:
     @just ast-grep
+
+# Run all linters scoped to a crate / path / workspace.
+# Argument parsing is in `cargo xtask scope`; filter list is in
+# `cargo xtask ast-grep`. This recipe is a thin orchestrator.
+#
+#   just audit                              # whole workspace
+#   just audit kithara-queue                # crate by name
+#   just audit crates/kithara-abr/src       # path inside a crate
+#   just audit tests tests/bench            # one or more workspace paths
+#   just audit ./xtask/src                  # leading ./ ok
+audit *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    section() { echo; echo "── $1"; }
+
+    # Validate scope tokens up front so a typo doesn't silently fall back to
+    # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
+    if ! XTASK_FLAGS=$(cargo xtask scope --for=xtask {{ARGS}}); then exit 2; fi
+    CLIPPY_FLAGS=$(cargo xtask scope --for=clippy {{ARGS}})
+    FMT_FLAGS=$(cargo xtask scope --for=fmt {{ARGS}})
+    AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep {{ARGS}})
+
+    fail=0
+    section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
+    section "clippy";       cargo clippy $CLIPPY_FLAGS -- -D warnings || fail=1
+    section "ast-grep";     cargo xtask ast-grep --mode=blocking $AST_GREP_PATHS || fail=1
+    section "xtask lint";   cargo xtask lint $XTASK_FLAGS || fail=1
+
+    echo
+    [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
 
 # --- internal: xtask self-tests ---
 

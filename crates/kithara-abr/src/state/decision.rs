@@ -11,6 +11,7 @@
 
 use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::time::Instant;
+use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
 use crate::controller::AbrSettings;
@@ -128,16 +129,14 @@ fn current_bandwidth(sorted: &[(usize, u64)], current: usize) -> u64 {
 }
 
 fn adjusted_throughput(estimate_bps: u64, safety_factor: f64) -> f64 {
-    #[expect(clippy::cast_precision_loss)]
-    let raw = estimate_bps as f64;
+    let raw = estimate_bps.to_f64().unwrap_or(0.0);
     (raw / safety_factor).max(0.0)
 }
 
 fn candidate_variant(sorted: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
-    #[expect(clippy::cast_precision_loss)]
     let best_under = sorted
         .iter()
-        .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
+        .filter(|(_, bw)| bw.to_f64().unwrap_or(f64::INFINITY) <= adjusted_bps)
         .max_by_key(|(_, bw)| *bw);
     best_under
         .or_else(|| sorted.first())
@@ -159,9 +158,8 @@ fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
     let buffer_ok = ctx
         .buffer_ahead
         .is_none_or(|b| b >= ctx.settings.min_buffer_for_up_switch);
-    #[expect(clippy::cast_precision_loss)]
-    let headroom_ok =
-        ctx.adjusted_bps >= (ctx.candidate_bw as f64) * ctx.settings.up_hysteresis_ratio;
+    let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(f64::INFINITY);
+    let headroom_ok = ctx.adjusted_bps >= candidate_bw_f * ctx.settings.up_hysteresis_ratio;
     if buffer_ok && headroom_ok {
         return decision(ctx.current, ctx.candidate_idx, AbrReason::UpSwitch);
     }
@@ -172,9 +170,8 @@ fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
     let urgent = ctx
         .buffer_ahead
         .is_some_and(|b| b <= ctx.settings.urgent_downswitch_buffer);
-    #[expect(clippy::cast_precision_loss)]
-    let margin_ok =
-        ctx.adjusted_bps <= (ctx.current_bw as f64) * ctx.settings.down_hysteresis_ratio;
+    let current_bw_f = ctx.current_bw.to_f64().unwrap_or(f64::INFINITY);
+    let margin_ok = ctx.adjusted_bps <= current_bw_f * ctx.settings.down_hysteresis_ratio;
     if urgent {
         return Some(decision(
             ctx.current,

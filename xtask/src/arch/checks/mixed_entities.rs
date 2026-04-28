@@ -10,7 +10,7 @@ use super::{Check, Context};
 use crate::common::{
     parse::{parse_file, type_weights},
     violation::Violation,
-    walker::{relative_to, workspace_rs_files},
+    walker::{relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "mixed_entities";
@@ -26,7 +26,7 @@ impl Check for MixedEntities {
         let cfg = &ctx.config.thresholds.mixed_entities;
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
             };

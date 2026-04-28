@@ -17,7 +17,7 @@ use crate::{
     common::{
         parse::parse_file,
         violation::Violation,
-        walker::{relative_to, workspace_rs_files},
+        walker::{relative_to, workspace_rs_files_scoped},
     },
     style::config::StructFieldOrderConfig,
 };
@@ -34,7 +34,7 @@ impl Check for StructFieldOrder {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.struct_field_order;
         let mut violations = Vec::new();
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
             };

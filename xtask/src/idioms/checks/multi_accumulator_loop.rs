@@ -20,7 +20,7 @@ use crate::{
     common::{
         parse::{canonical_subject, parse_file},
         violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
+        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
     },
     idioms::config::MultiAccumulatorLoopConfig,
 };
@@ -38,7 +38,7 @@ impl Check for MultiAccumulatorLoop {
         let cfg = &ctx.config.thresholds.multi_accumulator_loop;
         let exempt = compile_globs(&cfg.exempt_files);
         let mut violations = Vec::new();
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel_path = relative_to(ctx.workspace_root, &path).to_path_buf();
             let rel = rel_path.to_string_lossy().replace('\\', "/");
             if matches_any(&exempt, std::path::Path::new(&rel)) {

@@ -25,6 +25,7 @@ use config::IdiomsConfig;
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
     report,
+    scope::Scope,
     violation::Report,
 };
 
@@ -40,6 +41,12 @@ pub(crate) struct IdiomsArgs {
     pub update_baseline: bool,
     #[arg(long, default_value = ".config/idioms")]
     pub config_dir: PathBuf,
+    /// Restrict scan to specific crate(s) by name. Repeatable.
+    #[arg(long = "crate", value_name = "NAME")]
+    pub crates: Vec<String>,
+    /// Restrict scan to workspace-relative path(s). Repeatable.
+    #[arg(long = "path", value_name = "PATH")]
+    pub paths: Vec<PathBuf>,
 }
 
 pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
@@ -48,11 +55,13 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     let metadata = MetadataCommand::new().exec()?;
     let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
     let config = IdiomsConfig::load(&args.config_dir)?;
+    let scope = Scope::new(args.crates.clone(), args.paths.clone());
 
     let ctx = Context {
         workspace_root: &workspace_root,
         metadata: &metadata,
         config: &config,
+        scope: &scope,
     };
 
     let registry = registry();
@@ -96,6 +105,11 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     }
 
     let baseline = Baseline::load(&args.config_dir)?;
+    let baseline = if scope.is_empty() {
+        baseline
+    } else {
+        baseline.filter_keys(|k| scope.key_in_scope(k))
+    };
     let diff = baseline.diff(&report.violations);
 
     if let Some(path) = &args.report {

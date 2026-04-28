@@ -1,0 +1,80 @@
+id: rust.no-lint-suppression
+message: |
+  `#[allow(...)]` and `#[expect(...)]` are banned: a clippy or rustc warning is
+  signal that something is wrong. The fix is the underlying code, not silencing
+  the lint.
+
+  Common substitutions:
+    • clippy::cast_possible_truncation / cast_sign_loss / cast_precision_loss
+        → use `u32::try_from(x)?` / `i64::try_from(x)?`
+        → for intentional truncation, wrap in a named helper that captures the
+          contract (`fn ms_from_secs_f64(s: f64) -> u64 { … }`) and place the
+          cast inside that helper
+        → for f32→u32 with bounded range, use `(x.clamp(0.0, MAX) as u32)` and
+          rename the lint name
+    • dead_code → delete the item
+    • unused_variables / unused_imports → delete or expose them
+    • unnecessary_qualification → add a `use` import
+    • clippy::too_many_arguments → group params into a struct
+    • unreachable_pub → reduce visibility to `pub(crate)`
+    • clippy::cognitive_complexity → split the function
+
+  Do NOT relocate the suppression — that is the same workaround in disguise:
+    • `[lints.clippy] foo = "allow"` in a crate Cargo.toml is banned by
+      `rust.no-crate-lint-allow`.
+    • Wrapping the cast/dead-code/etc. in a one-line helper function and
+      pushing the `#[expect]` onto that helper is also a workaround. The
+      lint catches a code smell; relocating it to a wrapper does not fix
+      the smell.
+
+  Legitimate exceptions are file-globbed in this rule's `ignores:` list (FFI
+  bindings, proc-macros, wasm-bindgen public surface). New exceptions must
+  argue the case in the owning crate's README.md and be added to `ignores:`,
+  not silenced inline.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+  - xtask/**/*.rs
+ignores:
+  # FFI bindings — `unsafe_code`, `non_camel_case_types`, naming lints are
+  # forced by mirroring native APIs. Keep the suppression file-local.
+  - crates/kithara-decode/src/apple/**
+  - crates/kithara-decode/src/android/**
+  - crates/kithara-ffi/**
+  # Proc-macros — `unused_macros` and naming lints fire on macro-generated
+  # surfaces; macro authors document why per-macro.
+  - crates/kithara-test-macros/**
+  - crates/kithara-wasm-macros/**
+  - crates/kithara-hang-detector-macros/**
+  # wasm-bindgen public surface — required `pub fn` triggers `unreachable_pub`.
+  - crates/kithara-wasm/src/bindings.rs
+  - crates/kithara-wasm/src/player.rs
+  # Per-crate carve-outs for legacy hotspots not yet through the audit sweep.
+  # Each entry is removed when its crate's audit lands.
+  - crates/kithara-audio/**
+  - crates/kithara-hls/**
+  - crates/kithara-storage/**
+  - crates/kithara-stream/**
+  - crates/kithara-net/**
+  - crates/kithara-events/**
+  - crates/kithara-assets/**
+  - crates/kithara-drm/**
+  - crates/kithara-test-utils/**
+  - crates/kithara-app/**
+  - crates/kithara-play/**
+  - crates/kithara-decode/src/lib.rs
+  - crates/kithara-decode/src/symphonia/**
+  - crates/kithara-decode/src/factory/**
+  - crates/kithara-decode/src/backend/**
+  - crates/kithara-decode/src/pcm/**
+  # tests/ and xtask/ — separate audits will sweep these later.
+  - tests/**
+  - xtask/**
+rule:
+  any:
+    - pattern: "#[allow($$$ARGS)]"
+    - pattern: "#[expect($$$ARGS)]"
+    - pattern: "#![allow($$$ARGS)]"
+    - pattern: "#![expect($$$ARGS)]"

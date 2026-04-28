@@ -11,6 +11,7 @@ description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 derivative = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
+num-traits = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 unimock = { workspace = true, optional = true }

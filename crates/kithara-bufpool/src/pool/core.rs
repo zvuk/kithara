@@ -135,19 +135,16 @@ where
         }
     }
 
-    /// Determine shard index for current thread.
+    /// Determine shard index for current thread. Pure function of the
+    /// `SHARDS` const; takes no `self`. Result is bounded by `SHARDS`,
+    /// which fits in `usize` on every platform we target — so the
+    /// `usize::try_from` here is infallible in practice and the
+    /// `.unwrap_or(0)` is just a non-panicking fallback.
     #[inline]
-    #[expect(
-        clippy::unused_self,
-        reason = "method on Pool for API consistency; may use self in future for per-pool salt"
-    )]
-    pub(crate) fn shard_index(&self) -> usize {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "modulo SHARDS guarantees result fits in usize"
-        )]
-        let idx = (current_thread_id() as usize) % SHARDS;
-        idx
+    pub(crate) fn shard_index() -> usize {
+        let tid = current_thread_id();
+        let shards_u64 = SHARDS as u64;
+        usize::try_from(tid % shards_u64).unwrap_or(0)
     }
 
     /// Get pool hit/miss statistics.
@@ -205,7 +202,7 @@ where
     /// The value is cleared and trimmed via [`Reuse::reuse`] before storing.
     /// If the pool is full, the value is silently dropped.
     pub fn recycle(&self, value: T) {
-        let shard_idx = self.shard_index();
+        let shard_idx = Self::shard_index();
         self.put(value, shard_idx);
     }
 }
@@ -246,7 +243,7 @@ where
     where
         F: FnOnce(&mut T),
     {
-        let shard_idx = self.shard_index();
+        let shard_idx = Self::shard_index();
         let mut value = {
             let mut shard = self.shards[shard_idx].lock_sync();
             shard.try_get()

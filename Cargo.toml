@@ -211,6 +211,11 @@ ratatui = "0.30.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"
 smallvec = "1"
+# Numeric conversions: lets call sites express bounded f→i / u→f via
+# `.to_u64()` / `.to_f64()` (returning Option) instead of raw `as` casts.
+# Using a typed conversion API is the alternative to `#[expect(clippy::cast_*)]`
+# suppressions when an `as` cast is genuinely required.
+num-traits = { version = "0.2", default-features = false }
 
 # audio engine
 cpal = { version = "0.17", default-features = false }

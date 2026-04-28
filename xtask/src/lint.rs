@@ -9,6 +9,8 @@
 //! `--json`, `--update-baseline`, `--config-dir`) to the underlying
 //! namespace.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
@@ -18,6 +20,14 @@ use crate::{arch, idioms, style};
 pub(crate) struct LintArgs {
     #[command(subcommand)]
     pub command: Option<LintCommand>,
+    /// When no subcommand is given, restrict the run to specific crates.
+    /// Repeatable. Forwarded to arch+style+idioms.
+    #[arg(long = "crate", value_name = "NAME", global = true)]
+    pub crates: Vec<String>,
+    /// When no subcommand is given, restrict the run to specific paths.
+    /// Repeatable. Forwarded to arch+style+idioms.
+    #[arg(long = "path", value_name = "PATH", global = true)]
+    pub paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -35,24 +45,30 @@ pub(crate) fn run(args: &LintArgs) -> Result<()> {
         Some(LintCommand::Arch(a)) => arch::run(a),
         Some(LintCommand::Style(a)) => style::run(a),
         Some(LintCommand::Idioms(a)) => idioms::run(a),
-        None => run_all(),
+        None => run_all(&args.crates, &args.paths),
     }
 }
 
-fn run_all() -> Result<()> {
+fn run_all(crates: &[String], paths: &[PathBuf]) -> Result<()> {
     let mut failures: Vec<&'static str> = Vec::new();
     // Mirror the clap `default_value` for `config_dir`; `Default::default()`
     // on `PathBuf` yields "" which silently bypasses config loading.
     let arch_args = arch::ArchArgs {
         config_dir: ".config/arch".into(),
+        crates: crates.to_vec(),
+        paths: paths.to_vec(),
         ..arch::ArchArgs::default()
     };
     let style_args = style::StyleArgs {
         config_dir: ".config/style".into(),
+        crates: crates.to_vec(),
+        paths: paths.to_vec(),
         ..style::StyleArgs::default()
     };
     let idioms_args = idioms::IdiomsArgs {
         config_dir: ".config/idioms".into(),
+        crates: crates.to_vec(),
+        paths: paths.to_vec(),
         ..idioms::IdiomsArgs::default()
     };
 

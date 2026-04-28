@@ -9,7 +9,7 @@ use anyhow::Result;
 use cargo_metadata::{DependencyKind, Metadata, Node, Package};
 
 use super::{Check, Context};
-use crate::common::violation::Violation;
+use crate::common::{scope::packages_in_scope, violation::Violation};
 
 pub(crate) const ID: &str = "direction";
 
@@ -33,9 +33,7 @@ impl Check for Direction {
             }
         }
 
-        let workspace_members: HashSet<&str> = ctx
-            .metadata
-            .workspace_packages()
+        let workspace_members: HashSet<&str> = packages_in_scope(ctx.metadata, ctx.scope)
             .iter()
             .map(|p| p.name.as_str())
             .collect();

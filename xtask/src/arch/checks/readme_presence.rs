@@ -5,7 +5,7 @@ use std::fs;
 use anyhow::Result;
 
 use super::{Check, Context};
-use crate::common::violation::Violation;
+use crate::common::{scope::packages_in_scope, violation::Violation};
 
 pub(crate) const ID: &str = "readme_presence";
 
@@ -20,7 +20,7 @@ impl Check for ReadmePresence {
         let cfg = &ctx.config.thresholds.readme_presence;
         let mut violations = Vec::new();
 
-        for pkg in ctx.metadata.workspace_packages() {
+        for pkg in packages_in_scope(ctx.metadata, ctx.scope) {
             if cfg.exempt.iter().any(|name| name == pkg.name.as_str()) {
                 continue;
             }

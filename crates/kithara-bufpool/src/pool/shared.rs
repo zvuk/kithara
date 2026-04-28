@@ -91,7 +91,7 @@ where
     /// Useful for attaching pool-recycling to values that were extracted via
     /// [`PooledOwned::into_inner()`] or created outside the pool.
     pub fn attach(&self, value: T) -> PooledOwned<SHARDS, T> {
-        let shard_idx = self.0.shard_index();
+        let shard_idx = Pool::<SHARDS, T>::shard_index();
         PooledOwned::wrap(Arc::clone(&self.0), value, shard_idx)
     }
 

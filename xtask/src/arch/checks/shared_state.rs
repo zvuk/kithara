@@ -10,7 +10,7 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{relative_to, workspace_rs_files},
+    walker::{relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "shared_state";
@@ -26,7 +26,7 @@ impl Check for SharedState {
         let cfg = &ctx.config.thresholds.shared_state;
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let content = fs::read_to_string(&path)?;
             let mut count = 0usize;
             for line in content.lines() {

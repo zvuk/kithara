@@ -9,9 +9,9 @@ where
     pool.put(value, shard_idx);
 }
 
-pub fn shard_index<const SHARDS: usize, T>(pool: &Pool<SHARDS, T>) -> usize
+pub fn shard_index<const SHARDS: usize, T>(_pool: &Pool<SHARDS, T>) -> usize
 where
     T: Reuse,
 {
-    pool.shard_index()
+    Pool::<SHARDS, T>::shard_index()
 }

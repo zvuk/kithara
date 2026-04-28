@@ -13,7 +13,7 @@ use super::{Check, Context};
 use crate::common::{
     parse::parse_file,
     violation::Violation,
-    walker::{relative_to, workspace_rs_files},
+    walker::{relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "single_impl_size";
@@ -29,7 +29,7 @@ impl Check for SingleImplSize {
         let cfg = &ctx.config.thresholds.single_impl_size;
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
             };

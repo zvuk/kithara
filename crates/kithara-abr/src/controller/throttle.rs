@@ -2,6 +2,7 @@
 
 use kithara_events::{AbrEvent, EventBus};
 use kithara_platform::time::{Duration, Instant};
+use num_traits::ToPrimitive;
 
 use super::{core::AbrController, peer::PeerEntry};
 
@@ -70,8 +71,7 @@ impl AbrController {
 
 pub(super) fn bytes_per_second(bytes: u64, duration: Duration) -> f64 {
     let secs = duration.as_secs_f64().max(f64::EPSILON);
-    #[expect(clippy::cast_precision_loss)]
-    let bytes_f = bytes as f64;
+    let bytes_f = bytes.to_f64().unwrap_or(0.0);
     bytes_f / secs
 }
 
@@ -83,9 +83,10 @@ fn relative_delta(prev: u64, now: u64) -> f64 {
     if prev == 0 {
         return f64::INFINITY;
     }
-    #[expect(clippy::cast_precision_loss)]
-    let diff = (i128::from(prev) - i128::from(now)).unsigned_abs() as f64;
-    #[expect(clippy::cast_precision_loss)]
-    let base = prev as f64;
+    let diff = (i128::from(prev) - i128::from(now))
+        .unsigned_abs()
+        .to_f64()
+        .unwrap_or(f64::INFINITY);
+    let base = prev.to_f64().unwrap_or(f64::INFINITY);
     diff / base
 }

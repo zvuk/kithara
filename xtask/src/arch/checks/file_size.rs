@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "file_size";
@@ -24,7 +24,7 @@ impl Check for FileSize {
         let exclude = compile_globs(&cfg.exclude_globs);
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel = relative_to(ctx.workspace_root, &path);
             if matches_any(&exclude, rel) {
                 continue;

@@ -8,6 +8,8 @@ use std::{
 use anyhow::Result;
 use glob::Pattern;
 
+use super::scope::Scope;
+
 /// Recursively collect all `.rs` files under `dir`, returning them sorted.
 pub(crate) fn walk_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
@@ -42,10 +44,19 @@ pub(crate) fn matches_any(patterns: &[Pattern], rel: &Path) -> bool {
     patterns.iter().any(|p| p.matches(&s))
 }
 
-/// Walk all `.rs` files under `<workspace_root>/crates`, returning paths relative to workspace root.
-pub(crate) fn workspace_rs_files(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let crates_dir = workspace_root.join("crates");
-    walk_rs_files(&crates_dir)
+/// Walk `.rs` files under each root in `scope` (defaults to `<workspace>/crates`
+/// when scope is empty). Results are de-duplicated and sorted.
+pub(crate) fn workspace_rs_files_scoped(
+    workspace_root: &Path,
+    scope: &Scope,
+) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for root in scope.roots(workspace_root) {
+        walk_rs_files_inner(&root, &mut out)?;
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 pub(crate) fn relative_to<'a>(root: &Path, full: &'a Path) -> &'a Path {

@@ -21,11 +21,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use cargo_metadata::{Package, TargetKind};
+use cargo_metadata::TargetKind;
 use syn::{ImplItem, Item, ItemImpl, Type, UseTree, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
-use crate::common::{parse::parse_file, violation::Violation, walker::walk_rs_files};
+use crate::common::{
+    parse::parse_file, scope::packages_in_scope, violation::Violation, walker::walk_rs_files,
+};
 
 pub(crate) const ID: &str = "redundant_reexport";
 
@@ -44,11 +46,8 @@ impl Check for RedundantReexport {
 
         let mut violations = Vec::new();
 
-        for member in &ctx.metadata.workspace_members {
-            let pkg: &Package = match ctx.metadata.packages.iter().find(|p| &p.id == member) {
-                Some(p) => p,
-                None => continue,
-            };
+        let scoped_pkgs = packages_in_scope(ctx.metadata, ctx.scope);
+        for pkg in scoped_pkgs {
             let crate_root = match pkg.targets.iter().find(|t| {
                 t.kind.iter().any(|k| {
                     matches!(

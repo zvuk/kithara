@@ -15,7 +15,7 @@ use glob::Pattern;
 use syn::{Item, UseTree};
 
 use super::{Check, Context};
-use crate::common::{violation::Violation, walker::walk_rs_files};
+use crate::common::{scope::packages_in_scope, violation::Violation, walker::walk_rs_files};
 
 pub(crate) const ID: &str = "module_layers";
 
@@ -32,9 +32,7 @@ impl Check for ModuleLayers {
             return Ok(Vec::new());
         }
 
-        let pkgs: HashMap<&str, &Package> = ctx
-            .metadata
-            .workspace_packages()
+        let pkgs: HashMap<&str, &Package> = packages_in_scope(ctx.metadata, ctx.scope)
             .iter()
             .map(|p| (p.name.as_str(), *p))
             .collect();

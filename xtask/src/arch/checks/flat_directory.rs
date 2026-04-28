@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files},
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "flat_directory";
@@ -25,7 +25,7 @@ impl Check for FlatDirectory {
 
         // group rs files by parent dir, excluding mod.rs
         let mut by_dir: BTreeMap<PathBuf, usize> = BTreeMap::new();
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel = relative_to(ctx.workspace_root, &path);
             if matches_any(&ignore, rel) {
                 continue;

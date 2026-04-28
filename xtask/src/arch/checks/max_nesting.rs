@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{relative_to, workspace_rs_files},
+    walker::{relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "max_nesting";
@@ -23,7 +23,7 @@ impl Check for MaxNesting {
         let cfg = &ctx.config.thresholds.max_nesting;
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel = relative_to(ctx.workspace_root, &path);
             let Some(crate_name) = crate_name_from(rel) else {
                 continue;

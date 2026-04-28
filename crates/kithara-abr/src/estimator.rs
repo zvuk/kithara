@@ -1,5 +1,6 @@
 use kithara_events::BandwidthSource;
 use kithara_platform::{Mutex, time::Duration};
+use num_traits::ToPrimitive;
 #[cfg(any(test, feature = "internal"))]
 use unimock::unimock;
 
@@ -97,7 +98,6 @@ impl Default for ThroughputEstimator {
 }
 
 impl Estimator for ThroughputEstimator {
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn estimate_bps(&self) -> Option<u64> {
         let inner = self.inner.lock_sync();
         let est = inner
@@ -106,9 +106,9 @@ impl Estimator for ThroughputEstimator {
             .min(inner.slow_ewma.get_estimate());
 
         if est > 0.0 {
-            Some(est.round() as u64)
+            est.round().to_u64().or(Some(0))
         } else if inner.initial_bps > 0.0 {
-            Some(inner.initial_bps.round() as u64)
+            inner.initial_bps.round().to_u64().or(Some(0))
         } else {
             None
         }
@@ -127,8 +127,7 @@ impl Estimator for ThroughputEstimator {
         }
 
         let dur_ms = (duration.as_secs_f64() * Self::MS_PER_SEC).max(Self::MIN_DURATION_MS);
-        #[expect(clippy::cast_precision_loss)]
-        let bps = (bytes as f64) * Self::BITS_PER_BYTE_MS / dur_ms;
+        let bps = bytes.to_f64().unwrap_or(0.0) * Self::BITS_PER_BYTE_MS / dur_ms;
         let weight_secs = dur_ms / Self::MS_PER_SEC;
 
         inner.fast_ewma.add_sample(weight_secs, bps);

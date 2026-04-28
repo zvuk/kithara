@@ -6,7 +6,7 @@ use super::{Check, Context};
 use crate::common::{
     parse::{count_items, parse_file},
     violation::Violation,
-    walker::{relative_to, workspace_rs_files},
+    walker::{relative_to, workspace_rs_files_scoped},
 };
 
 pub(crate) const ID: &str = "file_density";
@@ -22,7 +22,7 @@ impl Check for FileDensity {
         let cfg = &ctx.config.thresholds.file_density;
         let mut violations = Vec::new();
 
-        for path in workspace_rs_files(ctx.workspace_root)? {
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             // skip files that fail to parse — file_size will catch giant blobs anyway
             let Ok(file) = parse_file(&path) else {
                 continue;
