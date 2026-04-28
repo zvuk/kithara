@@ -1,10 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use kithara_abr::AbrState;
@@ -357,12 +354,11 @@ pub(crate) fn build_pair(
     timeline: Timeline,
 ) -> (HlsScheduler, HlsSource) {
     let cancel = config.cancel.clone().unwrap_or_default();
-    let abr_variant_index = abr.variant_index_handle();
     timeline.set_total_duration(playlist_state.track_duration());
-    let coord = Arc::new(HlsCoord::new(cancel, timeline, abr_variant_index));
+    let coord = Arc::new(HlsCoord::new(cancel, timeline, Arc::clone(&abr)));
     let num_variants = playlist_state.num_variants();
     let num_segments = playlist_state.num_segments(0).unwrap_or(0);
-    let initial_variant = coord.abr_variant_index.load(Ordering::Acquire);
+    let initial_variant = coord.variant_index();
     let mut stream_index = StreamIndex::new(num_variants, num_segments);
     if initial_variant < num_variants {
         stream_index.set_layout_variant(initial_variant);

@@ -75,10 +75,7 @@ impl HlsSource {
                     layout_segment_end,
                 )
             } else {
-                let abr_variant = self
-                    .coord
-                    .abr_variant_index
-                    .load(std::sync::atomic::Ordering::Acquire);
+                let abr_variant = self.coord.variant_index();
                 let fallback = if abr_variant < variants && abr_variant != layout_variant {
                     self.playlist_state
                         .find_seek_point_for_time(abr_variant, position)

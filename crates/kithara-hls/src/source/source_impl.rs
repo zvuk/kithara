@@ -167,7 +167,7 @@ impl Source for HlsSource {
         // all committed data for layout_variant, data will never arrive.
         // Report Ready so read_at can detect VariantChange.
         if range.start >= segments.max_end_offset() && segments.max_end_offset() > 0 {
-            let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+            let abr_variant = self.coord.variant_index();
             if abr_variant != segments.layout_variant() {
                 return SourcePhase::Ready;
             }
@@ -237,7 +237,7 @@ impl Source for HlsSource {
             // arrive if the downloader switched to a different variant.
             // Signal VariantChange so the FSM recreates the decoder.
             let layout_variant = self.segments.lock_sync().layout_variant();
-            let abr_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+            let abr_variant = self.coord.variant_index();
             if abr_variant != layout_variant {
                 trace!(
                     offset,
@@ -321,7 +321,7 @@ impl Source for HlsSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let hinted_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let hinted_variant = self.coord.variant_index();
         let reader_variant = self.current_loaded_segment_key().map(|(v, _)| v);
         let has_hinted_variant = self
             .segments
@@ -362,7 +362,7 @@ impl Source for HlsSource {
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        let current_variant = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let current_variant = self.coord.variant_index();
 
         // Do NOT change layout_variant here — this method is called from
         // detect_format_change() while the old decoder is still reading.
@@ -422,7 +422,7 @@ impl Source for HlsSource {
     }
 
     fn commit_variant_layout(&mut self) {
-        let target = self.coord.abr_variant_index.load(Ordering::Acquire);
+        let target = self.coord.variant_index();
         let mut segments = self.segments.lock_sync();
         if segments.layout_variant() != target {
             segments.set_layout_variant(target);

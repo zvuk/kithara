@@ -196,6 +196,17 @@ pub fn source_range_ready_from_segments(
 }
 
 #[must_use]
-pub fn source_variant_index_handle(source: &HlsSource) -> Arc<AtomicUsize> {
-    Arc::clone(&source.coord.abr_variant_index)
+pub fn source_variant_index(source: &HlsSource) -> usize {
+    source.coord.variant_index()
+}
+
+/// Force the ABR variant index without running through a real ABR tick.
+///
+/// Test-only escape hatch for integration tests that want to reproduce a
+/// midstream variant switch without simulating a full bandwidth/buffer
+/// scenario. Backed by `AbrState::set_variant_for_test` (gated under the
+/// `internal` feature in kithara-abr); production callers cannot reach
+/// `current_variant` from outside this crate without it.
+pub fn set_source_variant_for_test(source: &HlsSource, idx: usize) {
+    source.coord.abr_state.set_variant_for_test(idx);
 }

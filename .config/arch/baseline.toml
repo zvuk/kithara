@@ -129,7 +129,6 @@ kithara-fuzz = 1
 xtask = 1
 
 [redundant_accessors]
-"crates/kithara-abr/src/state.rs::AbrState::variant_index_handle" = 1
 "crates/kithara-audio/src/pipeline/fetch.rs::EpochValidator::next_epoch" = 1
 "crates/kithara-audio/src/pipeline/fetch.rs::Fetch::epoch" = 1
 "crates/kithara-audio/src/pipeline/fetch.rs::Fetch::into_inner" = 1

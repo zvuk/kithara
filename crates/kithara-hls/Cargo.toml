@@ -38,7 +38,7 @@ hotpath = { workspace = true, optional = true }
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
-internal = []
+internal = ["kithara-abr/internal"]
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
@@ -51,6 +51,7 @@ tokio-util = { workspace = true, features = ["full"] }
 [dev-dependencies]
 aes = { workspace = true }
 cbc = { workspace = true }
+kithara-abr = { workspace = true, features = ["internal"] }
 kithara-hls = { path = ".", default-features = false, features = ["internal"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }

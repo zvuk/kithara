@@ -303,7 +303,7 @@ fn seek_resolves_in_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 0, 0, SEG0_LEN);
 
     // ABR wants variant 1, but layout is variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = source
         .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
@@ -330,7 +330,7 @@ fn seek_does_not_switch_layout_variant() {
     );
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
 
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = make_anchor(0, 0, 0);
     let layout = source.classify_seek(&anchor);
@@ -395,7 +395,7 @@ fn commit_seek_landing_keeps_switched_tail_in_mixed_layout() {
 fn resolve_current_variant_uses_layout_variant() {
     const NUM_VARIANTS: usize = 2;
     let source = build_test_source_with_segments(NUM_VARIANTS, 1);
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     // resolve_current_variant uses layout_variant, not ABR
     assert_eq!(
@@ -424,7 +424,7 @@ fn seek_anchor_uses_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, 2, 2 * SEG_SIZE, SEG_SIZE);
     // ABR wants variant 1, but seek must use layout_variant (0)
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(SEEK_MS))
         .expect("seek anchor resolution should not error")
@@ -464,7 +464,7 @@ fn abr_does_not_affect_any_seek_state() {
     push_segment(&source.segments, 0, 1, V0_SEG_SIZE, V0_SEG_SIZE);
 
     // ABR switches to variant 1 mid-stream
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     source
         .coord
         .had_midstream_switch
@@ -517,7 +517,7 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     assert!(source.segments.lock_sync().remove_resource(&evicted));
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     source.coord.timeline().set_byte_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
@@ -559,7 +559,7 @@ fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix(
         1,
         &[SEG_SIZE, SEG_SIZE, SEG_SIZE, SEG_SIZE],
     );
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = make_anchor(ANCHOR_VARIANT, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Reset);
@@ -645,7 +645,7 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
     assert!(removed);
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     assert!(
         source.queue_segment_request_for_offset(0, SEEK_EPOCH),
@@ -1512,7 +1512,7 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
     // ABR has since picked variant 1 and the peer is fetching it — even
     // if variant 1 has no committed segments yet, its forward fetch is
     // what will actually arrive at the anchor offset.
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     assert_eq!(
         source.segments.lock_sync().layout_variant(),
         0,

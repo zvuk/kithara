@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
+use kithara_abr::AbrState;
 use kithara_platform::{Condvar, tokio::sync::Notify};
 use kithara_stream::{DemandSlot, Timeline};
 use tokio_util::sync::CancellationToken;
@@ -20,7 +18,12 @@ pub struct SegmentRequest {
 }
 
 pub struct HlsCoord {
-    pub abr_variant_index: Arc<AtomicUsize>,
+    /// Shared ABR state — the only authoritative source of the current
+    /// variant index. Held as an `Arc<AbrState>` so HLS reads stay
+    /// lock-free (`current_variant_index()` is one `Acquire` atomic load)
+    /// while writes are gated behind `pub(crate)` `apply()` inside
+    /// `kithara-abr` — HLS cannot bypass the controller.
+    pub abr_state: Arc<AbrState>,
     pub cancel: CancellationToken,
     pub condvar: Condvar,
     pub had_midstream_switch: AtomicBool,
@@ -37,13 +40,9 @@ pub struct HlsCoord {
 
 impl HlsCoord {
     #[must_use]
-    pub fn new(
-        cancel: CancellationToken,
-        timeline: Timeline,
-        abr_variant_index: Arc<AtomicUsize>,
-    ) -> Self {
+    pub fn new(cancel: CancellationToken, timeline: Timeline, abr_state: Arc<AbrState>) -> Self {
         Self {
-            abr_variant_index,
+            abr_state,
             cancel,
             condvar: Condvar::new(),
             had_midstream_switch: AtomicBool::new(false),
@@ -52,6 +51,15 @@ impl HlsCoord {
             timeline,
             demand: DemandSlot::new(),
         }
+    }
+
+    /// Read the current variant index from the shared ABR state.
+    ///
+    /// One `Acquire` atomic load — same hot-path cost as the previous
+    /// `coord.abr_variant_index.load(Ordering::Acquire)` direct read.
+    #[must_use]
+    pub fn variant_index(&self) -> usize {
+        self.abr_state.current_variant_index()
     }
 
     pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {

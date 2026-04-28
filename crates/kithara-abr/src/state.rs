@@ -67,15 +67,19 @@ impl AbrState {
         }
     }
 
-    /// Lock-free shared handle to the current variant index.
-    #[must_use]
-    pub fn variant_index_handle(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.current_variant)
-    }
-
     #[must_use]
     pub fn current_variant_index(&self) -> usize {
         self.current_variant.load(Ordering::Acquire)
+    }
+
+    /// Force a variant index without going through `apply()` / the controller.
+    ///
+    /// Used in `kithara-hls` integration tests to set up scenarios that would
+    /// otherwise require a full ABR tick cycle to reach. Gated under the
+    /// `internal` feature so production callers cannot bypass the FSM.
+    #[cfg(any(test, feature = "internal"))]
+    pub fn set_variant_for_test(&self, idx: usize) {
+        self.current_variant.store(idx, Ordering::Release);
     }
 
     #[must_use]
@@ -222,6 +226,17 @@ impl AbrState {
     }
 
     /// Commit a decision — record the new variant and the switch timestamp.
+    ///
+    /// Two legitimate callers write through this entry point:
+    /// 1. [`AbrController::tick`](crate::AbrController) when the controller
+    ///    decides on a new variant via the auto-mode FSM;
+    /// 2. `kithara-hls` scheduler when the user manually selects a variant —
+    ///    HLS holds `Arc<AbrState>` and applies a `Manual` decision so the
+    ///    layout switch and the ABR state stay in sync.
+    ///
+    /// External crates that need to mutate `current_variant` for any other
+    /// reason should be reviewed against the `redundant_accessors` lint —
+    /// adding a third write-path is the architectural smell the lint catches.
     pub fn apply(&self, d: &AbrDecision, now: Instant) {
         if cfg!(debug_assertions) {
             let variants = self.variants.lock_sync();

@@ -15,9 +15,10 @@ use crate::state::AbrState;
 /// [`AbrHandle`](crate::AbrHandle); peers do not need to juggle it.
 #[cfg_attr(any(test, feature = "internal"), unimock(api = AbrMock))]
 pub trait Abr: Send + Sync + 'static {
-    /// All variants known to the peer.
-    fn variants(&self) -> Vec<AbrVariant> {
-        Vec::new()
+    /// Pull-model buffer observation used for buffer-aware decisions.
+    /// Returning `None` disables buffer gates for this peer.
+    fn progress(&self) -> Option<AbrProgressSnapshot> {
+        None
     }
 
     /// Per-peer ABR state. Peers without variant switching return `None`.
@@ -25,9 +26,8 @@ pub trait Abr: Send + Sync + 'static {
         None
     }
 
-    /// Pull-model buffer observation used for buffer-aware decisions.
-    /// Returning `None` disables buffer gates for this peer.
-    fn progress(&self) -> Option<AbrProgressSnapshot> {
-        None
+    /// All variants known to the peer.
+    fn variants(&self) -> Vec<AbrVariant> {
+        Vec::new()
     }
 }

@@ -176,7 +176,7 @@ impl StreamType for Hls {
         Arc::new(HlsStreamContext::new(
             timeline,
             Arc::clone(&source.segments),
-            Arc::clone(&source.coord.abr_variant_index),
+            Arc::clone(&source.coord.abr_state),
         ))
     }
 }
