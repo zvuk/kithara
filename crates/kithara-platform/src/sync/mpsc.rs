@@ -100,6 +100,15 @@ pub struct Receiver<T>(wasm_safe_thread::mpsc::Receiver<T>);
 
 #[cfg(target_arch = "wasm32")]
 impl<T> Receiver<T> {
+    /// Await a value asynchronously (WASM only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if all senders have been dropped.
+    pub async fn recv_async(&self) -> Result<T, RecvError> {
+        self.0.recv_async().await
+    }
+
     /// Block until a value arrives.
     ///
     /// # Errors
@@ -116,14 +125,5 @@ impl<T> Receiver<T> {
     /// Returns [`TryRecvError`] if no value is available or senders are dropped.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         self.0.try_recv()
-    }
-
-    /// Await a value asynchronously (WASM only).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecvError`] if all senders have been dropped.
-    pub async fn recv_async(&self) -> Result<T, RecvError> {
-        self.0.recv_async().await
     }
 }
