@@ -188,7 +188,18 @@ async fn wait_for_current_id(
 }
 
 fn drain_event_backlog(rx: &mut EventReceiver) {
-    while rx.try_recv().is_ok() {}
+    // `try_recv` returns `Empty` when nothing's queued, `Closed` when the
+    // bus is gone, and `Lagged(_)` after a backlog overflow.  Treat
+    // `Lagged` as "keep draining" so a busy publisher window can't strand
+    // the receiver in a partial state.  Stop on any other error.
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        match rx.try_recv() {
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]

@@ -107,7 +107,16 @@ impl EventCollector {
         let mut rx = bus.subscribe();
         spawn(async move {
             let mut request_map: HashMap<RequestId, (usize, usize)> = HashMap::new();
-            while let Ok(ev) = rx.recv().await {
+            loop {
+                let ev = match rx.recv().await {
+                    Ok(ev) => ev,
+                    // `Lagged` only signals a dropped backlog window — the
+                    // channel is still live. Continue draining so we don't
+                    // miss the (rare, low-volume) `AbrEvent::VariantApplied`
+                    // that this collector keys off of.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 match &ev {
                     Event::Downloader(DownloaderEvent::RequestEnqueued {
                         request_id, url, ..
@@ -239,7 +248,7 @@ async fn vod_manual_switch_affects_future_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
-    let bus = EventBus::new(64);
+    let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::new(url)
@@ -352,7 +361,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     // Step 1: Track 1, Auto mode → downloads V0
     info!("=== Step 1: Track 1 Auto ===");
-    let bus1 = EventBus::new(64);
+    let bus1 = EventBus::new(8192);
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::new(url1.clone())
@@ -388,7 +397,7 @@ async fn multi_track_shared_abr_with_cache() {
     // Step 2: Switch to Manual(1) and load Track 2
     info!("=== Step 2: Manual(1) → Track 2 ===");
 
-    let bus2 = EventBus::new(64);
+    let bus2 = EventBus::new(8192);
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::new(url2)
@@ -424,7 +433,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     // Step 3: Replay Track 1 with Manual(0) → uses cache from step 1
 
-    let bus3 = EventBus::new(64);
+    let bus3 = EventBus::new(8192);
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::new(url1)
@@ -514,7 +523,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
-    let bus = EventBus::new(64);
+    let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::new(url)

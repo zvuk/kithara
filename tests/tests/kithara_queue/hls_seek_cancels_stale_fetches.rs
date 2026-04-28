@@ -222,9 +222,16 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // which `RequestId`s were enqueued before seek_at — the post-seek
     // observation needs to identify "new epoch" requests.
     let mut pre_seek_enqueued: HashSet<RequestId> = HashSet::new();
-    while let Ok(ev) = rx.try_recv() {
-        if let Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. }) = ev {
-            pre_seek_enqueued.insert(request_id);
+    loop {
+        match rx.try_recv() {
+            Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+                pre_seek_enqueued.insert(request_id);
+            }
+            Ok(_) => {}
+            // Lagged means we dropped a backlog window; the channel is
+            // still live, so continue draining instead of bailing out.
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
         }
     }
 
@@ -378,7 +385,10 @@ async fn observe_post_seek(
                 }
                 _ => {}
             },
-            Ok(Err(_)) => break,
+            // RecvError::Lagged is a recoverable backlog drop; only stop
+            // observing on RecvError::Closed (true channel teardown).
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
             Err(_) => continue,
         }
     }
