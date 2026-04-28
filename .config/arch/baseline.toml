@@ -9,7 +9,6 @@ schema_version = 1
 
 [file_size]
 "crates/kithara-abr/src/controller.rs" = 1
-"crates/kithara-abr/src/state.rs" = 1
 "crates/kithara-app/src/gui/view.rs" = 1
 "crates/kithara-assets/src/cache.rs" = 1
 "crates/kithara-assets/src/disk_store.rs" = 1
@@ -161,7 +160,6 @@ xtask = 1
 
 [single_impl_size]
 "crates/kithara-abr/src/controller.rs::impl AbrController" = 1
-"crates/kithara-abr/src/state.rs::impl AbrState" = 1
 "crates/kithara-app/src/tui/dashboard.rs::impl Dashboard" = 1
 "crates/kithara-assets/src/cache.rs::impl CachedAssets" = 1
 "crates/kithara-assets/src/disk_store.rs::impl DiskAssetStore" = 1

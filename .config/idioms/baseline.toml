@@ -13,7 +13,6 @@ schema_version = 1
 
 [guard_cascade]
 "crates/kithara-abr/src/controller.rs:413:8" = 1
-"crates/kithara-abr/src/state.rs:156:8" = 1
 "crates/kithara-audio/src/pipeline/source.rs:1175:8" = 1
 "crates/kithara-decode/src/android/source.rs:111:4" = 1
 "crates/kithara-decode/src/apple/audiofile.rs:420:8" = 1
