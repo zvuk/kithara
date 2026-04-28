@@ -268,60 +268,18 @@ impl HlsSource {
         range_start: u64,
         seek_epoch: u64,
     ) -> bool {
-        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
-            self.enqueue_resolved(
+        let Some((variant, segment_index, via)) = self.find_segment_for_offset(range_start) else {
+            // No resolution path found — size map not ready yet.
+            // The caller's condvar loop will retry once the scheduler
+            // commits data and notifies.
+            trace!(
+                target: "hls_seek_diag",
                 range_start,
                 seek_epoch,
-                variant,
-                segment_index,
-                "layout_segment_for_offset",
+                "queue_segment_request_for_offset: no resolution (size map not ready)"
             );
-            return true;
-        }
-        let variant = self.resolve_current_variant();
-        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
-            self.enqueue_resolved(
-                range_start,
-                seek_epoch,
-                variant,
-                segment_index,
-                "committed_segment_for_offset",
-            );
-            return true;
-        }
-        if let Some(segment_index) = self
-            .playlist_state
-            .find_segment_at_offset(variant, range_start)
-        {
-            self.enqueue_resolved(
-                range_start,
-                seek_epoch,
-                variant,
-                segment_index,
-                "playlist.find_segment_at_offset",
-            );
-            return true;
-        }
-        trace!(
-            target: "hls_seek_diag",
-            range_start,
-            seek_epoch,
-            "queue_segment_request_for_offset: no resolution (size map not ready)"
-        );
-        // No resolution path found — size map not ready yet.
-        // The caller's condvar loop will retry once the scheduler
-        // commits data and notifies.
-        false
-    }
-
-    fn enqueue_resolved(
-        &self,
-        range_start: u64,
-        seek_epoch: u64,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-        via: &'static str,
-    ) {
+            return false;
+        };
         trace!(
             target: "hls_seek_diag",
             range_start,
@@ -332,6 +290,24 @@ impl HlsSource {
             "queue_segment_request_for_offset: enqueue"
         );
         self.push_segment_request(variant, segment_index, seek_epoch);
+        true
+    }
+
+    fn find_segment_for_offset(
+        &self,
+        range_start: u64,
+    ) -> Option<(VariantIndex, SegmentIndex, &'static str)> {
+        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+            return Some((variant, segment_index, "layout_segment_for_offset"));
+        }
+        let variant = self.resolve_current_variant();
+        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
+            return Some((variant, segment_index, "committed_segment_for_offset"));
+        }
+        let segment_index = self
+            .playlist_state
+            .find_segment_at_offset(variant, range_start)?;
+        Some((variant, segment_index, "playlist.find_segment_at_offset"))
     }
 
     pub(super) fn resolve_segment_for_offset(
