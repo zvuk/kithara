@@ -1,0 +1,143 @@
+use std::{
+    io::Cursor,
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
+
+use kithara_stream::ContainerFormat;
+use kithara_test_utils::{create_test_wav, kithara};
+
+use super::{config::SymphoniaConfig, decoder::Symphonia};
+use crate::{error::DecodeError, traits::InnerDecoder};
+
+#[kithara::test]
+#[case(Some(ContainerFormat::Wav))]
+#[case(None)]
+fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
+    let wav_data = create_test_wav(100, 44100, 2);
+    let cursor = Cursor::new(wav_data);
+
+    let config = SymphoniaConfig {
+        container,
+        ..Default::default()
+    };
+    let decoder = Symphonia::new(Box::new(cursor), &config);
+    assert!(decoder.is_ok(), "decoder creation should succeed");
+
+    let decoder = decoder.unwrap();
+    assert_eq!(decoder.spec().sample_rate, 44100);
+    assert_eq!(decoder.spec().channels, 2);
+}
+
+#[kithara::test]
+fn test_next_chunk_returns_data() {
+    let wav_data = create_test_wav(100, 44100, 2);
+    let cursor = Cursor::new(wav_data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::Wav),
+        ..Default::default()
+    };
+    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
+
+    let chunk = outcome.into_chunk().unwrap();
+    assert_eq!(chunk.spec().sample_rate, 44100);
+    assert_eq!(chunk.spec().channels, 2);
+    assert!(!chunk.pcm.is_empty());
+}
+
+#[kithara::test]
+fn test_next_chunk_eof() {
+    let wav_data = create_test_wav(10, 44100, 2);
+    let cursor = Cursor::new(wav_data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::Wav),
+        ..Default::default()
+    };
+    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+
+    while decoder.next_chunk().unwrap().is_chunk() {}
+
+    let result = decoder.next_chunk().unwrap();
+    assert!(result.is_eof());
+}
+
+#[kithara::test]
+fn test_seek_to_beginning() {
+    let wav_data = create_test_wav(10000, 44100, 2);
+    let cursor = Cursor::new(wav_data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::Wav),
+        ..Default::default()
+    };
+    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+
+    let _ = decoder.next_chunk().unwrap();
+    let _ = decoder.next_chunk().unwrap();
+
+    decoder.seek(Duration::from_secs(0)).unwrap();
+
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
+}
+
+#[kithara::test]
+fn test_duration_available() {
+    let wav_data = create_test_wav(44100, 44100, 2);
+    let cursor = Cursor::new(wav_data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::Wav),
+        ..Default::default()
+    };
+    let decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+
+    let duration = decoder.duration();
+    assert!(duration.is_some());
+
+    let dur = duration.unwrap();
+    assert!(dur.as_secs_f64() > 0.9 && dur.as_secs_f64() < 1.1);
+}
+
+#[kithara::test]
+#[case(Vec::new())]
+#[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
+fn test_invalid_input_fails(#[case] data: Vec<u8>) {
+    let cursor = Cursor::new(data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::Wav),
+        ..Default::default()
+    };
+    let result = Symphonia::new(Box::new(cursor), &config);
+    assert!(result.is_err());
+}
+
+#[kithara::test]
+fn test_unsupported_container_returns_error() {
+    let data = vec![0u8; 100];
+    let cursor = Cursor::new(data);
+
+    let config = SymphoniaConfig {
+        container: Some(ContainerFormat::MpegTs),
+        ..Default::default()
+    };
+    let result = Symphonia::new(Box::new(cursor), &config);
+    assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
+}
+
+#[kithara::test]
+fn test_handle_integration() {
+    // Sanity check that Arc<AtomicU64> can be shared via config.
+    let handle = Arc::new(AtomicU64::new(12345));
+    let config = SymphoniaConfig {
+        byte_len_handle: Some(Arc::clone(&handle)),
+        ..Default::default()
+    };
+    assert!(config.byte_len_handle.is_some());
+}

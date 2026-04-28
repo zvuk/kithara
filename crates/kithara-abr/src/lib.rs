@@ -33,8 +33,6 @@ pub use controller::AbrController;
 pub use estimator::EstimatorMock;
 pub use estimator::{Estimator, ThroughputEstimator};
 pub use handle::AbrHandle;
-#[cfg(any(test, feature = "internal"))]
-pub use state::test_variants_3;
 pub use state::{AbrError, AbrState, AbrView};
 pub use types::{
     AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrVariant,

@@ -44,7 +44,7 @@ ast-grep MODE="blocking":
       {{ast-grep-bin}} scan --config sgconfig.yml --report-style short --warning; \
     else \
       {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
-        --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts|rust.no-error-string-match)$'; \
+        --filter '^(style.no-items-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts|rust.no-error-string-match)$'; \
     fi
 
 # Workspace linters: arch, style, idioms.

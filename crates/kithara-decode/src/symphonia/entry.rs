@@ -6,7 +6,7 @@
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 
-use super::{Symphonia, SymphoniaConfig};
+use super::{SymphoniaConfig, decoder::Symphonia};
 use crate::{
     DecoderConfig, InnerDecoder,
     backend::BoxedSource,

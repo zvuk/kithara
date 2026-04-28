@@ -5,8 +5,6 @@
 //! full HLS test server. The goal is fast, deterministic coverage of the
 //! hard invariants called out in the ABR projection §12 Tier 4:
 //!
-//! * SEEK-NO-SWITCH between `lock()` and `unlock()` even under sample
-//!   storms (`seek_no_switch`).
 //! * Three parallel peers holding independent state — no cross-track
 //!   leak (`multi_track_contention`).
 //! * `AbrEvent::VariantApplied` fires without a trailing `Incoherence`
@@ -15,9 +13,12 @@
 //!   shared state (`switch_midfetch`).
 //! * Canonical bandwidth profiles produce the expected switch sequence
 //!   (`bandwidth_scenarios_golden`).
+//!
+//! The SEEK-NO-SWITCH cases that used to live here moved into
+//! `kithara-abr/src/state/tests.rs` so the crate no longer needs to
+//! publish a `test_variants_3` helper.
 
 mod bandwidth_scenarios_golden;
 mod multi_track_contention;
-mod seek_no_switch;
 mod switch_midfetch;
 mod variant_switch_coherence;
