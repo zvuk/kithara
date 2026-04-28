@@ -11,7 +11,7 @@ use derive_setters::Setters;
 #[cfg(feature = "hls")]
 use kithara_abr::AbrMode;
 #[cfg(any(feature = "file", feature = "hls"))]
-use kithara_assets::StoreOptions;
+use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
@@ -188,6 +188,15 @@ pub struct ResourceConfig {
     #[cfg(any(feature = "file", feature = "hls"))]
     #[setters(skip)]
     pub downloader: Option<Downloader>,
+    /// Shared flush coordinator for `AssetStore` on-disk indexes.
+    ///
+    /// When set, the underlying [`StoreOptions`] uses this hub instead
+    /// of the per-store default. Lets multiple tracks coalesce index
+    /// flushes through a single (optionally worker-backed) coordinator
+    /// — analogous to a shared [`Downloader`] or audio worker.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
+    pub flush_hub: Option<Arc<FlushHub>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     ///
     /// When set, all resources sharing the same worker decode on a single
@@ -264,6 +273,8 @@ impl ResourceConfig {
             store: StoreOptions::default(),
             #[cfg(any(feature = "file", feature = "hls"))]
             downloader: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            flush_hub: None,
             worker: None,
         })
     }
@@ -273,6 +284,15 @@ impl ResourceConfig {
     #[must_use]
     pub fn with_downloader(mut self, dl: Downloader) -> Self {
         self.downloader = Some(dl);
+        self
+    }
+
+    /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
+    /// When omitted, each store gets its own no-worker hub.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
         self
     }
 
@@ -317,8 +337,12 @@ impl ResourceConfig {
         let dl = self
             .downloader
             .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
+        let mut store = self.store;
+        if let Some(hub) = self.flush_hub {
+            store = store.with_flush_hub(hub);
+        }
         let mut file_config = FileConfig::new(file_src)
-            .with_store(self.store)
+            .with_store(store)
             .with_downloader(dl);
 
         if let Some(bytes) = self.look_ahead_bytes {
@@ -382,9 +406,11 @@ impl ResourceConfig {
             }
         };
 
-        let mut hls_config = HlsConfig::new(url)
-            .with_store(self.store)
-            .with_keys(self.keys);
+        let mut store = self.store;
+        if let Some(hub) = self.flush_hub {
+            store = store.with_flush_hub(hub);
+        }
+        let mut hls_config = HlsConfig::new(url).with_store(store).with_keys(self.keys);
         if let Some(dl) = self.downloader {
             hls_config = hls_config.with_downloader(dl);
         }

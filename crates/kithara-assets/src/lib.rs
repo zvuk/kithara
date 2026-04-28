@@ -55,7 +55,7 @@ pub mod internal;
 // Public API - used by other crates
 pub use cache::CachedResource;
 pub use error::{AssetsError, AssetsResult};
-pub use index::EvictConfig;
+pub use index::{EvictConfig, FlushHub, FlushPolicy};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};

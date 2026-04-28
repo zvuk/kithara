@@ -162,6 +162,18 @@ impl FlushHub {
         self.sources.lock_sync().push(source);
     }
 
+    /// Count registered sources whose owning index is still alive.
+    ///
+    /// Drops dead `Weak` entries while counting, so this is also the
+    /// canonical way to verify that a destroyed `AssetStore` was GC'd
+    /// from the registry.
+    #[must_use]
+    pub fn live_source_count(&self) -> usize {
+        let mut g = self.sources.lock_sync();
+        g.retain(|w| w.strong_count() > 0);
+        g.len()
+    }
+
     /// Wake the worker. Bumps the operation counter so a sustained
     /// burst eventually bypasses the debounce. No-op when no worker is
     /// attached — the helper [`signal_or_flush_sync`] is the canonical

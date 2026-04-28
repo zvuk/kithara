@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara::stream::dl::Downloader;
+use kithara::{assets::FlushHub, stream::dl::Downloader};
 use kithara_drm::KeyProcessorRegistry;
 
 use crate::{drm, theme::Palette};
@@ -39,6 +41,13 @@ pub struct AppConfig {
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub downloader: Downloader,
+    /// Shared `AssetStore` flush coordinator for every track. Built
+    /// once in `main` so all tracks coalesce their on-disk index
+    /// flushes through a single hub — analogous to [`Self::downloader`]
+    /// and the audio worker.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub flush_hub: Arc<FlushHub>,
 }
 
 impl AppConfig {
@@ -60,10 +69,11 @@ impl AppConfig {
         "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
     ];
 
-    /// Create a default config around the given downloader. Tracks default
-    /// to [`Self::DEFAULT_TRACKS`]; override via [`Self::with_tracks`].
+    /// Create a default config around the given downloader and shared
+    /// flush hub. Tracks default to [`Self::DEFAULT_TRACKS`]; override
+    /// via [`Self::with_tracks`].
     #[must_use]
-    pub fn new(downloader: Downloader) -> Self {
+    pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>) -> Self {
         Self {
             tracks: Self::DEFAULT_TRACKS
                 .iter()
@@ -76,6 +86,7 @@ impl AppConfig {
             palette: Palette::default(),
             danger_accept_invalid_certs: true,
             downloader,
+            flush_hub,
         }
     }
 

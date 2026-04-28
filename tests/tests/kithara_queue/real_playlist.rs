@@ -22,7 +22,7 @@ use std::{
 };
 
 use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_assets::StoreOptions;
+use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
 use kithara_play::internal::init_offline_backend;
@@ -90,7 +90,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 ..NetOptions::default()
             };
             let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-            let config = AppConfig::new(downloader);
+            let flush_hub = FlushHub::new(
+                tokio_util::sync::CancellationToken::new(),
+                FlushPolicy::default(),
+            );
+            let config = AppConfig::new(downloader, flush_hub);
             let queue = Arc::new(Queue::new(QueueConfig::default()));
 
             // Background tick driver: Queue::tick updates cached

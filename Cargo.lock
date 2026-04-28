@@ -3946,6 +3946,7 @@ dependencies = [
  "rand 0.10.1",
  "ratatui",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
