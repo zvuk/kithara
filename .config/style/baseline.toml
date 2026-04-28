@@ -39,10 +39,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/signal_pcm.rs::MAX_FRAME_BYTES" = 1
 
 [struct_field_order]
-"crates/kithara-abr/src/controller.rs::AbrController" = 1
-"crates/kithara-abr/src/controller.rs::AbrSettings" = 1
-"crates/kithara-abr/src/controller.rs::EventThrottleCache" = 1
-"crates/kithara-abr/src/controller.rs::PeerEntry" = 1
 "crates/kithara-app/src/config.rs::AppConfig" = 1
 "crates/kithara-app/src/gui/app.rs::Kithara" = 1
 "crates/kithara-app/src/gui/frontend.rs::GuiFrontend" = 1
@@ -269,8 +265,6 @@ schema_version = 1
 "crates/kithara-wasm/src/player.rs::Player" = 1
 
 [struct_init_order]
-"crates/kithara-abr/src/controller.rs:223::ThroughputSample" = 1
-"crates/kithara-abr/src/controller.rs:279::VariantsRegistered" = 1
 "crates/kithara-abr/tests/state_machine.rs:80::AbrView" = 1
 "crates/kithara-app/src/config.rs:67::Self" = 1
 "crates/kithara-app/src/gui/app.rs:93::Self" = 1
@@ -460,7 +454,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/test_server.rs:343::PackagedAudioRequest" = 1
 
 [trait_item_order]
-"crates/kithara-abr/src/controller.rs::AbrController" = 1
 "crates/kithara-abr/src/estimator.rs::ThroughputEstimator" = 1
 "crates/kithara-app/src/frontend.rs::Frontend" = 1
 "crates/kithara-app/src/gui/app.rs::Kithara" = 1
