@@ -141,6 +141,7 @@ lifecycleScope.launch {
 }
 
 lifecycleScope.launch {
+    // Explicit preload is optional. Insert can auto-load with player config.
     item.load()
 }
 ```

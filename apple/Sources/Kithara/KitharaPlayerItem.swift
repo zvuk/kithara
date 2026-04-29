@@ -9,7 +9,6 @@ import KitharaFFI
 ///
 /// ```swift
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-/// item.load()
 /// try player.insert(item)
 /// ```
 public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
@@ -86,7 +85,9 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     ///
     /// Errors are reported through ``eventPublisher`` as `.error` events.
     /// Safe to call before inserting into a ``KitharaPlayer`` — the player
-    /// will also auto-load if the item is not yet ready.
+    /// will also auto-load if the item is not yet ready. For player-scoped
+    /// playback options such as gapless mode, prefer inserting first and
+    /// letting the player load the item with its own config.
     public func load() {
         _inner.load()
     }

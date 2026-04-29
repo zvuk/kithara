@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use kithara::decode::{GaplessMode, SilenceTrimParams};
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use url::Url;
 
@@ -124,6 +125,8 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 pub struct FfiPlayerConfig {
     /// Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
     pub eq_band_count: u32,
+    /// How resources loaded for this player trim leading/trailing PCM.
+    pub gapless_mode: FfiGaplessMode,
 }
 
 /// Default number of log-spaced EQ bands.
@@ -133,6 +136,69 @@ impl Default for FfiPlayerConfig {
     fn default() -> Self {
         Self {
             eq_band_count: DEFAULT_EQ_BAND_COUNT,
+            gapless_mode: FfiGaplessMode::default(),
+        }
+    }
+}
+
+/// FFI-friendly tunables for silence-based gapless trimming.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiSilenceTrimParams {
+    pub threshold_db: f32,
+    pub min_trim_frames: u64,
+    pub scan_window_frames: u64,
+    pub trim_trailing: bool,
+}
+
+impl Default for FfiSilenceTrimParams {
+    fn default() -> Self {
+        SilenceTrimParams::default().into()
+    }
+}
+
+impl From<SilenceTrimParams> for FfiSilenceTrimParams {
+    fn from(params: SilenceTrimParams) -> Self {
+        Self {
+            threshold_db: params.threshold_db,
+            min_trim_frames: params.min_trim_frames,
+            scan_window_frames: params.scan_window_frames,
+            trim_trailing: params.trim_trailing,
+        }
+    }
+}
+
+impl From<FfiSilenceTrimParams> for SilenceTrimParams {
+    fn from(params: FfiSilenceTrimParams) -> Self {
+        Self {
+            threshold_db: params.threshold_db,
+            min_trim_frames: params.min_trim_frames,
+            scan_window_frames: params.scan_window_frames,
+            trim_trailing: params.trim_trailing,
+        }
+    }
+}
+
+/// FFI-friendly mirror of [`GaplessMode`].
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+pub enum FfiGaplessMode {
+    Disabled,
+    #[default]
+    MediaOnly,
+    CodecPriming,
+    SilenceTrim {
+        params: FfiSilenceTrimParams,
+    },
+}
+
+impl From<FfiGaplessMode> for GaplessMode {
+    fn from(mode: FfiGaplessMode) -> Self {
+        match mode {
+            FfiGaplessMode::Disabled => Self::Disabled,
+            FfiGaplessMode::MediaOnly => Self::MediaOnly,
+            FfiGaplessMode::CodecPriming => Self::CodecPriming,
+            FfiGaplessMode::SilenceTrim { params } => Self::SilenceTrim(params.into()),
         }
     }
 }
@@ -454,5 +520,42 @@ mod tests {
         let ffi = FfiTimeRange::from(tr);
         assert!((ffi.start_seconds - 10.0).abs() < 1e-9);
         assert!((ffi.duration_seconds - 5.0).abs() < 1e-9);
+    }
+
+    #[kithara::test]
+    fn gapless_mode_defaults_to_media_only() {
+        assert_eq!(FfiGaplessMode::default(), FfiGaplessMode::MediaOnly);
+    }
+
+    #[kithara::test]
+    fn gapless_mode_maps_to_decode_mode() {
+        assert_eq!(
+            GaplessMode::from(FfiGaplessMode::Disabled),
+            GaplessMode::Disabled
+        );
+        assert_eq!(
+            GaplessMode::from(FfiGaplessMode::CodecPriming),
+            GaplessMode::CodecPriming
+        );
+    }
+
+    #[kithara::test]
+    fn silence_trim_params_map_to_decode_mode() {
+        let ffi_params = FfiSilenceTrimParams {
+            threshold_db: 72.0,
+            min_trim_frames: 512,
+            scan_window_frames: 8192,
+            trim_trailing: true,
+        };
+
+        assert_eq!(
+            GaplessMode::from(FfiGaplessMode::SilenceTrim { params: ffi_params }),
+            GaplessMode::SilenceTrim(SilenceTrimParams {
+                threshold_db: 72.0,
+                min_trim_frames: 512,
+                scan_window_frames: 8192,
+                trim_trailing: true,
+            })
+        );
     }
 }

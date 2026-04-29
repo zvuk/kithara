@@ -61,6 +61,7 @@ impl AudioPlayer {
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         let player_config = PlayerConfig {
             eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
+            gapless_mode: config.gapless_mode.into(),
             ..PlayerConfig::default()
         };
         Arc::new(Self {
@@ -131,6 +132,7 @@ impl AudioPlayer {
             *item.bus.lock_sync() = Some(player.bus().scoped());
             *item.worker.lock_sync() = Some(player.worker().clone());
             *item.runtime.lock_sync() = player.runtime().cloned();
+            item.set_player_gapless_mode(player.config().gapless_mode);
         }
         *item.key_options.lock_sync() = self.key_options();
 
@@ -231,6 +233,7 @@ impl AudioPlayer {
             *item.bus.lock_sync() = Some(player.bus().scoped());
             *item.worker.lock_sync() = Some(player.worker().clone());
             *item.runtime.lock_sync() = player.runtime().cloned();
+            item.set_player_gapless_mode(player.config().gapless_mode);
         }
         *item.key_options.lock_sync() = self.key_options();
 
@@ -507,6 +510,19 @@ mod tests {
     }
 
     #[kithara::test]
+    fn gapless_mode_from_config_reaches_player() {
+        let player = AudioPlayer::new(FfiPlayerConfig {
+            gapless_mode: crate::types::FfiGaplessMode::Disabled,
+            ..FfiPlayerConfig::default()
+        });
+
+        assert_eq!(
+            player.inner.lock_sync().config().gapless_mode,
+            kithara::decode::GaplessMode::Disabled
+        );
+    }
+
+    #[kithara::test]
     fn items_initially_empty() {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
         assert!(player.items().is_empty());
@@ -591,7 +607,10 @@ mod tests {
 
     #[kithara::test]
     fn eq_band_count_from_config() {
-        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        let player = AudioPlayer::new(FfiPlayerConfig {
+            eq_band_count: 3,
+            ..FfiPlayerConfig::default()
+        });
         assert_eq!(player.eq_band_count(), 3);
     }
 
@@ -617,7 +636,10 @@ mod tests {
 
     #[kithara::test]
     fn eq_gain_out_of_range_band() {
-        let player = AudioPlayer::new(FfiPlayerConfig { eq_band_count: 3 });
+        let player = AudioPlayer::new(FfiPlayerConfig {
+            eq_band_count: 3,
+            ..FfiPlayerConfig::default()
+        });
         assert!((player.eq_gain(99) - 0.0).abs() < f32::EPSILON);
     }
 }

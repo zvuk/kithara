@@ -2,9 +2,11 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiGaplessMode
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
+import com.kithara.ffi.FfiSilenceTrimParams
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -24,13 +26,27 @@ import kotlinx.coroutines.flow.update
  * ```kotlin
  * val player = KitharaPlayer()
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
- * item.load()
  * player.insert(item)
  * player.play()
  * ```
  */
-class KitharaPlayer() {
-    private val inner: FfiAudioPlayer = FfiAudioPlayer(FfiPlayerConfig(eqBandCount = 10u))
+class KitharaPlayer(
+    config: Config = Config(),
+) {
+    /**
+     * Player-wide configuration applied to resources loaded by this player.
+     */
+    data class Config(
+        val eqBandCount: Int = 10,
+        val gaplessMode: GaplessMode = GaplessMode.MediaOnly,
+    )
+
+    private val inner: FfiAudioPlayer = FfiAudioPlayer(
+        FfiPlayerConfig(
+            eqBandCount = config.eqBandCount.toUInt(),
+            gaplessMode = config.gaplessMode.toFfi(),
+        ),
+    )
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
@@ -244,6 +260,20 @@ private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
     FfiPlayerStatus.FAILED -> PlayerStatus.Failed
     FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
 }
+
+private fun GaplessMode.toFfi(): FfiGaplessMode = when (this) {
+    GaplessMode.Disabled -> FfiGaplessMode.Disabled
+    GaplessMode.MediaOnly -> FfiGaplessMode.MediaOnly
+    GaplessMode.CodecPriming -> FfiGaplessMode.CodecPriming
+    is GaplessMode.SilenceTrim -> FfiGaplessMode.SilenceTrim(params.toFfi())
+}
+
+private fun SilenceTrimParams.toFfi(): FfiSilenceTrimParams = FfiSilenceTrimParams(
+    thresholdDb = thresholdDb,
+    minTrimFrames = minTrimFrames,
+    scanWindowFrames = scanWindowFrames,
+    trimTrailing = trimTrailing,
+)
 
 private fun List<KitharaPlayerItem>.inserted(
     item: KitharaPlayerItem,

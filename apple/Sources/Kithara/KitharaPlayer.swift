@@ -11,7 +11,6 @@ import KitharaFFI
 /// ```swift
 /// let player = KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-/// item.load()
 /// try player.insert(item)
 /// player.play()
 /// ```
@@ -114,15 +113,23 @@ public final class KitharaPlayer: @unchecked Sendable {
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
         public var eqBandCount: Int
+        /// Gapless trimming mode for resources loaded by this player.
+        public var gaplessMode: GaplessMode
 
-        public init(eqBandCount: Int = 10) {
+        public init(eqBandCount: Int = 10, gaplessMode: GaplessMode = .mediaOnly) {
             self.eqBandCount = eqBandCount
+            self.gaplessMode = gaplessMode
         }
     }
 
     /// Create a new player instance.
     public init(config: Config = Config()) {
-        self._inner = AudioPlayer(config: FfiPlayerConfig(eqBandCount: UInt32(config.eqBandCount)))
+        self._inner = AudioPlayer(
+            config: FfiPlayerConfig(
+                eqBandCount: UInt32(config.eqBandCount),
+                gaplessMode: config.gaplessMode.ffi
+            )
+        )
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
@@ -282,6 +289,32 @@ private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked S
 
     func processKey(key: Data) -> Data {
         processor.processKey(key)
+    }
+}
+
+private extension GaplessMode {
+    var ffi: FfiGaplessMode {
+        switch self {
+        case .disabled:
+            .disabled
+        case .mediaOnly:
+            .mediaOnly
+        case .codecPriming:
+            .codecPriming
+        case let .silenceTrim(params):
+            .silenceTrim(params: params.ffi)
+        }
+    }
+}
+
+private extension SilenceTrimParams {
+    var ffi: FfiSilenceTrimParams {
+        FfiSilenceTrimParams(
+            thresholdDb: thresholdDb,
+            minTrimFrames: minTrimFrames,
+            scanWindowFrames: scanWindowFrames,
+            trimTrailing: trimTrailing
+        )
     }
 }
 

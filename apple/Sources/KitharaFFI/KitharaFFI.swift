@@ -2300,14 +2300,22 @@ public struct FfiPlayerConfig: Equatable, Hashable {
      * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
      */
     public let eqBandCount: UInt32
+    /**
+     * How resources loaded for this player trim leading/trailing PCM.
+     */
+    public let gaplessMode: FfiGaplessMode
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(
         /**
          * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
-         */eqBandCount: UInt32) {
+         */eqBandCount: UInt32, 
+        /**
+         * How resources loaded for this player trim leading/trailing PCM.
+         */gaplessMode: FfiGaplessMode) {
         self.eqBandCount = eqBandCount
+        self.gaplessMode = gaplessMode
     }
 
     
@@ -2326,12 +2334,14 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerConfig {
         return
             try FfiPlayerConfig(
-                eqBandCount: FfiConverterUInt32.read(from: &buf)
+                eqBandCount: FfiConverterUInt32.read(from: &buf), 
+                gaplessMode: FfiConverterTypeFfiGaplessMode.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+        FfiConverterTypeFfiGaplessMode.write(value.gaplessMode, into: &buf)
     }
 }
 
@@ -2428,6 +2438,71 @@ public func FfiConverterTypeFfiPlayerSnapshot_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) -> RustBuffer {
     return FfiConverterTypeFfiPlayerSnapshot.lower(value)
+}
+
+
+/**
+ * FFI-friendly tunables for silence-based gapless trimming.
+ */
+public struct FfiSilenceTrimParams: Equatable, Hashable {
+    public let thresholdDb: Float
+    public let minTrimFrames: UInt64
+    public let scanWindowFrames: UInt64
+    public let trimTrailing: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(thresholdDb: Float, minTrimFrames: UInt64, scanWindowFrames: UInt64, trimTrailing: Bool) {
+        self.thresholdDb = thresholdDb
+        self.minTrimFrames = minTrimFrames
+        self.scanWindowFrames = scanWindowFrames
+        self.trimTrailing = trimTrailing
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiSilenceTrimParams: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSilenceTrimParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSilenceTrimParams {
+        return
+            try FfiSilenceTrimParams(
+                thresholdDb: FfiConverterFloat.read(from: &buf), 
+                minTrimFrames: FfiConverterUInt64.read(from: &buf), 
+                scanWindowFrames: FfiConverterUInt64.read(from: &buf), 
+                trimTrailing: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSilenceTrimParams, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.thresholdDb, into: &buf)
+        FfiConverterUInt64.write(value.minTrimFrames, into: &buf)
+        FfiConverterUInt64.write(value.scanWindowFrames, into: &buf)
+        FfiConverterBool.write(value.trimTrailing, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSilenceTrimParams_lift(_ buf: RustBuffer) throws -> FfiSilenceTrimParams {
+    return try FfiConverterTypeFfiSilenceTrimParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSilenceTrimParams_lower(_ value: FfiSilenceTrimParams) -> RustBuffer {
+    return FfiConverterTypeFfiSilenceTrimParams.lower(value)
 }
 
 
@@ -2792,6 +2867,93 @@ public func FfiConverterTypeFfiError_lift(_ buf: RustBuffer) throws -> FfiError 
 public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
     return FfiConverterTypeFfiError.lower(value)
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * FFI-friendly mirror of [`GaplessMode`].
+ */
+
+public enum FfiGaplessMode: Equatable, Hashable {
+    
+    case disabled
+    case mediaOnly
+    case codecPriming
+    case silenceTrim(params: FfiSilenceTrimParams
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiGaplessMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiGaplessMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiGaplessMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGaplessMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .disabled
+        
+        case 2: return .mediaOnly
+        
+        case 3: return .codecPriming
+        
+        case 4: return .silenceTrim(params: try FfiConverterTypeFfiSilenceTrimParams.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiGaplessMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .disabled:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .mediaOnly:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .codecPriming:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .silenceTrim(params):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeFfiSilenceTrimParams.write(params, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGaplessMode_lift(_ buf: RustBuffer) throws -> FfiGaplessMode {
+    return try FfiConverterTypeFfiGaplessMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGaplessMode_lower(_ value: FfiGaplessMode) -> RustBuffer {
+    return FfiConverterTypeFfiGaplessMode.lower(value)
+}
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.

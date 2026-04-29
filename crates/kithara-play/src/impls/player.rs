@@ -14,6 +14,7 @@ use derive_setters::Setters;
 use kithara_abr::{AbrController, AbrMode, AbrOptions, ThroughputEstimator};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
@@ -81,6 +82,8 @@ pub struct PlayerConfig {
     /// EQ band layout. Default: 10-band log-spaced.
     #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
     pub eq_layout: Vec<EqBandConfig>,
+    /// How resources created for this player trim leading/trailing PCM.
+    pub gapless_mode: GaplessMode,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
@@ -215,6 +218,7 @@ impl PlayerImpl {
     pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
         config.worker = Some(self.engine.worker().clone());
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
+        config.gapless_mode = self.config.gapless_mode;
         if let Some(rt) = self.engine.runtime() {
             config.runtime = Some(rt.clone());
         }
@@ -1044,6 +1048,21 @@ mod tests {
         PlayerImpl::with_engine(config, engine)
     }
 
+    #[kithara::test]
+    fn prepare_config_applies_player_gapless_mode() {
+        let player = PlayerImpl::new(PlayerConfig {
+            gapless_mode: GaplessMode::Disabled,
+            ..PlayerConfig::default()
+        });
+        let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
+            .expect("valid resource config");
+
+        player.prepare_config(&mut config);
+
+        assert_eq!(config.gapless_mode, GaplessMode::Disabled);
+        player.worker().shutdown();
+    }
+
     fn drain_player_events(
         player: &PlayerImpl,
         rx: &mut kithara_events::EventReceiver,
@@ -1156,6 +1175,7 @@ mod tests {
             crossfade_duration: 2.0,
             default_rate: 0.5,
             eq_layout: generate_log_spaced_bands(5),
+            gapless_mode: GaplessMode::MediaOnly,
             max_slots: 2,
             pcm_pool: None,
         };

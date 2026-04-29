@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.update
  *
  * ```kotlin
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
- * item.load()
  * player.insert(item)
  * player.play()
  * ```
@@ -105,6 +104,8 @@ class KitharaPlayerItem(
      * Starts loading the underlying resource (fire-and-forget).
      *
      * Safe to call before inserting into a [KitharaPlayer] — the call is idempotent.
+     * For player-scoped playback options such as gapless mode, prefer inserting
+     * the item first and letting the player auto-load it with its own config.
      * Errors are reported through [state] as [ItemState.error].
      */
     fun load() {

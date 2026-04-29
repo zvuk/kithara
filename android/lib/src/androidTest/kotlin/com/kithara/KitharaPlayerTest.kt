@@ -40,6 +40,15 @@ class KitharaPlayerTest {
     }
 
     @Test
+    fun initAcceptsGaplessModeConfig() {
+        val player = KitharaPlayer(
+            KitharaPlayer.Config(gaplessMode = GaplessMode.CodecPriming),
+        )
+
+        assertEquals(PlayerStatus.Unknown, player.status)
+    }
+
+    @Test
     fun crossfadeDurationRoundTrips() {
         val player = KitharaPlayer()
 

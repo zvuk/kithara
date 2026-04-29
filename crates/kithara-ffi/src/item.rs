@@ -10,6 +10,7 @@ use std::{
 
 use kithara::{
     abr::{AbrController, AbrMode, AbrOptions},
+    decode::GaplessMode,
     play::{Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -36,6 +37,7 @@ pub struct AudioPlayerItem {
     preferred_peak_bitrate: Mutex<f64>,
     preferred_peak_bitrate_expensive: Mutex<f64>,
     abr_mode: Mutex<Option<crate::types::FfiAbrMode>>,
+    gapless_mode: Mutex<Option<GaplessMode>>,
     resource: Mutex<Option<Resource>>,
     store: Mutex<StoreOptions>,
     event_bridge: Mutex<Option<ItemEventBridge>>,
@@ -71,6 +73,7 @@ impl AudioPlayerItem {
             preferred_peak_bitrate: Mutex::new(0.0),
             preferred_peak_bitrate_expensive: Mutex::new(0.0),
             abr_mode: Mutex::new(None),
+            gapless_mode: Mutex::new(None),
             resource: Mutex::new(None),
             store: Mutex::new(StoreOptions::default()),
             event_bridge: Mutex::new(None),
@@ -190,6 +193,14 @@ impl AudioPlayerItem {
         self.observer.lock_sync().clone()
     }
 
+    pub(crate) fn set_player_gapless_mode(&self, mode: GaplessMode) {
+        *self.gapless_mode.lock_sync() = Some(mode);
+    }
+
+    pub(crate) fn player_gapless_mode(&self) -> GaplessMode {
+        (*self.gapless_mode.lock_sync()).unwrap_or_default()
+    }
+
     #[expect(
         clippy::option_if_let_else,
         reason = "nested lock access reads clearer as if/else than map_or_else"
@@ -256,6 +267,7 @@ impl AudioPlayerItem {
         let mut config = ResourceConfig::new(&self.url).map_err(|e| FfiError::Internal {
             description: e.to_string(),
         })?;
+        let gapless_mode = self.player_gapless_mode();
 
         config::configure_resource(&mut config, &self.store.lock_sync());
         let bitrate = self.preferred_peak_bitrate();
@@ -270,6 +282,7 @@ impl AudioPlayerItem {
         if let Some(ref b) = *self.bus.lock_sync() {
             config.bus = Some(b.clone());
         }
+        config = config.with_gapless_mode(gapless_mode);
         if let Some(ref w) = *self.worker.lock_sync() {
             config.worker = Some(w.clone());
         }
@@ -390,6 +403,16 @@ mod tests {
         item.set_preferred_peak_bitrate(256_000.0);
         let config = item.build_resource_config();
         assert!(config.is_ok());
+    }
+
+    #[kithara::test]
+    fn build_resource_config_uses_injected_gapless_mode() {
+        let item = AudioPlayerItem::new("https://example.com/a.mp3".into(), None);
+        item.set_player_gapless_mode(GaplessMode::Disabled);
+
+        let config = item.build_resource_config().expect("valid resource config");
+
+        assert_eq!(config.config.gapless_mode, GaplessMode::Disabled);
     }
 
     #[kithara::test]

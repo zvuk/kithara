@@ -29,6 +29,35 @@ enum class ItemStatus {
 }
 
 /**
+ * How leading/trailing PCM is trimmed for resources loaded by a player.
+ */
+sealed interface GaplessMode {
+    /** Do not trim decoder-reported gapless padding. */
+    data object Disabled : GaplessMode
+
+    /** Use media/container gapless metadata when present. */
+    data object MediaOnly : GaplessMode
+
+    /** Use media metadata, or fall back to codec priming estimates. */
+    data object CodecPriming : GaplessMode
+
+    /** Use media metadata, or fall back to leading silence detection. */
+    data class SilenceTrim(
+        val params: SilenceTrimParams = SilenceTrimParams(),
+    ) : GaplessMode
+}
+
+/**
+ * Tunables for [GaplessMode.SilenceTrim].
+ */
+data class SilenceTrimParams(
+    val thresholdDb: Float = 60f,
+    val minTrimFrames: ULong = 256u,
+    val scanWindowFrames: ULong = 4096u,
+    val trimTrailing: Boolean = false,
+)
+
+/**
  * Snapshot of player state for Compose, ViewModel, or Flow consumers.
  *
  * @property bufferedDuration Buffered media duration in seconds.
