@@ -48,6 +48,16 @@ impl OfflinePlayerHarness {
             .expect("render offline player harness")
     }
 
+    pub(crate) fn render_block(&self) -> Vec<f32> {
+        self.render(self.render_block_frames)
+    }
+
+    pub(crate) fn render_block_and_drain(&self) -> (Vec<f32>, Vec<PlayerEvent>) {
+        let block = self.render_block();
+        let events = self.tick_and_drain();
+        (block, events)
+    }
+
     pub(crate) fn render_until<P: FnMut(&[f32], &[PlayerEvent]) -> bool>(
         &self,
         mut predicate: P,
