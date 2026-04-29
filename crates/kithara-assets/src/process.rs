@@ -717,7 +717,7 @@ mod tests {
     fn red_test_drm_small_cache_reactivate_preserves_processed_flag() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
-        let encrypted_first: Vec<u8> = b"first payload".iter().map(|b| b ^ 0x42).collect();
+        let encrypted_first: Vec<u8> = b"first  payload".iter().map(|b| b ^ 0x42).collect();
         let encrypted_second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
         assert_eq!(
             encrypted_first.len(),
