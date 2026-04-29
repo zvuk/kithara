@@ -99,6 +99,7 @@ pub(crate) enum ResolvedPackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
+    SineOffset { freq_hz: f64, start_frame: u64 },
     Pattern(PcmPattern),
 }
 
@@ -443,6 +444,16 @@ fn resolved_signal(
         PackagedSignal::Sine { freq_hz } => {
             validate_packaged_sine_freq_hz(freq_hz, sample_rate)?;
             Ok(ResolvedPackagedSignal::Sine { freq_hz })
+        }
+        PackagedSignal::SineOffset {
+            freq_hz,
+            start_frame,
+        } => {
+            validate_packaged_sine_freq_hz(freq_hz, sample_rate)?;
+            Ok(ResolvedPackagedSignal::SineOffset {
+                freq_hz,
+                start_frame,
+            })
         }
     }
 }

@@ -415,22 +415,28 @@ impl PlayerNodeProcessor {
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
-        let active_tracks = if is_playing {
+        let arena_tracks = if is_playing {
             self.tracks
                 .iter()
-                .filter_map(|(_, track)| {
-                    track
-                        .state()
-                        .is_playing()
-                        .then(|| (Arc::clone(track.src()), track.state().is_leading()))
-                })
+                .map(|(_, track)| (Arc::clone(track.src()), track.state()))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
+        let active_tracks = arena_tracks
+            .iter()
+            .enumerate()
+            .filter_map(|(arena_idx, (src, state))| {
+                state
+                    .is_playing()
+                    .then(|| (arena_idx, Arc::clone(src), state.is_leading()))
+            })
+            .collect::<Vec<_>>();
         let mut skip_tracks = vec![false; active_tracks.len()];
 
-        for (track_idx, (track_src, was_leading)) in active_tracks.iter().enumerate() {
+        for (track_idx, (arena_track_idx, track_src, was_leading)) in
+            active_tracks.iter().enumerate()
+        {
             if skip_tracks[track_idx] {
                 continue;
             }
@@ -457,10 +463,11 @@ impl PlayerNodeProcessor {
             if *was_leading {
                 let mut handover_offset = match read_outcome {
                     TrackReadOutcome::Partial { frames, .. } => Some(frames),
+                    TrackReadOutcome::Eof => Some(0),
                     _ => None,
                 };
 
-                for (next_idx, (next_src, _)) in
+                for (next_idx, (_, next_src, _)) in
                     active_tracks.iter().enumerate().skip(track_idx + 1)
                 {
                     let Some(offset) = handover_offset else {
@@ -488,6 +495,34 @@ impl PlayerNodeProcessor {
                         } => Some(offset + written),
                         TrackReadOutcome::Eof | TrackReadOutcome::Error(_) => Some(offset),
                     };
+                }
+
+                if let Some(offset) = handover_offset
+                    && offset < frames
+                {
+                    for (next_arena_idx, (next_src, next_state)) in
+                        arena_tracks.iter().enumerate().skip(*arena_track_idx + 1)
+                    {
+                        if *next_state != TrackState::Preloading
+                            || active_tracks
+                                .iter()
+                                .any(|(active_arena_idx, _, _)| *active_arena_idx == next_arena_idx)
+                        {
+                            continue;
+                        }
+
+                        let Some(next_track) = self.tracks.get_mut(next_src) else {
+                            continue;
+                        };
+                        next_track.play();
+                        let _ = next_track.read(
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            &self.shared_state.notification_tx,
+                        );
+                        break;
+                    }
                 }
             }
 
@@ -943,6 +978,65 @@ mod tests {
             out_r
                 .iter()
                 .all(|sample| (*sample - 0.5).abs() < f32::EPSILON)
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn render_audio_handover_promotes_preloading_track_without_silence() {
+        let (mut processor, mut tx) = make_processor();
+        let short_src = Arc::from("short.mp3");
+        let preload_src = Arc::from("preload.mp3");
+        let frames = 1024usize;
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            item_id: None,
+            src: Arc::clone(&short_src),
+        })
+        .ok();
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("preload.mp3"),
+            item_id: None,
+            src: Arc::clone(&preload_src),
+        })
+        .ok();
+        processor.drain_commands();
+
+        processor
+            .tracks
+            .get_mut(&short_src)
+            .expect("short track must be loaded")
+            .play();
+
+        let inputs: [&[f32]; 0] = [];
+        let mut out_l = vec![99.0f32; frames];
+        let mut out_r = vec![99.0f32; frames];
+        let mut outputs = [&mut out_l[..], &mut out_r[..]];
+        let mut buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+
+        let rendered = processor.render_audio(&mut buffers, frames, true);
+
+        assert!(rendered);
+        assert!(
+            out_l
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < f32::EPSILON)
+        );
+        assert!(
+            out_r
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < f32::EPSILON)
+        );
+        assert_eq!(
+            processor
+                .tracks
+                .get(&preload_src)
+                .expect("preloading track must remain loaded")
+                .state(),
+            TrackState::Playing
         );
     }
 

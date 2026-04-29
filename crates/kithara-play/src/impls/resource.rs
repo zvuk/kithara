@@ -233,6 +233,7 @@ impl Resource {
     pub fn set_service_class(&self, class: ServiceClass) {
         self.inner.set_service_class(class);
     }
+
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
     ///
     /// After preload completes, the first `read()` returns data without blocking.

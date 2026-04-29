@@ -1141,7 +1141,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Decode one chunk using the decode loop.
     fn decode_one_step(&mut self) -> DecodeStep {
-        let decoder_duration = self.session.decoder.duration();
+        // Visible duration mirrors the post-trim coordinate space used by
+        // the consumer; see `visible_duration` for rationale.
+        let decoder_duration =
+            crate::pipeline::gapless::visible_duration(self.session.decoder.as_ref());
         let timeline_duration = self.timeline.total_duration();
         if decoder_duration > timeline_duration {
             self.timeline.set_total_duration(decoder_duration);

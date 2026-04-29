@@ -29,6 +29,7 @@ use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch},
+        gapless::visible_duration,
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -762,7 +763,12 @@ where
         .await?;
 
         let initial_spec = decoder.spec();
-        let total_duration = decoder.duration().or_else(|| timeline.total_duration());
+        // Report visible (post-gapless-trim) duration so downstream timeline
+        // consumers see the same coordinate space the trimmed PCM stream
+        // actually exposes — not the raw container duration that includes
+        // encoder priming/padding the trimmer is about to drop.
+        let total_duration =
+            visible_duration(decoder.as_ref()).or_else(|| timeline.total_duration());
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 

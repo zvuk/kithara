@@ -19,7 +19,7 @@ use crate::gapless_common::{
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths() {
     let server = TestServerHelper::new().await;
     let fixture =
-        generated_aac_elst_fixture(&server, PackagedSignal::Sine { freq_hz: 1_000.0 }).await;
+        generated_aac_elst_fixture(&server, PackagedSignal::Sine { freq_hz: 1_000.0 }, 0).await;
 
     let direct = create_decoder_from_media_info(&fixture, DecoderConfig::default())
         .expect("create direct AAC fMP4 decoder");

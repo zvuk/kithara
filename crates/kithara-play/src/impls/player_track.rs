@@ -70,12 +70,23 @@ pub(crate) enum TrackTransition {
 
 /// Result of a single track render attempt.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "position/duration fields are inspected only by tests"
+    )
+)]
 pub(crate) enum TrackReadOutcome {
     /// The full requested block was written into the mix buffer.
     Full {
-        /// Playback position snapshot after the read.
+        /// Playback position snapshot after the read (seconds).
+        ///
+        /// Tracks `served_frames / sample_rate`, i.e. what has actually been
+        /// mixed into the output for this track. Returned for diagnostic
+        /// and unit-test inspection.
         position: f64,
-        /// Duration snapshot associated with the current resource.
+        /// Visible (post-gapless-trim) duration snapshot in seconds.
         duration: f64,
     },
     /// Only the first `frames` samples were written; EOF was reached in-block.
@@ -85,9 +96,11 @@ pub(crate) enum TrackReadOutcome {
     Partial {
         /// Number of frames written into the destination block.
         frames: usize,
-        /// Playback position snapshot after the partial read.
+        /// Playback position snapshot after the partial read (seconds).
+        #[cfg_attr(not(test), expect(dead_code, reason = "exposed for diagnostics/tests"))]
         position: f64,
-        /// Duration snapshot associated with the current resource.
+        /// Visible (post-gapless-trim) duration snapshot in seconds.
+        #[cfg_attr(not(test), expect(dead_code, reason = "exposed for diagnostics/tests"))]
         duration: f64,
     },
     /// No frames were written because the track is already finished.
@@ -109,13 +122,23 @@ pub(crate) struct PlayerTrack {
     fade_curve: FadeCurve,
     /// Current crossfade duration used for near-end trigger checks.
     fade_duration: f32,
+    sample_rate: u32,
+    /// Cumulative frames this track has actually served into the mix output.
+    ///
+    /// Used as the source of truth for near-end trigger position so the
+    /// trigger reflects what has been rendered to the audio output, not the
+    /// decoder's pre-buffered position (which can be ~200 ms ahead of the
+    /// mixer thanks to `PlayerResource`'s scratch buffer).
+    served_frames: u64,
     /// Last observed playback position snapshot.
     ///
-    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    /// Tracks `served_frames / sample_rate` so consumers of `position()` see
+    /// the same value used for trigger evaluation.
     observed_position: f64,
     /// Last observed duration snapshot.
     ///
-    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
+    /// duration) captured under the resource lock.
     observed_duration: f64,
     item_id: Option<Arc<str>>,
     src: Arc<str>,
@@ -146,6 +169,8 @@ impl PlayerTrack {
             mix: MixDSP::new(Mix::FULLY_WET, fade_curve, fade_conf, sample_rate),
             fade_curve,
             fade_duration,
+            sample_rate: sample_rate.get(),
+            served_frames: 0,
             observed_position: 0.0,
             observed_duration: 0.0,
             item_id,
@@ -195,18 +220,19 @@ impl PlayerTrack {
 
             match guard.read(&mut scratch_window, 0..range.len()) {
                 Ok(ReadOutcome::Full) => {
-                    let position = guard.position();
                     let duration = guard.duration();
                     drop(guard);
-                    TrackReadOutcome::Full { position, duration }
+                    TrackReadOutcome::Full {
+                        position: 0.0, // overwritten below from served_frames
+                        duration,
+                    }
                 }
                 Ok(ReadOutcome::Partial(frames)) => {
-                    let position = guard.position();
                     let duration = guard.duration();
                     drop(guard);
                     TrackReadOutcome::Partial {
                         frames,
-                        position,
+                        position: 0.0, // overwritten below from served_frames
                         duration,
                     }
                 }
@@ -216,9 +242,10 @@ impl PlayerTrack {
         };
 
         match read_outcome {
-            TrackReadOutcome::Full { position, duration } => {
-                self.observed_position = position;
+            TrackReadOutcome::Full { duration, .. } => {
+                self.advance_served_frames(range.len() as u64);
                 self.observed_duration = duration;
+                let position = self.observed_position;
 
                 if scratch_bufs.len() >= MIN_STEREO_CHANNELS
                     && mix_bufs.len() >= MIN_STEREO_CHANNELS
@@ -236,7 +263,7 @@ impl PlayerTrack {
                     );
                 }
 
-                self.check_notifications(notification_tx);
+                self.check_notifications(notification_tx, range.len());
 
                 if self.mix.has_settled() {
                     self.update_state_after_fade();
@@ -249,12 +276,11 @@ impl PlayerTrack {
                 TrackReadOutcome::Full { position, duration }
             }
             TrackReadOutcome::Partial {
-                frames,
-                position,
-                duration,
+                frames, duration, ..
             } => {
-                self.observed_position = position;
+                self.advance_served_frames(frames as u64);
                 self.observed_duration = duration;
+                let position = self.observed_position;
 
                 if scratch_bufs.len() >= MIN_STEREO_CHANNELS
                     && mix_bufs.len() >= MIN_STEREO_CHANNELS
@@ -272,7 +298,7 @@ impl PlayerTrack {
                     );
                 }
 
-                self.check_notifications(notification_tx);
+                self.check_notifications(notification_tx, range.len());
                 self.handle_natural_end(notification_tx);
 
                 TrackReadOutcome::Partial {
@@ -289,6 +315,21 @@ impl PlayerTrack {
                 self.handle_read_error(notification_tx, error.clone());
                 TrackReadOutcome::Error(error)
             }
+        }
+    }
+
+    /// Add `frames` to the rolling served-frames counter and update
+    /// `observed_position` so trigger checks reflect what has been mixed
+    /// into the output, not what the decoder has pre-buffered.
+    fn advance_served_frames(&mut self, frames: u64) {
+        self.served_frames = self.served_frames.saturating_add(frames);
+        let sample_rate = self.sample_rate.max(1);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "served-frame count precision is sufficient for trigger thresholds"
+        )]
+        {
+            self.observed_position = self.served_frames as f64 / f64::from(sample_rate);
         }
     }
 
@@ -336,7 +377,11 @@ impl PlayerTrack {
     }
 
     /// Check position-based notifications.
-    fn check_notifications(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn check_notifications(
+        &mut self,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+        block_frames: usize,
+    ) {
         let position = self.observed_position;
         let duration = self.observed_duration;
 
@@ -354,7 +399,12 @@ impl PlayerTrack {
             reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
         )]
         let dur = duration as f32;
-        if pos + self.fade_duration >= dur {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "block duration precision is sufficient for near-end threshold checks"
+        )]
+        let block_seconds = block_frames as f32 / self.sample_rate as f32;
+        if pos + self.fade_duration + block_seconds >= dur {
             self.emit_track_requested(notification_tx);
         }
     }
@@ -473,29 +523,42 @@ impl PlayerTrack {
         self.mix.reset_to_target();
     }
 
-    /// Seek the underlying resource.
+    /// Seek the underlying resource and re-sync the served-frame counter
+    /// so trigger thresholds reflect the new playback origin.
     pub(crate) fn seek(&mut self, seconds: f64) {
         if let Ok(mut resource) = self.resource.try_lock() {
             resource.seek(seconds);
         }
+        let sample_rate = self.sample_rate.max(1);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "negative seek targets are clamped to zero by Resource::seek"
+        )]
+        let frames = (seconds.max(0.0) * f64::from(sample_rate)) as u64;
+        self.served_frames = frames;
+        self.observed_position = seconds.max(0.0);
+        self.notified_track_requested = false;
     }
 
     /// Current position in seconds.
     ///
-    /// Source of truth is `PlayerResource` (`Timeline` underneath).
-    /// Uses snapshot fallback only if lock is temporarily unavailable.
+    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
+    /// mixed into the output — so the value matches the trigger evaluator
+    /// instead of the decoder's pre-buffered position.
     pub(crate) fn position(&self) -> f64 {
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_position, |resource| resource.position())
+        self.observed_position
     }
 
-    /// Current duration in seconds.
+    /// Current visible (post-gapless-trim) duration in seconds.
     ///
-    /// Source of truth is `PlayerResource` (`Timeline` underneath).
-    /// Uses snapshot fallback only if lock is temporarily unavailable.
+    /// Mirrors `PlayerResource::duration()` captured under the resource
+    /// lock during the last `read()`. Falls back to a fresh `try_lock`
+    /// when invoked before any `read()` (e.g. immediately after `seek`).
     pub(crate) fn duration(&self) -> f64 {
+        if self.observed_duration > 0.0 {
+            return self.observed_duration;
+        }
         self.resource
             .try_lock()
             .ok()
@@ -531,6 +594,7 @@ impl PlayerTrack {
         };
         self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
         self.fade_duration = fade_duration;
+        self.sample_rate = sample_rate.get();
     }
 
     /// Update the fade curve used for future fade operations.

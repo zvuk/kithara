@@ -78,6 +78,31 @@ struct DelayPaddedPcm<'a> {
     trailing_delay_frames: usize,
 }
 
+#[derive(Debug)]
+struct OffsetSignal<S> {
+    inner: S,
+    start_frame: usize,
+}
+
+impl<S> OffsetSignal<S> {
+    fn new(inner: S, start_frame: u64) -> Self {
+        Self {
+            inner,
+            start_frame: usize::try_from(start_frame).expect("start_frame must fit usize"),
+        }
+    }
+}
+
+impl<S> signal::SignalFn for OffsetSignal<S>
+where
+    S: signal::SignalFn,
+{
+    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+        self.inner
+            .sample(frame.saturating_add(self.start_frame), sample_rate)
+    }
+}
+
 impl DelayPaddedPcm<'_> {
     fn bytes_per_frame(&self) -> usize {
         usize::from(self.inner.channels()) * size_of::<i16>()
@@ -388,6 +413,18 @@ fn encode_packaged_variant(
         ResolvedPackagedSignal::Sine { freq_hz } => {
             let pcm = SignalPcm::new(
                 signal::SineWave(freq_hz),
+                packaged.sample_rate,
+                packaged.channels,
+                content_length,
+            );
+            encode_signal(&pcm)
+        }
+        ResolvedPackagedSignal::SineOffset {
+            freq_hz,
+            start_frame,
+        } => {
+            let pcm = SignalPcm::new(
+                OffsetSignal::new(signal::SineWave(freq_hz), start_frame),
                 packaged.sample_rate,
                 packaged.channels,
                 content_length,

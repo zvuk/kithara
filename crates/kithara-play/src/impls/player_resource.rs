@@ -204,6 +204,16 @@ impl PlayerResource {
     }
 
     /// Current playback position in seconds.
+    ///
+    /// Reflects the underlying decoder's position, which can be ahead of
+    /// what the mixer has actually rendered (the audio thread sees PCM only
+    /// after it leaves [`PlayerResource`]'s scratch buffer). Trigger logic
+    /// uses [`crate::impls::player_track::PlayerTrack`]'s served-frame
+    /// counter instead; this accessor remains for diagnostics and tests.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "diagnostics and unit tests only")
+    )]
     pub(crate) fn position(&self) -> f64 {
         self.resource.position().as_secs_f64()
     }

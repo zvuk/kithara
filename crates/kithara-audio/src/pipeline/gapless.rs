@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use kithara_decode::{GaplessTrimmer, InnerDecoder, PcmChunk};
 use smallvec::{IntoIter, SmallVec};
 
@@ -71,6 +73,40 @@ impl GaplessStage {
         );
         self.pending = (!output.is_empty()).then(|| output.into_iter());
     }
+}
+
+/// Duration of the PCM stream as observed downstream of `GaplessStage`.
+///
+/// The decoder reports the raw container duration (e.g. AAC reports a value
+/// that includes encoder priming and padding frames). `GaplessStage` removes
+/// those frames before they reach the consumer, so any consumer-facing
+/// position/duration must subtract them too — otherwise `position` can never
+/// reach `duration` and near-end orchestration triggers misfire.
+#[must_use]
+pub(crate) fn visible_duration(decoder: &dyn InnerDecoder) -> Option<Duration> {
+    let raw = decoder.duration()?;
+    let Some(info) = decoder.track_info().gapless else {
+        return Some(raw);
+    };
+    let trim_frames = info.leading_frames.saturating_add(info.trailing_frames);
+    if trim_frames == 0 {
+        return Some(raw);
+    }
+
+    let sample_rate = u64::from(decoder.spec().sample_rate);
+    if sample_rate == 0 {
+        return Some(raw);
+    }
+
+    let trim_nanos = u128::from(trim_frames)
+        .saturating_mul(1_000_000_000)
+        .saturating_div(u128::from(sample_rate));
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "trim duration always fits in u64 nanoseconds for real audio"
+    )]
+    let trim = Duration::from_nanos(trim_nanos.min(u128::from(u64::MAX)) as u64);
+    Some(raw.saturating_sub(trim))
 }
 
 #[cfg(test)]

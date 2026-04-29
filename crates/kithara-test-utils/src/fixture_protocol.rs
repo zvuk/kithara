@@ -149,6 +149,7 @@ pub enum PackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
+    SineOffset { freq_hz: f64, start_frame: u64 },
 }
 
 /// Per-variant override for packaged audio fixtures.

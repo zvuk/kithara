@@ -44,7 +44,22 @@ pub(crate) fn generated_aac_elst_visible_frames() -> usize {
 pub(crate) async fn generated_aac_elst_fixture(
     server: &TestServerHelper,
     signal: PackagedSignal,
+    start_frame: u64,
 ) -> GaplessFixture {
+    let source = match (signal, start_frame) {
+        (PackagedSignal::Sine { freq_hz }, 0) => {
+            PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz })
+        }
+        (PackagedSignal::Sine { freq_hz }, start_frame) => {
+            PackagedAudioSource::Signal(PackagedSignal::SineOffset {
+                freq_hz,
+                start_frame,
+            })
+        }
+        (signal, 0) => PackagedAudioSource::Signal(signal),
+        (signal, _) => panic!("start_frame is only supported for sine fixtures, got {signal:?}"),
+    };
+
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -59,7 +74,7 @@ pub(crate) async fn generated_aac_elst_fixture(
                     bit_rate: Some(128_000),
                     encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),
                     trailing_delay: NonZeroU32::new(AAC_GAPLESS_TRAILING_DELAY),
-                    source: PackagedAudioSource::Signal(signal),
+                    source,
                     variant_overrides: Vec::new(),
                 }),
         )
