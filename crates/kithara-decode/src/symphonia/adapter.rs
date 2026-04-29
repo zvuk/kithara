@@ -17,14 +17,9 @@ use symphonia::core::io::MediaSource;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia [`MediaSource`].
 pub(crate) struct ReadSeekAdapter<R> {
-    inner: R,
     /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
     /// 0 means unknown (returns None from `byte_len()`).
     byte_len: Arc<AtomicU64>,
-    /// Controls whether seek operations are allowed.
-    /// Used to temporarily disable seeking during fMP4 reader initialization
-    /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
-    seek_enabled: Arc<AtomicBool>,
     /// Live read-cursor position. Updated on every `Read::read` /
     /// `Seek::seek` so the decoder layer can read it after
     /// `format_reader.seek()` to learn the absolute byte offset
@@ -32,22 +27,20 @@ pub(crate) struct ReadSeekAdapter<R> {
     /// uses this to plug a real byte target into `Stream::seek`,
     /// avoiding ad-hoc `frame × bytes_per_frame` recomputation.
     byte_pos: Arc<AtomicU64>,
+    /// Controls whether seek operations are allowed.
+    /// Used to temporarily disable seeking during fMP4 reader initialization
+    /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
+    seek_enabled: Arc<AtomicBool>,
+    inner: R,
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
-    /// Create adapter with seek initially disabled.
-    pub(crate) fn new_seek_disabled(inner: R) -> Self {
-        Self::new_inner(inner, None, false)
+    pub(crate) fn byte_len_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_len)
     }
 
-    /// Create adapter with seek enabled from the start.
-    pub(crate) fn new_seek_enabled(inner: R) -> Self {
-        Self::new_inner(inner, None, true)
-    }
-
-    /// Create adapter with a shared byte-length handle and seek disabled.
-    pub(crate) fn new_seek_disabled_shared(inner: R, handle: Arc<AtomicU64>) -> Self {
-        Self::new_inner(inner, Some(handle), false)
+    pub(crate) fn byte_pos_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_pos)
     }
 
     pub(crate) fn new_inner(
@@ -69,23 +62,26 @@ impl<R: Seek> ReadSeekAdapter<R> {
         }
         let initial_pos = inner.stream_position().unwrap_or(0);
         Self {
-            inner,
             byte_len,
             seek_enabled,
+            inner,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
         }
     }
 
-    pub(crate) fn byte_len_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.byte_len)
+    /// Create adapter with seek initially disabled.
+    pub(crate) fn new_seek_disabled(inner: R) -> Self {
+        Self::new_inner(inner, None, false)
     }
 
-    pub(crate) fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.seek_enabled)
+    /// Create adapter with a shared byte-length handle and seek disabled.
+    pub(crate) fn new_seek_disabled_shared(inner: R, handle: Arc<AtomicU64>) -> Self {
+        Self::new_inner(inner, Some(handle), false)
     }
 
-    pub(crate) fn byte_pos_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.byte_pos)
+    /// Create adapter with seek enabled from the start.
+    pub(crate) fn new_seek_enabled(inner: R) -> Self {
+        Self::new_inner(inner, None, true)
     }
 
     fn probe_byte_len(reader: &mut R) -> Option<u64> {
@@ -93,6 +89,10 @@ impl<R: Seek> ReadSeekAdapter<R> {
         let end = reader.seek(SeekFrom::End(0)).ok()?;
         reader.seek(SeekFrom::Start(current)).ok()?;
         Some(end)
+    }
+
+    pub(crate) fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.seek_enabled)
     }
 }
 
@@ -115,13 +115,13 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
 }
 
 impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
-    fn is_seekable(&self) -> bool {
-        self.seek_enabled.load(Ordering::Acquire)
-    }
-
     fn byte_len(&self) -> Option<u64> {
         let len = self.byte_len.load(Ordering::Acquire);
         if len > 0 { Some(len) } else { None }
+    }
+
+    fn is_seekable(&self) -> bool {
+        self.seek_enabled.load(Ordering::Acquire)
     }
 }
 

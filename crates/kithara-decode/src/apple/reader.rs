@@ -54,14 +54,8 @@ pub(super) struct PacketRef<'a> {
 
 /// Minimal interface the inner decoder needs from a container parser.
 pub(super) trait PacketReader: Send {
-    fn format(&self) -> AudioStreamBasicDescription;
-    fn magic_cookie(&self) -> Option<&[u8]>;
     fn duration(&self) -> Option<Duration>;
-    fn read_next_packet(&mut self) -> DecodeResult<Option<PacketRef<'_>>>;
-    /// Seek to the packet containing `target_frame`. Returns the first
-    /// frame that will be emitted after the seek (may be less than
-    /// `target_frame` when the seek lands on a packet boundary).
-    fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64>;
+    fn format(&self) -> AudioStreamBasicDescription;
     /// Absolute byte offset of the *next* packet body inside the
     /// source container after a successful seek. `AudioFile` resolves
     /// it via `kAudioFilePropertyPacketToByte`; `Fmp4Reader` exposes
@@ -71,4 +65,10 @@ pub(super) trait PacketReader: Send {
     /// must surface a typed `SeekFailed` rather than substitute a
     /// derived guess.
     fn landed_byte(&self) -> Option<u64>;
+    fn magic_cookie(&self) -> Option<&[u8]>;
+    fn read_next_packet(&mut self) -> DecodeResult<Option<PacketRef<'_>>>;
+    /// Seek to the packet containing `target_frame`. Returns the first
+    /// frame that will be emitted after the seek (may be less than
+    /// `target_frame` when the seek lands on a packet boundary).
+    fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64>;
 }

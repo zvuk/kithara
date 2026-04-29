@@ -42,10 +42,11 @@ use kithara::{
     },
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_decode::DecoderBackend;
 use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
 use tokio::time::sleep;
 
-use crate::common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared};
+use crate::common::test_defaults::Consts as Shared;
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -117,15 +118,15 @@ async fn render_until_position(
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::quick_symphonia(1, DecoderBackend::Symphonia)]
-#[case::quick_apple(1, DecoderBackend::Apple)]
-#[case::quick_android(1, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::quick_apple(1, DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::quick_android(1, DecoderBackend::Android))]
 async fn hls_seek_middle_repeated_seeks_stress(
     #[case] iterations: u32,
     #[case] backend: DecoderBackend,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
@@ -144,7 +145,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
     cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
     cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
 
     let resource = Resource::new(cfg)
         .await

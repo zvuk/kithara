@@ -18,6 +18,7 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -28,8 +29,6 @@ use kithara_test_utils::{
 };
 use tokio::time::{sleep, timeout};
 use url::Url;
-
-use crate::common::decoder_backend::DecoderBackend;
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -214,33 +213,51 @@ fn build_queue_with_tick(
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::mp3_symphonia(LocalSource::Mp3, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::mp3_apple(LocalSource::Mp3, 42, DecoderBackend::Apple, AbrMode::Auto(None))]
-#[case::mp3_android(LocalSource::Mp3, 42, DecoderBackend::Android, AbrMode::Auto(None))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple(LocalSource::Mp3, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::mp3_android(LocalSource::Mp3, 42, DecoderBackend::Android, AbrMode::Auto(None))
+)]
 #[case::hls_aac_symphonia(
     LocalSource::HlsAac,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
-#[case::hls_aac_apple(LocalSource::HlsAac, 42, DecoderBackend::Apple, AbrMode::Auto(None))]
-#[case::hls_aac_android(LocalSource::HlsAac, 42, DecoderBackend::Android, AbrMode::Auto(None))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_aac_apple(LocalSource::HlsAac, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::hls_aac_android(LocalSource::HlsAac, 42, DecoderBackend::Android, AbrMode::Auto(None))
+)]
 #[case::hls_aes_symphonia(
     LocalSource::HlsAacAes128,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
-#[case::hls_aes_apple(
-    LocalSource::HlsAacAes128,
-    42,
-    DecoderBackend::Apple,
-    AbrMode::Auto(None)
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_aes_apple(
+        LocalSource::HlsAacAes128,
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
 )]
-#[case::hls_aes_android(
-    LocalSource::HlsAacAes128,
-    42,
-    DecoderBackend::Android,
-    AbrMode::Auto(None)
+#[cfg_attr(
+    target_os = "android",
+    case::hls_aes_android(
+        LocalSource::HlsAacAes128,
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
 )]
 async fn local_track_plays_end_to_end(
     #[case] kind: LocalSource,
@@ -248,9 +265,6 @@ async fn local_track_plays_end_to_end(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
@@ -263,7 +277,7 @@ async fn local_track_plays_end_to_end(
     let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     cfg.initial_abr_mode = abr;
     let source = TrackSource::Config(Box::new(cfg));
 
@@ -362,12 +376,12 @@ where
 /// remains is the underlying engine bug.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
@@ -395,7 +409,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
             let mut cfg = ResourceConfig::new(u.as_str()).expect("valid fixture URL");
             cfg = cfg.with_downloader(downloader.clone());
             cfg.store = store.clone();
-            cfg.prefer_hardware = backend.prefer_hardware();
+            cfg.decoder_backend = backend;
             cfg.initial_abr_mode = AbrMode::Auto(None);
             queue.append(TrackSource::Config(Box::new(cfg)))
         })

@@ -85,7 +85,29 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
         }
         all_non_excluded()?
     } else {
-        args.packages.clone()
+        // Honour `Consts::EXCLUDED_PACKAGES` even on explicit `--package`
+        // requests: those crates have heavy `#[cfg(target_*)]` gating
+        // that produces false positives in `cargo modules orphans` when
+        // run from a non-matching target. Validating them needs a
+        // target-specific build (`just wasm check`, `cargo check
+        // --target ...`).
+        let mut kept = Vec::new();
+        let mut skipped = Vec::new();
+        for pkg in &args.packages {
+            if Consts::EXCLUDED_PACKAGES.contains(&pkg.as_str()) {
+                skipped.push(pkg.clone());
+            } else {
+                kept.push(pkg.clone());
+            }
+        }
+        if !skipped.is_empty() {
+            println!(
+                "orphans: skipping cfg-gated packages with known false-positives: {} \
+                 (validate via target-specific builds)",
+                skipped.join(", ")
+            );
+        }
+        kept
     };
 
     if packages.is_empty() {

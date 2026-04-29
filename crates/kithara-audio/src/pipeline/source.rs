@@ -14,8 +14,7 @@ use std::{
 
 use delegate::delegate;
 use kithara_decode::{
-    DecodeError, DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder, PcmChunk,
-    PcmSpec,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmSpec,
 };
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
@@ -181,7 +180,7 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 /// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
 pub(crate) type DecoderFactory<T> =
-    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
+    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
 /// Variant, segment index, and byte range spanning the current seek target.
 type SeekContextTuple = (Option<usize>, Option<u32>, Option<u64>, Option<u64>);
@@ -218,7 +217,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     pub(crate) fn new(
         shared_stream: SharedStream<T>,
-        decoder: Box<dyn InnerDecoder>,
+        decoder: Box<dyn Decoder>,
         decoder_factory: DecoderFactory<T>,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,
@@ -505,7 +504,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         new_info: &MediaInfo,
         base_offset: u64,
-        new_decoder: Box<dyn InnerDecoder>,
+        new_decoder: Box<dyn Decoder>,
     ) {
         let new_duration = new_decoder.duration();
         let variant = new_info.variant_index;
@@ -1159,7 +1158,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Trim or drop a freshly-decoded chunk against an in-flight seek
     /// skip. Returns the same [`DecoderChunkOutcome`] shape as
-    /// [`InnerDecoder::next_chunk`] so the decode loop carries one
+    /// [`Decoder::next_chunk`] so the decode loop carries one
     /// uniform three-way distinction across the whole pipeline:
     ///
     /// - [`DecoderChunkOutcome::Chunk`] — emit (no skip active, or skip

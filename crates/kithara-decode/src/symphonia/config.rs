@@ -8,10 +8,6 @@ use kithara_stream::{ContainerFormat, StreamContext};
 /// Configuration for Symphonia-based decoders.
 #[derive(Default)]
 pub(crate) struct SymphoniaConfig {
-    /// Enable data verification (slower but safer).
-    pub verify: bool,
-    /// Enable gapless playback.
-    pub gapless: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Container format for direct reader creation (no probe).
@@ -27,14 +23,18 @@ pub(crate) struct SymphoniaConfig {
     ///
     /// Used only when `container` is not set, as a hint for the probe.
     pub hint: Option<String>,
-    /// Stream context for segment/variant metadata.
-    pub stream_ctx: Option<Arc<dyn StreamContext>>,
-    /// Epoch counter for decoder recreation tracking.
-    pub epoch: u64,
     /// Optional PCM buffer pool override.
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub pcm_pool: Option<PcmPool>,
+    /// Stream context for segment/variant metadata.
+    pub stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Enable gapless playback.
+    pub gapless: bool,
+    /// Enable data verification (slower but safer).
+    pub verify: bool,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
 }
 
 #[cfg(test)]

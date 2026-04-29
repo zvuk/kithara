@@ -39,7 +39,6 @@ use crate::{
 /// Callback context: owns the `BoxedSource` and keeps it alive for the
 /// lifetime of the `AudioFileID`.
 struct SourceCtx {
-    source: BoxedSource,
     byte_len: Arc<AtomicU64>,
     /// Set by `read_callback` when the underlying `Stream::read` returns
     /// `ErrorKind::Interrupted` (e.g. concurrent seek-pending flush).
@@ -47,6 +46,7 @@ struct SourceCtx {
     /// rather than letting the caller misinterpret the resulting
     /// `kAudioFilePositionError` as a permanent decode failure.
     interrupted: Arc<AtomicBool>,
+    source: BoxedSource,
 }
 
 impl SourceCtx {
@@ -147,107 +147,32 @@ extern "C" fn get_size_callback(client_data: *mut c_void) -> SInt64 {
 }
 
 pub(super) struct AudioFileReader {
-    file: AudioFileID,
-    /// Boxed so the pointer fed into `AudioFileOpenWithCallbacks` stays
-    /// stable for the lifetime of the `AudioFileID`.
-    _ctx: Box<SourceCtx>,
     /// Cloned from `SourceCtx::interrupted`. Read by `read_next_packet`
     /// to translate `AudioFile` errors that originated from a transient
     /// `Stream::read` interruption (concurrent seek) into
     /// `DecodeError::Interrupted`.
     interrupted: Arc<AtomicBool>,
+    file: AudioFileID,
     format: AudioStreamBasicDescription,
-    magic_cookie: Option<Vec<u8>>,
-    packet_upper_bound: u32,
-    duration: Option<Duration>,
-    packet_buf: Vec<u8>,
-    last_num_bytes: u32,
     last_desc: AudioStreamPacketDescription,
-    next_packet: u64,
+    /// Boxed so the pointer fed into `AudioFileOpenWithCallbacks` stays
+    /// stable for the lifetime of the `AudioFileID`.
+    _ctx: Box<SourceCtx>,
+    duration: Option<Duration>,
+    magic_cookie: Option<Vec<u8>>,
     /// Absolute byte offset of `next_packet` inside the source container.
     /// Resolved once via `kAudioFilePropertyPacketToByte` after open or
     /// seek, then advanced incrementally by each successful read so we
     /// don't trigger `AudioFile`'s internal scan on every packet (which
     /// breaks state for streaming sources on MP3).
     next_packet_byte_offset: Option<u64>,
+    packet_buf: Vec<u8>,
+    last_num_bytes: u32,
+    packet_upper_bound: u32,
+    next_packet: u64,
 }
 
 impl AudioFileReader {
-    pub(super) fn open(
-        source: BoxedSource,
-        byte_len: Arc<AtomicU64>,
-        file_type: AudioFileTypeID,
-    ) -> DecodeResult<Self> {
-        let interrupted = Arc::new(AtomicBool::new(false));
-        let mut ctx = Box::new(SourceCtx {
-            source,
-            byte_len,
-            interrupted: Arc::clone(&interrupted),
-        });
-        let ctx_ptr = ctx.as_mut() as *mut SourceCtx as *mut c_void;
-
-        let mut file: AudioFileID = ptr::null_mut();
-        // SAFETY: `ctx_ptr` outlives the AudioFileID (owned by `ctx` kept
-        // inside `Self`). Callbacks cast it back to `&mut SourceCtx`.
-        let status = unsafe {
-            AudioFileOpenWithCallbacks(
-                ctx_ptr,
-                read_callback,
-                ptr::null(),
-                get_size_callback,
-                ptr::null(),
-                file_type,
-                &mut file,
-            )
-        };
-        if status != Consts::noErr {
-            let err = os_status_to_string(status);
-            warn!(status, err = %err, "AudioFileOpenWithCallbacks failed");
-            return Err(DecodeError::InvalidData(format!(
-                "AudioFileOpenWithCallbacks failed: {err}"
-            )));
-        }
-
-        let format = Self::get_format(file)?;
-        let magic_cookie = Self::get_magic_cookie(file);
-        let packet_upper_bound =
-            Self::get_property_u32(file, Consts::kAudioFilePropertyPacketSizeUpperBound)
-                .or_else(|_| {
-                    Self::get_property_u32(file, Consts::kAudioFilePropertyMaximumPacketSize)
-                })
-                .unwrap_or(64 * 1024);
-        let duration = Self::get_property_f64(file, Consts::kAudioFilePropertyEstimatedDuration)
-            .ok()
-            .filter(|d| *d > 0.0)
-            .map(Duration::from_secs_f64);
-
-        debug!(
-            file_type = format!("{:#x}", file_type),
-            sample_rate = format.mSampleRate,
-            channels = format.mChannelsPerFrame,
-            frames_per_packet = format.mFramesPerPacket,
-            packet_upper_bound,
-            ?duration,
-            cookie_size = magic_cookie.as_ref().map_or(0, Vec::len),
-            "AudioFileReader opened"
-        );
-
-        Ok(Self {
-            file,
-            _ctx: ctx,
-            interrupted,
-            format,
-            magic_cookie,
-            packet_upper_bound,
-            duration,
-            packet_buf: Vec::new(),
-            last_num_bytes: 0,
-            last_desc: AudioStreamPacketDescription::default(),
-            next_packet: 0,
-            next_packet_byte_offset: None,
-        })
-    }
-
     fn get_format(file: AudioFileID) -> DecodeResult<AudioStreamBasicDescription> {
         let mut format = AudioStreamBasicDescription::default();
         let mut size =
@@ -309,6 +234,10 @@ impl AudioFileReader {
         Some(cookie)
     }
 
+    fn get_property_f64(file: AudioFileID, prop: AudioFilePropertyID) -> DecodeResult<f64> {
+        Self::get_property_scalar::<Float64>(file, prop)
+    }
+
     /// Fetch a scalar `AudioFile` property of type `T` into a stack-allocated slot.
     fn get_property_scalar<T: Default>(
         file: AudioFileID,
@@ -336,8 +265,79 @@ impl AudioFileReader {
         Self::get_property_scalar::<UInt32>(file, prop)
     }
 
-    fn get_property_f64(file: AudioFileID, prop: AudioFilePropertyID) -> DecodeResult<f64> {
-        Self::get_property_scalar::<Float64>(file, prop)
+    pub(super) fn open(
+        source: BoxedSource,
+        byte_len: Arc<AtomicU64>,
+        file_type: AudioFileTypeID,
+    ) -> DecodeResult<Self> {
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let mut ctx = Box::new(SourceCtx {
+            byte_len,
+            source,
+            interrupted: Arc::clone(&interrupted),
+        });
+        let ctx_ptr = ctx.as_mut() as *mut SourceCtx as *mut c_void;
+
+        let mut file: AudioFileID = ptr::null_mut();
+        // SAFETY: `ctx_ptr` outlives the AudioFileID (owned by `ctx` kept
+        // inside `Self`). Callbacks cast it back to `&mut SourceCtx`.
+        let status = unsafe {
+            AudioFileOpenWithCallbacks(
+                ctx_ptr,
+                read_callback,
+                ptr::null(),
+                get_size_callback,
+                ptr::null(),
+                file_type,
+                &mut file,
+            )
+        };
+        if status != Consts::noErr {
+            let err = os_status_to_string(status);
+            warn!(status, err = %err, "AudioFileOpenWithCallbacks failed");
+            return Err(DecodeError::InvalidData(format!(
+                "AudioFileOpenWithCallbacks failed: {err}"
+            )));
+        }
+
+        let format = Self::get_format(file)?;
+        let magic_cookie = Self::get_magic_cookie(file);
+        let packet_upper_bound =
+            Self::get_property_u32(file, Consts::kAudioFilePropertyPacketSizeUpperBound)
+                .or_else(|_| {
+                    Self::get_property_u32(file, Consts::kAudioFilePropertyMaximumPacketSize)
+                })
+                .unwrap_or(64 * 1024);
+        let duration = Self::get_property_f64(file, Consts::kAudioFilePropertyEstimatedDuration)
+            .ok()
+            .filter(|d| *d > 0.0)
+            .map(Duration::from_secs_f64);
+
+        debug!(
+            file_type = format!("{:#x}", file_type),
+            sample_rate = format.mSampleRate,
+            channels = format.mChannelsPerFrame,
+            frames_per_packet = format.mFramesPerPacket,
+            packet_upper_bound,
+            ?duration,
+            cookie_size = magic_cookie.as_ref().map_or(0, Vec::len),
+            "AudioFileReader opened"
+        );
+
+        Ok(Self {
+            file,
+            interrupted,
+            format,
+            magic_cookie,
+            packet_upper_bound,
+            duration,
+            _ctx: ctx,
+            packet_buf: Vec::new(),
+            last_num_bytes: 0,
+            last_desc: AudioStreamPacketDescription::default(),
+            next_packet: 0,
+            next_packet_byte_offset: None,
+        })
     }
 
     /// Translate a packet index into its absolute byte offset in the
@@ -367,16 +367,20 @@ impl AudioFileReader {
 }
 
 impl PacketReader for AudioFileReader {
+    fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
     fn format(&self) -> AudioStreamBasicDescription {
         self.format
     }
 
-    fn magic_cookie(&self) -> Option<&[u8]> {
-        self.magic_cookie.as_deref()
+    fn landed_byte(&self) -> Option<u64> {
+        self.next_packet_byte_offset
     }
 
-    fn duration(&self) -> Option<Duration> {
-        self.duration
+    fn magic_cookie(&self) -> Option<&[u8]> {
+        self.magic_cookie.as_deref()
     }
 
     fn read_next_packet(&mut self) -> DecodeResult<Option<PacketRef<'_>>> {
@@ -409,67 +413,63 @@ impl PacketReader for AudioFileReader {
 
         let was_interrupted = self.interrupted.swap(false, Ordering::AcqRel);
 
-        // The read callback sets `interrupted` when `Stream::read` returned
-        // `ErrorKind::Interrupted` (e.g. concurrent seek-pending flush).
-        // When that coincides with AudioFile reporting EOF / no packets /
-        // a generic error, surface it as `DecodeError::Interrupted` so the
-        // pipeline retries through the seek gate instead of misclassifying
-        // the read as a permanent EOF or failure. If AudioFile produced a
-        // packet despite an interrupt earlier in the call, treat the read
-        // as successful — we got real data.
-        if num_packets > 0 && status == Consts::noErr {
-            // Resolve the absolute byte offset only when we don't have a
-            // running cursor (after open or after seek). Subsequent
-            // packets advance the cursor by `num_bytes`. Per-packet
-            // queries to `kAudioFilePropertyPacketToByte` corrupt
-            // AudioFile state on streaming MP3 sources.
-            if self.next_packet_byte_offset.is_none() {
-                self.next_packet_byte_offset = Self::packet_to_byte(self.file, packet_index);
+        // Parallel-compute classification of the four mutually exclusive
+        // outcomes — replaces a 4-guard cascade. Tuple match collapses
+        // into a single decision site (jump table for the discriminant
+        // tuple); semantics unchanged: success wins over any flag, then
+        // interrupt > natural EOF > backend failure.
+        let success = num_packets > 0 && status == Consts::noErr;
+        let interrupted = was_interrupted;
+        let natural_eof = status == Consts::kAudioFileEndOfFileError || num_packets == 0;
+        let failed = status != Consts::noErr;
+
+        match (success, interrupted, natural_eof, failed) {
+            (true, _, _, _) => {
+                // Resolve the absolute byte offset only when we don't have a
+                // running cursor (after open or after seek). Subsequent
+                // packets advance the cursor by `num_bytes`. Per-packet
+                // queries to `kAudioFilePropertyPacketToByte` corrupt
+                // AudioFile state on streaming MP3 sources.
+                if self.next_packet_byte_offset.is_none() {
+                    self.next_packet_byte_offset = Self::packet_to_byte(self.file, packet_index);
+                }
+                let byte_offset = self.next_packet_byte_offset;
+                if let Some(cursor) = self.next_packet_byte_offset.as_mut() {
+                    *cursor = cursor.saturating_add(u64::from(num_bytes));
+                }
+                self.next_packet += u64::from(num_packets);
+                self.last_num_bytes = num_bytes;
+                self.last_desc = desc;
+                Ok(Some(PacketRef {
+                    byte_offset,
+                    data: &self.packet_buf[..num_bytes as usize],
+                    description: desc,
+                }))
             }
-            let byte_offset = self.next_packet_byte_offset;
-            if let Some(cursor) = self.next_packet_byte_offset.as_mut() {
-                *cursor = cursor.saturating_add(u64::from(num_bytes));
+            (_, true, _, _) => Err(DecodeError::Interrupted),
+            (_, _, true, _) => Ok(None),
+            (_, _, _, true) => {
+                let err = os_status_to_string(status);
+                warn!(
+                    status,
+                    err = %err,
+                    packet_index,
+                    "AudioFileReadPacketData failed"
+                );
+                Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                    format!("AudioFileReadPacketData failed: {err}"),
+                ))))
             }
-            self.next_packet += u64::from(num_packets);
-            self.last_num_bytes = num_bytes;
-            self.last_desc = desc;
-            return Ok(Some(PacketRef {
-                data: &self.packet_buf[..num_bytes as usize],
-                description: desc,
-                byte_offset,
-            }));
+            // Unreachable: success path covers noErr + num_packets > 0;
+            // the other three predicates exhaust the failure space.
+            _ => unreachable!("AudioFileReadPacketData status/num_packets unhandled"),
         }
-
-        if was_interrupted {
-            return Err(DecodeError::Interrupted);
-        }
-
-        if status == Consts::kAudioFileEndOfFileError || num_packets == 0 {
-            return Ok(None);
-        }
-        if status != Consts::noErr {
-            let err = os_status_to_string(status);
-            warn!(
-                status,
-                err = %err,
-                packet_index,
-                "AudioFileReadPacketData failed"
-            );
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioFileReadPacketData failed: {err}"),
-            ))));
-        }
-
-        // Unreachable: noErr + num_packets > 0 returned above; other status
-        // paths above return explicitly. Keep the panic to surface a logic
-        // bug instead of silently producing a stale packet.
-        unreachable!("AudioFileReadPacketData status/num_packets unhandled")
     }
 
     fn seek_to_frame(&mut self, target_frame: u64) -> DecodeResult<u64> {
         // Reset the byte cursor — `read_next_packet` will reload it for
         // the next packet via `packet_to_byte`. We additionally prime
-        // it here from `next_packet` so callers (e.g. `AppleInner::seek`)
+        // it here from `next_packet` so callers (e.g. `AppleDecoder::seek`)
         // can read the byte offset of the post-seek packet without
         // forcing a packet read first.
         self.next_packet_byte_offset = None;
@@ -519,14 +519,10 @@ impl PacketReader for AudioFileReader {
         self.next_packet_byte_offset = Self::packet_to_byte(self.file, packet_index);
         Ok(aligned_frame)
     }
-
-    fn landed_byte(&self) -> Option<u64> {
-        self.next_packet_byte_offset
-    }
 }
 
 // SAFETY: The owned `AudioFileID` + `SourceCtx` are only touched on the
-// decoder's owner thread. Thread-affinity is enforced at the `AppleInner`
+// decoder's owner thread. Thread-affinity is enforced at the `AppleDecoder`
 // level via `assert_thread_affinity`.
 unsafe impl Send for AudioFileReader {}
 

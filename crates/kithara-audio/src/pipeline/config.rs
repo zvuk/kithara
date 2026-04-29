@@ -10,7 +10,7 @@ use std::{
 
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::PcmSpec;
+use kithara_decode::{DecoderBackend, PcmSpec};
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
@@ -46,8 +46,12 @@ pub struct AudioConfig<T: StreamType> {
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
-    pub prefer_hardware: bool,
+    /// Decoder backend selection. See [`DecoderBackend`]. Defaults to
+    /// [`DecoderBackend::Symphonia`] — the software path is cross-platform
+    /// and capability-complete; hardware backends are opt-in via
+    /// [`AudioConfig::with_decoder_backend`] because there is no runtime
+    /// fallback.
+    pub decoder_backend: DecoderBackend,
     /// Number of chunks to buffer before signaling preload readiness.
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
@@ -92,11 +96,7 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_buffer_chunks: Self::DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             playback_rate: None,
-            // Default to software path; hardware decoders are opt-in via
-            // `with_prefer_hardware(true)`. No fallback happens, so an
-            // implicit default would silently fail whenever the hardware
-            // backend cannot seek the active container (e.g. Apple + fMP4).
-            prefer_hardware: false,
+            decoder_backend: DecoderBackend::default(),
             preload_chunks: Self::DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,

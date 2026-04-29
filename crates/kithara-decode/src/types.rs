@@ -48,12 +48,6 @@ impl From<&PcmMeta> for kithara_stream::ChunkPosition {
 /// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmMeta {
-    /// Audio format (channels, sample rate).
-    pub spec: PcmSpec,
-    /// Absolute frame offset from the start of the track.
-    pub frame_offset: u64,
-    /// Timestamp of the first frame in this chunk.
-    pub timestamp: Duration,
     /// Wall-clock position **after** this chunk's frames have played
     /// out, computed by the decoder from its own frame counter. Used
     /// by `Timeline::advance_committed_chunk` to update the playhead
@@ -62,17 +56,31 @@ pub struct PcmMeta {
     /// chunk may legitimately push this a few ms past the rounded
     /// `total_duration`; the timeline clamps to duration on write.
     pub end_timestamp: Duration,
+    /// Timestamp of the first frame in this chunk.
+    pub timestamp: Duration,
     /// Segment index within playlist (`None` for progressive files).
     pub segment_index: Option<u32>,
+    /// Absolute byte offset of this chunk's source data within the input
+    /// stream, when the decoder reports it. Apple's `AudioFile` exposes
+    /// this via `AudioStreamPacketDescription.mStartOffset`; other
+    /// backends (Symphonia, Android `MediaExtractor`) do not surface
+    /// per-packet byte offsets through their public API and leave this
+    /// `None`. When present, downstream code can pin the chunk to an
+    /// exact byte range without recomputing rate × time.
+    pub source_byte_offset: Option<u64>,
     /// Variant/quality level index (`None` for progressive files).
     pub variant_index: Option<usize>,
-    /// Decoder generation — increments on each ABR switch / decoder recreation.
-    pub epoch: u64,
+    /// Audio format (channels, sample rate).
+    pub spec: PcmSpec,
     /// Number of audio frames this chunk represents (one frame =
     /// `spec.channels` interleaved samples). Decoder fills it from the
     /// output buffer length; consumer-side splits update it in place
     /// when slicing a chunk into consumed/remaining halves.
     pub frames: u32,
+    /// Decoder generation — increments on each ABR switch / decoder recreation.
+    pub epoch: u64,
+    /// Absolute frame offset from the start of the track.
+    pub frame_offset: u64,
     /// Number of source-stream bytes that produced this chunk's PCM, as
     /// reported by the underlying decoder packet (e.g. `Packet.data.len()`
     /// for Symphonia, `mDataByteSize` for Apple `AudioConverter`,
@@ -84,14 +92,6 @@ pub struct PcmMeta {
     /// formats and arbitrary-sized PCM packets. `0` means "unknown" (mock
     /// decoders, post-EOF flush chunks).
     pub source_bytes: u64,
-    /// Absolute byte offset of this chunk's source data within the input
-    /// stream, when the decoder reports it. Apple's `AudioFile` exposes
-    /// this via `AudioStreamPacketDescription.mStartOffset`; other
-    /// backends (Symphonia, Android `MediaExtractor`) do not surface
-    /// per-packet byte offsets through their public API and leave this
-    /// `None`. When present, downstream code can pin the chunk to an
-    /// exact byte range without recomputing rate × time.
-    pub source_byte_offset: Option<u64>,
 }
 
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
@@ -133,12 +133,6 @@ impl PcmChunk {
         Self { pcm, meta }
     }
 
-    /// Audio format specification.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.meta.spec
-    }
-
     /// Number of audio frames in this chunk.
     ///
     /// A frame contains one sample per channel.
@@ -148,10 +142,10 @@ impl PcmChunk {
         self.pcm.len().checked_div(channels).unwrap_or(0)
     }
 
-    /// Get reference to raw samples.
+    /// Audio format specification.
     #[must_use]
-    pub fn samples(&self) -> &[f32] {
-        &self.pcm
+    pub fn spec(&self) -> PcmSpec {
+        self.meta.spec
     }
 }
 
@@ -332,7 +326,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm.clone());
 
         assert_eq!(chunk.spec(), spec);
-        assert_eq!(chunk.samples(), &pcm[..]);
+        assert_eq!(&chunk.pcm[..], &pcm[..]);
     }
 
     #[kithara::test]
@@ -373,7 +367,7 @@ mod tests {
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = test_chunk(spec, pcm.clone());
 
-        let samples = chunk.samples();
+        let samples: &[f32] = &chunk.pcm;
         assert_eq!(samples.len(), 4);
         assert_eq!(samples, &pcm[..]);
     }

@@ -13,6 +13,7 @@ use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -147,23 +148,29 @@ fn app() -> Router {
 /// Expected duration of test.mp3 (ffprobe: 187.102041s).
 
 #[kithara::test(tokio)]
-#[case::sw_ext_hint("/test.mp3", Some("mp3"), false)]
-#[case::sw_ext("/test.mp3", None, false)]
-#[case::sw_no_ext_hint("/track/stream", Some("mp3"), false)]
-#[case::sw_no_ext("/track/stream", None, false)]
-#[case::hw_ext_hint("/test.mp3", Some("mp3"), true)]
-#[case::hw_no_ext("/track/stream", None, true)]
+#[case::sw_ext_hint("/test.mp3", Some("mp3"), DecoderBackend::Symphonia)]
+#[case::sw_ext("/test.mp3", None, DecoderBackend::Symphonia)]
+#[case::sw_no_ext_hint("/track/stream", Some("mp3"), DecoderBackend::Symphonia)]
+#[case::sw_no_ext("/track/stream", None, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw_ext_hint("/test.mp3", Some("mp3"), DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw_no_ext("/track/stream", None, DecoderBackend::Apple)
+)]
 async fn audio_file_mp3_decodes_with_duration(
     #[case] path: &str,
     #[case] hint: Option<&str>,
-    #[case] prefer_hardware: bool,
+    #[case] backend: DecoderBackend,
 ) {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url(path).into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
-    let mut config = AudioConfig::<File>::new(file_config).with_prefer_hardware(prefer_hardware);
+    let mut config = AudioConfig::<File>::new(file_config).with_decoder_backend(backend);
     if let Some(h) = hint {
         config = config.with_hint(h);
     }

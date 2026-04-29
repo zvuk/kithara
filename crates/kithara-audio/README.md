@@ -105,7 +105,7 @@ flowchart TB
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
     ST["Stream&lt;T&gt;<br/><i>Read + Seek</i>"]
-    DF["DecoderFactory<br/><i>Box&lt;dyn InnerDecoder&gt;</i>"]
+    DF["DecoderFactory<br/><i>Box&lt;dyn Decoder&gt;</i>"]
     SAS["StreamAudioSource<br/><i>format change, effects</i>"]
     AW["AudioWorker<br/><i>blocking thread, commands</i>"]
     KC["ringbuf<br/><i>lock-free, backpressure</i>"]

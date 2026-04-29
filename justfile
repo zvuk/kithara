@@ -77,12 +77,54 @@ doc:
 # --- tests ---
 
 # Run workspace tests via nextest.
-#   just test                 # whole workspace
+#
+# Backend features are activated automatically by `tests/Cargo.toml`:
+# `kithara-integration-tests` declares `[target.cfg(macos|ios).dependencies]`
+# with `kithara/apple` (and `target_os = "android"` with `kithara/android`),
+# which cargo's feature-unification then propagates to every workspace
+# member. So `cargo nextest run --workspace` already exercises:
+#   * macOS / iOS   → apple AudioToolbox + Symphonia software
+#   * Android       → Android MediaCodec + Symphonia software
+#   * Linux / other → Symphonia only
+# To verify each backend in isolation (no feature-unification crossover),
+# see `just test-decoders`.
+#
+#   just test                 # whole workspace, all available backends
 #   just test -p kithara-hls  # one package
 #   just test --profile ci    # CI nextest profile
 #   just test EXPR            # nextest filter expression
 test *ARGS:
     cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+
+# Run the cross-decoder protocol suite once per backend in isolation so a
+# regression in one backend's feature-gating cannot hide behind feature
+# unification (e.g. an apple-only build still passing because symphonia is
+# silently picking up the slack on macOS). Skipped backends are no-ops.
+test-decoders *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run() {
+        echo "===> cargo nextest with features: $1"
+        cargo nextest run --cargo-profile test-release \
+            -p kithara-decode --no-default-features --features "$1" \
+            --test decoder_protocol {{ARGS}}
+    }
+    # Software-only Symphonia path (cross-platform).
+    run "symphonia"
+    case "$(uname -s)" in
+        Darwin)
+            # Apple AudioToolbox in isolation (no Symphonia fallback).
+            run "apple"
+            # Combined (default `just test` shape) — sanity check.
+            run "apple,symphonia"
+            ;;
+        Linux)
+            if [[ "$(uname -o 2>/dev/null || true)" == "Android" ]]; then
+                run "android"
+                run "android,symphonia"
+            fi
+            ;;
+    esac
 
 # Doc-tests (cargo nextest doesn't run them).
 test-doc:

@@ -16,9 +16,9 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SeekTrim {
-    pub(crate) trim_frames: usize,
-    pub(crate) output_frame_offset: u64,
     pub(crate) output_timestamp_us: i64,
+    pub(crate) output_frame_offset: u64,
+    pub(crate) trim_frames: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +56,12 @@ pub(crate) fn pcm_meta_from_pts_us(
         frame_offset,
         timestamp,
         end_timestamp,
-        segment_index: stream_ctx.and_then(StreamContext::segment_index),
-        variant_index: stream_ctx.and_then(StreamContext::variant_index),
         epoch,
         frames,
         source_bytes,
         source_byte_offset,
+        segment_index: stream_ctx.and_then(StreamContext::segment_index),
+        variant_index: stream_ctx.and_then(StreamContext::variant_index),
     })
 }
 

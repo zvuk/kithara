@@ -44,6 +44,15 @@ pub enum DecodeError {
     #[error("Probe failed: could not detect codec")]
     ProbeFailed,
 
+    /// The caller selected a backend that is not compiled in for the
+    /// current target/feature combination (e.g. `DecoderBackend::Apple`
+    /// on Linux, or `DecoderBackend::Symphonia` without the `symphonia`
+    /// feature). Distinct from [`UnsupportedCodec`](Self::UnsupportedCodec)
+    /// (codec/container the backend cannot handle): `BackendUnavailable`
+    /// means the backend itself is absent from the binary.
+    #[error("Backend unavailable: {backend}")]
+    BackendUnavailable { backend: &'static str },
+
     /// A seek interrupted the decode operation. Not a real error —
     /// the caller should check for pending seeks and retry.
     #[error("Interrupted by seek")]
@@ -86,7 +95,7 @@ where
     }
 
     #[cfg(feature = "symphonia")]
-    if let Some(hit) = crate::symphonia::error_chain::inspect(err, check_io, check_leaf) {
+    if let Some(hit) = crate::symphonia::echain::inspect(err, check_io, check_leaf) {
         return hit;
     }
 

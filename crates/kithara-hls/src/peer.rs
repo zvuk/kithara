@@ -15,6 +15,7 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio,
 };
+use kithara_probes::kithara;
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
@@ -63,6 +64,7 @@ pub(crate) struct HlsPeer {
 
 impl HlsPeer {
     pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
+        kithara_probes::register_probes();
         Self {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
@@ -381,8 +383,33 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
         return DemandResult::None;
     };
 
-    if req.seek_epoch != active_before {
-        reset_for_new_epoch(state, &req);
+    dispatch_seek_demand(
+        state,
+        cx,
+        req.seek_epoch,
+        active_before,
+        req.segment_index,
+        req.variant,
+        req,
+    )
+}
+
+/// Decide what to do with a demand request just snapshotted off the
+/// scheduler's demand slot. The probe records the (`seek_epoch`,
+/// `active_before`, `segment_index`, `variant`) tuple at the moment the
+/// scheduler chose between an epoch reset and a same-epoch resolution.
+#[kithara::probe(seek_epoch, active_before, segment_index, variant)]
+fn dispatch_seek_demand(
+    state: &mut HlsState,
+    cx: &mut Context<'_>,
+    seek_epoch: u64,
+    active_before: u64,
+    segment_index: usize,
+    variant: usize,
+    req: crate::coord::SegmentRequest,
+) -> DemandResult {
+    if seek_epoch != active_before {
+        seek_epoch_reset(state, seek_epoch, segment_index, variant);
         cx.waker().wake_by_ref();
         return DemandResult::ResetAndPend;
     }
@@ -390,26 +417,31 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     resolve_same_epoch_demand(&mut state.scheduler, &req)
 }
 
-fn reset_for_new_epoch(state: &mut HlsState, req: &crate::coord::SegmentRequest) {
+/// Cancel the active seek epoch and rebuild scheduler state for the
+/// new one. The probe captures the moment the prior in-flight fetches
+/// are invalidated and the cursor is repositioned for the seek target.
+#[kithara::probe(seek_epoch, segment_index, variant)]
+fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize, variant: usize) {
     let sched = &mut state.scheduler;
     state.epoch_cancel.cancel();
     state.epoch_cancel = CancellationToken::new();
     sched.demand_throttle_until = None;
+    let _ = seek_epoch;
 
     let (is_variant_switch, is_midstream_switch) =
-        sched.classify_variant_transition(req.variant, req.segment_index);
+        sched.classify_variant_transition(variant, segment_index);
     sched.handle_midstream_switch(is_midstream_switch);
-    if let Some(sizes) = sched.playlist_state.segment_sizes(req.variant) {
+    if let Some(sizes) = sched.playlist_state.segment_sizes(variant) {
         sched
             .segments
             .lock_sync()
-            .set_expected_sizes(req.variant, sizes);
+            .set_expected_sizes(variant, sizes);
     }
     if is_variant_switch {
-        sched.download_variant = req.variant;
+        sched.download_variant = variant;
     }
-    let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(req.variant);
-    sched.apply_cached_segment_progress(req.variant, cached_count, cached_end_offset);
+    let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(variant);
+    sched.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
 }
 
 fn resolve_same_epoch_demand(
@@ -643,8 +675,7 @@ fn build_batch(
             demand_segment = ?demand_segment,
             "build_batch: emitting FetchCmd"
         );
-        // Build self-contained FetchCmd for network download.
-        let cmd = build_fetch_cmd(
+        let cmd = emit_fetch_cmd(
             state,
             state_arc,
             variant,
@@ -654,12 +685,6 @@ fn build_batch(
             plan_need_init,
         );
         cmds.push(cmd);
-        state
-            .scheduler
-            .in_flight_segments
-            .insert((variant, seg_idx));
-
-        state.scheduler.advance_current_segment_index(seg_idx + 1);
 
         if is_demanded {
             break;
@@ -667,6 +692,39 @@ fn build_batch(
     }
 
     cmds
+}
+
+/// Build a `FetchCmd` for `(variant, segment_index)`, mark it
+/// in-flight in the scheduler, and advance the scheduler cursor past
+/// it. The probe records the emit fact (`seek_epoch`, `segment_index`,
+/// `variant`) — the scheduler decision the test suite asserts on.
+#[kithara::probe(seek_epoch, segment_index, variant)]
+fn emit_fetch_cmd(
+    state: &mut HlsState,
+    state_arc: &Arc<Mutex<Option<HlsState>>>,
+    variant: usize,
+    segment_index: usize,
+    seek_epoch: u64,
+    prepared: PreparedMedia,
+    plan_need_init: bool,
+) -> FetchCmd {
+    let cmd = build_fetch_cmd(
+        state,
+        state_arc,
+        variant,
+        segment_index,
+        seek_epoch,
+        prepared,
+        plan_need_init,
+    );
+    state
+        .scheduler
+        .in_flight_segments
+        .insert((variant, segment_index));
+    state
+        .scheduler
+        .advance_current_segment_index(segment_index + 1);
+    cmd
 }
 
 fn skip_planned_segment(

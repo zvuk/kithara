@@ -15,6 +15,7 @@ ignores:
   - crates/kithara-wasm-macros/**
   - crates/kithara-hang-detector-macros/**
   - crates/kithara-test-macros/**
+  - crates/kithara-probe-macros/**
 rule:
   any:
     - kind: function_item

@@ -9,6 +9,7 @@ use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
+use kithara_probes::kithara;
 use kithara_stream::Timeline;
 use tracing::trace;
 
@@ -286,8 +287,25 @@ impl HlsSource {
             via,
             "queue_segment_request_for_offset: enqueue"
         );
-        self.push_segment_request(variant, segment_index, seek_epoch);
-        true
+        self.queue_resolved_segment_request(seek_epoch, segment_index, variant, range_start)
+    }
+
+    /// Hand a resolved `(variant, segment_index)` pair off to the
+    /// coord's demand slot for the given seek epoch. The probe records
+    /// the (`seek_epoch`, `segment_index`, `offset`) tuple at the
+    /// precise point the offset-driven path commits a request to the
+    /// queue, so `probe_capture` consumers can match this against the
+    /// scheduler's `fetch_cmd_emitted` for the same epoch+segment.
+    #[kithara::probe(seek_epoch, segment_index, offset)]
+    fn queue_resolved_segment_request(
+        &self,
+        seek_epoch: u64,
+        segment_index: SegmentIndex,
+        variant: VariantIndex,
+        offset: u64,
+    ) -> bool {
+        let _ = offset;
+        self.push_segment_request(variant, segment_index, seek_epoch)
     }
 
     fn find_segment_for_offset(

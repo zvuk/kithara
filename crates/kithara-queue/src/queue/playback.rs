@@ -136,6 +136,7 @@ impl Queue {
     /// Forwards `PlayError` from `PlayerImpl::tick`.
     pub fn tick(&self) -> Result<(), QueueError> {
         self.player.tick()?;
+        self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
         self.maybe_arm_crossfade();

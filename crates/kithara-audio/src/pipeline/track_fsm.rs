@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use kithara_decode::{DecodeError, InnerDecoder};
+use kithara_decode::{DecodeError, Decoder};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
 use crate::pipeline::{fetch::Fetch, seek_location::SeekLocation};
@@ -180,7 +180,7 @@ pub(crate) enum TrackFailure {
 /// the old session remains untouched.
 pub(crate) struct DecoderSession {
     pub base_offset: u64,
-    pub decoder: Box<dyn InnerDecoder>,
+    pub decoder: Box<dyn Decoder>,
     pub media_info: Option<MediaInfo>,
 }
 
@@ -326,7 +326,7 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 mod tests {
     use std::sync::{Arc, atomic::AtomicBool};
 
-    use kithara_decode::{PcmSpec, mock::infinite_inner_decoder_loose};
+    use kithara_decode::{PcmSpec, mock::infinite_decoder_loose};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -649,7 +649,7 @@ mod tests {
             .with_channels(2)
             .with_sample_rate(44100);
         let stop = Arc::new(AtomicBool::new(false));
-        let (decoder, _logs) = infinite_inner_decoder_loose(PcmSpec::default(), stop);
+        let (decoder, _logs) = infinite_decoder_loose(PcmSpec::default(), stop);
         let session = DecoderSession {
             base_offset: 1024,
             decoder,

@@ -408,6 +408,18 @@ impl PlayerImpl {
         }
     }
 
+    /// Move `current_index` past the end of the queue, marking that
+    /// playback has consumed the last entry and there is no current item.
+    /// Used by `Queue::advance_to_next` when navigation runs out of
+    /// playable slots so `current()` reports `None` instead of pinning
+    /// the just-finished track forever.
+    pub fn finish_queue(&self) {
+        let len = self.items.lock_sync().len();
+        self.current_index.store(len, Ordering::Relaxed);
+        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        debug!(new_index = len, "queue finished");
+    }
+
     /// Get current player status.
     pub fn status(&self) -> PlayerStatus {
         *self.status.lock_sync()

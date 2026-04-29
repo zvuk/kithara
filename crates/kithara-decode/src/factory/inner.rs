@@ -10,25 +10,71 @@ use std::{
 
 use derivative::Derivative;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{MediaInfo, SharedHooks, StreamContext};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SharedHooks, StreamContext};
 
-use super::{
-    hardware::{HardwareAttempt, try_hardware_decoder},
-    probe::{
-        CodecSelector, ProbeHint, container_from_extension, probe_codec, resolve_codec_container,
-    },
+use super::probe::{
+    CodecSelector, ProbeHint, container_from_extension, probe_codec, resolve_codec_container,
 };
 use crate::{
-    InnerDecoder,
-    backend::{BoxedSource, HardwareBackend, current::Current},
+    Decoder,
+    backend::{Backend, BoxedSource},
     error::{DecodeError, DecodeResult},
     hooks::HookedDecoder,
 };
+
+/// Explicit backend selection for [`DecoderFactory`].
+///
+/// Replaces the legacy boolean `prefer_hardware` flag with a typed
+/// enum so callers spell out which backend they want. Failures of the
+/// selected backend are terminal — there is no fallback chain.
+///
+/// Variants are gated on cargo features: a hardware variant exists in
+/// the type only when its platform feature is enabled (and only on a
+/// matching `target_os`). Picking `DecoderBackend::Apple` on Linux is
+/// therefore a compile error, not a runtime `BackendUnavailable`.
+///
+/// Default = [`DecoderBackend::Symphonia`]: the software path is
+/// cross-platform and capability-complete (gapless seek, full
+/// `StreamContext` propagation). Hardware backends (`Apple`/`Android`)
+/// are opt-in — there is no runtime fallback.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecoderBackend {
+    /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    Apple,
+    /// Android `MediaCodec` (Android, requires the `android` feature).
+    #[cfg(all(feature = "android", target_os = "android"))]
+    Android,
+    /// Symphonia software decoder (cross-platform, requires the
+    /// `symphonia` feature).
+    #[cfg(feature = "symphonia")]
+    #[default]
+    Symphonia,
+}
+
+impl std::fmt::Display for DecoderBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            Self::Apple => f.write_str("apple"),
+            #[cfg(all(feature = "android", target_os = "android"))]
+            Self::Android => f.write_str("android"),
+            #[cfg(feature = "symphonia")]
+            Self::Symphonia => f.write_str("symphonia"),
+        }
+    }
+}
 
 /// Configuration for `DecoderFactory`.
 #[derive(Clone, Derivative)]
 #[derivative(Default)]
 pub struct DecoderConfig {
+    /// Which decoder backend to use. See [`DecoderBackend`]. Default
+    /// is [`DecoderBackend::Auto`].
+    pub backend: DecoderBackend,
+    /// Handle for dynamic byte length updates (HLS).
+    pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte buffer pool override.
     ///
     /// Used by backends that need a reusable raw byte buffer (e.g. the
@@ -36,39 +82,32 @@ pub struct DecoderConfig {
     /// slices packets out without per-packet allocations).  When `None`,
     /// the global `kithara_bufpool::byte_pool()` is used.
     pub byte_pool: Option<BytePool>,
-    /// Handle for dynamic byte length updates (HLS).
-    pub byte_len_handle: Option<Arc<AtomicU64>>,
+    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    ///
+    /// Used when the container format is not specified, as a hint for auto-detection.
+    pub hint: Option<String>,
     /// Reader-side hooks injected into the resulting decoder via
     /// [`HookedDecoder`]. The factory wraps the inner decoder in
     /// `HookedDecoder` whenever this is `Some`. `None` keeps the
     /// inner decoder unwrapped (mock sources, tests).
     pub hooks: Option<SharedHooks>,
-    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
-    ///
-    /// Used when the container format is not specified, as a hint for auto-detection.
-    pub hint: Option<String>,
     /// Optional PCM buffer pool override.
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub pcm_pool: Option<PcmPool>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
-    /// Epoch counter for decoder recreation tracking.
-    pub epoch: u64,
     /// Enable gapless playback.
     #[derivative(Default(value = "true"))]
     pub gapless: bool,
-    /// Route decoding through the hardware backend (Apple `AudioToolbox`
-    /// or Android `MediaCodec`). When `false`, the factory uses Symphonia
-    /// (requires the `symphonia` feature). There is no fallback between
-    /// the two paths.
-    pub prefer_hardware: bool,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
 }
 
 pub(super) fn wrap_with_hooks(
-    inner: Box<dyn InnerDecoder>,
+    inner: Box<dyn Decoder>,
     hooks: Option<SharedHooks>,
-) -> Box<dyn InnerDecoder> {
+) -> Box<dyn Decoder> {
     match hooks {
         Some(hooks) => Box::new(HookedDecoder::new(inner, hooks)),
         None => inner,
@@ -77,11 +116,12 @@ pub(super) fn wrap_with_hooks(
 
 /// Factory for creating decoders with a single, strict backend selection.
 ///
-/// Backend matrix:
-/// - `prefer_hardware == true` → hardware backend (Apple/Android). Fails if
-///   the codec/container is unsupported or decoder construction errors.
-/// - `prefer_hardware == false` → Symphonia (requires `feature = "symphonia"`).
-///   Without the feature the call fails with `UnsupportedCodec`.
+/// Backend matrix (driven by [`DecoderConfig::backend`]):
+/// - [`DecoderBackend::Apple`] / [`DecoderBackend::Android`] — hardware
+///   backend, only present in the type when the matching feature and
+///   `target_os` are active. No runtime fallback.
+/// - [`DecoderBackend::Symphonia`] — software backend, present when
+///   the `symphonia` feature is enabled. No runtime fallback.
 pub struct DecoderFactory;
 
 impl DecoderFactory {
@@ -90,40 +130,12 @@ impl DecoderFactory {
         source: R,
         selector: &CodecSelector,
         config: &DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
         let source: BoxedSource = Box::new(source);
-        Self::create_with_backend::<Current>(source, selector, config)
-    }
-
-    /// Create decoder from `MediaInfo` (kithara-audio entry point).
-    ///
-    /// Extracts codec from `MediaInfo` and creates the appropriate decoder.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if codec cannot be determined or decoder creation fails.
-    /// No fallback — a failure is terminal.
-    pub fn create_from_media_info<R>(
-        source: R,
-        media_info: &MediaInfo,
-        config: &DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        tracing::debug!(?media_info, "create_from_media_info called");
-
-        let hint = ProbeHint {
-            codec: media_info.codec,
-            container: media_info.container,
-            extension: None,
-            mime: None,
-        };
-
-        Self::create(source, &CodecSelector::Probe(hint), config)
+        Self::dispatch_backend(source, selector, config)
     }
 
     /// Recreate a decoder on HLS variant switch / format change.
@@ -148,7 +160,7 @@ impl DecoderFactory {
         make_source: F,
         media_info: &MediaInfo,
         config: &DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
         F: Fn() -> R,
@@ -160,6 +172,34 @@ impl DecoderFactory {
                 "create_from_media_info failed during recreate"
             );
         })
+    }
+
+    /// Create decoder from `MediaInfo` (kithara-audio entry point).
+    ///
+    /// Extracts codec from `MediaInfo` and creates the appropriate decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if codec cannot be determined or decoder creation fails.
+    /// No fallback — a failure is terminal.
+    pub fn create_from_media_info<R>(
+        source: R,
+        media_info: &MediaInfo,
+        config: &DecoderConfig,
+    ) -> DecodeResult<Box<dyn Decoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        tracing::debug!(?media_info, "create_from_media_info called");
+
+        let hint = ProbeHint {
+            codec: media_info.codec,
+            container: media_info.container,
+            extension: None,
+            mime: None,
+        };
+
+        Self::create(source, &CodecSelector::Probe(hint), config)
     }
 
     /// Create decoder from a file-extension hint.
@@ -177,7 +217,7 @@ impl DecoderFactory {
         source: R,
         hint: Option<&str>,
         config: DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -191,50 +231,78 @@ impl DecoderFactory {
         Self::create(source, &CodecSelector::Probe(probe_hint), &config)
     }
 
-    pub(super) fn create_with_backend<B: HardwareBackend>(
+    pub(super) fn dispatch_backend(
         source: BoxedSource,
         selector: &CodecSelector,
         config: &DecoderConfig,
-    ) -> DecodeResult<Box<dyn InnerDecoder>> {
+    ) -> DecodeResult<Box<dyn Decoder>> {
         let (codec, container) = resolve_codec_container(selector)?;
 
         tracing::debug!(
             ?codec,
             ?container,
-            prefer_hardware = config.prefer_hardware,
+            backend = ?config.backend,
             "DecoderFactory::create called"
         );
 
-        let inner = if config.prefer_hardware {
-            match try_hardware_decoder::<B>(source, codec, container, config) {
-                HardwareAttempt::Decoded(decoder) => Ok(decoder),
-                HardwareAttempt::Skipped => {
-                    tracing::warn!(
-                        ?codec,
-                        ?container,
-                        "hardware backend does not support codec/container; \
-                         no fallback when prefer_hardware=true"
-                    );
-                    Err(DecodeError::UnsupportedCodec(codec))
-                }
-                HardwareAttempt::Failed(err) => Err(err),
-            }
-        } else {
+        let inner = match config.backend {
+            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            DecoderBackend::Apple => create_apple(source, codec, container, config),
+            #[cfg(all(feature = "android", target_os = "android"))]
+            DecoderBackend::Android => create_android(source, codec, container, config),
             #[cfg(feature = "symphonia")]
-            {
-                crate::symphonia::create_from_boxed(source, codec, container, config)
-            }
-            #[cfg(not(feature = "symphonia"))]
-            {
-                let _ = (source, container);
-                tracing::warn!(
-                    ?codec,
-                    "symphonia feature disabled; software decoder unavailable"
-                );
-                Err(DecodeError::UnsupportedCodec(codec))
-            }
+            DecoderBackend::Symphonia => create_symphonia(source, codec, container, config),
         }?;
 
         Ok(wrap_with_hooks(inner, config.hooks.clone()))
     }
+}
+
+fn dispatch<B: Backend>(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+    backend_name: &'static str,
+) -> DecodeResult<Box<dyn Decoder>> {
+    if !B::supports(codec, container) {
+        tracing::warn!(
+            backend = backend_name,
+            ?codec,
+            ?container,
+            "backend does not support codec/container — no fallback"
+        );
+        return Err(DecodeError::UnsupportedCodec(codec));
+    }
+    Ok(Box::new(B::try_create(source, config, codec, container)?))
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn create_apple(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    dispatch::<crate::apple::AppleDecoder>(source, codec, container, config, "Apple")
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn create_android(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    dispatch::<crate::android::AndroidDecoder>(source, codec, container, config, "Android")
+}
+
+#[cfg(feature = "symphonia")]
+fn create_symphonia(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    dispatch::<crate::symphonia::SymphoniaDecoder>(source, codec, container, config, "Symphonia")
 }

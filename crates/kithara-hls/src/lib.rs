@@ -1,4 +1,8 @@
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the `probes` module can locally
+// `#[allow(unsafe_code)]` for the inline asm emitted by `usdt::provider!`
+// when the `usdt-probes` feature is enabled. Production code outside
+// that module remains unsafe-free.
+#![deny(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
 #![allow(
     unreachable_pub,

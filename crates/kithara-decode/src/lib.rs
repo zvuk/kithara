@@ -44,12 +44,12 @@ mod apple;
 // Error types
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
-pub use factory::{DecoderConfig, DecoderFactory};
+pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 // Reader-side hook wrapper (the trait + signals live in `kithara-stream`).
 pub use hooks::HookedDecoder;
 // Public traits
 pub use traits::{
-    DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InnerDecoder, InputReadOutcome,
+    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

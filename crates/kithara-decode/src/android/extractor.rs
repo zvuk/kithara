@@ -6,34 +6,34 @@ use kithara_stream::AudioCodec;
 use tracing::debug;
 
 use super::{
+    aformat::OwnedFormat,
     error::AndroidBackendError,
     ffi::{self, KEY_CHANNEL_COUNT, KEY_DURATION_US, KEY_MIME, KEY_SAMPLE_RATE, MEDIA_STATUS_OK},
     format::track_mime_matches_codec,
-    media_format::OwnedFormat,
     source::OwnedMediaDataSource,
 };
 
 pub(crate) struct SelectedTrack {
-    pub(crate) index: usize,
-    pub(crate) mime: String,
     pub(crate) duration: Option<Duration>,
+    pub(crate) mime: String,
+    pub(crate) index: usize,
 }
 
 pub(crate) struct ExtractorBootstrap {
-    pub(crate) media_source: OwnedMediaDataSource,
     pub(crate) extractor: OwnedExtractor,
+    pub(crate) media_source: OwnedMediaDataSource,
     pub(crate) selected_track: SelectedTrack,
 }
 
 pub(crate) struct CompressedSample<'a> {
     pub(crate) bytes: &'a [u8],
-    pub(crate) presentation_time_us: i64,
     /// Byte offset of this sample within the source file, when the
     /// extractor reports it via the `sample-file-offset` key on
     /// `AMediaExtractor_getSampleFormat` (API 28+). `None` on earlier
     /// API levels or when the underlying container does not provide
     /// a per-sample byte offset.
     pub(crate) byte_offset: Option<u64>,
+    pub(crate) presentation_time_us: i64,
 }
 
 pub(crate) struct OwnedExtractor {
@@ -43,32 +43,33 @@ pub(crate) struct OwnedExtractor {
 unsafe impl Send for OwnedExtractor {}
 
 impl OwnedExtractor {
+    pub(crate) fn advance(&self) -> Result<bool, AndroidBackendError> {
+        Ok(unsafe { ffi::AMediaExtractor_advance(self.raw()) })
+    }
+
+    /// Return the byte offset of the extractor's current sample if
+    /// `AMediaExtractor_getSampleFormat` succeeds and reports
+    /// `sample-file-offset`. Failures and missing keys both yield
+    /// `None` — the offset is best-effort metadata.
+    fn current_sample_byte_offset(&self) -> Option<u64> {
+        let mut format: *mut ffi::AMediaFormat = ptr::null_mut();
+        let status = unsafe { ffi::AMediaExtractor_getSampleFormat(self.raw(), &mut format) };
+        if status != MEDIA_STATUS_OK || format.is_null() {
+            return None;
+        }
+        let mut value: i64 = 0;
+        let found = unsafe {
+            ffi::AMediaFormat_getInt64(format, ffi::KEY_SAMPLE_FILE_OFFSET.as_ptr(), &mut value)
+        };
+        unsafe { ffi::AMediaFormat_delete(format) };
+        if !found {
+            return None;
+        }
+        u64::try_from(value).ok()
+    }
+
     pub(crate) fn raw(&self) -> *mut ffi::AMediaExtractor {
         self.raw.as_ptr()
-    }
-
-    pub(crate) fn track_format(&self, index: usize) -> Result<OwnedFormat, AndroidBackendError> {
-        let raw = NonNull::new(unsafe { ffi::AMediaExtractor_getTrackFormat(self.raw(), index) })
-            .ok_or_else(|| {
-            AndroidBackendError::operation(
-                "extractor-track-format",
-                format!("track={index} format was null"),
-            )
-        })?;
-        Ok(OwnedFormat::from_raw(raw))
-    }
-
-    pub(crate) fn seek_to(&self, target_us: i64) -> Result<(), AndroidBackendError> {
-        let status = unsafe {
-            ffi::AMediaExtractor_seekTo(self.raw(), target_us, ffi::SEEK_MODE_PREVIOUS_SYNC)
-        };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "extractor-seek",
-                format!("status={status}"),
-            ));
-        }
-        Ok(())
     }
 
     pub(crate) fn read_sample<'a>(
@@ -114,35 +115,34 @@ impl OwnedExtractor {
         })?;
 
         Ok(Some(CompressedSample {
-            bytes: &buffer[..bytes_read],
             presentation_time_us,
             byte_offset,
+            bytes: &buffer[..bytes_read],
         }))
     }
 
-    /// Return the byte offset of the extractor's current sample if
-    /// `AMediaExtractor_getSampleFormat` succeeds and reports
-    /// `sample-file-offset`. Failures and missing keys both yield
-    /// `None` — the offset is best-effort metadata.
-    fn current_sample_byte_offset(&self) -> Option<u64> {
-        let mut format: *mut ffi::AMediaFormat = ptr::null_mut();
-        let status = unsafe { ffi::AMediaExtractor_getSampleFormat(self.raw(), &mut format) };
-        if status != MEDIA_STATUS_OK || format.is_null() {
-            return None;
-        }
-        let mut value: i64 = 0;
-        let found = unsafe {
-            ffi::AMediaFormat_getInt64(format, ffi::KEY_SAMPLE_FILE_OFFSET.as_ptr(), &mut value)
+    pub(crate) fn seek_to(&self, target_us: i64) -> Result<(), AndroidBackendError> {
+        let status = unsafe {
+            ffi::AMediaExtractor_seekTo(self.raw(), target_us, ffi::SEEK_MODE_PREVIOUS_SYNC)
         };
-        unsafe { ffi::AMediaFormat_delete(format) };
-        if !found {
-            return None;
+        if status != MEDIA_STATUS_OK {
+            return Err(AndroidBackendError::operation(
+                "extractor-seek",
+                format!("status={status}"),
+            ));
         }
-        u64::try_from(value).ok()
+        Ok(())
     }
 
-    pub(crate) fn advance(&self) -> Result<bool, AndroidBackendError> {
-        Ok(unsafe { ffi::AMediaExtractor_advance(self.raw()) })
+    pub(crate) fn track_format(&self, index: usize) -> Result<OwnedFormat, AndroidBackendError> {
+        let raw = NonNull::new(unsafe { ffi::AMediaExtractor_getTrackFormat(self.raw(), index) })
+            .ok_or_else(|| {
+            AndroidBackendError::operation(
+                "extractor-track-format",
+                format!("track={index} format was null"),
+            )
+        })?;
+        Ok(OwnedFormat::from_raw(raw))
     }
 }
 

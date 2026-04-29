@@ -34,18 +34,17 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    temp_dir,
+    probe_capture, temp_dir,
 };
 use tokio::time::sleep;
 use url::Url;
-
-use crate::common::decoder_backend::DecoderBackend;
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -184,14 +183,24 @@ struct PostSeekObservation {
     target_started_wait: Option<Duration>,
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
 async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
+
+    // Install probe recorder BEFORE any Downloader is created. Captures
+    // USDT-paired tracing events from `kithara-stream` and `kithara-hls`
+    // (target = "kithara_stream_probe" / "kithara_hls_probe", any
+    // `*_probe` suffix is matched by `probe_capture::ProbeLayer`).
+    // Defense-in-depth: the four EventBus assertions below can each be
+    // silenced by a `broadcast:: Lagged`, but probes fire at the
+    // decision itself and cannot be dropped by the bus. `#[serial]`
+    // keeps a single test in the process-wide recorder window.
+    let probe_recorder = probe_capture::install();
 
     let helper = TestServerHelper::new().await;
     let url = build_hls_with_delay(&helper).await;
@@ -207,7 +216,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
     cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
     queue.select(track_id, Transition::None).expect("select");
@@ -252,7 +261,93 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     tick_handle.abort();
 
-    // ── ASSERTIONS ───────────────────────────────────────────────────
+    // ── PROBE-LEVEL PRE-ASSERTIONS ─────────────────────────────────
+    // Run probe assertions FIRST so a downstream EventBus panic does
+    // not hide the lower-layer signal. Probes observe scheduler
+    // decisions directly; EventBus events can be dropped when the
+    // broadcast subscriber lags.
+
+    let probe_events = probe_recorder.snapshot();
+    let total_probes = probe_events.len();
+    assert!(
+        total_probes > 0,
+        "[{backend:?}, probe] zero probe events captured — `usdt-probes` \
+         feature not enabled in test build, or probe sites missing"
+    );
+
+    // PROBE-A: `seek_epoch_reset` fires after seek_at. If this assertion
+    //          fails, the scheduler never observed a new seek epoch —
+    //          the bug is upstream of the FetchCmd-emit logic.
+    let post_seek_resets: Vec<_> = probe_events
+        .iter()
+        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("seek_epoch_reset"))
+        .collect();
+    assert!(
+        !post_seek_resets.is_empty(),
+        "[{backend:?}, probe] hls_probe::seek_epoch_reset never fired after \
+         queue.seek — scheduler did not observe a new epoch (total probes = {total_probes})"
+    );
+    let new_epoch = post_seek_resets
+        .iter()
+        .filter_map(|e| e.u64("seek_epoch"))
+        .max()
+        .expect("seek_epoch field present on seek_epoch_reset probe");
+
+    // PROBE-B (mirror of EventBus assert C, immune to broadcast Lagged):
+    //          NO `fetch_cmd_emitted` for prefix segments in the new
+    //          epoch. The scheduler must NOT walk through prefix
+    //          segments after the seek demand resets the cursor.
+    let post_seek_prefix_emissions: Vec<_> = probe_events
+        .iter()
+        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
+        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| {
+            e.u64("segment_index").is_some_and(|s| {
+                let seg = usize::try_from(s).unwrap_or(usize::MAX);
+                seg + Consts::WARMUP_TOLERANCE < nominal_target_segment
+            })
+        })
+        .collect();
+    assert!(
+        post_seek_prefix_emissions.is_empty(),
+        "[bug, {backend:?}, probe-level defense-in-depth] {} `fetch_cmd_emitted` \
+         events for prefix segments in the new epoch ({new_epoch}) after seek to \
+         nominal segment {nominal_target_segment} — scheduler walked through prefix \
+         despite cursor reset. Sample seg indices: {:?}",
+        post_seek_prefix_emissions.len(),
+        post_seek_prefix_emissions
+            .iter()
+            .take(5)
+            .filter_map(|e| e.u64("segment_index"))
+            .collect::<Vec<_>>(),
+    );
+
+    // PROBE-C: target segment's FetchCmd was actually emitted in the
+    //          new epoch. Together with PROBE-B, this asserts the
+    //          scheduler emits exactly the right thing — not just
+    //          "nothing wrong" but "the right call did fire".
+    let target_emissions: Vec<_> = probe_events
+        .iter()
+        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
+        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| {
+            e.u64("segment_index").is_some_and(|s| {
+                let seg = usize::try_from(s).unwrap_or(0);
+                seg + Consts::WARMUP_TOLERANCE >= nominal_target_segment
+            })
+        })
+        .collect();
+    assert!(
+        !target_emissions.is_empty(),
+        "[{backend:?}, probe] no `fetch_cmd_emitted` for target segment {nominal_target_segment} \
+         (or near it within WARMUP_TOLERANCE) in the new epoch ({new_epoch}) — \
+         scheduler did not emit a FetchCmd for the seek target"
+    );
+
+    // ── EVENTBUS ASSERTIONS (existing contract, kept verbatim) ──────
 
     // Ассерт A: ReaderSeek прилетел и landed near the target segment.
     //           Подтверждает что декодер реально дёрнул Seek::seek.

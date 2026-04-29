@@ -7,9 +7,7 @@ use std::{
 
 use kithara_abr::{AbrMode, AbrSettings};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
-#[cfg(target_arch = "wasm32")]
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(target_arch = "wasm32")]
 use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
 
@@ -145,9 +143,26 @@ pub fn setup_tracing_with_filter(directives: &str) {
 pub fn init_tracing(filter: EnvFilter) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(filter)
+        use tracing_subscriber::Layer as _;
+
+        // Compose fmt + probe layers BEFORE calling try_init: a
+        // separate `set_global_default` for the probe layer would
+        // race the fmt layer's init (`try_init` succeeds for whoever
+        // wins, the loser gets a `SetGlobalDefault` error and probe
+        // capture is silently dropped). Stacking them in one
+        // subscriber guarantees both layers are active.
+        //
+        // The `EnvFilter` is attached to the fmt layer only — probe
+        // events (target ends with `_probe`, e.g. `"kithara_hls_probe"`) are emitted at
+        // TRACE level, which the default fmt filter ("warn") would
+        // otherwise drop before they reach our probe layer.
+        let fmt_layer = tracing_subscriber::fmt::layer()
             .with_test_writer()
+            .with_filter(filter);
+        let probe_layer = crate::probe_capture::probe_layer();
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(probe_layer)
             .try_init();
     }
 

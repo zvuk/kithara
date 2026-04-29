@@ -12,7 +12,6 @@ pub(crate) const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
 pub(crate) const PCM_ENCODING_16BIT: i32 = 2;
 pub(crate) const PCM_ENCODING_FLOAT: i32 = 4;
 pub(crate) const SEEK_MODE_PREVIOUS_SYNC: u32 = 0;
-pub(crate) const MIN_HARDWARE_API_LEVEL: u32 = 28;
 
 pub(crate) const KEY_MIME: &CStr = c"mime";
 pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
@@ -220,6 +219,8 @@ pub(crate) fn current_api_level() -> Option<u32> {
 
 #[must_use]
 pub(crate) fn api_level_allows_hardware(api_level: Option<u32>) -> bool {
+    /// Minimum Android API level that supports the hardware decoder path.
+    const MIN_HARDWARE_API_LEVEL: u32 = 28;
     api_level.is_some_and(|level| level >= MIN_HARDWARE_API_LEVEL)
 }
 
@@ -244,6 +245,9 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
+        // mirrors `MIN_HARDWARE_API_LEVEL` defined inside
+        // `api_level_allows_hardware`.
+        const MIN_HARDWARE_API_LEVEL: u32 = 28;
         assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
         assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));
     }

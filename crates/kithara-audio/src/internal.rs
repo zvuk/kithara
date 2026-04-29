@@ -69,7 +69,7 @@ pub mod source {
     };
 
     use delegate::delegate;
-    use kithara_decode::{InnerDecoder, PcmChunk};
+    use kithara_decode::{Decoder, PcmChunk};
     use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
@@ -134,7 +134,7 @@ pub mod source {
     }
 
     pub type DecoderFactory<T> =
-        Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
+        Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
     pub struct StreamAudioSource<T: StreamType>(crate::pipeline::source::StreamAudioSource<T>);
 
@@ -155,7 +155,7 @@ pub mod source {
 
     pub fn new_stream_audio_source<T: StreamType>(
         shared_stream: SharedStream<T>,
-        decoder: Box<dyn InnerDecoder>,
+        decoder: Box<dyn Decoder>,
         decoder_factory: DecoderFactory<T>,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,

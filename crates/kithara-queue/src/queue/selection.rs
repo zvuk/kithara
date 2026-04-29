@@ -29,6 +29,7 @@ impl Queue {
         loop {
             let Some(idx) = self.lock_navigation_mut().next(len) else {
                 self.bus.publish(QueueEvent::QueueEnded);
+                self.player.finish_queue();
                 return None;
             };
             let Some((id, status)) = self

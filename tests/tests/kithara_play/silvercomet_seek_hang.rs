@@ -31,13 +31,14 @@ use kithara::{
     play::{Resource, ResourceConfig, internal::offline::OfflinePlayer},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_decode::DecoderBackend;
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
 use kithara_test_utils::temp_dir;
 
-use crate::common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared};
+use crate::common::test_defaults::Consts as Shared;
 
 struct Consts;
 impl Consts {
@@ -149,7 +150,7 @@ async fn build_resource(
         .with_downloader(downloader.clone())
         .with_name(format!("{iter_label}|{url}"));
     cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     cfg.initial_abr_mode = abr;
     let mut resource = Resource::new(cfg)
         .await
@@ -231,18 +232,27 @@ fn rms(samples: &[f32]) -> f32 {
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
-#[case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))]
-#[case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))]
-#[case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))]
-#[case::android(DecoderBackend::Android, AbrMode::Auto(None))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android(DecoderBackend::Android, AbrMode::Auto(None))
+)]
 #[ignore = "real network to silvercomet.top; run with --run-ignored only"]
 async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     // Pipe kithara_* trace output to /tmp/silvercomet-trace.log so failures
     // surface the FSM seek transitions and HLS peer fetches that a nextest
     // capture typically loses after the panic. `try_init()` keeps the test

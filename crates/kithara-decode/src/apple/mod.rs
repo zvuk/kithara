@@ -6,8 +6,9 @@
 //! supports atom-structured containers (fMP4, MP4, CAF, WAV) — the
 //! capability required for HLS seek.
 //!
-//! The backend dispatches on the runtime `AudioCodec` enum in
-//! `try_create_apple_decoder`; no compile-time codec markers are used.
+//! `AppleDecoder` (in `decoder.rs`) implements both [`crate::traits::Decoder`]
+//! (runtime) and [`crate::backend::Backend`] (capability + factory). The
+//! `Backend` impl is in `backend.rs` for file-level cohesion.
 
 mod audiofile;
 mod backend;
@@ -17,9 +18,6 @@ mod converter;
 mod decoder;
 mod ffi;
 mod fmp4;
-mod inner;
 mod reader;
 
-pub(crate) use self::{
-    backend::AppleBackend, config::AppleConfig, decoder::try_create_apple_decoder,
-};
+pub(crate) use self::{config::AppleConfig, decoder::AppleDecoder};

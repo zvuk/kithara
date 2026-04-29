@@ -7,60 +7,30 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_test_utils::{create_test_wav, kithara};
 
 use super::{
-    inner::{DecoderConfig, DecoderFactory},
+    inner::{DecoderBackend, DecoderConfig, DecoderFactory},
     probe::{CodecSelector, ProbeHint, container_from_extension, probe_codec},
 };
-use crate::{
-    InnerDecoder,
-    backend::{BoxedSource, HardwareBackend},
-    error::DecodeError,
-};
+use crate::error::DecodeError;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/test.mp3"
 ));
 
-struct FailingHardwareBackend;
-
-impl HardwareBackend for FailingHardwareBackend {
-    fn can_seek_container(container: ContainerFormat) -> bool {
-        container == ContainerFormat::Wav
-    }
-
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
-        (codec == AudioCodec::Pcm).then_some(ContainerFormat::Wav)
-    }
-
-    fn supports_codec(codec: AudioCodec) -> bool {
-        codec == AudioCodec::Pcm
-    }
-
-    fn try_create(
-        _source: BoxedSource,
-        _config: &DecoderConfig,
-        _codec: AudioCodec,
-        _container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
-        Err(DecodeError::Backend(Box::new(IoError::other(
-            "forced hardware failure",
-        ))))
-    }
-}
-
 #[kithara::test]
 fn test_decoder_config_default() {
     let config = DecoderConfig::default();
-    assert!(!config.prefer_hardware);
+    assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
     assert!(config.gapless);
 }
 
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 #[kithara::test]
 fn test_decoder_config_custom() {
     let handle = Arc::new(AtomicU64::new(1000));
     let config = DecoderConfig {
-        prefer_hardware: true,
+        backend: DecoderBackend::Apple,
         byte_len_handle: Some(Arc::clone(&handle)),
         gapless: false,
         hint: Some("mp3".to_string()),
@@ -70,7 +40,7 @@ fn test_decoder_config_custom() {
         byte_pool: None,
         hooks: None,
     };
-    assert!(config.prefer_hardware);
+    assert_eq!(config.backend, DecoderBackend::Apple);
     assert!(config.byte_len_handle.is_some());
     assert!(!config.gapless);
     assert_eq!(config.hint, Some("mp3".to_string()));
@@ -83,28 +53,36 @@ fn test_auto_selector_fails() {
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
 
+/// `DecoderBackend::Symphonia` returns `UnsupportedCodec` for codecs the
+/// software backend rejects (`Opus`, `Adpcm`). Replaces the old
+/// `test_hardware_failure_is_terminal_no_symphonia_fallback` which
+/// relied on a `FailingDecoderBackend` shim wired through the now-gone
+/// `create_with_backend::<B>` generic dispatch.
 #[kithara::test]
-fn test_hardware_failure_is_terminal_no_symphonia_fallback() {
-    let wav_data = create_test_wav(64, 44_100, 2);
+fn test_symphonia_rejects_unsupported_codec() {
+    let _ = create_test_wav; // reserved for future positive-path coverage
+    let _ = (
+        IoError::other("force keep import"),
+        AudioCodec::Pcm,
+        ContainerFormat::Wav,
+    );
     let config = DecoderConfig {
-        prefer_hardware: true,
+        backend: DecoderBackend::Symphonia,
         ..Default::default()
     };
     let hint = ProbeHint {
-        codec: Some(AudioCodec::Pcm),
-        container: Some(ContainerFormat::Wav),
+        codec: Some(AudioCodec::Opus),
         ..Default::default()
     };
-
-    let result = DecoderFactory::create_with_backend::<FailingHardwareBackend>(
-        Box::new(Cursor::new(wav_data)),
-        &CodecSelector::Probe(hint),
-        &config,
-    );
-    assert!(
-        result.is_err(),
-        "hardware failure with prefer_hardware=true must not fall back to Symphonia"
-    );
+    let empty = Cursor::new(Vec::new());
+    let result = DecoderFactory::create(empty, &CodecSelector::Probe(hint), &config);
+    match result {
+        Err(DecodeError::UnsupportedCodec(AudioCodec::Opus)) => {}
+        Err(other) => {
+            panic!("Symphonia must reject Opus with UnsupportedCodec, got Err({other:?})")
+        }
+        Ok(_) => panic!("Symphonia must reject Opus with UnsupportedCodec, got Ok"),
+    }
 }
 
 #[kithara::test]

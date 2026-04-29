@@ -108,6 +108,7 @@ impl Downloader {
     /// and the shared [`AbrController`] from `config.abr_settings`.
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
+        ::kithara_probes::register_probes();
         let (tx, rx) = mpsc::unbounded_channel();
         // Per-chunk inactivity timeout in the BodyStream wrapper —
         // semantically the Downloader-layer mirror of reqwest's

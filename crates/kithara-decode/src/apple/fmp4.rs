@@ -67,7 +67,6 @@ use crate::{
 /// `reader.seek(...)` calls work normally. Mirrors
 /// `symphonia::adapter::ReadSeekAdapter`.
 struct BoxedMediaSource {
-    inner: BoxedSource,
     /// Dynamic byte length shared with the audio FSM. Updated externally
     /// as new HLS segments arrive; `0` means unknown.
     /// Reading via `.load()` ensures the demuxer sees the current stream
@@ -75,12 +74,13 @@ struct BoxedMediaSource {
     /// goes stale on growing live streams — `BoxedMediaSource::seek` then
     /// rejects byte targets that are valid in the current, larger stream).
     byte_len: Arc<AtomicU64>,
-    seek_enabled: Arc<AtomicBool>,
     /// Live read-cursor of the underlying source. Updated on every
     /// `Read::read` / `Seek::seek` so `Fmp4Reader::landed_byte` can
     /// report the absolute byte offset of the next packet body
     /// without reaching into `IsoMp4Reader`'s internals.
     byte_pos: Arc<AtomicU64>,
+    seek_enabled: Arc<AtomicBool>,
+    inner: BoxedSource,
 }
 
 impl io::Read for BoxedMediaSource {
@@ -154,35 +154,35 @@ impl io::Seek for BoxedMediaSource {
 }
 
 impl MediaSource for BoxedMediaSource {
-    fn is_seekable(&self) -> bool {
-        self.seek_enabled.load(Ordering::Acquire)
-    }
-
     fn byte_len(&self) -> Option<u64> {
         let len = self.byte_len.load(Ordering::Acquire);
         (len > 0).then_some(len)
     }
+
+    fn is_seekable(&self) -> bool {
+        self.seek_enabled.load(Ordering::Acquire)
+    }
 }
 
 pub(super) struct Fmp4Reader {
-    reader: IsoMp4Reader<'static>,
-    audio_track_id: u32,
-    sample_rate: u32,
-    timebase_numer: u32,
-    timebase_denom: u32,
-    format: AudioStreamBasicDescription,
-    magic_cookie: Vec<u8>,
-    duration: Option<Duration>,
-    /// Reusable scratch for the current packet's bytes so callers get a
-    /// `&[u8]` that stays alive until the next `read_next_packet`.
-    packet_scratch: Vec<u8>,
-    last_packet_desc: AudioStreamPacketDescription,
-    eof: bool,
     /// Shared with `BoxedMediaSource`: read-cursor of the underlying
     /// source updated on every read/seek. After
     /// `IsoMp4Reader::seek()` lands, this is the byte offset where
     /// the next packet body will be read from.
     byte_pos_handle: Arc<AtomicU64>,
+    format: AudioStreamBasicDescription,
+    last_packet_desc: AudioStreamPacketDescription,
+    reader: IsoMp4Reader<'static>,
+    duration: Option<Duration>,
+    magic_cookie: Vec<u8>,
+    /// Reusable scratch for the current packet's bytes so callers get a
+    /// `&[u8]` that stays alive until the next `read_next_packet`.
+    packet_scratch: Vec<u8>,
+    eof: bool,
+    audio_track_id: u32,
+    sample_rate: u32,
+    timebase_denom: u32,
+    timebase_numer: u32,
 }
 
 impl Fmp4Reader {
@@ -199,8 +199,8 @@ impl Fmp4Reader {
         let seek_enabled = Arc::new(AtomicBool::new(false));
         let byte_pos_handle = Arc::new(AtomicU64::new(0));
         let media_source: Box<dyn MediaSource> = Box::new(BoxedMediaSource {
-            inner: source,
             byte_len,
+            inner: source,
             seek_enabled: Arc::clone(&seek_enabled),
             byte_pos: Arc::clone(&byte_pos_handle),
         });
@@ -288,10 +288,10 @@ impl Fmp4Reader {
             format,
             magic_cookie,
             duration,
+            byte_pos_handle,
             packet_scratch: Vec::new(),
             last_packet_desc: AudioStreamPacketDescription::default(),
             eof: false,
-            byte_pos_handle,
         })
     }
 }
@@ -384,8 +384,20 @@ fn build_input_format(
 }
 
 impl PacketReader for Fmp4Reader {
+    fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
     fn format(&self) -> AudioStreamBasicDescription {
         self.format
+    }
+
+    fn landed_byte(&self) -> Option<u64> {
+        // After `IsoMp4Reader::seek` parks at the target fragment, the
+        // shared `byte_pos_handle` reflects the underlying source's
+        // read cursor — i.e. the byte offset of the next packet body
+        // we will hand to AudioConverter.
+        Some(self.byte_pos_handle.load(Ordering::Acquire))
     }
 
     fn magic_cookie(&self) -> Option<&[u8]> {
@@ -394,10 +406,6 @@ impl PacketReader for Fmp4Reader {
         } else {
             Some(&self.magic_cookie)
         }
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        self.duration
     }
 
     fn read_next_packet(&mut self) -> DecodeResult<Option<PacketRef<'_>>> {
@@ -467,7 +475,7 @@ impl PacketReader for Fmp4Reader {
                     track_id: Some(self.audio_track_id),
                 },
             )
-            .map_err(|e| crate::symphonia::inner::classify_format_seek_error(&e))?;
+            .map_err(|e| crate::symphonia::decoder::classify_format_seek_error(&e))?;
         self.eof = false;
 
         // Translate the seeked-to timestamp back to a frame count in
@@ -492,13 +500,5 @@ impl PacketReader for Fmp4Reader {
             aligned_ts
         };
         Ok(aligned_frame)
-    }
-
-    fn landed_byte(&self) -> Option<u64> {
-        // After `IsoMp4Reader::seek` parks at the target fragment, the
-        // shared `byte_pos_handle` reflects the underlying source's
-        // read cursor — i.e. the byte offset of the next packet body
-        // we will hand to AudioConverter.
-        Some(self.byte_pos_handle.load(Ordering::Acquire))
     }
 }

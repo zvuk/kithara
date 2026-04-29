@@ -9,7 +9,7 @@
 //! buffer, no decoder-specific error type.
 //!
 //! `kithara-decode` owns the wrapper (`HookedDecoder`) that intercepts
-//! `InnerDecoder::next_chunk` / `seek` and feeds the corresponding
+//! `Decoder::next_chunk` / `seek` and feeds the corresponding
 //! signal into the hook. Source impls (`HlsSource`, `FileSource`) live
 //! in their own crates and produce hook instances via
 //! [`Source::take_reader_hooks`](crate::Source::take_reader_hooks).

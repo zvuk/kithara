@@ -5,6 +5,7 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
     stream::Stream,
@@ -22,14 +23,14 @@ async fn server() -> TestServerHelper {
 async fn open_test_mp3(
     server: &TestServerHelper,
     temp_dir: &TestTempDir,
-    prefer_hardware: bool,
+    backend: DecoderBackend,
     events: Option<EventBus>,
 ) -> Audio<Stream<File>> {
     let url = server.asset("test.mp3");
     let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
-        .with_prefer_hardware(prefer_hardware);
+        .with_decoder_backend(backend);
     if let Some(bus) = events {
         config = config.with_events(bus);
     }
@@ -70,7 +71,7 @@ async fn decoder_file_creates_successfully(
     temp_dir: TestTempDir,
 ) {
     let server = server.await;
-    let decoder = open_test_mp3(&server, &temp_dir, false, None).await;
+    let decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate > 0);
@@ -86,7 +87,7 @@ async fn decoder_file_creates_successfully(
 )]
 async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
     let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, false, None).await;
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 }
@@ -110,7 +111,7 @@ async fn decoder_file_single_seek(
     #[case] target: Duration,
 ) {
     let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, false, None).await;
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate > 0 && spec.channels > 0);
@@ -135,7 +136,7 @@ async fn decoder_file_single_seek(
 )]
 async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
     let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, false, None).await;
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -155,15 +156,18 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case::sw(false)]
-#[case::hw(true)]
+#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw(DecoderBackend::Apple)
+)]
 async fn decoder_file_seek_multiple(
     #[future] server: TestServerHelper,
     temp_dir: TestTempDir,
-    #[case] prefer_hardware: bool,
+    #[case] backend: DecoderBackend,
 ) {
     let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, prefer_hardware, None).await;
+    let mut decoder = open_test_mp3(&server, &temp_dir, backend, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 
@@ -185,7 +189,7 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let mut decoder = open_test_mp3(&server, &temp_dir, false, Some(bus)).await;
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, Some(bus)).await;
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();

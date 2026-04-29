@@ -1,48 +1,48 @@
-//! Hardware-backend protocol shared by Apple `AudioToolbox` and
-//! Android `MediaCodec`.
+//! Backend protocol shared by all decoder backends (Apple `AudioToolbox`,
+//! Android `MediaCodec`, Symphonia software).
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 
-use crate::{DecodeError, DecoderConfig, InnerDecoder, traits::DecoderInput};
+use crate::{
+    DecoderConfig,
+    error::DecodeResult,
+    traits::{Decoder, DecoderInput},
+};
 
 pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 
-/// Check whether a hardware backend accepts this codec/container pair.
+/// Capability + factory protocol implemented by every decoder backend.
 ///
-/// Returns the resolved container (possibly inferred from codec) when the
-/// backend can handle it.  Returns `None` when the backend should be
-/// skipped — the caller keeps `source` and falls through to Symphonia.
-pub(crate) fn hardware_accepts<B: HardwareBackend>(
-    codec: AudioCodec,
-    container: Option<ContainerFormat>,
-) -> Option<ContainerFormat> {
-    if !B::supports_codec(codec) {
-        return None;
-    }
-    let resolved = container.or_else(|| B::default_container_for_codec(codec))?;
-    if !B::can_seek_container(resolved) {
-        return None;
-    }
-    Some(resolved)
-}
+/// `Backend: Decoder` — every backend is also a [`Decoder`] at runtime,
+/// so the dispatch site can box `B::try_create(...)` straight into
+/// `Box<dyn Decoder>` without juggling associated types. Returning
+/// `Self` from `try_create` requires `Self: Sized` implicitly, which
+/// means `dyn Backend` is impossible — `Backend` is a static-dispatch-only
+/// contract by design.
+///
+/// The `supports` method answers "will this backend decode this
+/// codec/container?" without ever touching the source. When `container`
+/// is `None`, the backend may either reject (hardware backends usually
+/// need a known container) or accept and probe the container from raw
+/// bytes (Symphonia).
+pub(crate) trait Backend: Decoder {
+    /// Whether this backend will decode `codec` (with `container` if given).
+    fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool;
 
-/// Capability description for a platform-specific hardware decoder backend.
-pub(crate) trait HardwareBackend {
-    /// Whether this backend can reliably seek within `container`.
-    fn can_seek_container(container: ContainerFormat) -> bool;
-
-    /// Infer the most likely container for `codec` when metadata doesn't
-    /// supply one (e.g. codec known from file extension only).
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat>;
-
-    /// Whether this backend can decode `codec`.
-    fn supports_codec(codec: AudioCodec) -> bool;
-
-    /// Create a decoder for the given codec/container pair.
+    /// Build a decoder of the concrete `Self` type. The backend is free
+    /// to resolve a missing `container` from `codec` internally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::UnsupportedCodec`] when the codec is not
+    /// in the backend's accept list, plus any source / decoder
+    /// initialisation errors.
     fn try_create(
         source: BoxedSource,
         config: &DecoderConfig,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, DecodeError>;
+    ) -> DecodeResult<Self>
+    where
+        Self: Sized;
 }

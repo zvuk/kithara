@@ -2,7 +2,7 @@
 //!
 //! The hook contract (`DecoderHooks`, `ReaderChunkSignal`,
 //! `ReaderSeekSignal`, `SharedHooks`) lives in `kithara-stream` and is
-//! protocol-agnostic. This wrapper sits at the [`InnerDecoder`] boundary,
+//! protocol-agnostic. This wrapper sits at the [`Decoder`] boundary,
 //! observes typed `DecoderChunkOutcome` / `DecoderSeekOutcome`, maps
 //! each into the corresponding signal, and forwards it to the hook.
 //! Backend code (`symphonia` / `apple` / `android`) stays untouched.
@@ -13,26 +13,26 @@ use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 
 use crate::{
     error::DecodeResult,
-    traits::{DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder},
+    traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmSpec, TrackMetadata},
 };
 
-/// Adapter that wraps any [`InnerDecoder`] and forwards every method
+/// Adapter that wraps any [`Decoder`] and forwards every method
 /// to the inner decoder while invoking [`DecoderHooks`](kithara_stream::DecoderHooks)
 /// callbacks after `next_chunk` / `seek` produce their typed outcomes.
 ///
 /// One emission point per outcome — no double conversion, no per-byte
 /// hook traffic. Backend code stays untouched; the wrapper sits at the
-/// [`InnerDecoder`] boundary.
+/// [`Decoder`] boundary.
 pub struct HookedDecoder {
-    inner: Box<dyn InnerDecoder>,
+    inner: Box<dyn Decoder>,
     hooks: SharedHooks,
 }
 
 impl HookedDecoder {
     /// Wrap an existing decoder with a hook implementation.
     #[must_use]
-    pub fn new(inner: Box<dyn InnerDecoder>, hooks: SharedHooks) -> Self {
+    pub fn new(inner: Box<dyn Decoder>, hooks: SharedHooks) -> Self {
         Self { inner, hooks }
     }
 }
@@ -54,17 +54,21 @@ fn seek_signal(outcome: &DecoderSeekOutcome) -> ReaderSeekSignal {
     }
 }
 
-impl InnerDecoder for HookedDecoder {
+impl Decoder for HookedDecoder {
+    fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
+    }
+
+    fn metadata(&self) -> TrackMetadata {
+        self.inner.metadata()
+    }
+
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.inner.next_chunk()?;
         if let Ok(mut hooks) = self.hooks.lock() {
             hooks.on_chunk(chunk_signal(&outcome));
         }
         Ok(outcome)
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.inner.spec()
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -75,16 +79,12 @@ impl InnerDecoder for HookedDecoder {
         Ok(outcome)
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.inner.spec()
+    }
+
     fn update_byte_len(&self, len: u64) {
         self.inner.update_byte_len(len);
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        self.inner.metadata()
     }
 }
 
@@ -135,19 +135,16 @@ mod tests {
         seek_outcomes: Vec<DecoderSeekOutcome>,
     }
 
-    impl InnerDecoder for StubDecoder {
+    impl Decoder for StubDecoder {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
             Ok(self
                 .next_chunk_outcomes
                 .pop()
                 .unwrap_or(DecoderChunkOutcome::Eof))
-        }
-
-        fn spec(&self) -> PcmSpec {
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            }
         }
 
         fn seek(&mut self, _pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -159,11 +156,14 @@ mod tests {
                 }))
         }
 
-        fn update_byte_len(&self, _len: u64) {}
-
-        fn duration(&self) -> Option<Duration> {
-            None
+        fn spec(&self) -> PcmSpec {
+            PcmSpec {
+                channels: 2,
+                sample_rate: 44_100,
+            }
         }
+
+        fn update_byte_len(&self, _len: u64) {}
     }
 
     fn dummy_chunk() -> PcmChunk {

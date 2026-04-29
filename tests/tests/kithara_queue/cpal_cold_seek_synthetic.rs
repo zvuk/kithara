@@ -15,6 +15,7 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_decode::DecoderBackend;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -22,8 +23,6 @@ use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara, temp_dir,
 };
 use tokio::time::sleep;
-
-use crate::common::decoder_backend::DecoderBackend;
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -75,12 +74,12 @@ async fn wait_for_position_at_least(
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
@@ -126,7 +125,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     let source = TrackSource::Config(Box::new(cfg));
 
     let id = queue.append(source);

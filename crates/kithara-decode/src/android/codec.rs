@@ -5,13 +5,13 @@ use std::{ffi::CString, ptr::NonNull};
 use tracing::{debug, info};
 
 use super::{
+    aformat::OwnedFormat,
     error::AndroidBackendError,
     extractor::{OwnedExtractor, SelectedTrack},
     ffi::{
         self, KEY_CHANNEL_COUNT, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
         PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
-    media_format::OwnedFormat,
 };
 use crate::types::PcmSpec;
 
@@ -22,8 +22,8 @@ pub(crate) enum AndroidPcmEncoding {
 }
 
 pub(crate) struct OutputFormat {
-    pub(crate) spec: PcmSpec,
     pub(crate) pcm_encoding: AndroidPcmEncoding,
+    pub(crate) spec: PcmSpec,
 }
 
 pub(crate) struct InputBuffer {
@@ -39,9 +39,9 @@ impl InputBuffer {
 }
 
 pub(crate) struct OutputBuffer {
-    pub(crate) index: usize,
     pub(crate) presentation_time_us: i64,
     pub(crate) flags: u32,
+    pub(crate) index: usize,
     ptr: NonNull<u8>,
     len: usize,
 }
@@ -59,9 +59,9 @@ pub(crate) enum DequeueOutput {
 }
 
 pub(crate) struct CodecBootstrap {
+    pub(crate) pcm_encoding: AndroidPcmEncoding,
     pub(crate) codec: OwnedCodec,
     pub(crate) spec: PcmSpec,
-    pub(crate) pcm_encoding: AndroidPcmEncoding,
 }
 
 pub(crate) struct OwnedCodec {
@@ -72,21 +72,6 @@ pub(crate) struct OwnedCodec {
 unsafe impl Send for OwnedCodec {}
 
 impl OwnedCodec {
-    pub(crate) fn raw(&self) -> *mut ffi::AMediaCodec {
-        self.raw.as_ptr()
-    }
-
-    pub(crate) fn flush(&mut self) -> Result<(), AndroidBackendError> {
-        let status = unsafe { ffi::AMediaCodec_flush(self.raw()) };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-flush",
-                format!("status={status}"),
-            ));
-        }
-        Ok(())
-    }
-
     pub(crate) fn dequeue_input_buffer(
         &mut self,
         timeout_us: i64,
@@ -123,42 +108,6 @@ impl OwnedCodec {
             ptr: data,
             len: size,
         }))
-    }
-
-    pub(crate) fn queue_input_buffer(
-        &mut self,
-        index: usize,
-        size: usize,
-        presentation_time_us: i64,
-        flags: u32,
-    ) -> Result<(), AndroidBackendError> {
-        let presentation_time_us = u64::try_from(presentation_time_us).map_err(|_| {
-            AndroidBackendError::operation(
-                "codec-queue-input-buffer",
-                format!("negative timestamp {presentation_time_us}"),
-            )
-        })?;
-        let status = unsafe {
-            ffi::AMediaCodec_queueInputBuffer(
-                self.raw(),
-                index,
-                0,
-                size,
-                presentation_time_us,
-                flags,
-            )
-        };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-queue-input-buffer",
-                format!("buffer={index} size={size} status={status}"),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {
-        self.queue_input_buffer(index, 0, 0, ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM)
     }
 
     pub(crate) fn dequeue_output_buffer(
@@ -243,6 +192,65 @@ impl OwnedCodec {
         }
     }
 
+    pub(crate) fn flush(&mut self) -> Result<(), AndroidBackendError> {
+        let status = unsafe { ffi::AMediaCodec_flush(self.raw()) };
+        if status != MEDIA_STATUS_OK {
+            return Err(AndroidBackendError::operation(
+                "codec-flush",
+                format!("status={status}"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {
+        let raw = NonNull::new(unsafe { ffi::AMediaCodec_getOutputFormat(self.raw()) })
+            .ok_or_else(|| {
+                AndroidBackendError::operation("codec-output-format", "output format was null")
+            })?;
+        Ok(OwnedFormat::from_raw(raw))
+    }
+
+    pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {
+        self.queue_input_buffer(index, 0, 0, ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM)
+    }
+
+    pub(crate) fn queue_input_buffer(
+        &mut self,
+        index: usize,
+        size: usize,
+        presentation_time_us: i64,
+        flags: u32,
+    ) -> Result<(), AndroidBackendError> {
+        let presentation_time_us = u64::try_from(presentation_time_us).map_err(|_| {
+            AndroidBackendError::operation(
+                "codec-queue-input-buffer",
+                format!("negative timestamp {presentation_time_us}"),
+            )
+        })?;
+        let status = unsafe {
+            ffi::AMediaCodec_queueInputBuffer(
+                self.raw(),
+                index,
+                0,
+                size,
+                presentation_time_us,
+                flags,
+            )
+        };
+        if status != MEDIA_STATUS_OK {
+            return Err(AndroidBackendError::operation(
+                "codec-queue-input-buffer",
+                format!("buffer={index} size={size} status={status}"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn raw(&self) -> *mut ffi::AMediaCodec {
+        self.raw.as_ptr()
+    }
+
     pub(crate) fn release_output_buffer(
         &mut self,
         index: usize,
@@ -255,14 +263,6 @@ impl OwnedCodec {
             ));
         }
         Ok(())
-    }
-
-    pub(crate) fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {
-        let raw = NonNull::new(unsafe { ffi::AMediaCodec_getOutputFormat(self.raw()) })
-            .ok_or_else(|| {
-                AndroidBackendError::operation("codec-output-format", "output format was null")
-            })?;
-        Ok(OwnedFormat::from_raw(raw))
     }
 }
 
@@ -362,11 +362,11 @@ fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackend
     };
 
     Ok(OutputFormat {
+        pcm_encoding,
         spec: PcmSpec {
             sample_rate,
             channels,
         },
-        pcm_encoding,
     })
 }
 

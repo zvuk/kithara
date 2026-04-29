@@ -8,8 +8,9 @@ use std::{
 };
 
 use kithara_abr::AbrPeerId;
-use kithara_events::{EventBus, RequestPriority};
+use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
 use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
+use kithara_probes::kithara;
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -19,6 +20,39 @@ use super::{
     downloader::{DownloaderInner, RegisteredPeerEntry},
     peer::{InternalCmd, Peer, ResponseTarget, SlotEntry},
 };
+
+/// Push a fetch command onto its priority slot — the moment a request
+/// becomes eligible for dispatch. Wakes the urgent slot (`High`/`High`
+/// or `High`/`Low`) consumer so it doesn't sit on the queue until the
+/// next periodic poll, and fans the descriptor out to bus subscribers.
+#[kithara::probe(request_id, priority)]
+fn enqueue_request(
+    slots: &mut [VecDeque<SlotEntry>; SLOT_COUNT],
+    slot: usize,
+    urgent_notify: &Notify,
+    entry: SlotEntry,
+    request_id: RequestId,
+    priority: RequestPriority,
+) {
+    let bus = entry.cmd.bus.clone();
+    let url = entry.cmd.cmd.url.clone();
+    let method = entry.cmd.cmd.method;
+
+    slots[slot].push_back(entry);
+
+    if slot <= 1 {
+        urgent_notify.notify_one();
+    }
+
+    if let Some(b) = bus {
+        b.publish(DownloaderEvent::RequestEnqueued {
+            request_id,
+            url,
+            method,
+            priority,
+        });
+    }
+}
 
 const SLOT_COUNT: usize = 4;
 
@@ -150,21 +184,17 @@ impl Registry {
                     cmd,
                     peer_cancel: entry.peer_cancel.clone(),
                 };
-                // RequestEnqueued for imperative path: bus is taken
-                // from cmd.bus snapshot at submission time.
-                if let Some(ref b) = entry_slot.cmd.bus {
-                    b.publish(kithara_events::DownloaderEvent::RequestEnqueued {
-                        request_id: entry_slot.cmd.request_id,
-                        url: entry_slot.cmd.cmd.url.clone(),
-                        method: entry_slot.cmd.cmd.method,
-                        priority: entry_slot.cmd.priority,
-                    });
-                }
-                self.slots[slot].push_back(entry_slot);
+                let request_id = entry_slot.cmd.request_id;
+                let priority = entry_slot.cmd.priority;
+                enqueue_request(
+                    &mut self.slots,
+                    slot,
+                    &self.urgent_notify,
+                    entry_slot,
+                    request_id,
+                    priority,
+                );
                 stats.drained_cmds += 1;
-                if slot <= 1 {
-                    self.urgent_notify.notify_one();
-                }
             }
 
             // Skip peer_done or global capacity reached.
@@ -195,18 +225,6 @@ impl Registry {
                         let slot = slot_index(peer_prio, cmd_prio);
                         let request_id = inner.next_request_id();
                         let enqueued_at = kithara_platform::time::Instant::now();
-                        // Publish RequestEnqueued BEFORE the cmd can be
-                        // picked up by BatchGroup::process — guarantees
-                        // subscribers see the carcass-of-fetch event
-                        // before any subsequent lifecycle events.
-                        if let Some(ref b) = bus {
-                            b.publish(kithara_events::DownloaderEvent::RequestEnqueued {
-                                request_id,
-                                url: cmd.url.clone(),
-                                method: cmd.method,
-                                priority: cmd_prio,
-                            });
-                        }
                         let internal = InternalCmd {
                             cmd,
                             cancel,
@@ -218,13 +236,18 @@ impl Registry {
                             request_id,
                             enqueued_at,
                         };
-                        self.slots[slot].push_back(SlotEntry {
+                        let entry_slot = SlotEntry {
                             cmd: internal,
                             peer_cancel: entry.peer_cancel.clone(),
-                        });
-                        if slot <= 1 {
-                            self.urgent_notify.notify_one();
-                        }
+                        };
+                        enqueue_request(
+                            &mut self.slots,
+                            slot,
+                            &self.urgent_notify,
+                            entry_slot,
+                            request_id,
+                            cmd_prio,
+                        );
                     }
                     if batch_had_cmds {
                         stats.peer_batches += 1;

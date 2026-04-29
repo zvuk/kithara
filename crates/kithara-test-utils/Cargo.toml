@@ -17,6 +17,7 @@ kithara-storage = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }

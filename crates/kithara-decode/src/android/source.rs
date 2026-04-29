@@ -16,10 +16,10 @@ use super::{error::AndroidBackendError, ffi};
 use crate::backend::BoxedSource;
 
 pub(crate) struct SourceState {
-    source: Mutex<BoxedSource>,
     byte_len_handle: Arc<AtomicU64>,
     closed: AtomicBool,
     last_error: Mutex<Option<String>>,
+    source: Mutex<BoxedSource>,
 }
 
 pub(crate) struct OwnedMediaDataSource {
@@ -48,8 +48,8 @@ impl OwnedMediaDataSource {
         };
 
         let state = Box::new(SourceState {
-            source: Mutex::new(source),
             byte_len_handle,
+            source: Mutex::new(source),
             closed: AtomicBool::new(false),
             last_error: Mutex::new(None),
         });
@@ -65,10 +65,6 @@ impl OwnedMediaDataSource {
             raw: Some(raw),
             state: Some(state_ptr),
         })
-    }
-
-    pub(crate) fn raw(&self) -> *mut ffi::AMediaDataSource {
-        self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
     pub(crate) fn into_source(mut self) -> Result<BoxedSource, AndroidBackendError> {
@@ -88,6 +84,10 @@ impl OwnedMediaDataSource {
             .source
             .into_inner()
             .map_err(|_| AndroidBackendError::operation("recover-source", "source mutex poisoned"))
+    }
+
+    pub(crate) fn raw(&self) -> *mut ffi::AMediaDataSource {
+        self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 }
 
@@ -111,15 +111,24 @@ unsafe extern "C" fn read_at_callback(
     let Some(state) = state_from_userdata(userdata) else {
         return -1;
     };
-    if state.closed.load(Ordering::Acquire) {
-        return -1;
-    }
-    if size == 0 {
-        return 0;
-    }
-    if position < 0 {
-        record_error(state, "read-at", "negative position");
-        return -1;
+
+    // Parallel-compute classification of the three preconditions —
+    // replaces a 4-guard cascade. Tuple match collapses into a single
+    // decision site without altering the original semantics: closed
+    // wins over zero-size, which wins over negative position; only the
+    // last branch carries the side effect (record_error).
+    let closed = state.closed.load(Ordering::Acquire);
+    let empty = size == 0;
+    let negative_pos = position < 0;
+
+    match (closed, empty, negative_pos) {
+        (true, _, _) => return -1,
+        (_, true, _) => return 0,
+        (_, _, true) => {
+            record_error(state, "read-at", "negative position");
+            return -1;
+        }
+        _ => {}
     }
 
     let mut source = match state.source.lock() {

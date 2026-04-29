@@ -21,7 +21,7 @@ kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true, features = ["internal"] }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
-kithara-hls = { workspace = true, features = ["internal"] }
+kithara-hls = { workspace = true, features = ["internal", "usdt-probes"] }
 kithara-queue = { workspace = true }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true }
@@ -29,7 +29,7 @@ rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
-kithara-stream = { workspace = true }
+kithara-stream = { workspace = true, features = ["usdt-probes"] }
 # Async runtime
 tokio-util = { workspace = true }
 
@@ -95,6 +95,22 @@ memory-stats = { workspace = true }
 assert_no_alloc = { workspace = true }
 ringbuf = { workspace = true }
 tokio-stream = { workspace = true }
+
+# --- Apple hardware backend (macOS/iOS only) ---
+# Forwarded so `DecoderBackend::Apple` is in scope for tests that
+# parametrise over backends. The variant is `#[cfg]`-gated on
+# `feature = "apple"` + matching `target_os`, so without these entries
+# the test crate cannot reference it.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple"] }
+kithara-audio = { workspace = true, features = ["apple"] }
+kithara-decode = { workspace = true, features = ["apple"] }
+kithara-play = { workspace = true, features = ["apple"] }
+
+# --- Android hardware backend (android only) ---
+[target.'cfg(target_os = "android")'.dependencies]
+kithara-audio = { workspace = true, features = ["android"] }
+kithara-decode = { workspace = true, features = ["android"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -29,7 +29,7 @@ pub enum InputReadOutcome {
     Eof,
 }
 
-/// Outcome of a [`InnerDecoder::seek`] call.
+/// Outcome of a [`Decoder::seek`] call.
 ///
 /// `Landed.landed_at` is the position the decoder actually parked at
 /// (often the granule boundary nearest the requested target — never
@@ -62,7 +62,7 @@ pub enum DecoderSeekOutcome {
     PastEof { duration: Duration },
 }
 
-/// Outcome of an [`InnerDecoder::next_chunk`] call.
+/// Outcome of an [`Decoder::next_chunk`] call.
 ///
 /// Mirrors [`kithara_stream::ReadOutcome`] / [`InputReadOutcome`] in
 /// shape so every layer of the pipeline carries the same three-way
@@ -175,8 +175,20 @@ impl<T: Read + Seek + Send + Sync + ?Sized> DecoderInput for T {}
 ///
 /// This trait is used by kithara-audio for dynamic dispatch when the
 /// decoder type is determined at runtime (e.g., based on media info).
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = InnerDecoderMock))]
-pub trait InnerDecoder: Send + 'static {
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = DecoderMock))]
+pub trait Decoder: Send + 'static {
+    /// Get total duration from track metadata.
+    ///
+    /// Returns `None` if duration cannot be determined.
+    fn duration(&self) -> Option<Duration>;
+
+    /// Get track metadata (title, artist, album, artwork).
+    ///
+    /// Returns default metadata if not available.
+    fn metadata(&self) -> TrackMetadata {
+        TrackMetadata::default()
+    }
+
     /// Decode the next chunk of PCM data.
     ///
     /// Returns [`DecoderChunkOutcome::Chunk`] with PCM data,
@@ -190,9 +202,6 @@ pub trait InnerDecoder: Send + 'static {
     ///
     /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome>;
-
-    /// Get the PCM output specification.
-    fn spec(&self) -> PcmSpec;
 
     /// Seek to a time position.
     ///
@@ -208,22 +217,13 @@ pub trait InnerDecoder: Send + 'static {
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
 
+    /// Get the PCM output specification.
+    fn spec(&self) -> PcmSpec;
+
     /// Update the byte length reported to the underlying media source.
     ///
     /// For HLS streams, the total length becomes known after metadata
     /// calculation. Call this before seeking so the decoder can compute
     /// correct seek deltas.
     fn update_byte_len(&self, len: u64);
-
-    /// Get total duration from track metadata.
-    ///
-    /// Returns `None` if duration cannot be determined.
-    fn duration(&self) -> Option<Duration>;
-
-    /// Get track metadata (title, artist, album, artwork).
-    ///
-    /// Returns default metadata if not available.
-    fn metadata(&self) -> TrackMetadata {
-        TrackMetadata::default()
-    }
 }

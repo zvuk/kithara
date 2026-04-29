@@ -7,8 +7,8 @@ use std::{
 use kithara_stream::ContainerFormat;
 use kithara_test_utils::{create_test_wav, kithara};
 
-use super::{config::SymphoniaConfig, decoder::Symphonia};
-use crate::{error::DecodeError, traits::InnerDecoder};
+use super::{config::SymphoniaConfig, decoder::SymphoniaDecoder};
+use crate::{error::DecodeError, traits::Decoder};
 
 #[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
@@ -21,7 +21,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
         container,
         ..Default::default()
     };
-    let decoder = Symphonia::new(Box::new(cursor), &config);
+    let decoder = SymphoniaDecoder::new(Box::new(cursor), &config);
     assert!(decoder.is_ok(), "decoder creation should succeed");
 
     let decoder = decoder.unwrap();
@@ -38,7 +38,7 @@ fn test_next_chunk_returns_data() {
         container: Some(ContainerFormat::Wav),
         ..Default::default()
     };
-    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
@@ -58,7 +58,7 @@ fn test_next_chunk_eof() {
         container: Some(ContainerFormat::Wav),
         ..Default::default()
     };
-    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
 
     while decoder.next_chunk().unwrap().is_chunk() {}
 
@@ -75,7 +75,7 @@ fn test_seek_to_beginning() {
         container: Some(ContainerFormat::Wav),
         ..Default::default()
     };
-    let mut decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
 
     let _ = decoder.next_chunk().unwrap();
     let _ = decoder.next_chunk().unwrap();
@@ -95,7 +95,7 @@ fn test_duration_available() {
         container: Some(ContainerFormat::Wav),
         ..Default::default()
     };
-    let decoder = Symphonia::new(Box::new(cursor), &config).unwrap();
+    let decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
 
     let duration = decoder.duration();
     assert!(duration.is_some());
@@ -114,7 +114,7 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
         container: Some(ContainerFormat::Wav),
         ..Default::default()
     };
-    let result = Symphonia::new(Box::new(cursor), &config);
+    let result = SymphoniaDecoder::new(Box::new(cursor), &config);
     assert!(result.is_err());
 }
 
@@ -127,7 +127,7 @@ fn test_unsupported_container_returns_error() {
         container: Some(ContainerFormat::MpegTs),
         ..Default::default()
     };
-    let result = Symphonia::new(Box::new(cursor), &config);
+    let result = SymphoniaDecoder::new(Box::new(cursor), &config);
     assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
 }
 

@@ -27,6 +27,7 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -34,8 +35,6 @@ use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, temp_dir};
 use tokio::time::sleep;
 use url::Url;
-
-use crate::common::decoder_backend::DecoderBackend;
 
 static INIT_OFFLINE: Once = Once::new();
 
@@ -207,7 +206,7 @@ async fn run_one_attempt(
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
     cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 
     if let Err(e) = queue.select(track_id, Transition::None) {
@@ -340,17 +339,26 @@ async fn run_one_attempt(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::symphonia_no_sidx(DecoderBackend::Symphonia, false)]
 #[case::symphonia_with_sidx(DecoderBackend::Symphonia, true)]
-#[case::apple_no_sidx(DecoderBackend::Apple, false)]
-#[case::apple_with_sidx(DecoderBackend::Apple, true)]
-#[case::android_no_sidx(DecoderBackend::Android, false)]
-#[case::android_with_sidx(DecoderBackend::Android, true)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_no_sidx(DecoderBackend::Apple, false)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_with_sidx(DecoderBackend::Apple, true)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android_no_sidx(DecoderBackend::Android, false)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android_with_sidx(DecoderBackend::Android, true)
+)]
 async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
     #[case] include_sidx: bool,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;

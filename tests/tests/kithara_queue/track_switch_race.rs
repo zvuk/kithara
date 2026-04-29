@@ -268,10 +268,12 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
             .unwrap_or_else(|e| panic!("[iter {iter}] fast never became current: {e}"));
 
         // Watch the post-fast window: the bug is current flipping to
-        // slow via auto-advance after fast ends naturally.
+        // slow via auto-advance after fast ends naturally. If `current`
+        // resolves to `None` (queue ended cleanly through `QueueEnded`),
+        // no barge-in can fire in this iteration — exit early so the
+        // stress matrix doesn't burn the full window per iter.
         let watch_start = std::time::Instant::now();
         let mut current_history: Vec<Option<TrackId>> = Vec::new();
-        let mut barged = false;
         while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
             let cur = queue.current().map(|e| e.id);
             if cur != current_history.last().copied().flatten().and_then(Some) {
@@ -283,17 +285,13 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
                      (history={current_history:?})",
                     elapsed_ms = watch_start.elapsed().as_millis(),
                 ));
-                barged = true;
+                break;
+            }
+            if cur.is_none() && current_history.iter().any(|c| *c == Some(fast_id)) {
+                // fast → None reached naturally, queue ended; skip remaining poll.
                 break;
             }
             sleep(Consts::POLL_INTERVAL).await;
-        }
-
-        // If we did not flip to slow, there should be at most a transition
-        // fast → None (QueueEnded) — not fast → slow.
-        if !barged {
-            // Soft sanity: at least one of fast→None or fast persisting.
-            // (Diagnostic; not asserted as failure on its own.)
         }
 
         tick_handle.abort();

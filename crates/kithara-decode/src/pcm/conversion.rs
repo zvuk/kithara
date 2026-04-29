@@ -11,8 +11,6 @@ use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 
 use crate::DecodeError;
 
-const PCM_16_SCALE: f32 = 32_768.0;
-
 /// Decode interleaved little-endian PCM16 bytes into pool-backed `f32`.
 ///
 /// `trim_frames` drops that many frames from the front — used to align
@@ -23,6 +21,7 @@ pub(crate) fn decode_pcm16_to_f32(
     trim_frames: usize,
     channels: u16,
 ) -> Result<PcmBuf, DecodeError> {
+    const PCM_16_SCALE: f32 = 32_768.0;
     convert_pcm_to_f32::<2>(
         pool,
         bytes,

@@ -14,7 +14,7 @@ use kithara_abr::AbrMode;
 use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::DecodeError;
+use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 #[cfg(feature = "file")]
 use kithara_file::{FileConfig, FileSrc};
@@ -167,12 +167,11 @@ pub struct ResourceConfig {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: NonZeroUsize,
-    /// Forwarded to [`AudioConfig::with_prefer_hardware`] via
-    /// `into_file_config` / `into_hls_config`. When `false` the factory
-    /// uses Symphonia; when `true` it uses the hardware backend
-    /// (Apple `AudioToolbox` / Android `MediaCodec`). No runtime
-    /// fallback between paths — a failure is terminal.
-    pub prefer_hardware: bool,
+    /// Forwarded to [`AudioConfig::with_decoder_backend`] via
+    /// `into_file_config` / `into_hls_config`. Selects the decoder
+    /// backend explicitly. No runtime fallback between paths —
+    /// a failure is terminal.
+    pub decoder_backend: DecoderBackend,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
@@ -266,7 +265,7 @@ impl ResourceConfig {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_for_expensive_networks: 0.0,
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
-            prefer_hardware: false,
+            decoder_backend: DecoderBackend::default(),
             resampler_quality: ResamplerQuality::default(),
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -382,7 +381,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
-        config = config.with_prefer_hardware(self.prefer_hardware);
+        config = config.with_decoder_backend(self.decoder_backend);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }
@@ -461,7 +460,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
-        config = config.with_prefer_hardware(self.prefer_hardware);
+        config = config.with_decoder_backend(self.decoder_backend);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }

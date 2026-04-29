@@ -1,90 +1,133 @@
+use std::time::Duration;
+
 use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_test_utils::kithara;
 
-use super::protocol::{BoxedSource, HardwareBackend, hardware_accepts};
-use crate::{DecodeError, DecoderConfig, InnerDecoder};
+use super::protocol::{Backend, BoxedSource};
+use crate::{
+    DecoderConfig,
+    error::DecodeResult,
+    traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
+    types::{PcmSpec, TrackMetadata},
+};
 
-fn unsupported_try_create(
-    _source: BoxedSource,
-    _config: &DecoderConfig,
-    _codec: AudioCodec,
-    _container: Option<ContainerFormat>,
-) -> Result<Box<dyn InnerDecoder>, DecodeError> {
-    unreachable!("capability-only test backend should never construct a decoder")
-}
-
+/// Capability-only test backends. They satisfy `Backend: Decoder` so the
+/// trait dispatch shape is exercised, but their runtime methods panic if
+/// ever invoked — these tests never construct an actual decoder.
 struct UnsupportedBackend;
-struct Mp3CapabilityBackend;
+struct Mp3OnlyBackend;
+struct ProbingBackend;
 
-impl HardwareBackend for UnsupportedBackend {
-    fn can_seek_container(_container: ContainerFormat) -> bool {
-        false
-    }
+macro_rules! impl_unreachable_decoder {
+    ($t:ty) => {
+        impl Decoder for $t {
+            fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+                unreachable!("capability-only test backend should never decode")
+            }
+            fn spec(&self) -> PcmSpec {
+                unreachable!("capability-only test backend has no spec")
+            }
+            fn seek(&mut self, _pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+                unreachable!("capability-only test backend should never seek")
+            }
+            fn update_byte_len(&self, _len: u64) {
+                unreachable!("capability-only test backend has no byte-len handle")
+            }
+            fn duration(&self) -> Option<Duration> {
+                unreachable!("capability-only test backend has no duration")
+            }
+            fn metadata(&self) -> TrackMetadata {
+                unreachable!("capability-only test backend has no metadata")
+            }
+        }
+    };
+}
 
-    fn default_container_for_codec(_codec: AudioCodec) -> Option<ContainerFormat> {
-        None
-    }
+impl_unreachable_decoder!(UnsupportedBackend);
+impl_unreachable_decoder!(Mp3OnlyBackend);
+impl_unreachable_decoder!(ProbingBackend);
 
-    fn supports_codec(_codec: AudioCodec) -> bool {
+impl Backend for UnsupportedBackend {
+    fn supports(_codec: AudioCodec, _container: Option<ContainerFormat>) -> bool {
         false
     }
 
     fn try_create(
-        source: BoxedSource,
-        config: &DecoderConfig,
-        codec: AudioCodec,
-        container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
-        unsupported_try_create(source, config, codec, container)
+        _source: BoxedSource,
+        _config: &DecoderConfig,
+        _codec: AudioCodec,
+        _container: Option<ContainerFormat>,
+    ) -> DecodeResult<Self> {
+        unreachable!("capability-only test backend should never construct a decoder")
     }
 }
 
-impl HardwareBackend for Mp3CapabilityBackend {
-    fn can_seek_container(container: ContainerFormat) -> bool {
-        container == ContainerFormat::MpegAudio
-    }
-
-    fn default_container_for_codec(codec: AudioCodec) -> Option<ContainerFormat> {
-        (codec == AudioCodec::Mp3).then_some(ContainerFormat::MpegAudio)
-    }
-
-    fn supports_codec(codec: AudioCodec) -> bool {
-        codec == AudioCodec::Mp3
+impl Backend for Mp3OnlyBackend {
+    fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+        if codec != AudioCodec::Mp3 {
+            return false;
+        }
+        match container {
+            Some(ContainerFormat::MpegAudio) | None => true,
+            Some(_) => false,
+        }
     }
 
     fn try_create(
-        source: BoxedSource,
-        config: &DecoderConfig,
-        codec: AudioCodec,
-        container: Option<ContainerFormat>,
-    ) -> Result<Box<dyn InnerDecoder>, DecodeError> {
-        unsupported_try_create(source, config, codec, container)
+        _source: BoxedSource,
+        _config: &DecoderConfig,
+        _codec: AudioCodec,
+        _container: Option<ContainerFormat>,
+    ) -> DecodeResult<Self> {
+        unreachable!("capability-only test backend should never construct a decoder")
+    }
+}
+
+impl Backend for ProbingBackend {
+    fn supports(_codec: AudioCodec, _container: Option<ContainerFormat>) -> bool {
+        true
+    }
+
+    fn try_create(
+        _source: BoxedSource,
+        _config: &DecoderConfig,
+        _codec: AudioCodec,
+        _container: Option<ContainerFormat>,
+    ) -> DecodeResult<Self> {
+        unreachable!("capability-only test backend should never construct a decoder")
     }
 }
 
 #[kithara::test]
-fn test_hardware_accepts_rejects_backends_without_capabilities() {
-    let accepted =
-        hardware_accepts::<UnsupportedBackend>(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio));
-    assert!(accepted.is_none());
+fn supports_returns_false_when_backend_lacks_capability() {
+    assert!(!UnsupportedBackend::supports(
+        AudioCodec::Mp3,
+        Some(ContainerFormat::MpegAudio)
+    ));
 }
 
 #[kithara::test]
-fn test_hardware_accepts_uses_explicit_container_when_supported() {
-    let accepted =
-        hardware_accepts::<Mp3CapabilityBackend>(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio));
-    assert_eq!(accepted, Some(ContainerFormat::MpegAudio));
+fn supports_accepts_explicit_matching_container() {
+    assert!(Mp3OnlyBackend::supports(
+        AudioCodec::Mp3,
+        Some(ContainerFormat::MpegAudio)
+    ));
 }
 
 #[kithara::test]
-fn test_hardware_accepts_infers_container_from_codec() {
-    let accepted = hardware_accepts::<Mp3CapabilityBackend>(AudioCodec::Mp3, None);
-    assert_eq!(accepted, Some(ContainerFormat::MpegAudio));
+fn supports_accepts_missing_container_when_codec_alone_is_enough() {
+    assert!(Mp3OnlyBackend::supports(AudioCodec::Mp3, None));
 }
 
 #[kithara::test]
-fn test_hardware_accepts_rejects_unsupported_container() {
-    let accepted =
-        hardware_accepts::<Mp3CapabilityBackend>(AudioCodec::Mp3, Some(ContainerFormat::Fmp4));
-    assert!(accepted.is_none());
+fn supports_rejects_explicit_unsupported_container() {
+    assert!(!Mp3OnlyBackend::supports(
+        AudioCodec::Mp3,
+        Some(ContainerFormat::Fmp4)
+    ));
+}
+
+#[kithara::test]
+fn probing_backend_accepts_missing_container() {
+    assert!(ProbingBackend::supports(AudioCodec::AacLc, None));
 }

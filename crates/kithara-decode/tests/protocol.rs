@@ -1,6 +1,6 @@
 //! Cross-decoder protocol contract.
 //!
-//! Validates that every `InnerDecoder` backend exposes the same interface
+//! Validates that every `Decoder` backend exposes the same interface
 //! contract on the same input: spec, duration, total frames, seek-then-resume,
 //! and end-of-stream. On macOS with the `apple` feature enabled the test
 //! also compares PCM output between Symphonia and Apple within an L2-norm
@@ -13,21 +13,16 @@
 
 use std::{io::Cursor, time::Duration};
 
-use kithara_decode::{DecoderConfig, DecoderFactory, InnerDecoder};
+use kithara_decode::{Decoder, DecoderConfig, DecoderFactory};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::{create_test_wav, kithara};
-
-const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../assets/test.mp3"
-));
 
 struct Consts;
 
 impl Consts {
-    const WAV_SAMPLE_RATE: u32 = 44_100;
     const WAV_CHANNELS: u16 = 2;
     const WAV_FRAMES: usize = Self::WAV_SAMPLE_RATE as usize * 2;
+    const WAV_SAMPLE_RATE: u32 = 44_100;
 }
 
 /// Backend selector for cross-decoder comparison.
@@ -39,30 +34,26 @@ enum Backend {
 }
 
 impl Backend {
-    fn prefer_hardware(self) -> bool {
-        match self {
-            Self::Symphonia => false,
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-            Self::Apple => true,
-        }
-    }
-
-    fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn InnerDecoder> {
+    fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
         let config = DecoderConfig {
-            prefer_hardware: self.prefer_hardware(),
+            backend: self.to_choice(),
             ..Default::default()
         };
         DecoderFactory::create_from_media_info(source, info, &config)
             .unwrap_or_else(|e| panic!("{self:?} decoder should create: {e}"))
     }
 
-    fn make_mp3(self) -> Box<dyn InnerDecoder> {
+    fn make_mp3(self) -> Box<dyn Decoder> {
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
         let info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
         self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
     }
 
-    fn make_wav(self) -> Box<dyn InnerDecoder> {
+    fn make_wav(self) -> Box<dyn Decoder> {
         let bytes = create_test_wav(
             Consts::WAV_FRAMES,
             Consts::WAV_SAMPLE_RATE,
@@ -70,6 +61,15 @@ impl Backend {
         );
         let info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         self.make_decoder(bytes, &info)
+    }
+
+    fn to_choice(self) -> kithara_decode::DecoderBackend {
+        use kithara_decode::DecoderBackend;
+        match self {
+            Self::Symphonia => DecoderBackend::Symphonia,
+            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            Self::Apple => DecoderBackend::Apple,
+        }
     }
 }
 
@@ -85,12 +85,12 @@ fn available_backends() -> Vec<Backend> {
 }
 
 /// Drain the decoder and return concatenated f32 PCM samples.
-fn drain_all(decoder: &mut dyn InnerDecoder) -> Vec<f32> {
+fn drain_all(decoder: &mut dyn Decoder) -> Vec<f32> {
     let mut all = Vec::new();
     loop {
         match decoder.next_chunk().expect("decode should succeed") {
             kithara_decode::DecoderChunkOutcome::Chunk(chunk) => {
-                all.extend_from_slice(chunk.samples());
+                all.extend_from_slice(&chunk.pcm);
             }
             kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
             kithara_decode::DecoderChunkOutcome::Eof => break,

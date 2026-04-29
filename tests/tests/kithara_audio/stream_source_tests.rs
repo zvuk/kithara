@@ -15,9 +15,9 @@ use std::{
 use kithara_audio::internal::source::*;
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
-    DecodeError, DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, InnerDecoder, PcmChunk,
-    PcmMeta, PcmSpec,
-    mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmMeta,
+    PcmSpec,
+    mock::{infinite_decoder_loose, scripted_decoder_loose},
 };
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
@@ -287,14 +287,14 @@ fn make_shared_stream(
     (new_shared_stream(stream), state)
 }
 
-fn make_factory(decoders: Vec<Box<dyn InnerDecoder>>) -> DecoderFactory<TestStream> {
+fn make_factory(decoders: Vec<Box<dyn Decoder>>) -> DecoderFactory<TestStream> {
     let queue = Arc::new(Mutex::new(VecDeque::from(decoders)));
     Box::new(move |_stream, _info, _offset| queue.lock_sync().pop_front())
 }
 
 /// Factory that records every `base_offset` it receives.
 fn make_tracking_factory(
-    decoders: Vec<Box<dyn InnerDecoder>>,
+    decoders: Vec<Box<dyn Decoder>>,
 ) -> (DecoderFactory<TestStream>, Arc<Mutex<Vec<u64>>>) {
     let queue = Arc::new(Mutex::new(VecDeque::from(decoders)));
     let offsets: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -308,7 +308,7 @@ fn make_tracking_factory(
 
 fn make_source(
     shared: SharedStream<TestStream>,
-    decoder: Box<dyn InnerDecoder>,
+    decoder: Box<dyn Decoder>,
     factory: DecoderFactory<TestStream>,
     media_info: Option<MediaInfo>,
 ) -> StreamAudioSource<TestStream> {
@@ -390,11 +390,11 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 
     // V0 decoder: 4 chunks then EOF
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 4];
-    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
     // V3 decoder the factory will create
     let v3_chunks = vec![];
-    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, _) = scripted_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let (factory, factory_offsets) = make_tracking_factory(vec![v3_decoder]);
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
@@ -442,7 +442,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 fn basic_decode_to_eof() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v0_spec(), 1024); 3];
-    let (decoder, _) = scripted_inner_decoder_loose(v0_spec(), chunks, vec![], None);
+    let (decoder, _) = scripted_decoder_loose(v0_spec(), chunks, vec![], None);
     let factory = make_factory(vec![]);
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
@@ -460,10 +460,10 @@ fn basic_decode_to_eof() {
 fn format_change_recreates_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 2];
-    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 3];
-    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, _) = scripted_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let factory = make_factory(vec![v3_decoder]);
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
@@ -500,7 +500,7 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
 ) {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(spec, 1024); 5];
-    let (decoder, logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
+    let (decoder, logs) = scripted_decoder_loose(spec, chunks, vec![], None);
     let seek_log = logs.seek_log();
     let byte_len_log = logs.byte_len_log();
     let factory = make_factory(vec![]);
@@ -543,7 +543,7 @@ fn seek_uses_exact_target_after_anchor_preparation_without_decoder_recreate() {
         sample_rate: 100,
     };
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let seek_log = logs.seek_log();
 
     let (factory, offsets) = make_tracking_factory(vec![]);
@@ -618,7 +618,7 @@ fn seek_waits_for_anchor_range_before_calling_decoder_seek() {
         sample_rate: 100,
     };
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -757,10 +757,10 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (recreated_decoder, logs) =
-        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
+        scripted_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
     let recreated_seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
@@ -832,10 +832,10 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (recreated_decoder, _) =
-        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
+        scripted_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -890,10 +890,10 @@ fn seek_anchor_recreates_decoder_when_variant_changes_with_same_codec() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (recreated_decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let recreated_seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
@@ -965,10 +965,10 @@ fn seek_anchor_uses_init_range_for_fmp4_variant_switch() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (recreated_decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -1025,7 +1025,7 @@ fn seek_anchor_fails_when_fmp4_variant_switch_has_no_init_range() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -1091,10 +1091,10 @@ fn seek_anchor_same_variant_init_bearing_forces_recreate_at_init_range() {
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
 
     let (recreated_decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let recreated_seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
@@ -1176,7 +1176,7 @@ fn seek_anchor_same_variant_mpeg_audio_stays_in_place() {
         sample_rate: 100,
     };
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let decoder_seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -1236,7 +1236,7 @@ fn seek_anchor_same_variant_fmp4_no_init_range_stays_in_place() {
         sample_rate: 100,
     };
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let decoder_seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -1328,9 +1328,9 @@ fn variant_switch_recreate_offset_matches_container_class(
         sample_rate: 100,
     };
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let (recreated_decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -1380,7 +1380,7 @@ fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
         channels: 1,
         sample_rate: 100,
     };
-    let (decoder, logs) = scripted_inner_decoder_loose(
+    let (decoder, logs) = scripted_decoder_loose(
         seek_spec,
         vec![make_chunk(seek_spec, 100); 3],
         vec![
@@ -1448,7 +1448,7 @@ fn seek_anchor_resolution_failure_fails_track_without_direct_seek_fallback() {
         sample_rate: 100,
     };
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
     let seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -1491,7 +1491,7 @@ fn failed_seek_without_pending_format_change_fails_track_without_decoder_recreat
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (v3_decoder, _) = scripted_inner_decoder_loose(
+    let (v3_decoder, _) = scripted_decoder_loose(
         v3_spec(),
         v3_chunks,
         vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
@@ -1531,7 +1531,7 @@ fn same_codec_seek_with_stale_base_offset_does_not_recreate_decoder() {
 
     let seek_spec = v3_spec();
     let (decoder, logs) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 16], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 16], vec![], None);
     let seek_log = logs.seek_log();
     let (factory, offsets) = make_tracking_factory(vec![]);
 
@@ -1584,7 +1584,7 @@ fn waiting_recreation_uses_recreate_offset_for_readiness() {
     let (shared, state) = make_shared_stream(vec![0u8; 2_000], Some(2_000));
     let seek_spec = v0_spec();
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
     let (factory, offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -1621,9 +1621,9 @@ fn recreating_decoder_waits_for_recreate_offset_before_factory() {
     let (shared, state) = make_shared_stream(vec![0u8; 2_000], Some(2_000));
     let seek_spec = v0_spec();
     let (decoder, _) =
-        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
+        scripted_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 64); 4], vec![], None);
     let (recreated_decoder, _) =
-        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 64); 2], vec![], None);
+        scripted_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 64); 2], vec![], None);
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -1659,7 +1659,7 @@ fn seek_clears_variant_fence() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let chunks = vec![make_chunk(v3_spec(), 2048); 2];
-    let (decoder, _) = scripted_inner_decoder_loose(v3_spec(), chunks, vec![], None);
+    let (decoder, _) = scripted_decoder_loose(v3_spec(), chunks, vec![], None);
     let factory = make_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -1703,7 +1703,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // V0 decoder: 3 chunks, then seek will fail
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 3];
-    let (v0_decoder, _) = scripted_inner_decoder_loose(
+    let (v0_decoder, _) = scripted_decoder_loose(
         v0_spec(),
         v0_chunks,
         vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
@@ -1712,7 +1712,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // V3 decoder that factory will create — should receive retried seek
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 10];
-    let (v3_decoder, logs) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, logs) = scripted_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let v3_seek_log = logs.seek_log();
     let factory = make_factory(vec![v3_decoder]);
 
@@ -1789,7 +1789,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 
         // V0 decoder: produces chunks until stopped
         let v0_stop = Arc::new(AtomicBool::new(false));
-        let (v0_decoder, _) = infinite_inner_decoder_loose(v0_spec(), Arc::clone(&v0_stop));
+        let (v0_decoder, _) = infinite_decoder_loose(v0_spec(), Arc::clone(&v0_stop));
 
         // Factory: only succeeds at correct offset, returns None at wrong offset.
         // Mimics production: ftyp atom only at 964431, not at 1732515.
@@ -1799,7 +1799,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
             factory_offsets_clone.lock_sync().push(offset);
             if offset == V3_SEGMENT_19_START {
                 // Correct offset — decoder would succeed
-                Some(infinite_inner_decoder_loose(v3_spec(), Arc::new(AtomicBool::new(false))).0)
+                Some(infinite_decoder_loose(v3_spec(), Arc::new(AtomicBool::new(false))).0)
             } else {
                 // Wrong offset (1732515) — "missing ftyp atom" in production
                 None
@@ -2091,7 +2091,7 @@ impl EncodedDecoder {
     }
 }
 
-impl InnerDecoder for EncodedDecoder {
+impl Decoder for EncodedDecoder {
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let mut pcm = Vec::new();
         let mut sample_buf = vec![0u8; self.sample_size];
@@ -2211,7 +2211,7 @@ impl ProbeBeforeSeekDecoder {
     }
 }
 
-impl InnerDecoder for ProbeBeforeSeekDecoder {
+impl Decoder for ProbeBeforeSeekDecoder {
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         Ok(DecoderChunkOutcome::Chunk(make_chunk(self.spec, 64)))
     }
@@ -2252,7 +2252,7 @@ impl PanicOnNextChunkDecoder {
     }
 }
 
-impl InnerDecoder for PanicOnNextChunkDecoder {
+impl Decoder for PanicOnNextChunkDecoder {
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         panic!("test panic from decoder next_chunk");
     }
@@ -2433,7 +2433,7 @@ fn seek_during_active_decode_completes_without_hang() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = v0_spec();
     let chunks = vec![make_chunk(spec, 1024); 20];
-    let (decoder, _logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
+    let (decoder, _logs) = scripted_decoder_loose(spec, chunks, vec![], None);
     let factory = make_factory(vec![]);
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
@@ -2484,7 +2484,7 @@ fn rapid_seeks_via_timeline_all_complete() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = v0_spec();
     let chunks = vec![make_chunk(spec, 1024); 100];
-    let (decoder, _logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
+    let (decoder, _logs) = scripted_decoder_loose(spec, chunks, vec![], None);
     let factory = make_factory(vec![]);
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
@@ -2512,7 +2512,7 @@ fn rapid_seeks_via_timeline_all_complete() {
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1024], Some(1024));
-    let decoder: Box<dyn InnerDecoder> = Box::new(PanicOnNextChunkDecoder::new(v0_spec()));
+    let decoder: Box<dyn Decoder> = Box::new(PanicOnNextChunkDecoder::new(v0_spec()));
     let (factory, offsets) = make_tracking_factory(vec![]);
     let epoch = Arc::new(AtomicU64::new(0));
     let mut source = new_stream_audio_source(

@@ -25,9 +25,9 @@ use super::{adapter::ReadSeekAdapter, config::SymphoniaConfig};
 use crate::error::{DecodeError, DecodeResult};
 
 pub(crate) struct ReaderBootstrap {
-    pub(crate) format_reader: Box<dyn FormatReader>,
     pub(crate) byte_len_handle: Arc<AtomicU64>,
     pub(crate) byte_pos_handle: Arc<AtomicU64>,
+    pub(crate) format_reader: Box<dyn FormatReader>,
 }
 
 /// Create a format reader directly from a known container format.
@@ -70,9 +70,9 @@ where
     tracing::debug!("Re-enabled seek after decoder initialization");
 
     Ok(ReaderBootstrap {
-        format_reader,
         byte_len_handle,
         byte_pos_handle,
+        format_reader,
     })
 }
 
@@ -123,9 +123,9 @@ where
     }
 
     Ok(ReaderBootstrap {
-        format_reader,
         byte_len_handle,
         byte_pos_handle,
+        format_reader,
     })
 }
 

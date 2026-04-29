@@ -190,12 +190,9 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         };
         assert_eq!(chunk.spec().sample_rate, 44_100);
         assert_eq!(chunk.spec().channels, 2);
-        assert_valid_pcm_samples(
-            chunk.samples(),
-            format!("{format:?} chunk {chunk_idx}").as_str(),
-        );
+        assert_valid_pcm_samples(&chunk.pcm, format!("{format:?} chunk {chunk_idx}").as_str());
         total_frames += chunk.frames();
-        if detect_direction(chunk.samples(), chunk.spec().channels as usize)
+        if detect_direction(&chunk.pcm, chunk.spec().channels as usize)
             == SignalDirection::Ascending
         {
             ascending_chunks += 1;

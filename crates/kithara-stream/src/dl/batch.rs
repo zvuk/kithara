@@ -13,6 +13,7 @@ use kithara_platform::{
     tokio,
     tokio::task,
 };
+use kithara_probes::kithara;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -22,6 +23,92 @@ use super::{
     peer::{InternalCmd, ResponseTarget, SlotEntry},
     response::{BodyStream, FetchResponse},
 };
+
+/// Transition a fetch from queued → in-flight. Increments the
+/// `inflight` counter (the fact subscribers and the watchdog actually
+/// observe) and notifies bus listeners with the realised
+/// queue-residence time.
+#[kithara::probe(request_id, wait_in_queue)]
+fn start_request(
+    bus: Option<&EventBus>,
+    inflight: &std::sync::atomic::AtomicUsize,
+    request_id: RequestId,
+    wait_in_queue: Duration,
+) {
+    inflight.fetch_add(1, Ordering::Relaxed);
+    if let Some(b) = bus {
+        b.publish(DownloaderEvent::RequestStarted {
+            request_id,
+            wait_in_queue,
+        });
+    }
+}
+
+/// Record a fetch as successfully finished. Feeds the realised
+/// bandwidth into ABR (the fact downstream throttling cares about) and
+/// notifies subscribers.
+#[kithara::probe(request_id, bytes_transferred, duration)]
+fn finish_request(
+    bus: Option<&EventBus>,
+    abr: &AbrController,
+    peer_id: AbrPeerId,
+    request_id: RequestId,
+    bytes_transferred: u64,
+    duration: Duration,
+) {
+    if bytes_transferred > 0 {
+        abr.record_bandwidth(
+            peer_id,
+            bytes_transferred,
+            duration,
+            BandwidthSource::Network,
+        );
+    }
+    if let Some(b) = bus {
+        b.publish(DownloaderEvent::RequestCompleted {
+            request_id,
+            bytes_transferred,
+            duration,
+            bandwidth_bps: bandwidth_bps(bytes_transferred, duration),
+        });
+    }
+}
+
+/// Abort a fetch and propagate the cancel reason. `was_in_flight`
+/// distinguishes a mid-flight kill (a fetch task was already running)
+/// from a before-start kill the [`deliver_cancelled_with_event`] path
+/// performs on entries that never spawned.
+#[kithara::probe(request_id, reason, bytes_transferred, was_in_flight)]
+fn abort_request(
+    bus: Option<&EventBus>,
+    request_id: RequestId,
+    reason: CancelReason,
+    bytes_transferred: u64,
+    was_in_flight: bool,
+) {
+    if let Some(bus) = bus {
+        bus.publish(DownloaderEvent::RequestCancelled {
+            request_id,
+            reason,
+            bytes_transferred,
+        });
+    }
+    let _ = was_in_flight;
+}
+
+/// Mark a fetch as failed (network or protocol error). Tags the
+/// failure as retryable or terminal so callers can decide whether to
+/// re-queue.
+#[kithara::probe(request_id, retryable)]
+fn fail_request(bus: Option<&EventBus>, request_id: RequestId, err: &NetError, retryable: bool) {
+    if let Some(bus) = bus {
+        bus.publish(DownloaderEvent::RequestFailed {
+            request_id,
+            error: err.clone(),
+            retryable,
+        });
+    }
+}
 
 /// Group of slot entries sharing the same cancel-token identity (epoch).
 struct EpochGroup {
@@ -109,14 +196,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
 
-    if let Some(ref b) = bus {
-        b.publish(DownloaderEvent::RequestStarted {
-            request_id,
-            wait_in_queue,
-        });
-    }
-
-    inflight.fetch_add(1, Ordering::Relaxed);
+    start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
 
     task::spawn(async move {
         let result = establish(
@@ -296,22 +376,7 @@ async fn deliver(
                     let elapsed = started.elapsed();
                     match write_result {
                         Ok(total) => {
-                            if total > 0 {
-                                abr.record_bandwidth(
-                                    peer_id,
-                                    total,
-                                    elapsed,
-                                    BandwidthSource::Network,
-                                );
-                            }
-                            if let Some(ref b) = bus {
-                                b.publish(DownloaderEvent::RequestCompleted {
-                                    request_id,
-                                    bytes_transferred: total,
-                                    duration: elapsed,
-                                    bandwidth_bps: bandwidth_bps(total, elapsed),
-                                });
-                            }
+                            finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
                             if let Some(cb) = on_complete_cb {
                                 cb(total, None);
                             }
@@ -362,19 +427,12 @@ fn publish_failure_or_cancel(
     epoch_cancel: Option<&CancellationToken>,
     downloader_cancel: &CancellationToken,
 ) {
-    let Some(bus) = bus else { return };
     if matches!(err, NetError::Cancelled) {
-        bus.publish(DownloaderEvent::RequestCancelled {
-            request_id,
-            reason: classify_cancel(peer_cancel, epoch_cancel, downloader_cancel),
-            bytes_transferred,
-        });
+        let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
+        abort_request(bus, request_id, reason, bytes_transferred, true);
     } else {
-        bus.publish(DownloaderEvent::RequestFailed {
-            request_id,
-            error: err.clone(),
-            retryable: err.is_retryable(),
-        });
+        let retryable = err.is_retryable();
+        fail_request(bus, request_id, err, retryable);
     }
 }
 
@@ -391,20 +449,15 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
     // Reuse the same classifier; `epoch_cancel` lives on the cmd until
     // it's torn apart in `deliver_cancelled` below.
     let epoch_cancel = internal.cmd.cancel.clone();
-    if let Some(ref b) = bus {
-        b.publish(DownloaderEvent::RequestCancelled {
-            request_id,
-            reason: classify_cancel(
-                peer_cancel,
-                epoch_cancel.as_ref(),
-                // Without an inner-cancel reference here we treat "no
-                // peer or epoch" as `BeforeStart` — same outcome the
-                // classifier would land on.
-                &CancellationToken::new(),
-            ),
-            bytes_transferred: 0,
-        });
-    }
+    let reason = classify_cancel(
+        peer_cancel,
+        epoch_cancel.as_ref(),
+        // Without an inner-cancel reference here we treat "no
+        // peer or epoch" as `BeforeStart` — same outcome the
+        // classifier would land on.
+        &CancellationToken::new(),
+    );
+    abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);
 }
 

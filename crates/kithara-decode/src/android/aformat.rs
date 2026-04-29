@@ -13,8 +13,17 @@ impl OwnedFormat {
         Self { raw }
     }
 
-    pub(crate) fn raw(&self) -> *mut ffi::AMediaFormat {
-        self.raw.as_ptr()
+    pub(crate) fn get_i32(&self, key: &CStr) -> Option<i32> {
+        let mut value = 0;
+        unsafe { ffi::AMediaFormat_getInt32(self.raw(), key.as_ptr(), &mut value) }.then_some(value)
+    }
+
+    pub(crate) fn get_i64(&self, key: &CStr) -> Result<Option<i64>, AndroidBackendError> {
+        let mut value = 0;
+        Ok(
+            unsafe { ffi::AMediaFormat_getInt64(self.raw(), key.as_ptr(), &mut value) }
+                .then_some(value),
+        )
     }
 
     pub(crate) fn get_string(&self, key: &CStr) -> Result<Option<String>, AndroidBackendError> {
@@ -31,19 +40,6 @@ impl OwnedFormat {
                 .to_string_lossy()
                 .into_owned(),
         ))
-    }
-
-    pub(crate) fn get_i32(&self, key: &CStr) -> Option<i32> {
-        let mut value = 0;
-        unsafe { ffi::AMediaFormat_getInt32(self.raw(), key.as_ptr(), &mut value) }.then_some(value)
-    }
-
-    pub(crate) fn get_i64(&self, key: &CStr) -> Result<Option<i64>, AndroidBackendError> {
-        let mut value = 0;
-        Ok(
-            unsafe { ffi::AMediaFormat_getInt64(self.raw(), key.as_ptr(), &mut value) }
-                .then_some(value),
-        )
     }
 
     pub(crate) fn get_u16(&self, key: &CStr) -> Result<Option<u16>, AndroidBackendError> {
@@ -68,6 +64,10 @@ impl OwnedFormat {
                 })
             })
             .transpose()
+    }
+
+    pub(crate) fn raw(&self) -> *mut ffi::AMediaFormat {
+        self.raw.as_ptr()
     }
 
     pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) -> bool {

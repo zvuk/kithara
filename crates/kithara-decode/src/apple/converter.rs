@@ -1,7 +1,7 @@
 //! `AudioConverter` input-data callback and associated state.
 //!
 //! The callback hands `AudioConverter` a pointer+len into the active
-//! packet buffer without any per-packet allocation. `AppleInner` writes
+//! packet buffer without any per-packet allocation. `AppleDecoder` writes
 //! the current packet into `ConverterInputState` before each
 //! `AudioConverterFillComplexBuffer` call and clears `has_packet` once
 //! the converter consumes it.
@@ -19,12 +19,12 @@ use super::{
 ///
 /// All fields point at memory owned by the `PacketReader`'s internal
 /// buffer — they stay valid until the next `read_next_packet` call, which
-/// is always issued by `AppleInner` *after* the converter has finished
+/// is always issued by `AppleDecoder` *after* the converter has finished
 /// consuming the current packet.
 pub(super) struct ConverterInputState {
     pub(super) packet_ptr: *const u8,
-    pub(super) packet_len: UInt32,
     pub(super) packet_desc: AudioStreamPacketDescription,
+    pub(super) packet_len: UInt32,
     pub(super) has_packet: bool,
 }
 
@@ -32,10 +32,16 @@ impl ConverterInputState {
     pub(super) fn new() -> Self {
         Self {
             packet_ptr: ptr::null(),
-            packet_len: 0,
             packet_desc: AudioStreamPacketDescription::default(),
+            packet_len: 0,
             has_packet: false,
         }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.packet_ptr = ptr::null();
+        self.packet_len = 0;
+        self.has_packet = false;
     }
 
     pub(super) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
@@ -54,12 +60,6 @@ impl ConverterInputState {
         };
         self.has_packet = true;
     }
-
-    pub(super) fn clear(&mut self) {
-        self.packet_ptr = ptr::null();
-        self.packet_len = 0;
-        self.has_packet = false;
-    }
 }
 
 /// `AudioConverter` input data callback.
@@ -71,7 +71,7 @@ pub(super) extern "C" fn converter_input_callback(
     user_data: *mut c_void,
 ) -> OSStatus {
     // SAFETY: `user_data` was set to a valid `ConverterInputState` pointer
-    // by `AppleInner::run_converter`; the state outlives the callback.
+    // by `AppleDecoder::run_converter`; the state outlives the callback.
     let state = unsafe { &mut *(user_data as *mut ConverterInputState) };
 
     if !state.has_packet {

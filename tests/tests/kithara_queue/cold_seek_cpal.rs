@@ -11,6 +11,7 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -18,8 +19,6 @@ use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{kithara, temp_dir};
 use tokio::time::sleep;
-
-use crate::common::decoder_backend::DecoderBackend;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -96,16 +95,16 @@ async fn wait_for_position_at_least(
 /// the kithara pipeline abstract.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 #[ignore = "real network + real cpal; run manually: \
     cargo test --test suite_e2e \
     kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     install_tracing();
 
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -137,7 +136,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let mut cfg = ResourceConfig::new(URL).expect("valid silvercomet URL");
     cfg = cfg.with_downloader(downloader.clone());
     cfg.store = store;
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

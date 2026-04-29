@@ -25,6 +25,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
+use kithara_decode::DecoderBackend;
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
 use kithara_platform::time::{Duration, Instant, sleep};
@@ -36,7 +37,7 @@ use tokio::time::timeout;
 use tracing::{debug, info};
 
 use crate::{
-    common::{decoder_backend::DecoderBackend, test_defaults::Consts as Shared},
+    common::test_defaults::Consts as Shared,
     continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
         render_offline_window,
@@ -187,7 +188,7 @@ fn resource_config(
     if let Some(w) = worker {
         cfg = cfg.with_worker(w);
     }
-    cfg.prefer_hardware = backend.prefer_hardware();
+    cfg.decoder_backend = backend;
     cfg
 }
 
@@ -245,7 +246,7 @@ async fn warm_hls_worker(
     let config = AudioConfig::<Hls>::new(hls_config)
         .with_media_info(wav_info)
         .with_worker(worker)
-        .with_prefer_hardware(backend.prefer_hardware());
+        .with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -304,7 +305,7 @@ async fn warm_hls_worker_without_seek(
     let config = AudioConfig::<Hls>::new(hls_config)
         .with_media_info(wav_info)
         .with_worker(worker)
-        .with_prefer_hardware(backend.prefer_hardware());
+        .with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -376,7 +377,7 @@ async fn open_packaged_hls_audio(
     backend: DecoderBackend,
 ) -> Audio<Stream<Hls>> {
     let config = AudioConfig::<Hls>::new(HlsConfig::new(url.clone()).with_store(store))
-        .with_prefer_hardware(backend.prefer_hardware());
+        .with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
@@ -447,15 +448,15 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, true);
     let ok_url = server.url("/ok.mp3");
@@ -509,24 +510,27 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     case::disk_symphonia(false, DecoderBackend::Symphonia)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    any(target_os = "macos", target_os = "ios"),
     case::disk_apple(false, DecoderBackend::Apple)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    target_os = "android",
     case::disk_android(false, DecoderBackend::Android)
 )]
 #[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
-#[case::ephemeral_apple(true, DecoderBackend::Apple)]
-#[case::ephemeral_android(true, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::ephemeral_apple(true, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::ephemeral_android(true, DecoderBackend::Android)
+)]
 async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, ephemeral);
     let ok_url = server.url("/ok.mp3");
@@ -564,24 +568,27 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     case::disk_symphonia(false, DecoderBackend::Symphonia)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    any(target_os = "macos", target_os = "ios"),
     case::disk_apple(false, DecoderBackend::Apple)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    target_os = "android",
     case::disk_android(false, DecoderBackend::Android)
 )]
 #[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
-#[case::ephemeral_apple(true, DecoderBackend::Apple)]
-#[case::ephemeral_android(true, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::ephemeral_apple(true, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::ephemeral_android(true, DecoderBackend::Android)
+)]
 async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -638,15 +645,15 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[case::apple(DecoderBackend::Apple)]
-#[case::android(DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let worker = AudioWorkerHandle::new();
@@ -723,21 +730,36 @@ enum WarmupTeardown {
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::shutdown_symphonia(WarmupTeardown::Shutdown, DecoderBackend::Symphonia)]
-#[case::shutdown_apple(WarmupTeardown::Shutdown, DecoderBackend::Apple)]
-#[case::shutdown_android(WarmupTeardown::Shutdown, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::shutdown_apple(WarmupTeardown::Shutdown, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::shutdown_android(WarmupTeardown::Shutdown, DecoderBackend::Android)
+)]
 #[case::drop_only_symphonia(WarmupTeardown::DropOnly, DecoderBackend::Symphonia)]
-#[case::drop_only_apple(WarmupTeardown::DropOnly, DecoderBackend::Apple)]
-#[case::drop_only_android(WarmupTeardown::DropOnly, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::drop_only_apple(WarmupTeardown::DropOnly, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::drop_only_android(WarmupTeardown::DropOnly, DecoderBackend::Android)
+)]
 #[case::read_only_symphonia(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Symphonia)]
-#[case::read_only_apple(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Apple)]
-#[case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::read_only_apple(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)
+)]
 async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -823,19 +845,28 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 #[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia)]
-#[case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple)]
-#[case::aac_android(AudioCodec::AacLc, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::aac_android(AudioCodec::AacLc, DecoderBackend::Android)
+)]
 #[case::flac_symphonia(AudioCodec::Flac, DecoderBackend::Symphonia)]
-#[case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple)]
-#[case::flac_android(AudioCodec::Flac, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::flac_android(AudioCodec::Flac, DecoderBackend::Android)
+)]
 async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] codec: AudioCodec,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     use kithara::play::internal::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
@@ -934,24 +965,27 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     case::disk_symphonia(false, DecoderBackend::Symphonia)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    any(target_os = "macos", target_os = "ios"),
     case::disk_apple(false, DecoderBackend::Apple)
 )]
 #[cfg_attr(
-    not(target_arch = "wasm32"),
+    target_os = "android",
     case::disk_android(false, DecoderBackend::Android)
 )]
 #[case::ephemeral_symphonia(true, DecoderBackend::Symphonia)]
-#[case::ephemeral_apple(true, DecoderBackend::Apple)]
-#[case::ephemeral_android(true, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::ephemeral_apple(true, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::ephemeral_android(true, DecoderBackend::Android)
+)]
 async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -1178,19 +1212,28 @@ async fn stress_offline_crossfade_no_gaps() {
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 #[case::with_extension_symphonia("/ok.mp3", DecoderBackend::Symphonia)]
-#[case::with_extension_apple("/ok.mp3", DecoderBackend::Apple)]
-#[case::with_extension_android("/ok.mp3", DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::with_extension_apple("/ok.mp3", DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::with_extension_android("/ok.mp3", DecoderBackend::Android)
+)]
 #[case::no_extension_symphonia("/track/stream", DecoderBackend::Symphonia)]
-#[case::no_extension_apple("/track/stream", DecoderBackend::Apple)]
-#[case::no_extension_android("/track/stream", DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::no_extension_apple("/track/stream", DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::no_extension_android("/track/stream", DecoderBackend::Android)
+)]
 async fn resource_mp3_no_hint_decodes_with_duration(
     #[case] path: &str,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let server = TestHttpServer::new(test_app()).await;
     let url = server.url(path);
     let store = store_options(&temp_dir, true);
@@ -1275,67 +1318,94 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     "https://stream.silvercomet.top/track.mp3",
     DecoderBackend::Symphonia
 )]
-#[case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)]
-#[case::silvercomet_mp3_android(
-    "https://stream.silvercomet.top/track.mp3",
-    DecoderBackend::Android
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_mp3_android(
+        "https://stream.silvercomet.top/track.mp3",
+        DecoderBackend::Android
+    )
 )]
 #[case::silvercomet_hls_symphonia(
     "https://stream.silvercomet.top/hls/master.m3u8",
     DecoderBackend::Symphonia
 )]
-#[case::silvercomet_hls_apple(
-    "https://stream.silvercomet.top/hls/master.m3u8",
-    DecoderBackend::Apple
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_hls_apple(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        DecoderBackend::Apple
+    )
 )]
-#[case::silvercomet_hls_android(
-    "https://stream.silvercomet.top/hls/master.m3u8",
-    DecoderBackend::Android
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_hls_android(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        DecoderBackend::Android
+    )
 )]
 #[case::zvuk_27390231_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
     DecoderBackend::Symphonia
 )]
-#[case::zvuk_27390231_apple(
-    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
-    DecoderBackend::Apple
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_27390231_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        DecoderBackend::Apple
+    )
 )]
-#[case::zvuk_27390231_android(
-    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
-    DecoderBackend::Android
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_27390231_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        DecoderBackend::Android
+    )
 )]
 #[case::zvuk_151585912_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
     DecoderBackend::Symphonia
 )]
-#[case::zvuk_151585912_apple(
-    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
-    DecoderBackend::Apple
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_151585912_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        DecoderBackend::Apple
+    )
 )]
-#[case::zvuk_151585912_android(
-    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
-    DecoderBackend::Android
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_151585912_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        DecoderBackend::Android
+    )
 )]
 #[case::zvuk_125475417_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
     DecoderBackend::Symphonia
 )]
-#[case::zvuk_125475417_apple(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Apple
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_125475417_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Apple
+    )
 )]
-#[case::zvuk_125475417_android(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Android
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_125475417_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Android
+    )
 )]
 async fn live_remote_resource_decodes_with_duration(
     #[case] url: &str,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let store = store_options(&temp_dir, true);
     let net = NetOptions {
         inactivity_timeout: Duration::from_secs(25),
@@ -1347,7 +1417,7 @@ async fn live_remote_resource_decodes_with_duration(
         .expect("valid URL")
         .with_store(store)
         .with_downloader(downloader);
-    config.prefer_hardware = backend.prefer_hardware();
+    config.decoder_backend = backend;
 
     let mut resource = Resource::new(config)
         .await
@@ -1418,38 +1488,47 @@ async fn live_remote_resource_decodes_with_duration(
     "https://stream.silvercomet.top/track.mp3",
     DecoderBackend::Symphonia
 )]
-#[case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)]
-#[case::silvercomet_mp3_android(
-    "https://stream.silvercomet.top/track.mp3",
-    DecoderBackend::Android
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_mp3_apple("https://stream.silvercomet.top/track.mp3", DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_mp3_android(
+        "https://stream.silvercomet.top/track.mp3",
+        DecoderBackend::Android
+    )
 )]
 #[case::zvuk_125475417_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
     DecoderBackend::Symphonia
 )]
-#[case::zvuk_125475417_apple(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Apple
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_125475417_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Apple
+    )
 )]
-#[case::zvuk_125475417_android(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Android
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_125475417_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Android
+    )
 )]
 async fn player_mp3_duration_matches_app_flow(
     #[case] url: &str,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let store = store_options(&temp_dir, true);
 
     let player = PlayerImpl::new(PlayerConfig::default());
     player.reserve_slots(1);
 
     let mut config = ResourceConfig::new(url).unwrap().with_store(store);
-    config.prefer_hardware = backend.prefer_hardware();
+    config.decoder_backend = backend;
     player.prepare_config(&mut config);
 
     let resource = Resource::new(config)
@@ -1489,19 +1568,28 @@ enum LocalKind {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 #[case::mp3_symphonia(LocalKind::Mp3, DecoderBackend::Symphonia)]
-#[case::mp3_apple(LocalKind::Mp3, DecoderBackend::Apple)]
-#[case::mp3_android(LocalKind::Mp3, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple(LocalKind::Mp3, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::mp3_android(LocalKind::Mp3, DecoderBackend::Android)
+)]
 #[case::hls_aac_symphonia(LocalKind::HlsAac, DecoderBackend::Symphonia)]
-#[case::hls_aac_apple(LocalKind::HlsAac, DecoderBackend::Apple)]
-#[case::hls_aac_android(LocalKind::HlsAac, DecoderBackend::Android)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_aac_apple(LocalKind::HlsAac, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::hls_aac_android(LocalKind::HlsAac, DecoderBackend::Android)
+)]
 async fn local_resource_decodes_with_duration(
     #[case] kind: LocalKind,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    if backend.skip_if_unavailable() {
-        return;
-    }
     let helper = TestServerHelper::new().await;
     let url = match kind {
         LocalKind::Mp3 => helper.asset("track.mp3"),
@@ -1522,7 +1610,7 @@ async fn local_resource_decodes_with_duration(
     let mut config = ResourceConfig::new(url.as_str())
         .expect("valid URL")
         .with_store(store);
-    config.prefer_hardware = backend.prefer_hardware();
+    config.decoder_backend = backend;
 
     let mut resource = Resource::new(config)
         .await

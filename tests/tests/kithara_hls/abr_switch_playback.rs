@@ -8,6 +8,7 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
+    decode::DecoderBackend,
     events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -327,19 +328,31 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::drm_abr_auto_sw("drm/master.m3u8", true, false)]
-#[case::drm_abr_auto_hw("drm/master.m3u8", true, true)]
-#[case::hls_abr_auto_sw("hls/master.m3u8", true, false)]
-#[case::hls_abr_auto_hw("hls/master.m3u8", true, true)]
-#[case::drm_manual_v0_sw("drm/master.m3u8", false, false)]
-#[case::drm_manual_v0_hw("drm/master.m3u8", false, true)]
-#[case::hls_manual_v0_sw("hls/master.m3u8", false, false)]
-#[case::hls_manual_v0_hw("hls/master.m3u8", false, true)]
+#[case::drm_abr_auto_sw("drm/master.m3u8", true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::drm_abr_auto_hw("drm/master.m3u8", true, DecoderBackend::Apple)
+)]
+#[case::hls_abr_auto_sw("hls/master.m3u8", true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_abr_auto_hw("hls/master.m3u8", true, DecoderBackend::Apple)
+)]
+#[case::drm_manual_v0_sw("drm/master.m3u8", false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::drm_manual_v0_hw("drm/master.m3u8", false, DecoderBackend::Apple)
+)]
+#[case::hls_manual_v0_sw("hls/master.m3u8", false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_manual_v0_hw("hls/master.m3u8", false, DecoderBackend::Apple)
+)]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] abr_auto: bool,
-    #[case] prefer_hardware: bool,
+    #[case] backend: DecoderBackend,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -355,7 +368,7 @@ async fn stream_continues_after_seek(
         .with_cancel(cancel)
         .with_initial_abr_mode(abr_mode);
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
+    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -495,7 +508,8 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         .with_cancel(cancel)
         .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(false);
+    let config =
+        AudioConfig::<Hls>::new(hls_config).with_decoder_backend(DecoderBackend::Symphonia);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");

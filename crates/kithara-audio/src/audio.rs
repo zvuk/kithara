@@ -790,14 +790,14 @@ where
         hint: Option<String>,
         pcm_pool: PcmPool,
         byte_pool: kithara_bufpool::BytePool,
-        prefer_hardware: bool,
+        decoder_backend: kithara_decode::DecoderBackend,
         stream_ctx: Arc<dyn StreamContext>,
-    ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
+    ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let hooks = shared_stream.take_reader_hooks();
         let decoder_config = kithara_decode::DecoderConfig {
-            prefer_hardware,
+            backend: decoder_backend,
             hint: hint.clone(),
             byte_len_handle: Some(Arc::clone(&byte_len_handle)),
             pcm_pool: Some(pcm_pool),
@@ -856,7 +856,7 @@ where
     }
 
     fn create_decoder_factory(
-        prefer_hardware: bool,
+        decoder_backend: kithara_decode::DecoderBackend,
         stream_ctx: &Arc<dyn StreamContext>,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
@@ -880,7 +880,7 @@ where
             let current_epoch = factory_epoch.load(Ordering::Acquire);
             let hooks = stream.take_reader_hooks();
             let config = kithara_decode::DecoderConfig {
-                prefer_hardware,
+                backend: decoder_backend,
                 byte_len_handle: Some(Arc::clone(&factory_byte_len)),
                 pcm_pool: Some(factory_pool.clone()),
                 byte_pool: Some(factory_byte_pool.clone()),
@@ -931,7 +931,7 @@ where
             pcm_buffer_chunks,
             pcm_pool: mut pool,
             playback_rate: config_playback_rate,
-            prefer_hardware,
+            decoder_backend,
             preload_chunks,
             resampler_quality,
             stream: stream_config,
@@ -961,7 +961,7 @@ where
             hint.clone(),
             pool.clone(),
             byte_pool.clone(),
-            prefer_hardware,
+            decoder_backend,
             Arc::clone(&stream_ctx),
         )
         .await?;
@@ -989,7 +989,7 @@ where
 
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
-            prefer_hardware,
+            decoder_backend,
             &stream_ctx,
             &epoch,
             &byte_len_handle,

@@ -792,7 +792,7 @@ mod tests {
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
         // Skip transient, measure steady-state RMS.
         let steady = &out[4096..];
@@ -1030,7 +1030,7 @@ mod tests {
             .collect();
         let chunk = test_chunk(spec, signal);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
         let max_diff = out
             .windows(2)
@@ -1065,7 +1065,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm);
         let result = eq.process(chunk);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().samples().len(), sample_len);
+        assert_eq!(result.unwrap().pcm.len(), sample_len);
     }
 
     #[kithara::test]
@@ -1097,7 +1097,7 @@ mod tests {
             let pcm: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.1).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
-            for (i, &s) in output.samples().iter().enumerate() {
+            for (i, &s) in output.pcm.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
             }
         }
@@ -1121,7 +1121,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
 
-        for (i, &s) in output.samples().iter().enumerate() {
+        for (i, &s) in output.pcm.iter().enumerate() {
             assert!(s.is_finite(), "sample {i}: got {s}");
         }
     }
@@ -1148,7 +1148,7 @@ mod tests {
             let pcm: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.3).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
-            for &s in output.samples() {
+            for &s in &output.pcm[..] {
                 assert!(s.is_finite());
             }
         }
@@ -1333,7 +1333,7 @@ mod tests {
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
         let steady = &out[4096..];
         let output_rms: f32 =
