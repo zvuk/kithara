@@ -18,6 +18,8 @@ use kithara_test_utils::{
 };
 use reqwest::Client;
 
+const AAC_NATIVE_ENCODER_DELAY: u64 = 1_024;
+
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(5)),
@@ -604,6 +606,7 @@ async fn test_packaged_hls_init_segment_exposes_configured_gapless_delays() {
     let server = TestServerHelper::new().await;
     let encoder_delay = 2_112;
     let trailing_delay = 960;
+    let expected_leading = u64::from(encoder_delay) + AAC_NATIVE_ENCODER_DELAY;
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -614,6 +617,7 @@ async fn test_packaged_hls_init_segment_exposes_configured_gapless_delays() {
                     codec: AudioCodec::AacLc,
                     sample_rate: 48_000,
                     channels: 2,
+                    start_frame: None,
                     timescale: Some(48_000),
                     bit_rate: Some(128_000),
                     encoder_delay: NonZeroU32::new(encoder_delay),
@@ -636,7 +640,7 @@ async fn test_packaged_hls_init_segment_exposes_configured_gapless_delays() {
     let gapless = probe_mp4_gapless(&mut Cursor::new(init.to_vec())).expect("probe gapless");
 
     let gapless = gapless.expect("expected gapless metadata");
-    assert_eq!(gapless.leading_frames, u64::from(encoder_delay));
+    assert_eq!(gapless.leading_frames, expected_leading);
     assert_eq!(gapless.trailing_frames, u64::from(trailing_delay));
 }
 
@@ -650,6 +654,7 @@ async fn test_symphonia_aac_decoder_exposes_gapless_metadata_only_when_enabled()
     let server = TestServerHelper::new().await;
     let encoder_delay = 2_112;
     let trailing_delay = 960;
+    let expected_leading = u64::from(encoder_delay) + AAC_NATIVE_ENCODER_DELAY;
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -660,6 +665,7 @@ async fn test_symphonia_aac_decoder_exposes_gapless_metadata_only_when_enabled()
                     codec: AudioCodec::AacLc,
                     sample_rate: 48_000,
                     channels: 2,
+                    start_frame: None,
                     timescale: Some(48_000),
                     bit_rate: Some(128_000),
                     encoder_delay: NonZeroU32::new(encoder_delay),
@@ -706,7 +712,7 @@ async fn test_symphonia_aac_decoder_exposes_gapless_metadata_only_when_enabled()
     let direct_gapless = direct_decoder.track_info().gapless;
     assert_eq!(
         direct_gapless.as_ref().map(|info| info.leading_frames),
-        Some(u64::from(encoder_delay))
+        Some(expected_leading)
     );
     assert_eq!(
         direct_gapless.as_ref().map(|info| info.trailing_frames),
@@ -722,7 +728,7 @@ async fn test_symphonia_aac_decoder_exposes_gapless_metadata_only_when_enabled()
     let probe_gapless = probe_decoder.track_info().gapless;
     assert_eq!(
         probe_gapless.as_ref().map(|info| info.leading_frames),
-        Some(u64::from(encoder_delay))
+        Some(expected_leading)
     );
     assert_eq!(
         probe_gapless.as_ref().map(|info| info.trailing_frames),

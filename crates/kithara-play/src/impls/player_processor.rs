@@ -5,12 +5,6 @@
 //! main thread via a bounded channel and renders mixed audio into the
 //! Firewheel output buffers.
 
-use std::{
-    collections::VecDeque,
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
-
 use derivative::Derivative;
 use firewheel::{
     StreamInfo,
@@ -22,6 +16,12 @@ use kithara_platform::Mutex;
 use ringbuf::{
     HeapCons,
     traits::{Consumer, Producer},
+};
+use smallvec::SmallVec;
+use std::{
+    collections::VecDeque,
+    num::NonZeroU32,
+    sync::{Arc, atomic::Ordering},
 };
 use thunderdome::Index;
 use tracing::warn;
@@ -101,7 +101,7 @@ impl PlayerNodeProcessor {
         sample_rate: NonZeroU32,
         pool: &PcmPool,
     ) -> Self {
-        let scratch_bufs = [pool.get(), pool.get(), pool.get(), pool.get()];
+        let scratch_bufs = std::array::from_fn(|_| pool.get());
 
         Self {
             cmd_rx,
@@ -372,6 +372,22 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
+        match read_outcome {
+            TrackReadOutcome::Partial { frames, .. } => Some(*frames),
+            TrackReadOutcome::Eof => Some(0),
+            TrackReadOutcome::Full { .. } | TrackReadOutcome::Error(_) => None,
+        }
+    }
+
+    fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
+        match read_outcome {
+            TrackReadOutcome::Full { .. } => None,
+            TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
+            TrackReadOutcome::Eof | TrackReadOutcome::Error(_) => Some(offset),
+        }
+    }
+
     /// Update position and duration from the leading track.
     fn update_position_duration(&self) {
         for (_, track) in self.tracks.iter() {
@@ -415,15 +431,17 @@ impl PlayerNodeProcessor {
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
-        let arena_tracks = if is_playing {
-            self.tracks
+        let notification_tx = &self.shared_state.notification_tx;
+        let tracks = &mut self.tracks;
+        let arena_tracks: SmallVec<[(Arc<str>, TrackState); MAX_TRACKS]> = if is_playing {
+            tracks
                 .iter()
                 .map(|(_, track)| (Arc::clone(track.src()), track.state()))
-                .collect::<Vec<_>>()
+                .collect()
         } else {
-            Vec::new()
+            SmallVec::new()
         };
-        let active_tracks = arena_tracks
+        let active_tracks: SmallVec<[(usize, Arc<str>, bool); MAX_TRACKS]> = arena_tracks
             .iter()
             .enumerate()
             .filter_map(|(arena_idx, (src, state))| {
@@ -431,8 +449,12 @@ impl PlayerNodeProcessor {
                     .is_playing()
                     .then(|| (arena_idx, Arc::clone(src), state.is_leading()))
             })
-            .collect::<Vec<_>>();
-        let mut skip_tracks = vec![false; active_tracks.len()];
+            .collect();
+        let mut active_arena_slots = [false; MAX_TRACKS];
+        for (arena_idx, _, _) in &active_tracks {
+            active_arena_slots[*arena_idx] = true;
+        }
+        let mut skip_tracks = [false; MAX_TRACKS];
 
         for (track_idx, (_arena_track_idx, track_src, was_leading)) in
             active_tracks.iter().enumerate()
@@ -447,55 +469,43 @@ impl PlayerNodeProcessor {
             }
 
             let mut read_outcome = {
-                let Some(track) = self.tracks.get_mut(track_src) else {
+                let Some(outcome) = tracks.get_mut(track_src).map(|track| {
+                    track.read(&mut read_bufs, &mut mix_bufs, 0..frames, notification_tx)
+                }) else {
                     continue;
                 };
-                let outcome = track.read(
-                    &mut read_bufs,
-                    &mut mix_bufs,
-                    0..frames,
-                    &self.shared_state.notification_tx,
-                );
                 playback_started = true;
                 outcome
             };
 
             if *was_leading {
-                let mut handover_offset = match read_outcome {
-                    TrackReadOutcome::Partial { frames, .. } => Some(frames),
-                    TrackReadOutcome::Eof => Some(0),
-                    _ => None,
-                };
+                let mut handover_offset = Self::initial_handover_offset(&read_outcome);
 
-                for (next_idx, (_, next_src, _)) in active_tracks.iter().enumerate() {
+                for (next_idx, (_, next_src, next_is_leading)) in active_tracks.iter().enumerate() {
                     let Some(offset) = handover_offset else {
                         break;
                     };
-                    if next_idx == track_idx || skip_tracks[next_idx] {
+                    if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
                     if offset >= frames {
                         break;
                     }
 
-                    let Some(next_track) = self.tracks.get_mut(next_src) else {
+                    let Some(outcome) = tracks.get_mut(next_src).map(|track| {
+                        track.read(
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            notification_tx,
+                        )
+                    }) else {
                         continue;
                     };
-                    read_outcome = next_track.read(
-                        &mut read_bufs,
-                        &mut mix_bufs,
-                        offset..frames,
-                        &self.shared_state.notification_tx,
-                    );
+                    read_outcome = outcome;
                     skip_tracks[next_idx] = true;
 
-                    handover_offset = match read_outcome {
-                        TrackReadOutcome::Full { .. } => None,
-                        TrackReadOutcome::Partial {
-                            frames: written, ..
-                        } => Some(offset + written),
-                        TrackReadOutcome::Eof | TrackReadOutcome::Error(_) => Some(offset),
-                    };
+                    handover_offset = Self::next_handover_offset(&read_outcome, offset);
                 }
 
                 if let Some(offset) = handover_offset
@@ -504,14 +514,12 @@ impl PlayerNodeProcessor {
                     for (next_arena_idx, (next_src, next_state)) in arena_tracks.iter().enumerate()
                     {
                         if *next_state != TrackState::Preloading
-                            || active_tracks
-                                .iter()
-                                .any(|(active_arena_idx, _, _)| *active_arena_idx == next_arena_idx)
+                            || active_arena_slots[next_arena_idx]
                         {
                             continue;
                         }
 
-                        let Some(next_track) = self.tracks.get_mut(next_src) else {
+                        let Some(next_track) = tracks.get_mut(next_src) else {
                             continue;
                         };
                         next_track.play();
@@ -560,21 +568,6 @@ fn eviction_priority(state: TrackState) -> u8 {
 }
 
 impl AudioNodeProcessor for PlayerNodeProcessor {
-    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        let new_sr = stream_info.sample_rate;
-        self.sample_rate = new_sr;
-        self.shared_state
-            .sample_rate
-            .store(new_sr.get(), Ordering::Relaxed);
-
-        // Update host_sample_rate for all active tracks
-        for (_, track) in self.tracks.iter() {
-            if let Ok(resource) = track.resource().try_lock() {
-                resource.set_host_sample_rate(new_sr);
-            }
-        }
-    }
-
     fn process(
         &mut self,
         info: &ProcInfo,
@@ -605,6 +598,21 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs
+        }
+    }
+
+    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        let new_sr = stream_info.sample_rate;
+        self.sample_rate = new_sr;
+        self.shared_state
+            .sample_rate
+            .store(new_sr.get(), Ordering::Relaxed);
+
+        // Update host_sample_rate for all active tracks
+        for (_, track) in self.tracks.iter() {
+            if let Ok(resource) = track.resource().try_lock() {
+                resource.set_host_sample_rate(new_sr);
+            }
         }
     }
 }
@@ -1030,6 +1038,72 @@ mod tests {
                 .iter()
                 .all(|sample| (*sample - 0.5).abs() < f32::EPSILON)
         );
+        assert_eq!(
+            processor
+                .tracks
+                .get(&preload_src)
+                .expect("preloading track must remain loaded")
+                .state(),
+            TrackState::Playing
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
+        let (mut processor, mut tx) = make_processor();
+        let short_src = Arc::from("short.mp3");
+        let fading_src = Arc::from("fading.mp3");
+        let preload_src = Arc::from("preload.mp3");
+        let frames = 1024usize;
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            item_id: None,
+            src: Arc::clone(&short_src),
+        })
+        .ok();
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("fading.mp3"),
+            item_id: None,
+            src: Arc::clone(&fading_src),
+        })
+        .ok();
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("preload.mp3"),
+            item_id: None,
+            src: Arc::clone(&preload_src),
+        })
+        .ok();
+        processor.drain_commands();
+
+        processor
+            .tracks
+            .get_mut(&short_src)
+            .expect("short track must be loaded")
+            .play();
+        processor
+            .tracks
+            .get_mut(&fading_src)
+            .expect("fading track must be loaded")
+            .play();
+        processor
+            .tracks
+            .get_mut(&fading_src)
+            .expect("fading track must remain loaded")
+            .fade_out();
+
+        let inputs: [&[f32]; 0] = [];
+        let mut out_l = vec![99.0f32; frames];
+        let mut out_r = vec![99.0f32; frames];
+        let mut outputs = [&mut out_l[..], &mut out_r[..]];
+        let mut buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+
+        let rendered = processor.render_audio(&mut buffers, frames, true);
+
+        assert!(rendered);
         assert_eq!(
             processor
                 .tracks

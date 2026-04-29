@@ -10,8 +10,8 @@ use crate::{
 };
 
 /// Stream the MP4 boxes in `reader` and derive a [`GaplessInfo`] if any
-/// recognised source is present. Returns `Ok(None)` when the file is well
-/// formed but carries no gapless metadata.
+/// recognised source is present. Returns `Ok(None)` when the file is well-formed
+/// but carries no gapless metadata.
 ///
 /// # Errors
 ///

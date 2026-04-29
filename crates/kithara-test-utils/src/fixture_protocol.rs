@@ -100,7 +100,7 @@ pub enum PcmPattern {
     Ascending,
     /// Descending saw-tooth: frame 0 → 32767, frame 65535 → -32768.
     Descending,
-    /// Ascending saw-tooth with half-period phase offset.
+    /// Ascending saw-tooth with the half-period phase offset.
     ShiftedAscending,
 }
 
@@ -149,7 +149,6 @@ pub enum PackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
-    SineOffset { freq_hz: f64, start_frame: u64 },
 }
 
 /// Per-variant override for packaged audio fixtures.
@@ -169,6 +168,8 @@ pub struct PackagedAudioRequest {
     pub codec: AudioCodec,
     pub sample_rate: u32,
     pub channels: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_frame: Option<NonZeroU32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timescale: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,10 +318,31 @@ mod tests {
         });
         let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
         assert_eq!(req.codec, AudioCodec::AacLc);
+        assert!(req.start_frame.is_none());
         assert!(matches!(
             req.source,
             PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 })
         ));
+    }
+
+    #[test]
+    fn packaged_audio_start_frame_roundtrips() {
+        let value = serde_json::json!({
+            "codec": "aac_lc",
+            "sample_rate": 44100,
+            "channels": 2,
+            "start_frame": 123,
+            "source": { "Signal": { "Sine": { "freq_hz": 440.0 } } }
+        });
+        let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            req.start_frame,
+            NonZeroU32::new(123),
+            "start_frame JSON number maps to NonZero"
+        );
+
+        let encoded = serde_json::to_value(&req).unwrap();
+        assert_eq!(encoded["start_frame"], 123);
     }
 
     #[test]

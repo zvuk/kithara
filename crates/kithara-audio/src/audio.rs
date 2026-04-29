@@ -725,6 +725,7 @@ where
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
+            gapless_mode,
             pcm_buffer_chunks,
             pcm_pool: mut pool,
             playback_rate: config_playback_rate,
@@ -768,7 +769,7 @@ where
         // actually exposes — not the raw container duration that includes
         // encoder priming/padding the trimmer is about to drop.
         let total_duration =
-            visible_duration(decoder.as_ref()).or_else(|| timeline.total_duration());
+            visible_duration(decoder.as_ref(), gapless_mode).or_else(|| timeline.total_duration());
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 
@@ -810,6 +811,7 @@ where
             decoder_factory,
             stream_media_info,
             Arc::clone(&epoch),
+            gapless_mode,
             effects,
         )
         .with_emit(emit);

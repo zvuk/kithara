@@ -384,52 +384,80 @@ fn encode_packaged_variant(
 
     match variant.signal {
         ResolvedPackagedSignal::Sawtooth => {
-            let pcm = SignalPcm::new(
-                signal::Sawtooth,
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
+            if variant.start_frame == 0 {
+                let pcm = SignalPcm::new(
+                    signal::Sawtooth,
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            } else {
+                let pcm = SignalPcm::new(
+                    OffsetSignal::new(signal::Sawtooth, variant.start_frame),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            }
         }
         ResolvedPackagedSignal::SawtoothDescending => {
-            let pcm = SignalPcm::new(
-                signal::SawtoothDescending,
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
+            if variant.start_frame == 0 {
+                let pcm = SignalPcm::new(
+                    signal::SawtoothDescending,
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            } else {
+                let pcm = SignalPcm::new(
+                    OffsetSignal::new(signal::SawtoothDescending, variant.start_frame),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            }
         }
         ResolvedPackagedSignal::Silence => {
-            let pcm = SignalPcm::new(
-                signal::Silence,
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
+            if variant.start_frame == 0 {
+                let pcm = SignalPcm::new(
+                    signal::Silence,
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            } else {
+                let pcm = SignalPcm::new(
+                    OffsetSignal::new(signal::Silence, variant.start_frame),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            }
         }
         ResolvedPackagedSignal::Sine { freq_hz } => {
-            let pcm = SignalPcm::new(
-                signal::SineWave(freq_hz),
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
-        }
-        ResolvedPackagedSignal::SineOffset {
-            freq_hz,
-            start_frame,
-        } => {
-            let pcm = SignalPcm::new(
-                OffsetSignal::new(signal::SineWave(freq_hz), start_frame),
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
+            if variant.start_frame == 0 {
+                let pcm = SignalPcm::new(
+                    signal::SineWave(freq_hz),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            } else {
+                let pcm = SignalPcm::new(
+                    OffsetSignal::new(signal::SineWave(freq_hz), variant.start_frame),
+                    packaged.sample_rate,
+                    packaged.channels,
+                    content_length,
+                );
+                encode_signal(&pcm)
+            }
         }
         ResolvedPackagedSignal::Pattern(pattern) => {
             let pcm = SignalPcm::new(
@@ -740,6 +768,7 @@ mod tests {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
                 channels: 2,
+                start_frame: None,
                 timescale: Some(44_100),
                 bit_rate: Some(128_000),
                 encoder_delay: NonZeroU32::new(2_112),

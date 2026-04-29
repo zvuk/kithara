@@ -3,6 +3,7 @@
 use std::{fs::File, io::Write};
 
 use kithara_audio::internal::audio::*;
+use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_events::{AudioEvent, Event, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
@@ -74,6 +75,28 @@ fn test_audio_config_with_media_info() {
         config.media_info.unwrap().container,
         Some(ContainerFormat::Wav)
     );
+}
+
+#[kithara::test]
+fn test_audio_config_with_gapless_mode_codec_priming() {
+    let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
+        .with_gapless_mode(GaplessMode::CodecPriming);
+
+    assert_eq!(config.gapless_mode, GaplessMode::CodecPriming);
+}
+
+#[kithara::test]
+fn test_audio_config_with_gapless_mode_silence_trim() {
+    let params = SilenceTrimParams {
+        threshold_db: 50.0,
+        min_trim_frames: 128,
+        scan_window_frames: 2_048,
+        trim_trailing: true,
+    };
+    let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
+        .with_gapless_mode(GaplessMode::SilenceTrim(params));
+
+    assert_eq!(config.gapless_mode, GaplessMode::SilenceTrim(params));
 }
 
 #[kithara::test(tokio)]

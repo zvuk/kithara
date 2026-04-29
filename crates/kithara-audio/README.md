@@ -19,12 +19,14 @@ Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a 
 
 ```rust
 use kithara_audio::{Audio, AudioConfig, ResamplerQuality};
+use kithara_decode::GaplessMode;
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
 
 let config = AudioConfig::<Hls>::new(hls_config)
     .with_host_sample_rate(sample_rate)
-    .with_resampler_quality(ResamplerQuality::High);
+    .with_resampler_quality(ResamplerQuality::High)
+    .with_gapless_mode(GaplessMode::CodecPriming);
 let mut audio = Audio::<Stream<Hls>>::new(config).await?;
 
 // Read interleaved PCM
@@ -144,7 +146,7 @@ On ABR variant switch, `StreamAudioSource` detects the format change via `media_
 ### Decoder recreate policy
 
 - Decoder is **not** recreated on every seek.
-- Decoder is recreated when stream format changes (codec/container boundary) or when post-seek decode reports a recoverable format mismatch.
+- Decoder is recreated when a stream format changes (codec/container boundary) or when post-seek decode reports a recoverable format mismatch.
 - Recreate path is metadata-first (`MediaInfo`) with native Symphonia probe fallback from a fresh source.
 - Decoder recreate always uses seek target anchor/base offset from timeline/source, so new decoder starts from stream timeline truth.
 

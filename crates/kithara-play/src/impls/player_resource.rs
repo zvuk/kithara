@@ -61,22 +61,15 @@ impl PlayerResource {
         let buffer_len =
             (spec.sample_rate as usize / BUFFER_DURATION_DIVISOR) * channels.max(STEREO_CHANNELS);
 
-        let channel_buffers = [
+        let channel_buffers = std::array::from_fn(|_| {
             pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
                 }
                 b.resize(buffer_len, 0.0);
-            }),
-            pool.get_with(|b: &mut Vec<f32>| {
-                let cap = b.capacity();
-                if cap < buffer_len {
-                    b.reserve(buffer_len - cap);
-                }
-                b.resize(buffer_len, 0.0);
-            }),
-        ];
+            })
+        });
 
         Self {
             resource,

@@ -112,19 +112,7 @@ async fn generated_aac_elst_fixture(
     signal: PackagedSignal,
     start_frame: u64,
 ) -> GaplessFixture {
-    let source = match (signal, start_frame) {
-        (PackagedSignal::Sine { freq_hz }, 0) => {
-            PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz })
-        }
-        (PackagedSignal::Sine { freq_hz }, start_frame) => {
-            PackagedAudioSource::Signal(PackagedSignal::SineOffset {
-                freq_hz,
-                start_frame,
-            })
-        }
-        (signal, 0) => PackagedAudioSource::Signal(signal),
-        (signal, _) => panic!("start_frame is only supported for sine fixtures, got {signal:?}"),
-    };
+    let source = PackagedAudioSource::Signal(signal);
 
     let created = server
         .create_hls(
@@ -136,6 +124,9 @@ async fn generated_aac_elst_fixture(
                     codec: AudioCodec::AacLc,
                     sample_rate: GAPLESS_SAMPLE_RATE,
                     channels: GAPLESS_CHANNELS,
+                    start_frame: NonZeroU32::new(
+                        u32::try_from(start_frame).expect("start_frame fits u32"),
+                    ),
                     timescale: Some(GAPLESS_SAMPLE_RATE),
                     bit_rate: Some(128_000),
                     encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),

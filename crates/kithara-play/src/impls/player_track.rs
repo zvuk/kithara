@@ -129,11 +129,6 @@ pub(crate) struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     served_frames: u64,
-    /// Last observed playback position snapshot.
-    ///
-    /// Tracks `served_frames / sample_rate` so consumers of `position()` see
-    /// the same value used for trigger evaluation.
-    observed_position: f64,
     /// Last observed duration snapshot.
     ///
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
@@ -170,7 +165,6 @@ impl PlayerTrack {
             fade_duration,
             sample_rate: sample_rate.get(),
             served_frames: 0,
-            observed_position: 0.0,
             observed_duration: 0.0,
             item_id,
             src,
@@ -207,7 +201,7 @@ impl PlayerTrack {
         let read_outcome = {
             let Some(mut guard) = self.resource.try_lock().ok() else {
                 return TrackReadOutcome::Full {
-                    position: self.observed_position,
+                    position: self.position(),
                     duration: self.observed_duration,
                     frames_until_eof: None,
                 };
@@ -254,12 +248,12 @@ impl PlayerTrack {
                         reason = "buffered frame count precision is sufficient for duration snapshots"
                     )]
                     let observed_eof =
-                        self.observed_position + remaining_frames as f64 / f64::from(sample_rate);
+                        self.position() + remaining_frames as f64 / f64::from(sample_rate);
                     if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
                         self.observed_duration = observed_eof;
                     }
                 }
-                let position = self.observed_position;
+                let position = self.position();
                 let duration = self.observed_duration;
 
                 if scratch_bufs.len() >= MIN_STEREO_CHANNELS
@@ -298,7 +292,7 @@ impl PlayerTrack {
                 frames, duration, ..
             } => {
                 self.advance_served_frames(frames as u64);
-                let position = self.observed_position;
+                let position = self.position();
                 self.observed_duration = if position > 0.0 { position } else { duration };
                 let duration = self.observed_duration;
 
@@ -334,19 +328,11 @@ impl PlayerTrack {
         }
     }
 
-    /// Add `frames` to the rolling served-frames counter and update
-    /// `observed_position` so trigger checks reflect what has been mixed
-    /// into the output, not what the decoder has pre-buffered.
+    /// Add `frames` to the rolling served-frames counter so trigger checks
+    /// reflect what has been mixed into the output, not what the decoder has
+    /// pre-buffered.
     fn advance_served_frames(&mut self, frames: u64) {
         self.served_frames = self.served_frames.saturating_add(frames);
-        let sample_rate = self.sample_rate.max(1);
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "served-frame count precision is sufficient for trigger thresholds"
-        )]
-        {
-            self.observed_position = self.served_frames as f64 / f64::from(sample_rate);
-        }
     }
 
     /// Handle natural EOF.
@@ -399,7 +385,7 @@ impl PlayerTrack {
         block_frames: usize,
         frames_until_eof: Option<usize>,
     ) {
-        let position = self.observed_position;
+        let position = self.position();
         let duration = self.observed_duration;
 
         #[expect(
@@ -567,7 +553,6 @@ impl PlayerTrack {
         )]
         let frames = (seconds.max(0.0) * f64::from(sample_rate)) as u64;
         self.served_frames = frames;
-        self.observed_position = seconds.max(0.0);
         self.notified_track_requested = false;
     }
 
@@ -577,7 +562,14 @@ impl PlayerTrack {
     /// mixed into the output — so the value matches the trigger evaluator
     /// instead of the decoder's pre-buffered position.
     pub(crate) fn position(&self) -> f64 {
-        self.observed_position
+        let sample_rate = self.sample_rate.max(1);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "served-frame count precision is sufficient for position snapshots"
+        )]
+        {
+            self.served_frames as f64 / f64::from(sample_rate)
+        }
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.
@@ -781,6 +773,28 @@ mod tests {
         notifications
     }
 
+    fn drain_eof_stop_notifications(
+        rx: &mut impl Consumer<Item = PlayerNotification>,
+        saw_partial: bool,
+    ) -> usize {
+        let mut eof_stop_count = 0;
+
+        while let Some(notification) = rx.try_pop() {
+            if let PlayerNotification::TrackPlaybackStopped {
+                item_id,
+                reason: TrackPlaybackStopReason::Eof,
+                ..
+            } = notification
+            {
+                assert!(saw_partial, "EOF stop must not precede Partial");
+                assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
+                eof_stop_count += 1;
+            }
+        }
+
+        eof_stop_count
+    }
+
     #[kithara::test(tokio)]
     #[case(TrackStateScenario::StartPreloading, TrackState::Preloading)]
     #[case(TrackStateScenario::FadeIn, TrackState::FadingIn)]
@@ -839,6 +853,18 @@ mod tests {
         let track = make_track();
         assert_eq!(track.position(), 0.0);
         assert!((track.duration() - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_seek_position_is_derived_from_served_frames() {
+        let mut track = make_track();
+        let seconds = 9.791_337;
+        track.seek(seconds);
+
+        let sample_rate = 44_100.0;
+        let expected = (seconds * sample_rate).floor() / sample_rate;
+
+        assert!((track.position() - expected).abs() < f64::EPSILON);
     }
 
     #[kithara::test(tokio)]
@@ -940,32 +966,10 @@ mod tests {
                 TrackReadOutcome::Full { .. } | TrackReadOutcome::Error(_) => {}
             }
 
-            while let Some(notification) = rx.try_pop() {
-                if let PlayerNotification::TrackPlaybackStopped {
-                    item_id,
-                    reason: TrackPlaybackStopReason::Eof,
-                    ..
-                } = notification
-                {
-                    assert!(saw_partial, "EOF stop must not precede Partial");
-                    assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
-                    eof_stop_count += 1;
-                }
-            }
+            eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);
         }
 
-        while let Some(notification) = rx.try_pop() {
-            if let PlayerNotification::TrackPlaybackStopped {
-                item_id,
-                reason: TrackPlaybackStopReason::Eof,
-                ..
-            } = notification
-            {
-                assert!(saw_partial, "EOF stop must not precede Partial");
-                assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
-                eof_stop_count += 1;
-            }
-        }
+        eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);
 
         assert!(saw_partial, "expected a Partial outcome before EOF");
         assert!(saw_eof_after_partial, "expected EOF after Partial");

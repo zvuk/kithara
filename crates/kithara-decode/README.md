@@ -70,6 +70,27 @@ The contract has one owner for actual trimming:
 - `GaplessTrimmer::notify_seek()` drops only the leading trim state; tail trim is
   still applied at EOF for the current track.
 
+When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can select
+heuristic behaviour via `GaplessMode`:
+
+- `GaplessMode::CodecPriming` — `GaplessTrimmer::codec_priming(frames, sample_rate)`
+  is built from a static codec table (`codec_priming_frames`). AAC LC
+  is 2112, HE-AAC 3072, MP3 LAME-default 1105, Opus 312, and lossless
+  codecs are 0. Predictable and zero-latency.
+- `GaplessMode::SilenceTrim(SilenceTrimParams)` — `GaplessTrimmer::silence_trim`
+  walks the leading buffer until the first sample above a configurable
+  dB threshold and trims everything before it. Optionally trims the
+  trailing silence at EOF too.
+
+See also `GaplessMode::Disabled` and `GaplessMode::MediaOnly` on `AudioConfig`.
+
+Both fallbacks apply a short raised-cosine fade-in (~3 ms) at the trim
+boundary. The metadata-driven path does not — the boundary lands on a
+sample-accurate count.
+
+`GaplessTrimmer::notify_seek()` drops both the leading-trim state and
+any pending fade-in; tail trim continues to be applied at EOF.
+
 Current metadata sources:
 
 - AAC in MP4/M4A/fMP4: MP4 probe reads `edts/elst` first, then falls back to

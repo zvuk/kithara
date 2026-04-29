@@ -90,6 +90,7 @@ pub(crate) struct ResolvedPackagedAudioSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedVariant {
     pub(crate) bit_rate: u64,
+    pub(crate) start_frame: u64,
     pub(crate) signal: ResolvedPackagedSignal,
 }
 
@@ -99,7 +100,6 @@ pub(crate) enum ResolvedPackagedSignal {
     SawtoothDescending,
     Silence,
     Sine { freq_hz: f64 },
-    SineOffset { freq_hz: f64, start_frame: u64 },
     Pattern(PcmPattern),
 }
 
@@ -403,7 +403,11 @@ fn resolve_packaged_audio(
         {
             apply_variant_override(override_spec, &mut bit_rate, &mut signal);
         }
-        variants.push(ResolvedPackagedVariant { bit_rate, signal });
+        variants.push(ResolvedPackagedVariant {
+            bit_rate,
+            start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
+            signal,
+        });
     }
 
     Ok(ResolvedPackagedAudioSpec {
@@ -444,16 +448,6 @@ fn resolved_signal(
         PackagedSignal::Sine { freq_hz } => {
             validate_packaged_sine_freq_hz(freq_hz, sample_rate)?;
             Ok(ResolvedPackagedSignal::Sine { freq_hz })
-        }
-        PackagedSignal::SineOffset {
-            freq_hz,
-            start_frame,
-        } => {
-            validate_packaged_sine_freq_hz(freq_hz, sample_rate)?;
-            Ok(ResolvedPackagedSignal::SineOffset {
-                freq_hz,
-                start_frame,
-            })
         }
     }
 }
@@ -524,7 +518,7 @@ impl ResolvedEncryption {
 mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara_stream::AudioCodec;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroU32};
 
     use super::*;
     use crate::{
@@ -589,6 +583,7 @@ mod tests {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
                 channels: 2,
+                start_frame: None,
                 timescale: None,
                 bit_rate: None,
                 encoder_delay: None,
@@ -600,5 +595,31 @@ mod tests {
         };
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
+    }
+
+    #[test]
+    fn resolves_packaged_audio_start_frame_on_sine() {
+        let spec = HlsSpec {
+            packaged_audio: Some(PackagedAudioRequest {
+                codec: AudioCodec::AacLc,
+                sample_rate: 44_100,
+                channels: 2,
+                start_frame: NonZeroU32::new(256),
+                timescale: None,
+                bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 }),
+                variant_overrides: Vec::new(),
+            }),
+            ..HlsSpec::default()
+        };
+        let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
+        let packaged = resolved.packaged_audio.unwrap();
+        assert_eq!(packaged.variants[0].start_frame, 256);
+        assert!(matches!(
+            packaged.variants[0].signal,
+            ResolvedPackagedSignal::Sine { freq_hz: 440.0 }
+        ));
     }
 }

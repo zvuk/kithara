@@ -69,7 +69,7 @@ pub mod source {
     };
 
     use delegate::delegate;
-    use kithara_decode::{InnerDecoder, PcmChunk};
+    use kithara_decode::{GaplessMode, InnerDecoder, PcmChunk};
     use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
@@ -161,6 +161,26 @@ pub mod source {
         epoch: Arc<AtomicU64>,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> StreamAudioSource<T> {
+        new_stream_audio_source_with_gapless(
+            shared_stream,
+            decoder,
+            decoder_factory,
+            initial_media_info,
+            epoch,
+            GaplessMode::default(),
+            effects,
+        )
+    }
+
+    pub fn new_stream_audio_source_with_gapless<T: StreamType>(
+        shared_stream: SharedStream<T>,
+        decoder: Box<dyn InnerDecoder>,
+        decoder_factory: DecoderFactory<T>,
+        initial_media_info: Option<MediaInfo>,
+        epoch: Arc<AtomicU64>,
+        gapless_mode: GaplessMode,
+        effects: Vec<Box<dyn AudioEffect>>,
+    ) -> StreamAudioSource<T> {
         let inner_factory: crate::pipeline::source::DecoderFactory<T> =
             Box::new(move |shared, media_info, base_offset| {
                 decoder_factory(SharedStream(shared), media_info, base_offset)
@@ -171,6 +191,7 @@ pub mod source {
             inner_factory,
             initial_media_info,
             epoch,
+            gapless_mode,
             effects,
         ))
     }
