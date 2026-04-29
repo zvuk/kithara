@@ -18,8 +18,6 @@ targets = []
 ignore = [
   # paste is unmaintained but only a transitive dev-dep (unimock -> higher-kinded-types -> paste)
   "RUSTSEC-2024-0436",
-  # atomic-polyfill is unmaintained; transitive dep via heapless -> postcard -> kithara-assets
-  "RUSTSEC-2023-0089",
   # derivative is unmaintained; used in kithara-abr, migration to derive_more is a separate task
   "RUSTSEC-2024-0388",
 ]

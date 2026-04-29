@@ -718,7 +718,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
         let encrypted_first: Vec<u8> = b"first payload".iter().map(|b| b ^ 0x42).collect();
-        let encrypted_second: Vec<u8> = b"second paylod".iter().map(|b| b ^ 0x42).collect();
+        let encrypted_second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
         assert_eq!(
             encrypted_first.len(),
             encrypted_second.len(),
@@ -779,7 +779,7 @@ mod tests {
             .expect("read_at after second commit");
         assert_eq!(
             &out[..],
-            b"second paylod",
+            b"second payload",
             "reader must see plaintext after the reactivated resource is \
              re-committed; if bytes are still ciphertext the DRM \
              processor was skipped"

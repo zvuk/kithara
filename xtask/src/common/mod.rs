@@ -11,5 +11,6 @@ pub(crate) mod baseline;
 pub(crate) mod parse;
 pub(crate) mod report;
 pub(crate) mod scope;
+pub(crate) mod timestamp;
 pub(crate) mod violation;
 pub(crate) mod walker;

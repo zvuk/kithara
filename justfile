@@ -128,12 +128,22 @@ audit *ARGS:
     CLIPPY_FLAGS=$(cargo xtask scope --for=clippy {{ARGS}})
     FMT_FLAGS=$(cargo xtask scope --for=fmt {{ARGS}})
     AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep {{ARGS}})
+    TYPOS_PATHS=$(cargo xtask scope --for=typos {{ARGS}})
+    SIMILARITY_PATHS=$(cargo xtask scope --for=similarity {{ARGS}})
+    ORPHANS_FLAGS=$(cargo xtask scope --for=orphans {{ARGS}})
 
     fail=0
     section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
     section "clippy";       cargo clippy $CLIPPY_FLAGS -- -D warnings || fail=1
     section "ast-grep";     cargo xtask ast-grep --mode=blocking $AST_GREP_PATHS || fail=1
     section "xtask lint";   cargo xtask lint $XTASK_FLAGS || fail=1
+    section "typos";        cargo xtask typos $TYPOS_PATHS || fail=1
+    section "similarity";   cargo xtask similarity --profile audit $SIMILARITY_PATHS || fail=1
+    if [[ "$ORPHANS_FLAGS" == "__skip__" ]]; then
+        section "orphans"; echo "orphans: skipped (non-crate scope)"
+    else
+        section "orphans"; cargo xtask orphans --deny --audit-mode $ORPHANS_FLAGS || fail=1
+    fi
 
     echo
     [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
@@ -245,10 +255,86 @@ dead:
       --show-missing-lines
 
 # Find near-duplicate functions (AST similarity) across production code.
+# Default profile: advisory (0.85 threshold, informational, no fail).
+#   just similarity                              # advisory full sweep
+#   just similarity --profile=audit              # blocking, low-noise (0.96)
+#   just similarity --profile=strict             # comprehensive (0.80, includes tests)
+#   just similarity crates/kithara-abr/src       # scoped roots
 similarity *ARGS:
-    similarity-rs --threshold 0.85 --min-lines 10 \
-      --exclude target --exclude .claude \
-      $(find crates -maxdepth 2 -name src -type d | sort) {{ARGS}}
+    cargo xtask similarity {{ARGS}}
+
+# Workspace spell-check via `typos` with the pinned config in `.config/typos.toml`.
+#   just typos                                   # whole workspace
+#   just typos crates/kithara-queue              # scoped
+typos *ARGS:
+    cargo xtask typos {{ARGS}}
+
+# Per-package orphan-module detection (`cargo modules orphans` with `--cfg-test`).
+#   just orphans                                 # advisory full sweep (~1.5 min)
+#   just orphans --deny                          # fail on any orphans
+#   just orphans --package kithara-queue         # single crate
+orphans *ARGS:
+    cargo xtask orphans {{ARGS}}
+
+# Comprehensive workspace health check (15-30 min).
+# Runs lint + quality + audit tools + heavy stages (lockbud / hack /
+# semver-checks / unused-pub) + workspace tests, writes
+# target/health-report.md plus per-stage logs in target/health-logs/.
+# Excluded by design (run separately): mutants, coverage, dead, test-e2e,
+# test-selenium, wasm, bench, perf, memory-check.
+# Install every external tool that `just health`, `just audit`, and the
+# standalone diagnostic recipes depend on. Idempotent — `cargo install --locked`
+# is a no-op when the binary is already current. `lockbud` is rebuilt from
+# source against the active toolchain to avoid `librustc_driver` mismatches.
+install-tools:
+    cargo install --locked cargo-deny
+    cargo install --locked cargo-machete
+    cargo install --locked cargo-hack
+    cargo install --locked cargo-semver-checks
+    cargo install --locked cargo-modules
+    cargo install --locked cargo-workspace-unused-pub
+    cargo install --locked cargo-bloat
+    cargo install --locked cargo-depgraph
+    cargo install --locked cargo-llvm-cov
+    cargo install --locked cargo-mutants
+    cargo install --locked typos-cli
+    cargo install --locked similarity-rs
+    cargo install --locked --force lockbud
+    @echo "==> tools installed; run 'just health' to verify"
+
+# Comprehensive workspace health check with markdown report.
+# Runs every applicable static analysis and test stage; report goes to
+# `target/health-report.md` and per-stage logs to `target/health-logs/`.
+# Stages requiring tools that are missing or broken are reported as SKIP.
+health:
+    cargo xtask health
+
+# Static deadlock detection across the workspace (`cargo lockbud`).
+# Heavy: relies on MIR analysis; first install warms up nightly toolchain.
+deadlock *ARGS:
+    cargo lockbud -k deadlock --workspace {{ARGS}}
+
+# Detect unused public items workspace-wide (`cargo workspace-unused-pub`).
+# Heavy: ~1.5 min — runs rust-analyzer SCIP under the hood.
+unused-pub:
+    cargo workspace-unused-pub
+
+# Show top contributors to release binary size (`cargo bloat`).
+bloat *ARGS:
+    cargo bloat --release --crates -n 50 {{ARGS}}
+
+# Visualise a crate's internal module structure (`cargo modules structure`).
+#   just modules kithara-stream
+modules CRATE:
+    cargo modules structure --package {{CRATE}}
+
+# Render workspace dependency graph as SVG to target/depgraph.svg.
+# Requires graphviz `dot` to be installed.
+depgraph:
+    @command -v dot >/dev/null || { echo "graphviz 'dot' is required (brew install graphviz)"; exit 2; }
+    @mkdir -p target
+    cargo depgraph --workspace-only --dedup-transitive-deps | dot -Tsvg > target/depgraph.svg
+    @echo "==> target/depgraph.svg"
 
 # --- mutation testing ---
 

@@ -25,6 +25,9 @@ pub(crate) enum Tool {
     Fmt,
     #[clap(name = "ast-grep")]
     AstGrep,
+    Typos,
+    Similarity,
+    Orphans,
 }
 
 const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "examples", "benches"];
@@ -120,72 +123,110 @@ impl Scope {
     /// Emit space-separated flag tokens for the requested downstream tool.
     /// See `cargo xtask scope` documentation for the full output table.
     pub(crate) fn flags_for(&self, tool: Tool) -> Vec<String> {
-        let is_empty = self.crates.is_empty() && self.paths.is_empty();
+        let is_empty = self.is_empty();
         let crate_paths_names = self.crate_names_from_paths();
         match tool {
-            Tool::Xtask => {
-                if is_empty {
-                    return vec![];
-                }
-                let mut out = Vec::new();
-                for c in &self.crates {
-                    out.push("--crate".into());
-                    out.push(c.clone());
-                }
-                for p in &self.paths {
-                    out.push("--path".into());
-                    out.push(p.display().to_string());
-                }
-                out
-            }
-            Tool::Clippy => {
-                if is_empty || self.has_noncrate_path {
-                    return vec!["--workspace".into()];
-                }
-                let mut out = Vec::new();
-                for c in self.crates.iter().chain(crate_paths_names.iter()) {
-                    out.push("-p".into());
-                    out.push(c.clone());
-                }
-                if out.is_empty() {
-                    return vec!["--workspace".into()];
-                }
-                // `--no-deps` keeps clippy focused on the target crate(s).
-                // Without it, dead-code in a dependency (e.g. items behind
-                // a non-default feature like kithara-hls's `internal`)
-                // surfaces as errors during a per-crate audit. Workspace
-                // clippy stays in `just lint-fast`.
-                out.push("--no-deps".into());
-                out
-            }
-            Tool::Fmt => {
-                if is_empty || self.has_noncrate_path {
-                    return vec!["--all".into()];
-                }
-                let mut out = Vec::new();
-                for c in self.crates.iter().chain(crate_paths_names.iter()) {
-                    out.push("-p".into());
-                    out.push(c.clone());
-                }
-                if out.is_empty() {
-                    out.push("--all".into());
-                }
-                out
-            }
-            Tool::AstGrep => {
-                if is_empty {
-                    return vec![];
-                }
-                let mut out = Vec::new();
-                for c in &self.crates {
-                    out.push(format!("crates/{c}"));
-                }
-                for p in &self.paths {
-                    out.push(p.display().to_string());
-                }
-                out
+            Tool::Xtask => self.flags_xtask(is_empty),
+            Tool::Clippy => self.flags_packageish(is_empty, &crate_paths_names, "--workspace"),
+            Tool::Fmt => self.flags_packageish(is_empty, &crate_paths_names, "--all"),
+            Tool::AstGrep | Tool::Typos => self.flags_path_list(is_empty, ""),
+            Tool::Similarity => self.flags_path_list(is_empty, "/src"),
+            Tool::Orphans => self.flags_orphans(is_empty, &crate_paths_names),
+        }
+    }
+
+    fn flags_xtask(&self, is_empty: bool) -> Vec<String> {
+        if is_empty {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        for c in &self.crates {
+            out.push("--crate".into());
+            out.push(c.clone());
+        }
+        for p in &self.paths {
+            out.push("--path".into());
+            out.push(p.display().to_string());
+        }
+        out
+    }
+
+    fn flags_packageish(
+        &self,
+        is_empty: bool,
+        crate_paths_names: &[String],
+        wide_flag: &str,
+    ) -> Vec<String> {
+        if is_empty || self.has_noncrate_path {
+            return vec![wide_flag.into()];
+        }
+        let mut out = Vec::new();
+        for c in self.crates.iter().chain(crate_paths_names.iter()) {
+            out.push("-p".into());
+            out.push(c.clone());
+        }
+        if out.is_empty() {
+            return vec![wide_flag.into()];
+        }
+        // `--no-deps` keeps clippy focused on the target crate(s).
+        // Without it, dead-code in a dependency (e.g. items behind a
+        // non-default feature like kithara-hls's `internal`) surfaces
+        // as errors during a per-crate audit. Workspace clippy stays in
+        // `just lint-fast`. fmt does not accept `--no-deps`, so the
+        // suffix is added only for clippy via the `wide_flag` shape.
+        if wide_flag == "--workspace" {
+            out.push("--no-deps".into());
+        }
+        out
+    }
+
+    /// Path-list emission for tools whose argv is just root paths
+    /// (ast-grep, typos, similarity-rs). `crate_suffix` is appended to
+    /// each crate root: empty for ast-grep/typos, `/src` for similarity.
+    fn flags_path_list(&self, is_empty: bool, crate_suffix: &str) -> Vec<String> {
+        if is_empty {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for c in &self.crates {
+            let p = format!("crates/{c}{crate_suffix}");
+            if !seen.contains(&p) {
+                seen.push(p.clone());
+                out.push(p);
             }
         }
+        for p in &self.paths {
+            let s = p.display().to_string();
+            if !seen.contains(&s) {
+                seen.push(s.clone());
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    fn flags_orphans(&self, is_empty: bool, crate_paths_names: &[String]) -> Vec<String> {
+        if is_empty {
+            return vec![];
+        }
+        let mut packages: Vec<String> = self
+            .crates
+            .iter()
+            .chain(crate_paths_names.iter())
+            .cloned()
+            .collect();
+        packages.sort();
+        packages.dedup();
+        if packages.is_empty() {
+            return vec!["__skip__".into()];
+        }
+        let mut out = Vec::new();
+        for p in &packages {
+            out.push("--package".into());
+            out.push(p.clone());
+        }
+        out
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -295,6 +336,9 @@ mod tests {
         assert_eq!(s.flags_for(Tool::Fmt), vec!["--all"]);
         assert_eq!(s.flags_for(Tool::Xtask), Vec::<String>::new());
         assert_eq!(s.flags_for(Tool::AstGrep), Vec::<String>::new());
+        assert_eq!(s.flags_for(Tool::Typos), Vec::<String>::new());
+        assert_eq!(s.flags_for(Tool::Similarity), Vec::<String>::new());
+        assert_eq!(s.flags_for(Tool::Orphans), Vec::<String>::new());
     }
 
     #[test]
@@ -307,6 +351,57 @@ mod tests {
         assert_eq!(s.flags_for(Tool::Fmt), vec!["-p", "kithara-queue"]);
         assert_eq!(s.flags_for(Tool::Xtask), vec!["--crate", "kithara-queue"]);
         assert_eq!(s.flags_for(Tool::AstGrep), vec!["crates/kithara-queue"]);
+        assert_eq!(s.flags_for(Tool::Typos), vec!["crates/kithara-queue"]);
+        assert_eq!(
+            s.flags_for(Tool::Similarity),
+            vec!["crates/kithara-queue/src"]
+        );
+        assert_eq!(
+            s.flags_for(Tool::Orphans),
+            vec!["--package", "kithara-queue"]
+        );
+    }
+
+    #[test]
+    fn crate_path_emits_package_for_orphans() {
+        let s = Scope::new(vec![], vec!["crates/kithara-abr/src".into()]);
+        assert_eq!(s.flags_for(Tool::Orphans), vec!["--package", "kithara-abr"]);
+        assert_eq!(
+            s.flags_for(Tool::Similarity),
+            vec!["crates/kithara-abr/src"]
+        );
+    }
+
+    #[test]
+    fn noncrate_path_skip_for_orphans() {
+        let mut s = Scope::default();
+        s.paths.push("tests/tests".into());
+        s.has_noncrate_path = true;
+        assert_eq!(s.flags_for(Tool::Orphans), vec!["__skip__"]);
+        assert_eq!(s.flags_for(Tool::Typos), vec!["tests/tests"]);
+        assert_eq!(s.flags_for(Tool::Similarity), vec!["tests/tests"]);
+    }
+
+    #[test]
+    fn similarity_dedupes_crate_and_crate_path_overlap() {
+        let s = Scope::new(
+            vec!["kithara-abr".into()],
+            vec!["crates/kithara-abr/src".into()],
+        );
+        let flags = s.flags_for(Tool::Similarity);
+        let unique: std::collections::HashSet<&String> = flags.iter().collect();
+        assert_eq!(flags.len(), unique.len(), "no duplicate paths: {flags:?}");
+    }
+
+    #[test]
+    fn orphans_dedupes_crate_and_crate_path_overlap() {
+        let s = Scope::new(
+            vec!["kithara-abr".into()],
+            vec!["crates/kithara-abr/src".into()],
+        );
+        let flags = s.flags_for(Tool::Orphans);
+        // expect exactly one "--package kithara-abr" pair
+        assert_eq!(flags, vec!["--package", "kithara-abr"]);
     }
 
     #[test]
