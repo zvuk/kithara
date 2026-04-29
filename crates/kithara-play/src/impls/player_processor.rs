@@ -434,7 +434,7 @@ impl PlayerNodeProcessor {
             .collect::<Vec<_>>();
         let mut skip_tracks = vec![false; active_tracks.len()];
 
-        for (track_idx, (arena_track_idx, track_src, was_leading)) in
+        for (track_idx, (_arena_track_idx, track_src, was_leading)) in
             active_tracks.iter().enumerate()
         {
             if skip_tracks[track_idx] {
@@ -467,13 +467,14 @@ impl PlayerNodeProcessor {
                     _ => None,
                 };
 
-                for (next_idx, (_, next_src, _)) in
-                    active_tracks.iter().enumerate().skip(track_idx + 1)
-                {
+                for (next_idx, (_, next_src, _)) in active_tracks.iter().enumerate() {
                     let Some(offset) = handover_offset else {
                         break;
                     };
-                    if offset >= frames || skip_tracks[next_idx] {
+                    if next_idx == track_idx || skip_tracks[next_idx] {
+                        continue;
+                    }
+                    if offset >= frames {
                         break;
                     }
 
@@ -500,8 +501,7 @@ impl PlayerNodeProcessor {
                 if let Some(offset) = handover_offset
                     && offset < frames
                 {
-                    for (next_arena_idx, (next_src, next_state)) in
-                        arena_tracks.iter().enumerate().skip(*arena_track_idx + 1)
+                    for (next_arena_idx, (next_src, next_state)) in arena_tracks.iter().enumerate()
                     {
                         if *next_state != TrackState::Preloading
                             || active_tracks

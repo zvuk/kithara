@@ -88,6 +88,9 @@ pub(crate) enum TrackReadOutcome {
         position: f64,
         /// Visible (post-gapless-trim) duration snapshot in seconds.
         duration: f64,
+        /// Exact remaining buffered frames when the resource has already
+        /// observed EOF while filling its scratch buffer.
+        frames_until_eof: Option<usize>,
     },
     /// Only the first `frames` samples were written; EOF was reached in-block.
     ///
@@ -96,11 +99,7 @@ pub(crate) enum TrackReadOutcome {
     Partial {
         /// Number of frames written into the destination block.
         frames: usize,
-        /// Playback position snapshot after the partial read (seconds).
-        #[cfg_attr(not(test), expect(dead_code, reason = "exposed for diagnostics/tests"))]
-        position: f64,
         /// Visible (post-gapless-trim) duration snapshot in seconds.
-        #[cfg_attr(not(test), expect(dead_code, reason = "exposed for diagnostics/tests"))]
         duration: f64,
     },
     /// No frames were written because the track is already finished.
@@ -210,6 +209,7 @@ impl PlayerTrack {
                 return TrackReadOutcome::Full {
                     position: self.observed_position,
                     duration: self.observed_duration,
+                    frames_until_eof: None,
                 };
             };
             let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
@@ -221,20 +221,18 @@ impl PlayerTrack {
             match guard.read(&mut scratch_window, 0..range.len()) {
                 Ok(ReadOutcome::Full) => {
                     let duration = guard.duration();
+                    let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
                         position: 0.0, // overwritten below from served_frames
                         duration,
+                        frames_until_eof,
                     }
                 }
                 Ok(ReadOutcome::Partial(frames)) => {
                     let duration = guard.duration();
                     drop(guard);
-                    TrackReadOutcome::Partial {
-                        frames,
-                        position: 0.0, // overwritten below from served_frames
-                        duration,
-                    }
+                    TrackReadOutcome::Partial { frames, duration }
                 }
                 Ok(ReadOutcome::Eof) => TrackReadOutcome::Eof,
                 Err(e) => TrackReadOutcome::Error(e),
@@ -242,10 +240,27 @@ impl PlayerTrack {
         };
 
         match read_outcome {
-            TrackReadOutcome::Full { duration, .. } => {
+            TrackReadOutcome::Full {
+                duration,
+                frames_until_eof,
+                ..
+            } => {
                 self.advance_served_frames(range.len() as u64);
                 self.observed_duration = duration;
+                if let Some(remaining_frames) = frames_until_eof {
+                    let sample_rate = self.sample_rate.max(1);
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "buffered frame count precision is sufficient for duration snapshots"
+                    )]
+                    let observed_eof =
+                        self.observed_position + remaining_frames as f64 / f64::from(sample_rate);
+                    if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
+                        self.observed_duration = observed_eof;
+                    }
+                }
                 let position = self.observed_position;
+                let duration = self.observed_duration;
 
                 if scratch_bufs.len() >= MIN_STEREO_CHANNELS
                     && mix_bufs.len() >= MIN_STEREO_CHANNELS
@@ -263,7 +278,7 @@ impl PlayerTrack {
                     );
                 }
 
-                self.check_notifications(notification_tx, range.len());
+                self.check_notifications(notification_tx, range.len(), frames_until_eof);
 
                 if self.mix.has_settled() {
                     self.update_state_after_fade();
@@ -273,14 +288,19 @@ impl PlayerTrack {
                     self.notify_state_change(notification_tx);
                 }
 
-                TrackReadOutcome::Full { position, duration }
+                TrackReadOutcome::Full {
+                    position,
+                    duration,
+                    frames_until_eof,
+                }
             }
             TrackReadOutcome::Partial {
                 frames, duration, ..
             } => {
                 self.advance_served_frames(frames as u64);
-                self.observed_duration = duration;
                 let position = self.observed_position;
+                self.observed_duration = if position > 0.0 { position } else { duration };
+                let duration = self.observed_duration;
 
                 if scratch_bufs.len() >= MIN_STEREO_CHANNELS
                     && mix_bufs.len() >= MIN_STEREO_CHANNELS
@@ -298,14 +318,10 @@ impl PlayerTrack {
                     );
                 }
 
-                self.check_notifications(notification_tx, range.len());
+                self.check_notifications(notification_tx, range.len(), Some(0));
                 self.handle_natural_end(notification_tx);
 
-                TrackReadOutcome::Partial {
-                    frames,
-                    position,
-                    duration,
-                }
+                TrackReadOutcome::Partial { frames, duration }
             }
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(notification_tx);
@@ -381,9 +397,27 @@ impl PlayerTrack {
         &mut self,
         notification_tx: &Mutex<HeapProd<PlayerNotification>>,
         block_frames: usize,
+        frames_until_eof: Option<usize>,
     ) {
         let position = self.observed_position;
         let duration = self.observed_duration;
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "block duration precision is sufficient for near-end threshold checks"
+        )]
+        let block_seconds = block_frames as f32 / self.sample_rate as f32;
+        if let Some(frames_until_eof) = frames_until_eof {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "buffered frame count precision is sufficient for near-end threshold checks"
+            )]
+            let remaining = frames_until_eof as f32 / self.sample_rate as f32;
+            if remaining <= self.fade_duration + block_seconds {
+                self.emit_track_requested(notification_tx);
+                return;
+            }
+        }
 
         if duration <= 0.0 {
             return;
@@ -399,11 +433,7 @@ impl PlayerTrack {
             reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
         )]
         let dur = duration as f32;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "block duration precision is sufficient for near-end threshold checks"
-        )]
-        let block_seconds = block_frames as f32 / self.sample_rate as f32;
+
         if pos + self.fade_duration + block_seconds >= dur {
             self.emit_track_requested(notification_tx);
         }
@@ -605,8 +635,10 @@ impl PlayerTrack {
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::mock::TestPcmReader;
-    use kithara_decode::PcmSpec;
+    use kithara_audio::{PcmReader, mock::TestPcmReader};
+    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_events::EventBus;
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapRb,
@@ -638,6 +670,14 @@ mod tests {
     fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
         let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs));
+        make_track_from_resource(resource, src, item_id)
+    }
+
+    fn make_track_from_resource(
+        resource: Resource,
+        src: Arc<str>,
+        item_id: Option<Arc<str>>,
+    ) -> PlayerTrack {
         let player_resource =
             PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
         let arc_resource = Arc::new(Mutex::new(player_resource));
@@ -654,6 +694,81 @@ mod tests {
 
     fn make_track() -> PlayerTrack {
         make_track_with(60.0, None)
+    }
+
+    struct MisreportedDurationReader {
+        bus: EventBus,
+        metadata: TrackMetadata,
+        remaining_frames: usize,
+        position_frames: usize,
+        spec: PcmSpec,
+    }
+
+    impl MisreportedDurationReader {
+        fn new(actual_frames: usize) -> Self {
+            Self {
+                bus: EventBus::default(),
+                metadata: TrackMetadata::default(),
+                remaining_frames: actual_frames,
+                position_frames: 0,
+                spec: mock_spec(),
+            }
+        }
+    }
+
+    impl PcmReader for MisreportedDurationReader {
+        fn read(&mut self, buf: &mut [f32]) -> usize {
+            let channels = usize::from(self.spec.channels);
+            let frames = (buf.len() / channels).min(self.remaining_frames);
+            let samples = frames.saturating_mul(channels);
+            buf[..samples].fill(0.5);
+            self.remaining_frames -= frames;
+            self.position_frames += frames;
+            samples
+        }
+
+        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+            let frames = output
+                .iter()
+                .map(|channel| channel.len())
+                .min()
+                .unwrap_or(0)
+                .min(self.remaining_frames);
+            for channel in output.iter_mut() {
+                channel[..frames].fill(0.5);
+            }
+            self.remaining_frames -= frames;
+            self.position_frames += frames;
+            frames
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            self.remaining_frames == 0
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(10))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
     }
 
     fn collect_notifications(
@@ -783,7 +898,8 @@ mod tests {
             outcome,
             TrackReadOutcome::Full {
                 position,
-                duration
+                duration,
+                ..
             } if position >= 0.0 && duration > 0.0
         ));
     }
@@ -916,6 +1032,59 @@ mod tests {
                 PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
             )),
             "TrackRequested must not be emitted twice in one playback cycle"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn track_requested_uses_buffered_eof_when_duration_is_overestimated() {
+        let src = Arc::from("misreported.mp3");
+        let resource =
+            Resource::from_reader_with_src(MisreportedDurationReader::new(900), Arc::clone(&src));
+        let mut track = make_track_from_resource(resource, src, None);
+        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        track.update_fade_duration(0.0, sample_rate);
+        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
+        let notification_tx = Mutex::new(tx);
+        let mut scratch_l = [0.0; 512];
+        let mut scratch_r = [0.0; 512];
+        let mut mix_l = [0.0; 512];
+        let mut mix_r = [0.0; 512];
+        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+        track.play();
+
+        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+
+        assert!(matches!(
+            outcome,
+            TrackReadOutcome::Full {
+                frames_until_eof: Some(388),
+                duration,
+                ..
+            } if duration < 10.0
+        ));
+        let notifications = collect_notifications(&mut rx);
+        assert!(
+            notifications.iter().any(|notification| {
+                matches!(
+                    notification,
+                    PlayerNotification::TrackRequested(src) if src.as_ref() == "misreported.mp3"
+                )
+            }),
+            "TrackRequested must be emitted before the EOF block when the resource has already observed EOF"
+        );
+        assert!(
+            !notifications.iter().any(|notification| {
+                matches!(
+                    notification,
+                    PlayerNotification::TrackPlaybackStopped {
+                        reason: TrackPlaybackStopReason::Eof,
+                        ..
+                    }
+                )
+            }),
+            "first full block must only request preload, not emit EOF"
         );
     }
 

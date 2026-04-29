@@ -108,36 +108,7 @@ impl PlayerResource {
         range: Range<usize>,
     ) -> Result<ReadOutcome, PlayError> {
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = false;
-
-        // Fill scratch buffers until we have enough data
-        while frames_to_read > self.write_len {
-            if self.resource.is_eof() {
-                eof_reached = true;
-                break;
-            }
-
-            let avail = self.channel_buffers[0].len() - self.write_pos;
-            if avail == 0 {
-                break;
-            }
-
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; STEREO_CHANNELS] = [left, right];
-
-            let n = self.resource.read_planar(&mut planar);
-            if n == 0 {
-                if self.resource.is_eof() {
-                    eof_reached = true;
-                }
-                break;
-            }
-            self.write_len += n;
-            self.write_pos += n;
-        }
+        let mut eof_reached = self.fill_scratch(frames_to_read);
 
         // Copy from scratch buffers to output
         if self.write_len > 0 {
@@ -163,6 +134,10 @@ impl PlayerResource {
             self.write_pos = tail_size;
 
             if frames_to_write == frames_to_read {
+                eof_reached |= self.fill_scratch(frames_to_read);
+            }
+
+            if frames_to_write == frames_to_read {
                 Ok(ReadOutcome::Full)
             } else if eof_reached {
                 Ok(ReadOutcome::Partial(frames_to_write))
@@ -185,6 +160,46 @@ impl PlayerResource {
             }
             Ok(ReadOutcome::Full)
         }
+    }
+
+    fn fill_scratch(&mut self, target_frames: usize) -> bool {
+        let mut eof_reached = false;
+
+        while target_frames > self.write_len {
+            if self.resource.is_eof() {
+                eof_reached = true;
+                break;
+            }
+
+            let needed = target_frames - self.write_len;
+            let avail = needed.min(self.channel_buffers[0].len() - self.write_pos);
+            if avail == 0 {
+                break;
+            }
+
+            let channel_buffers = &mut self.channel_buffers;
+            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+            let mut planar: [&mut [f32]; STEREO_CHANNELS] = [left, right];
+
+            let n = self.resource.read_planar(&mut planar);
+            if n == 0 {
+                if self.resource.is_eof() {
+                    eof_reached = true;
+                }
+                break;
+            }
+            self.write_len += n;
+            self.write_pos += n;
+
+            if self.resource.is_eof() {
+                eof_reached = true;
+                break;
+            }
+        }
+
+        eof_reached
     }
 
     /// Seek to the given position in seconds.
@@ -221,6 +236,14 @@ impl PlayerResource {
     /// Total duration in seconds. Returns 0.0 if unknown.
     pub(crate) fn duration(&self) -> f64 {
         self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
+    }
+
+    /// Remaining buffered frames when the wrapped reader has reached EOF.
+    ///
+    /// `Some(0)` means the current read drained the last buffered frame exactly;
+    /// the next read will return [`ReadOutcome::Eof`].
+    pub(crate) fn frames_until_eof(&self) -> Option<usize> {
+        self.resource.is_eof().then_some(self.write_len)
     }
 
     /// Source identifier for this resource.
@@ -443,6 +466,29 @@ mod tests {
         let result = pr.read(&mut output, 0..128);
 
         assert!(matches!(result, Ok(ReadOutcome::Full)));
+    }
+
+    #[kithara::test(tokio)]
+    async fn full_read_prefetches_buffered_eof() {
+        let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
+        let resource = Resource::from_reader(reader);
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            kithara_bufpool::pcm_pool(),
+        );
+        let mut left = vec![0.0f32; 512];
+        let mut right = vec![0.0f32; 512];
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+
+        let result = pr.read(&mut output, 0..512);
+
+        assert!(matches!(result, Ok(ReadOutcome::Full)));
+        let remaining = pr
+            .frames_until_eof()
+            .expect("EOF should be known after prefetch");
+        assert!(remaining > 0);
+        assert!(remaining < 512);
     }
 
     #[kithara::test(tokio)]

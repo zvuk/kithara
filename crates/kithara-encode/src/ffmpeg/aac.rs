@@ -73,6 +73,9 @@ impl AacFFmpegEncoder {
             .with_codec(AudioCodec::AacLc)
             .with_sample_rate(request.pcm.sample_rate())
             .with_channels(request.pcm.channels());
+        let encoder_delay = request
+            .encoder_delay
+            .saturating_add(encoder.native_encoder_delay());
 
         Ok(EncodedTrack {
             media_info,
@@ -80,7 +83,7 @@ impl AacFFmpegEncoder {
             bit_rate: request.bit_rate,
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
-            encoder_delay: request.encoder_delay,
+            encoder_delay,
             trailing_delay: request.trailing_delay,
             access_units: encoder.into_units(),
         })
@@ -169,6 +172,16 @@ impl PacketCollectingEncoder {
         );
     }
 
+    fn native_encoder_delay(&self) -> u32 {
+        let Some(origin) = self.timestamp_origin else {
+            return 0;
+        };
+        if origin >= 0 {
+            return 0;
+        }
+        u32::try_from(origin.saturating_abs()).unwrap_or(u32::MAX)
+    }
+
     fn into_units(self) -> Vec<EncodedAccessUnit> {
         self.units
     }
@@ -210,7 +223,10 @@ mod tests {
         assert_eq!(encoded.timescale, SAMPLE_RATE);
         assert_eq!(encoded.bit_rate, 128_000);
         assert_eq!(encoded.packets_per_segment, 2);
-        assert_eq!(encoded.encoder_delay, 0);
+        assert_eq!(
+            encoded.encoder_delay,
+            u32::try_from(AacFFmpegEncoder::frame_samples()).expect("AAC frame samples fit u32")
+        );
         assert_eq!(encoded.trailing_delay, 0);
         assert!(encoded.codec_config.is_empty());
         assert!(

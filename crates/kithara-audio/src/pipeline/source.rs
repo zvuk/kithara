@@ -422,7 +422,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             let new_duration = new_decoder.duration();
             let variant = new_info.variant_index;
-            self.gapless = GaplessStage::from_decoder(new_decoder.as_ref());
             // Atomic session update — only on success
             self.session = DecoderSession {
                 base_offset,

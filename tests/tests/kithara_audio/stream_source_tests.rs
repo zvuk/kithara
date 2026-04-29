@@ -490,26 +490,33 @@ fn seek_before_first_decode_resets_gapless_leading_trim() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn format_change_rebuilds_gapless_stage_from_recreated_decoder() {
+fn format_change_preserves_track_gapless_stage() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let spec = mono_spec();
     let v0_chunks = vec![make_indexed_chunk(spec, 0, 2)];
-    let (v0_decoder, _) = scripted_inner_decoder_loose(spec, v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        v0_chunks,
+        vec![],
+        None,
+        gapless_track_info(1, 0),
+    );
 
-    let v3_chunks = vec![make_indexed_chunk(spec, 10, 4)];
+    let v3_chunks = vec![make_indexed_chunk(spec, 10, 3)];
     let (v3_decoder, _) = scripted_inner_decoder_with_track_info_loose(
         spec,
         v3_chunks,
         vec![],
         None,
-        gapless_track_info(1, 1),
+        gapless_track_info(1, 0),
     );
     let factory = make_factory(vec![v3_decoder]);
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
 
     let first = fetch_next(&mut source);
     assert!(!first.is_eof);
-    assert_eq!(first.data.samples(), &[0.0, 1.0]);
+    assert_eq!(first.data.meta.frame_offset, 1);
+    assert_eq!(first.data.samples(), &[1.0]);
 
     {
         let mut s = state.lock_sync();
@@ -521,8 +528,8 @@ fn format_change_rebuilds_gapless_stage_from_recreated_decoder() {
     let recreated = fetch_next(&mut source);
 
     assert!(!recreated.is_eof);
-    assert_eq!(recreated.data.meta.frame_offset, 11);
-    assert_eq!(recreated.data.samples(), &[11.0, 12.0]);
+    assert_eq!(recreated.data.meta.frame_offset, 10);
+    assert_eq!(recreated.data.samples(), &[10.0, 11.0, 12.0]);
 }
 
 /// Test that ABR switch uses `format_change_segment_range()` to find init data.
