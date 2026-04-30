@@ -7,12 +7,12 @@
 //! [`DemuxOutcome::Frame`] values consumable by any [`FrameCodec`].
 
 use std::{
-    io::ErrorKind,
+    io::{ErrorKind, Read, Seek},
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
-use kithara_stream::{AudioCodec, PendingReason};
+use kithara_stream::{AudioCodec, ContainerFormat, PendingReason};
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -25,13 +25,17 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatReader, SeekMode, SeekTo, Track, TrackType},
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
     units::{Time, TimeBase, Timestamp},
 };
 
 use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::{DecodeError, DecodeResult},
+    symphonia::{
+        config::SymphoniaConfig,
+        probe::{ReaderBootstrap, new_direct, probe_with_seek},
+    },
 };
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
@@ -50,9 +54,45 @@ pub struct SymphoniaDemuxer {
 }
 
 impl SymphoniaDemuxer {
+    /// Build a demuxer for a file-like source: probe the container if
+    /// no [`ContainerFormat`] hint is provided, otherwise wire the
+    /// matching reader directly. Returns a [`SymphoniaDemuxer`] plus the
+    /// bootstrap byte-length handle (so the factory can keep updating it
+    /// across the decoder's lifetime).
+    ///
+    /// # Errors
+    ///
+    /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
+    /// and missing-track errors ([`DecodeError::ProbeFailed`]).
+    pub fn open_file<R>(
+        source: R,
+        hint: Option<String>,
+        container: Option<ContainerFormat>,
+        byte_len_handle: Option<Arc<AtomicU64>>,
+    ) -> DecodeResult<(Self, Arc<AtomicU64>)>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let config = SymphoniaConfig {
+            byte_len_handle,
+            container,
+            hint,
+            ..Default::default()
+        };
+        let format_opts = FormatOptions::default();
+        let bootstrap: ReaderBootstrap = if let Some(container) = container {
+            new_direct(source, &config, container, format_opts)?
+        } else {
+            probe_with_seek(source, &config, format_opts, false)?
+        };
+        let len_handle = bootstrap.byte_len_handle.clone();
+        let demuxer = Self::from_reader(bootstrap.format_reader, Some(bootstrap.byte_pos_handle))?;
+        Ok((demuxer, len_handle))
+    }
+
     /// Build from an already-constructed `FormatReader`.
     ///
-    /// The factory layer (Phase 5) is responsible for wiring up the
+    /// The factory layer is responsible for wiring up the
     /// `Source -> MediaSource` adapter and probing the right reader
     /// for the container; `SymphoniaDemuxer` only deals with the
     /// post-bootstrap object.

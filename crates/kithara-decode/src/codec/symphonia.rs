@@ -50,6 +50,23 @@ pub struct SymphoniaCodec {
     spec: PcmSpec,
 }
 
+impl SymphoniaCodec {
+    /// Whether `SymphoniaCodec::open` accepts this codec via [`TrackInfo`]
+    /// alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need bit-depth +
+    /// endianness which the generic enum does not encode — those tracks
+    /// fall through to the legacy whole-stream decoder for now.
+    /// `AudioCodec::Opus` is excluded for parity with
+    /// `crate::symphonia::SymphoniaDecoder::supports` — the software
+    /// stack rejects Opus tracks at the backend layer.
+    #[must_use]
+    pub fn supports(codec: AudioCodec) -> bool {
+        !matches!(
+            codec,
+            AudioCodec::Pcm | AudioCodec::Adpcm | AudioCodec::Opus
+        )
+    }
+}
+
 impl FrameCodec for SymphoniaCodec {
     fn open(track: &TrackInfo) -> DecodeResult<Self> {
         let (codec_id, profile) = map_codec(track.codec)?;
