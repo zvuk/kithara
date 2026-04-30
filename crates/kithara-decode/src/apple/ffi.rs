@@ -10,75 +10,75 @@
 
 use std::ffi::c_void;
 
-pub(super) type OSStatus = i32;
-pub(super) type AudioFileID = *mut c_void;
-pub(super) type AudioFileTypeID = u32;
-pub(super) type AudioFilePropertyID = u32;
-pub(super) type AudioFormatID = u32;
-pub(super) type AudioFormatFlags = u32;
-pub(super) type AudioConverterRef = *mut c_void;
-pub(super) type UInt32 = u32;
-pub(super) type SInt64 = i64;
-pub(super) type Float64 = f64;
+pub(crate) type OSStatus = i32;
+pub(crate) type AudioFileID = *mut c_void;
+pub(crate) type AudioFileTypeID = u32;
+pub(crate) type AudioFilePropertyID = u32;
+pub(crate) type AudioFormatID = u32;
+pub(crate) type AudioFormatFlags = u32;
+pub(crate) type AudioConverterRef = *mut c_void;
+pub(crate) type UInt32 = u32;
+pub(crate) type SInt64 = i64;
+pub(crate) type Float64 = f64;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct AudioStreamPacketDescription {
-    pub(super) mStartOffset: SInt64,
-    pub(super) mVariableFramesInPacket: UInt32,
-    pub(super) mDataByteSize: UInt32,
+pub(crate) struct AudioStreamPacketDescription {
+    pub(crate) mStartOffset: SInt64,
+    pub(crate) mVariableFramesInPacket: UInt32,
+    pub(crate) mDataByteSize: UInt32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct AudioStreamBasicDescription {
-    pub(super) mSampleRate: Float64,
-    pub(super) mFormatID: AudioFormatID,
-    pub(super) mFormatFlags: AudioFormatFlags,
-    pub(super) mBytesPerPacket: UInt32,
-    pub(super) mFramesPerPacket: UInt32,
-    pub(super) mBytesPerFrame: UInt32,
-    pub(super) mChannelsPerFrame: UInt32,
-    pub(super) mBitsPerChannel: UInt32,
-    pub(super) mReserved: UInt32,
+pub(crate) struct AudioStreamBasicDescription {
+    pub(crate) mSampleRate: Float64,
+    pub(crate) mFormatID: AudioFormatID,
+    pub(crate) mFormatFlags: AudioFormatFlags,
+    pub(crate) mBytesPerPacket: UInt32,
+    pub(crate) mFramesPerPacket: UInt32,
+    pub(crate) mBytesPerFrame: UInt32,
+    pub(crate) mChannelsPerFrame: UInt32,
+    pub(crate) mBitsPerChannel: UInt32,
+    pub(crate) mReserved: UInt32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub(super) struct AudioBuffer {
-    pub(super) mNumberChannels: UInt32,
-    pub(super) mDataByteSize: UInt32,
-    pub(super) mData: *mut c_void,
+pub(crate) struct AudioBuffer {
+    pub(crate) mNumberChannels: UInt32,
+    pub(crate) mDataByteSize: UInt32,
+    pub(crate) mData: *mut c_void,
 }
 
 #[repr(C)]
-pub(super) struct AudioBufferList {
-    pub(super) mNumberBuffers: UInt32,
-    pub(super) mBuffers: [AudioBuffer; 1],
+pub(crate) struct AudioBufferList {
+    pub(crate) mNumberBuffers: UInt32,
+    pub(crate) mBuffers: [AudioBuffer; 1],
 }
 
 /// Translation between frame index and packet index (VBR containers).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct AudioFramePacketTranslation {
-    pub(super) mFrame: SInt64,
-    pub(super) mPacket: SInt64,
-    pub(super) mFrameOffsetInPacket: UInt32,
+pub(crate) struct AudioFramePacketTranslation {
+    pub(crate) mFrame: SInt64,
+    pub(crate) mPacket: SInt64,
+    pub(crate) mFrameOffsetInPacket: UInt32,
 }
 
 /// Translation between absolute byte offset and packet index (VBR containers).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct AudioBytePacketTranslation {
-    pub(super) mByte: SInt64,
-    pub(super) mPacket: SInt64,
-    pub(super) mByteOffsetInPacket: UInt32,
-    pub(super) mFlags: UInt32,
+pub(crate) struct AudioBytePacketTranslation {
+    pub(crate) mByte: SInt64,
+    pub(crate) mPacket: SInt64,
+    pub(crate) mByteOffsetInPacket: UInt32,
+    pub(crate) mFlags: UInt32,
 }
 
 /// Callbacks supplied to `AudioFileOpenWithCallbacks`. `inClientData`
 /// receives the pointer passed to `AudioFileOpenWithCallbacks`.
-pub(super) type AudioFile_ReadProc = extern "C" fn(
+pub(crate) type AudioFile_ReadProc = extern "C" fn(
     inClientData: *mut c_void,
     inPosition: SInt64,
     requestCount: UInt32,
@@ -86,10 +86,10 @@ pub(super) type AudioFile_ReadProc = extern "C" fn(
     actualCount: *mut UInt32,
 ) -> OSStatus;
 
-pub(super) type AudioFile_GetSizeProc = extern "C" fn(inClientData: *mut c_void) -> SInt64;
+pub(crate) type AudioFile_GetSizeProc = extern "C" fn(inClientData: *mut c_void) -> SInt64;
 
 /// Callback type for `AudioConverterFillComplexBuffer`.
-pub(super) type AudioConverterComplexInputDataProc = extern "C" fn(
+pub(crate) type AudioConverterComplexInputDataProc = extern "C" fn(
     inAudioConverter: AudioConverterRef,
     ioNumberDataPackets: *mut UInt32,
     ioData: *mut AudioBufferList,
@@ -99,7 +99,7 @@ pub(super) type AudioConverterComplexInputDataProc = extern "C" fn(
 
 #[link(name = "AudioToolbox", kind = "framework")]
 unsafe extern "C" {
-    pub(super) fn AudioFileOpenWithCallbacks(
+    pub(crate) fn AudioFileOpenWithCallbacks(
         inClientData: *mut c_void,
         inReadFunc: AudioFile_ReadProc,
         inWriteFunc: *const c_void,
@@ -109,23 +109,23 @@ unsafe extern "C" {
         outAudioFile: *mut AudioFileID,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileClose(inAudioFile: AudioFileID) -> OSStatus;
+    pub(crate) fn AudioFileClose(inAudioFile: AudioFileID) -> OSStatus;
 
-    pub(super) fn AudioFileGetPropertyInfo(
+    pub(crate) fn AudioFileGetPropertyInfo(
         inAudioFile: AudioFileID,
         inPropertyID: AudioFilePropertyID,
         outDataSize: *mut UInt32,
         isWritable: *mut UInt32,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileGetProperty(
+    pub(crate) fn AudioFileGetProperty(
         inAudioFile: AudioFileID,
         inPropertyID: AudioFilePropertyID,
         ioDataSize: *mut UInt32,
         outPropertyData: *mut c_void,
     ) -> OSStatus;
 
-    pub(super) fn AudioFileReadPacketData(
+    pub(crate) fn AudioFileReadPacketData(
         inAudioFile: AudioFileID,
         inUseCache: u8,
         ioNumBytes: *mut UInt32,
@@ -135,20 +135,20 @@ unsafe extern "C" {
         outBuffer: *mut c_void,
     ) -> OSStatus;
 
-    pub(super) fn AudioConverterNew(
+    pub(crate) fn AudioConverterNew(
         inSourceFormat: *const AudioStreamBasicDescription,
         inDestinationFormat: *const AudioStreamBasicDescription,
         outAudioConverter: *mut AudioConverterRef,
     ) -> OSStatus;
 
-    pub(super) fn AudioConverterSetProperty(
+    pub(crate) fn AudioConverterSetProperty(
         inAudioConverter: AudioConverterRef,
         inPropertyID: u32,
         inPropertyDataSize: UInt32,
         inPropertyData: *const c_void,
     ) -> OSStatus;
 
-    pub(super) fn AudioConverterFillComplexBuffer(
+    pub(crate) fn AudioConverterFillComplexBuffer(
         inAudioConverter: AudioConverterRef,
         inInputDataProc: AudioConverterComplexInputDataProc,
         inInputDataProcUserData: *mut c_void,
@@ -157,7 +157,7 @@ unsafe extern "C" {
         outPacketDescription: *mut AudioStreamPacketDescription,
     ) -> OSStatus;
 
-    pub(super) fn AudioConverterDispose(inAudioConverter: AudioConverterRef) -> OSStatus;
+    pub(crate) fn AudioConverterDispose(inAudioConverter: AudioConverterRef) -> OSStatus;
 
-    pub(super) fn AudioConverterReset(inAudioConverter: AudioConverterRef) -> OSStatus;
+    pub(crate) fn AudioConverterReset(inAudioConverter: AudioConverterRef) -> OSStatus;
 }

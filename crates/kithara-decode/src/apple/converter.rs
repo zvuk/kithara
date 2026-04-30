@@ -21,15 +21,15 @@ use super::{
 /// buffer — they stay valid until the next `read_next_packet` call, which
 /// is always issued by `AppleDecoder` *after* the converter has finished
 /// consuming the current packet.
-pub(super) struct ConverterInputState {
-    pub(super) packet_ptr: *const u8,
-    pub(super) packet_desc: AudioStreamPacketDescription,
-    pub(super) packet_len: UInt32,
-    pub(super) has_packet: bool,
+pub(crate) struct ConverterInputState {
+    pub(crate) packet_ptr: *const u8,
+    pub(crate) packet_desc: AudioStreamPacketDescription,
+    pub(crate) packet_len: UInt32,
+    pub(crate) has_packet: bool,
 }
 
 impl ConverterInputState {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             packet_ptr: ptr::null(),
             packet_desc: AudioStreamPacketDescription::default(),
@@ -38,13 +38,13 @@ impl ConverterInputState {
         }
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.packet_ptr = ptr::null();
         self.packet_len = 0;
         self.has_packet = false;
     }
 
-    pub(super) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
+    pub(crate) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
         #[expect(clippy::cast_possible_truncation, reason = "packet size fits in u32")]
         let len = data.len() as UInt32;
         self.packet_ptr = data.as_ptr();
@@ -63,7 +63,7 @@ impl ConverterInputState {
 }
 
 /// `AudioConverter` input data callback.
-pub(super) extern "C" fn converter_input_callback(
+pub(crate) extern "C" fn converter_input_callback(
     _converter: AudioConverterRef,
     io_num_packets: *mut UInt32,
     io_data: *mut AudioBufferList,

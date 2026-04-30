@@ -42,6 +42,8 @@ ignores:
   # forced by mirroring native APIs. Keep the suppression file-local.
   - crates/kithara-decode/src/apple/**
   - crates/kithara-decode/src/android/**
+  - crates/kithara-decode/src/codec/apple.rs
+  - crates/kithara-decode/src/codec/android.rs
   - crates/kithara-ffi/**
   # Proc-macros — `unused_macros` and naming lints fire on macro-generated
   # surfaces; macro authors document why per-macro.

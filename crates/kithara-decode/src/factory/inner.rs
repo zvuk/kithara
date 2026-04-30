@@ -296,9 +296,51 @@ fn create_apple(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
+        // Apple HW codec when supported, Symphonia fallback otherwise.
+        if crate::codec::AppleCodec::supports(codec) {
+            return create_fmp4_segment_apple(source, codec, layout, config);
+        }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
     dispatch::<crate::apple::AppleDecoder>(source, codec, container, config, "Apple")
+}
+
+#[cfg(all(
+    feature = "apple",
+    feature = "symphonia",
+    any(target_os = "macos", target_os = "ios")
+))]
+fn create_fmp4_segment_apple(
+    source: BoxedSource,
+    codec: AudioCodec,
+    layout: Arc<dyn SegmentLayout>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        FrameCodec, UniversalDecoder,
+        codec::AppleCodec,
+        demuxer::{Demuxer, Fmp4SegmentDemuxer},
+    };
+
+    tracing::debug!(
+        ?codec,
+        "fmp4_segment: dispatching to segment-aware Apple HW codec path"
+    );
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
+    let codec = AppleCodec::open(demuxer.track_info())?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+    let decoder = UniversalDecoder::new(
+        demuxer,
+        codec,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.stream_ctx.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]

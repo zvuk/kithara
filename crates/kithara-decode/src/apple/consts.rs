@@ -4,51 +4,51 @@
 
 use super::ffi::{AudioFilePropertyID, AudioFileTypeID, AudioFormatFlags, AudioFormatID, OSStatus};
 
-pub(super) struct Consts;
+pub(crate) struct Consts;
 
 impl Consts {
     /// AAC always decodes 1024 samples per packet (SBR spectral bands
     /// use the same packet boundary).
-    pub(super) const AAC_FRAMES_PER_PACKET: u32 = 1024;
-    pub(super) const BITS_PER_F32_SAMPLE: u32 = 32;
-    pub(super) const BYTES_PER_F32_SAMPLE: u32 = 4;
-    pub(super) const DEFAULT_BUFFER_FRAMES: usize = 1024;
+    pub(crate) const AAC_FRAMES_PER_PACKET: u32 = 1024;
+    pub(crate) const BITS_PER_F32_SAMPLE: u32 = 32;
+    pub(crate) const BYTES_PER_F32_SAMPLE: u32 = 4;
+    pub(crate) const DEFAULT_BUFFER_FRAMES: usize = 1024;
     /// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:
     /// 4 bytes `"fLaC"` marker + 4 bytes `METADATA_BLOCK_HEADER`.
-    pub(super) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
+    pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
     /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
-    pub(super) const FLAC_STREAMINFO_LEN: usize = 34;
-    pub(super) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
-    pub(super) const kAudioConverterErr_NoDataNow: OSStatus = 0x21646174; // '!dat'
+    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
+    pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x21646174; // '!dat'
     // AudioFile container-type hints
-    pub(super) const kAudioFileAAC_ADTSType: AudioFileTypeID = 0x61647473; // 'adts'
-    pub(super) const kAudioFileCAFType: AudioFileTypeID = 0x63616666; // 'caff'
-    pub(super) const kAudioFileEndOfFileError: OSStatus = -39;
-    pub(super) const kAudioFileFLACType: AudioFileTypeID = 0x666c6163; // 'flac'
-    pub(super) const kAudioFileMP3Type: AudioFileTypeID = 0x4d504733; // 'MPG3'
-    pub(super) const kAudioFileMPEG4Type: AudioFileTypeID = 0x6d703466; // 'mp4f'
-    pub(super) const kAudioFilePositionError: OSStatus = -40;
+    pub(crate) const kAudioFileAAC_ADTSType: AudioFileTypeID = 0x61647473; // 'adts'
+    pub(crate) const kAudioFileCAFType: AudioFileTypeID = 0x63616666; // 'caff'
+    pub(crate) const kAudioFileEndOfFileError: OSStatus = -39;
+    pub(crate) const kAudioFileFLACType: AudioFileTypeID = 0x666c6163; // 'flac'
+    pub(crate) const kAudioFileMP3Type: AudioFileTypeID = 0x4d504733; // 'MPG3'
+    pub(crate) const kAudioFileMPEG4Type: AudioFileTypeID = 0x6d703466; // 'mp4f'
+    pub(crate) const kAudioFilePositionError: OSStatus = -40;
     // AudioFile property IDs
-    pub(super) const kAudioFilePropertyDataFormat: AudioFilePropertyID = 0x64666d74; // 'dfmt'
-    pub(super) const kAudioFilePropertyEstimatedDuration: AudioFilePropertyID = 0x65647572; // 'edur'
-    pub(super) const kAudioFilePropertyFrameToPacket: AudioFilePropertyID = 0x66727470; // 'frtp'
-    pub(super) const kAudioFilePropertyMagicCookieData: AudioFilePropertyID = 0x6d676963; // 'mgic'
-    pub(super) const kAudioFilePropertyMaximumPacketSize: AudioFilePropertyID = 0x70737a65; // 'psze'
-    pub(super) const kAudioFilePropertyPacketSizeUpperBound: AudioFilePropertyID = 0x706b7562; // 'pkub'
-    pub(super) const kAudioFilePropertyPacketToByte: AudioFilePropertyID = 0x706b6279; // 'pkby'
-    pub(super) const kAudioFileWAVEType: AudioFileTypeID = 0x57415645; // 'WAVE'
-    pub(super) const kAudioFormatFLAC: AudioFormatID = 0x666c6163; // 'flac'
-    pub(super) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
-    pub(super) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
-    pub(super) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
+    pub(crate) const kAudioFilePropertyDataFormat: AudioFilePropertyID = 0x64666d74; // 'dfmt'
+    pub(crate) const kAudioFilePropertyEstimatedDuration: AudioFilePropertyID = 0x65647572; // 'edur'
+    pub(crate) const kAudioFilePropertyFrameToPacket: AudioFilePropertyID = 0x66727470; // 'frtp'
+    pub(crate) const kAudioFilePropertyMagicCookieData: AudioFilePropertyID = 0x6d676963; // 'mgic'
+    pub(crate) const kAudioFilePropertyMaximumPacketSize: AudioFilePropertyID = 0x70737a65; // 'psze'
+    pub(crate) const kAudioFilePropertyPacketSizeUpperBound: AudioFilePropertyID = 0x706b7562; // 'pkub'
+    pub(crate) const kAudioFilePropertyPacketToByte: AudioFilePropertyID = 0x706b6279; // 'pkby'
+    pub(crate) const kAudioFileWAVEType: AudioFileTypeID = 0x57415645; // 'WAVE'
+    pub(crate) const kAudioFormatFLAC: AudioFormatID = 0x666c6163; // 'flac'
+    pub(crate) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
+    pub(crate) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
+    pub(crate) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
         Self::kAudioFormatFlagIsFloat | Self::kAudioFormatFlagIsPacked;
-    pub(super) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d; // 'lpcm'
-    pub(super) const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320; // 'aac '
-    pub(super) const noErr: OSStatus = 0;
+    pub(crate) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70636d; // 'lpcm'
+    pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x61616320; // 'aac '
+    pub(crate) const noErr: OSStatus = 0;
 }
 
 /// Decode a `FourCC`-style `OSStatus` into an ASCII tag when possible.
-pub(super) fn os_status_to_string(status: OSStatus) -> String {
+pub(crate) fn os_status_to_string(status: OSStatus) -> String {
     if status == Consts::noErr {
         return "noErr".to_string();
     }

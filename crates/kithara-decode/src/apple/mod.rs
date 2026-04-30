@@ -13,10 +13,10 @@
 mod audiofile;
 mod backend;
 mod config;
-mod consts;
-mod converter;
+pub(crate) mod consts;
+pub(crate) mod converter;
 mod decoder;
-mod ffi;
+pub(crate) mod ffi;
 mod fmp4;
 mod reader;
 
