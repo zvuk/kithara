@@ -12,7 +12,9 @@ use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{time::Duration, tokio::task};
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{MediaInfo, ReadOutcome, SourcePhase, StreamError, Timeline, dl::PeerHandle};
+use kithara_stream::{
+    MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline, dl::PeerHandle,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
@@ -20,6 +22,7 @@ use url::Url;
 use super::{
     download::{run_full_download, run_range_watcher},
     inner::{FileInner, FileInnerParams, FilePhase, FileStreamState},
+    segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 
@@ -59,6 +62,31 @@ impl FileSource {
             FilePhase::Complete,
         ));
         Self { coord, inner }
+    }
+
+    /// Try to populate the lazy fragmented-mp4 segment index from the
+    /// fully cached file bytes. No-op when the file is still
+    /// downloading or the index is already set.
+    fn ensure_segment_index(&self) -> Option<&FileSegmentIndex> {
+        if let Some(idx) = self.inner.segment_index.get() {
+            return Some(idx);
+        }
+        let total = self.inner.res.len()?;
+        if total == 0 {
+            return None;
+        }
+        if !self.inner.res.contains_range(0..total) {
+            return None;
+        }
+        let total_usize = usize::try_from(total).ok()?;
+        let mut buf = vec![0u8; total_usize];
+        self.inner.res.read_at(0, &mut buf).ok()?;
+        let index = FileSegmentIndex::try_build(&buf)?;
+        // OnceLock::set fails if a concurrent caller raced us to the
+        // store — both winners observe a valid index, so the loser
+        // can ignore the rejection.
+        let _ = self.inner.segment_index.set(index);
+        self.inner.segment_index.get()
     }
 
     /// Create a source for a remote file and spawn download tasks.
@@ -194,6 +222,31 @@ impl kithara_stream::Source for FileSource {
         self.coord.timeline()
     }
 
+    fn init_segment_range(&self) -> Option<Range<u64>> {
+        self.ensure_segment_index()
+            .map(FileSegmentIndex::init_range)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.ensure_segment_index()?.segment_at_time(t)
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        self.ensure_segment_index()?.segment_after_byte(byte_offset)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.ensure_segment_index()?.segment_count())
+    }
+
+    fn as_segment_source(&self) -> Option<Arc<dyn kithara_stream::Source>> {
+        self.ensure_segment_index()?;
+        Some(Arc::new(FileSegmentView {
+            inner: Arc::clone(&self.inner),
+            timeline: self.coord.timeline(),
+        }))
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_range(
         &mut self,
@@ -231,5 +284,69 @@ impl kithara_stream::Source for FileSource {
             .res
             .wait_range(range)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
+    }
+}
+
+/// Sidecar `Source` view that exposes the file's fragmented-mp4
+/// segment layout without surfacing any I/O.
+///
+/// Mirrors `kithara-hls::source::HlsSegmentView` — the byte-level
+/// methods are stubbed (the HLS demuxer reads through the original
+/// `BoxedSource`, not through this view), so seek/play paths never
+/// confuse the sidecar with the live cursor.
+struct FileSegmentView {
+    inner: Arc<FileInner>,
+    timeline: Timeline,
+}
+
+impl FileSegmentView {
+    fn segment_index(&self) -> Option<&FileSegmentIndex> {
+        self.inner.segment_index.get()
+    }
+}
+
+impl kithara_stream::Source for FileSegmentView {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        _range: Range<u64>,
+        _timeout: Option<Duration>,
+    ) -> kithara_stream::StreamResult<WaitOutcome> {
+        Ok(WaitOutcome::Eof)
+    }
+
+    fn read_at(
+        &mut self,
+        _offset: u64,
+        _buf: &mut [u8],
+    ) -> kithara_stream::StreamResult<ReadOutcome> {
+        Ok(ReadOutcome::Eof)
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Eof
+    }
+
+    fn len(&self) -> Option<u64> {
+        None
+    }
+
+    fn init_segment_range(&self) -> Option<Range<u64>> {
+        self.segment_index().map(FileSegmentIndex::init_range)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.segment_index()?.segment_at_time(t)
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        self.segment_index()?.segment_after_byte(byte_offset)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.segment_index()?.segment_count())
     }
 }

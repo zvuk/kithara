@@ -21,6 +21,7 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 futures = { workspace = true }
+re_mp4 = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }

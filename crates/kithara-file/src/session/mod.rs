@@ -12,6 +12,7 @@ mod download;
 mod inner;
 mod peer;
 mod reader;
+mod segments;
 mod source;
 #[cfg(test)]
 mod tests;

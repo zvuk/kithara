@@ -20,6 +20,7 @@ use kithara_stream::AudioCodec;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use super::segments::FileSegmentIndex;
 use crate::{coord::FileCoord, error::SourceError};
 
 /// Creation helper: acquire the asset resource and prepare the event bus
@@ -91,6 +92,11 @@ pub(crate) struct FileInner {
     pub(crate) headers: Option<Headers>,
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
+    /// Lazily-built fragmented-mp4 segment index. Populated on first
+    /// segment-method call once the file is fully cached and parses
+    /// as fragmented mp4. Stays empty for non-mp4 files, classic mp4
+    /// (no `moof` chain), or while the file is still downloading.
+    pub(crate) segment_index: OnceLock<FileSegmentIndex>,
 
     // --- mutable state (no Mutex needed) ---
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
@@ -119,6 +125,7 @@ impl FileInner {
             res,
             url,
             content_type_codec: OnceLock::new(),
+            segment_index: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
         }
     }
