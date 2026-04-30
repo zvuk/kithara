@@ -346,9 +346,9 @@ fn create_fmp4_segment_symphonia(
     segmented: Arc<dyn Source>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::fmp4_segment::{
-        codec_symphonia::{SymphoniaAacCodec, SymphoniaFlacCodec},
-        decoder::Fmp4SegmentDecoder,
+    use crate::{
+        FrameCodec, SymphoniaCodec, UniversalDecoder,
+        demuxer::{Demuxer, Fmp4SegmentDemuxer},
     };
 
     tracing::debug!(
@@ -356,12 +356,21 @@ fn create_fmp4_segment_symphonia(
         "fmp4_segment: dispatching to segment-aware Symphonia path"
     );
     match codec {
-        AudioCodec::AacLc => {
-            let decoder = Fmp4SegmentDecoder::<SymphoniaAacCodec>::new(source, segmented, config)?;
-            Ok(Box::new(decoder))
-        }
-        AudioCodec::Flac => {
-            let decoder = Fmp4SegmentDecoder::<SymphoniaFlacCodec>::new(source, segmented, config)?;
+        AudioCodec::AacLc | AudioCodec::Flac => {
+            let demuxer = Fmp4SegmentDemuxer::open(source, segmented)?;
+            let codec = SymphoniaCodec::open(demuxer.track_info())?;
+            let pool = config
+                .pcm_pool
+                .clone()
+                .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+            let decoder = UniversalDecoder::new(
+                demuxer,
+                codec,
+                pool,
+                config.epoch,
+                config.byte_len_handle.clone(),
+                config.stream_ctx.clone(),
+            );
             Ok(Box::new(decoder))
         }
         other => Err(DecodeError::UnsupportedCodec(other)),

@@ -9,15 +9,16 @@ use std::{
     },
 };
 
+use kithara_bufpool::pcm_pool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{ReadOutcome, SegmentDescriptor, Source, SourcePhase, StreamResult, Timeline};
 use kithara_test_utils::kithara;
 
 use crate::{
-    DecoderConfig,
+    FrameCodec, SymphoniaCodec, UniversalDecoder,
     backend::BoxedSource,
-    fmp4_segment::{codec_symphonia::SymphoniaAacCodec, decoder::Fmp4SegmentDecoder},
+    demuxer::{Demuxer, Fmp4SegmentDemuxer},
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
 
@@ -158,7 +159,7 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
 }
 
 type DecoderHarness = (
-    Fmp4SegmentDecoder<SymphoniaAacCodec>,
+    UniversalDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
     Arc<Mutex<Vec<Range<u64>>>>,
     Arc<AtomicBool>,
 );
@@ -172,9 +173,9 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let segmented_arc: Arc<dyn Source> = Arc::new(segmented);
-    let config = DecoderConfig::default();
-    let decoder = Fmp4SegmentDecoder::<SymphoniaAacCodec>::new(source, segmented_arc, &config)
-        .expect("build decoder");
+    let demuxer = Fmp4SegmentDemuxer::open(source, segmented_arc).expect("build demuxer");
+    let codec = SymphoniaCodec::open(demuxer.track_info()).expect("open codec");
+    let decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
     (decoder, reads, record)
 }
 
