@@ -18,11 +18,13 @@
 //! `UniversalDecoder<D, C>` can name them without import cycles.
 
 mod contract;
+mod fmp4_segment;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 mod types;
 
 pub use contract::Demuxer;
+pub use fmp4_segment::Fmp4SegmentDemuxer;
 #[cfg(feature = "symphonia")]
 pub use symphonia::SymphoniaDemuxer;
 pub use types::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo};
