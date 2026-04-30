@@ -21,7 +21,6 @@ mod error;
 mod hooks;
 mod media;
 mod media_rfc6381;
-mod segmented;
 mod source;
 mod stream;
 mod timeline;
@@ -38,8 +37,9 @@ pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use media_rfc6381::audio_codec_supports_fmp4_packaging;
-pub use segmented::{SegmentDescriptor, SegmentedSource, SharedSegmentedSource};
-pub use source::{PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor};
+pub use source::{
+    PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase, SourceSeekAnchor,
+};
 pub use stream::{
     Stream, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType, VariantChangeError,
 };

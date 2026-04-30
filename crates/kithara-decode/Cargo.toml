@@ -55,6 +55,8 @@ internal = []
 
 [dev-dependencies]
 kithara-decode = { path = ".", default-features = false, features = ["internal", "symphonia"] }
+kithara-platform = { workspace = true }
+kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

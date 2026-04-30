@@ -796,7 +796,7 @@ where
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let hooks = shared_stream.take_reader_hooks();
-        let segmented_source = shared_stream.as_segmented();
+        let segmented_source = shared_stream.as_segment_source();
         let decoder_config = kithara_decode::DecoderConfig {
             backend: decoder_backend,
             hint: hint.clone(),
@@ -881,7 +881,7 @@ where
             factory_byte_len.store(byte_len, Ordering::Release);
             let current_epoch = factory_epoch.load(Ordering::Acquire);
             let hooks = stream.take_reader_hooks();
-            let segmented_source = stream.as_segmented();
+            let segmented_source = stream.as_segment_source();
             let config = kithara_decode::DecoderConfig {
                 backend: decoder_backend,
                 byte_len_handle: Some(Arc::clone(&factory_byte_len)),

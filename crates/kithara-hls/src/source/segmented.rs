@@ -1,7 +1,8 @@
 use std::{ops::Range, sync::Arc};
 
 use kithara_platform::{Mutex, time::Duration};
-use kithara_stream::{SegmentDescriptor, SegmentedSource};
+use kithara_storage::WaitOutcome;
+use kithara_stream::{ReadOutcome, SegmentDescriptor, Source, SourcePhase, StreamResult, Timeline};
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
@@ -19,16 +20,19 @@ use crate::{
 pub(crate) struct HlsSegmentView {
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) segments: Arc<Mutex<StreamIndex>>,
+    pub(crate) timeline: Timeline,
 }
 
 impl HlsSegmentView {
     pub(crate) fn new(
         playlist_state: Arc<PlaylistState>,
         segments: Arc<Mutex<StreamIndex>>,
+        timeline: Timeline,
     ) -> Arc<Self> {
         Arc::new(Self {
             playlist_state,
             segments,
+            timeline,
         })
     }
 
@@ -81,10 +85,8 @@ impl HlsSegmentView {
             variant,
         ))
     }
-}
 
-impl SegmentedSource for HlsSegmentView {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
+    pub(crate) fn init_segment_range(&self) -> Option<Range<u64>> {
         let variant = self.current_variant();
         let segments = self.segments.lock_sync();
         let vs = segments.variant_segments(variant)?;
@@ -118,7 +120,7 @@ impl SegmentedSource for HlsSegmentView {
         (end > start).then_some(start..end)
     }
 
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+    pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         let variant = self.current_variant();
         let (segment_index, _, _) = self.playlist_state.find_seek_point_for_time(variant, t)?;
         // Already routed through `descriptor_for_segment` so the
@@ -126,7 +128,7 @@ impl SegmentedSource for HlsSegmentView {
         self.descriptor_for_segment(variant, segment_index)
     }
 
-    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+    pub(crate) fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
         let variant = self.current_variant();
         let segment_index = self
             .playlist_state
@@ -142,10 +144,53 @@ impl SegmentedSource for HlsSegmentView {
         self.descriptor_for_segment(variant, actual_index)
     }
 
-    fn segment_count(&self) -> Option<u32> {
+    pub(crate) fn segment_count(&self) -> Option<u32> {
         let variant = self.current_variant();
         let count = self.playlist_state.num_segments(variant)?;
         u32::try_from(count).ok()
+    }
+}
+
+impl Source for HlsSegmentView {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        _range: Range<u64>,
+        _timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        // Segment-only view — no live I/O.
+        Ok(WaitOutcome::Eof)
+    }
+
+    fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        Ok(ReadOutcome::Eof)
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Eof
+    }
+
+    fn len(&self) -> Option<u64> {
+        None
+    }
+
+    fn init_segment_range(&self) -> Option<Range<u64>> {
+        Self::init_segment_range(self)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        Self::segment_at_time(self, t)
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        Self::segment_after_byte(self, byte_offset)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Self::segment_count(self)
     }
 }
 
@@ -203,7 +248,7 @@ mod tests {
 
         let stream_index = StreamIndex::new(1, num_segments);
         let segments = Arc::new(Mutex::new(stream_index));
-        HlsSegmentView::new(playlist_state, segments)
+        HlsSegmentView::new(playlist_state, segments, Timeline::new())
     }
 
     #[kithara::test]

@@ -7,14 +7,50 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range};
+use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{Timeline, error::StreamResult, media::MediaInfo, segmented::SharedSegmentedSource};
+use crate::{Timeline, error::StreamResult, media::MediaInfo};
+
+/// Per-segment metadata exposed by segmented sources (HLS).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SegmentDescriptor {
+    /// Byte range in the source's virtual stream.
+    pub byte_range: Range<u64>,
+    /// Absolute decode time at the start of this segment (cumulative
+    /// EXTINF over preceding segments).
+    pub decode_time: Duration,
+    /// Segment duration (EXTINF).
+    pub duration: Duration,
+    /// Segment index within the variant.
+    pub segment_index: u32,
+    /// Variant the descriptor was resolved against.
+    pub variant_index: usize,
+}
+
+impl SegmentDescriptor {
+    #[must_use]
+    pub fn new(
+        byte_range: Range<u64>,
+        decode_time: Duration,
+        duration: Duration,
+        segment_index: u32,
+        variant_index: usize,
+    ) -> Self {
+        Self {
+            byte_range,
+            decode_time,
+            duration,
+            segment_index,
+            variant_index,
+        }
+    }
+}
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -137,7 +173,7 @@ impl SourceSeekAnchor {
     unimock(api = SourceMock)
 )]
 #[expect(clippy::len_without_is_empty)]
-pub trait Source: Send + 'static {
+pub trait Source: Send + Sync + 'static {
     /// Get shared playback timeline.
     ///
     /// Timeline is the single source of truth for playback state across all
@@ -330,17 +366,42 @@ pub trait Source: Send + 'static {
         None
     }
 
-    /// Optional sidecar handle exposing per-segment metadata (HLS).
+    /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
+    /// current layout variant. Returns `None` until the init segment is
+    /// announced or for non-segmented sources.
     ///
-    /// Segment-aware decoders (fMP4 segment demuxer) use this to map
+    /// Used by segment-aware decoders (fMP4 segment demuxer) to map
     /// time/byte targets to single-segment byte ranges, bypassing the
-    /// whole-stream container parser. Non-segmented sources keep the
-    /// default `None`.
+    /// whole-stream container parser.
+    fn init_segment_range(&self) -> Option<Range<u64>> {
+        None
+    }
+
+    /// Locate the segment whose `[decode_time, decode_time + duration)`
+    /// covers `t`. Resolves against the source's *current layout
+    /// variant* — same variant `init_segment_range` describes.
+    fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    /// Next segment whose byte range starts at or after `byte_offset`.
+    /// Used for sequential play after the current segment is consumed.
+    fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    /// Total number of segments in the current layout variant.
+    fn segment_count(&self) -> Option<u32> {
+        None
+    }
+
+    /// Optional shared handle exposing per-segment metadata (HLS).
     ///
-    /// Implementations should return a cheap `Arc::clone` — typically
-    /// pointing at an internal view that aggregates the source's
-    /// `Arc`-shared playlist / byte-map / coord state.
-    fn as_segmented(&self) -> Option<SharedSegmentedSource> {
+    /// Returned `Arc<dyn Source>` only needs to honour the segment
+    /// methods — its I/O methods can stub to `Eof`. Used by segment-aware
+    /// decoders that read raw segment bytes through `BoxedSource` and
+    /// query segment boundaries through this handle.
+    fn as_segment_source(&self) -> Option<Arc<dyn Source>> {
         None
     }
 }

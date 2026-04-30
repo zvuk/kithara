@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::{SegmentDescriptor, SharedSegmentedSource, StreamContext};
+use kithara_stream::{SegmentDescriptor, Source, StreamContext};
 
 use crate::{
     DecoderConfig,
@@ -42,7 +42,7 @@ pub(crate) struct Fmp4SegmentDecoder<C: FrameCodec> {
     init: Fmp4InitInfo,
     codec: C,
     source: BoxedSource,
-    segmented: SharedSegmentedSource,
+    segmented: Arc<dyn Source>,
     byte_len_handle: Option<Arc<AtomicU64>>,
     pool: PcmPool,
     spec: PcmSpec,
@@ -67,7 +67,7 @@ impl<C: FrameCodec> Fmp4SegmentDecoder<C> {
     /// parsing it, and opening `C` against the resulting init info.
     pub(crate) fn new(
         mut source: BoxedSource,
-        segmented: SharedSegmentedSource,
+        segmented: Arc<dyn Source>,
         config: &DecoderConfig,
     ) -> DecodeResult<Self> {
         let init_range = segmented.init_segment_range().ok_or_else(|| {
@@ -198,7 +198,7 @@ enum EnsureCursor {
     Eof,
 }
 
-fn compute_duration(segmented: &SharedSegmentedSource, _init: &Fmp4InitInfo) -> Option<Duration> {
+fn compute_duration(segmented: &Arc<dyn Source>, _init: &Fmp4InitInfo) -> Option<Duration> {
     // Avoids relying on the init segment's `mvhd.duration` (often zero
     // for fragmented mp4) — playlist authority wins for HLS. Probe
     // with a far-future timestamp so `find_seek_point_for_time` clamps

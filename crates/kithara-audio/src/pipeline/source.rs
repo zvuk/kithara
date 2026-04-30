@@ -19,8 +19,8 @@ use kithara_decode::{
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{
-    ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
-    Timeline,
+    ContainerFormat, MediaInfo, PendingReason, Source, SourcePhase, SourceSeekAnchor, Stream,
+    StreamType, Timeline,
 };
 use tracing::{debug, trace, warn};
 
@@ -68,10 +68,10 @@ impl<T: StreamType> SharedStream<T> {
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
             pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::SharedHooks>;
-            /// Pull a clone of the optional segment-aware metadata view
-            /// from the inner source. Used by the decoder factory to
-            /// activate the segment-by-segment fMP4 path on HLS.
-            pub(crate) fn as_segmented(&self) -> Option<kithara_stream::SharedSegmentedSource>;
+            /// Pull a clone of the optional segment-aware view from the
+            /// inner source. Used by the decoder factory to activate the
+            /// segment-by-segment fMP4 path on HLS.
+            pub(crate) fn as_segment_source(&self) -> Option<Arc<dyn Source>>;
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.

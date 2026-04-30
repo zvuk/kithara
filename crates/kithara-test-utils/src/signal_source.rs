@@ -57,7 +57,7 @@ impl<S: signal::SignalFn> SignalSource<S> {
 #[error("signal source error")]
 pub struct SignalSourceError;
 
-impl<S: signal::SignalFn> Source for SignalSource<S> {
+impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -133,7 +133,7 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
 /// `StreamType` marker for [`SignalSource`].
 pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
-impl<S: signal::SignalFn> StreamType for SignalStream<S> {
+impl<S: signal::SignalFn + Sync> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
     type Source = SignalSource<S>;
 
@@ -160,7 +160,9 @@ impl<S: signal::SignalFn> Default for SignalStreamConfig<S> {
 
 /// Create a `Stream` from a WAV-backed [`SignalSource`].
 #[must_use]
-pub fn signal_stream<S: signal::SignalFn>(source: SignalSource<S>) -> Stream<SignalStream<S>> {
+pub fn signal_stream<S: signal::SignalFn + Sync>(
+    source: SignalSource<S>,
+) -> Stream<SignalStream<S>> {
     let config = SignalStreamConfig {
         source: Some(source),
     };

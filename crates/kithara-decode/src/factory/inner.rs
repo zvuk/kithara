@@ -10,9 +10,7 @@ use std::{
 
 use derivative::Derivative;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, SharedHooks, SharedSegmentedSource, StreamContext,
-};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SharedHooks, Source, StreamContext};
 
 use super::probe::{
     CodecSelector, ProbeHint, container_from_extension, probe_codec, resolve_codec_container,
@@ -104,7 +102,7 @@ pub struct DecoderConfig {
     /// segment-by-segment demuxer (`fmp4_segment::Fmp4SegmentDecoder`)
     /// instead of the whole-stream container parser, side-stepping
     /// prefix walks during forward seek.
-    pub segmented_source: Option<SharedSegmentedSource>,
+    pub segmented_source: Option<Arc<dyn Source>>,
     /// Enable gapless playback.
     #[derivative(Default(value = "true"))]
     pub gapless: bool,
@@ -345,7 +343,7 @@ fn should_use_segment_aware(
 fn create_fmp4_segment_symphonia(
     source: BoxedSource,
     codec: AudioCodec,
-    segmented: SharedSegmentedSource,
+    segmented: Arc<dyn Source>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::fmp4_segment::{

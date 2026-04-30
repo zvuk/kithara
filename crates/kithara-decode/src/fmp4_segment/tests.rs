@@ -7,10 +7,11 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
-use kithara_stream::{SegmentDescriptor, SegmentedSource};
+use kithara_platform::time::Duration;
+use kithara_storage::WaitOutcome;
+use kithara_stream::{ReadOutcome, SegmentDescriptor, Source, SourcePhase, StreamResult, Timeline};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -53,9 +54,34 @@ impl Seek for InstrumentedSource {
 struct FakeSegmented {
     init_range: Range<u64>,
     segments: Arc<Vec<SegmentDescriptor>>,
+    timeline: Timeline,
 }
 
-impl SegmentedSource for FakeSegmented {
+impl Source for FakeSegmented {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        _range: Range<u64>,
+        _timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        Ok(WaitOutcome::Eof)
+    }
+
+    fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        Ok(ReadOutcome::Eof)
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Eof
+    }
+
+    fn len(&self) -> Option<u64> {
+        None
+    }
+
     fn init_segment_range(&self) -> Option<Range<u64>> {
         Some(self.init_range.clone())
     }
@@ -126,6 +152,7 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
         FakeSegmented {
             init_range: 0..init_len,
             segments: Arc::new(descs),
+            timeline: Timeline::new(),
         },
     )
 }
@@ -144,7 +171,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
     });
-    let segmented_arc: Arc<dyn SegmentedSource> = Arc::new(segmented);
+    let segmented_arc: Arc<dyn Source> = Arc::new(segmented);
     let config = DecoderConfig::default();
     let decoder = Fmp4SegmentDecoder::<SymphoniaAacCodec>::new(source, segmented_arc, &config)
         .expect("build decoder");

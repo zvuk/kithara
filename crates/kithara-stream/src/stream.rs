@@ -235,8 +235,16 @@ impl<T: StreamType> Stream<T> {
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
             pub fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks>;
-            /// Optional segment-aware metadata view (HLS only).
-            pub fn as_segmented(&self) -> Option<crate::SharedSegmentedSource>;
+            /// Init segment range (HLS only).
+            pub fn init_segment_range(&self) -> Option<Range<u64>>;
+            /// Map a target time to a segment descriptor.
+            pub fn segment_at_time(&self, t: Duration) -> Option<crate::SegmentDescriptor>;
+            /// Next segment whose byte range starts at or after `byte_offset`.
+            pub fn segment_after_byte(&self, byte_offset: u64) -> Option<crate::SegmentDescriptor>;
+            /// Total number of segments in the current layout variant.
+            pub fn segment_count(&self) -> Option<u32>;
+            /// Optional shared handle exposing per-segment metadata.
+            pub fn as_segment_source(&self) -> Option<Arc<dyn Source>>;
         }
     }
 

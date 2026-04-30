@@ -4081,6 +4081,8 @@ dependencies = [
  "jni 0.22.4",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-platform",
+ "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
