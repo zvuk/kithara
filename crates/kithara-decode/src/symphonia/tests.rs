@@ -1,14 +1,17 @@
-use std::{
-    io::Cursor,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
-};
+//! Tests for the Symphonia bootstrap path. Now drives
+//! [`UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>`] through
+//! [`crate::factory::DecoderFactory::create_with_probe`] / `_from_media_info`,
+//! since the legacy whole-stream `SymphoniaDecoder` was deleted.
 
-use kithara_stream::ContainerFormat;
+use std::{io::Cursor, time::Duration};
+
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::{create_test_wav, kithara};
 
-use super::{config::SymphoniaConfig, decoder::SymphoniaDecoder};
-use crate::{error::DecodeError, traits::Decoder};
+use crate::{
+    error::DecodeError,
+    factory::{DecoderConfig, DecoderFactory},
+};
 
 #[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
@@ -16,12 +19,15 @@ use crate::{error::DecodeError, traits::Decoder};
 fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let wav_data = create_test_wav(100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-
-    let config = SymphoniaConfig {
-        container,
-        ..Default::default()
-    };
-    let decoder = SymphoniaDecoder::new(Box::new(cursor), &config);
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), container);
+    let decoder = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        &DecoderConfig {
+            hint: Some("wav".into()),
+            ..Default::default()
+        },
+    );
     assert!(decoder.is_ok(), "decoder creation should succeed");
 
     let decoder = decoder.unwrap();
@@ -33,12 +39,10 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
 fn test_next_chunk_returns_data() {
     let wav_data = create_test_wav(100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::Wav),
-        ..Default::default()
-    };
-    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let mut decoder =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+            .expect("decoder");
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
@@ -53,12 +57,10 @@ fn test_next_chunk_returns_data() {
 fn test_next_chunk_eof() {
     let wav_data = create_test_wav(10, 44100, 2);
     let cursor = Cursor::new(wav_data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::Wav),
-        ..Default::default()
-    };
-    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let mut decoder =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+            .expect("decoder");
 
     while decoder.next_chunk().unwrap().is_chunk() {}
 
@@ -70,12 +72,10 @@ fn test_next_chunk_eof() {
 fn test_seek_to_beginning() {
     let wav_data = create_test_wav(10000, 44100, 2);
     let cursor = Cursor::new(wav_data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::Wav),
-        ..Default::default()
-    };
-    let mut decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let mut decoder =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+            .expect("decoder");
 
     let _ = decoder.next_chunk().unwrap();
     let _ = decoder.next_chunk().unwrap();
@@ -90,12 +90,10 @@ fn test_seek_to_beginning() {
 fn test_duration_available() {
     let wav_data = create_test_wav(44100, 44100, 2);
     let cursor = Cursor::new(wav_data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::Wav),
-        ..Default::default()
-    };
-    let decoder = SymphoniaDecoder::new(Box::new(cursor), &config).unwrap();
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let decoder =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+            .expect("decoder");
 
     let duration = decoder.duration();
     assert!(duration.is_some());
@@ -109,12 +107,9 @@ fn test_duration_available() {
 #[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
 fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     let cursor = Cursor::new(data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::Wav),
-        ..Default::default()
-    };
-    let result = SymphoniaDecoder::new(Box::new(cursor), &config);
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let result =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default());
     assert!(result.is_err());
 }
 
@@ -122,22 +117,8 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
 fn test_unsupported_container_returns_error() {
     let data = vec![0u8; 100];
     let cursor = Cursor::new(data);
-
-    let config = SymphoniaConfig {
-        container: Some(ContainerFormat::MpegTs),
-        ..Default::default()
-    };
-    let result = SymphoniaDecoder::new(Box::new(cursor), &config);
+    let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::MpegTs));
+    let result =
+        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default());
     assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
-}
-
-#[kithara::test]
-fn test_handle_integration() {
-    // Sanity check that Arc<AtomicU64> can be shared via config.
-    let handle = Arc::new(AtomicU64::new(12345));
-    let config = SymphoniaConfig {
-        byte_len_handle: Some(Arc::clone(&handle)),
-        ..Default::default()
-    };
-    assert!(config.byte_len_handle.is_some());
 }

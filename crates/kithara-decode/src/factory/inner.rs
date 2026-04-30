@@ -401,40 +401,7 @@ fn create_symphonia(
     {
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    if crate::SymphoniaCodec::supports(codec) {
-        return create_file_symphonia_universal(source, codec, container, config);
-    }
-    // PCM / ADPCM / Opus still need bit-depth + endianness or workspace-
-    // level workarounds the generic `AudioCodec` enum does not encode —
-    // those tracks fall through to the legacy whole-stream decoder.
-    create_legacy_symphonia(source, codec, container, config)
-}
-
-#[cfg(feature = "symphonia")]
-fn create_legacy_symphonia(
-    source: BoxedSource,
-    codec: AudioCodec,
-    container: Option<ContainerFormat>,
-    config: &DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::symphonia::{config::SymphoniaConfig, decoder::SymphoniaDecoder};
-
-    if matches!(codec, AudioCodec::Opus | AudioCodec::Adpcm) {
-        return Err(DecodeError::UnsupportedCodec(codec));
-    }
-
-    let symphonia_config = SymphoniaConfig {
-        container,
-        verify: false,
-        gapless: config.gapless,
-        byte_len_handle: config.byte_len_handle.clone(),
-        hint: config.hint.clone(),
-        stream_ctx: config.stream_ctx.clone(),
-        epoch: config.epoch,
-        pcm_pool: config.pcm_pool.clone(),
-    };
-    tracing::debug!(?codec, ?container, "create_legacy_symphonia (PCM path)");
-    Ok(Box::new(SymphoniaDecoder::new(source, &symphonia_config)?))
+    create_file_symphonia_universal(source, codec, container, config)
 }
 
 #[cfg(feature = "symphonia")]
@@ -457,14 +424,22 @@ fn create_file_symphonia_universal(
         container,
         config.byte_len_handle.clone(),
     )?;
-    let codec = SymphoniaCodec::open(demuxer.track_info())?;
+    // PCM / ADPCM tracks need the concrete bit-depth & endianness that
+    // `TrackInfo::codec` does not carry — feed the registry the demuxer's
+    // native `AudioCodecParameters` directly. Other codecs go through the
+    // generic [`SymphoniaCodec::open`] path keyed off [`TrackInfo`].
+    let codec_impl = if SymphoniaCodec::supports(codec) {
+        SymphoniaCodec::open(demuxer.track_info())?
+    } else {
+        SymphoniaCodec::open_native(demuxer.native_params())?
+    };
     let pool = config
         .pcm_pool
         .clone()
         .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
-        codec,
+        codec_impl,
         pool,
         config.epoch,
         config.byte_len_handle.clone(),

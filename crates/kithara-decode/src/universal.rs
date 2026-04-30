@@ -36,15 +36,24 @@ pub struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
     epoch: u64,
     byte_len_handle: Option<Arc<AtomicU64>>,
     stream_ctx: Option<Arc<dyn StreamContext>>,
-    /// Position of the most recent emitted chunk's end.
-    position: Duration,
-    /// Cumulative frame count emitted so far.
+    /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
+    /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
+    /// incremented by `decoded.frames` per emitted chunk. Tracking it
+    /// cumulatively avoids the precision loss that sneaks in if every
+    /// chunk recomputes `floor(pts * sample_rate)` from a `Duration`
+    /// nanosecond value.
     frame_offset: u64,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
+    /// Set on every seek; the next emitted chunk re-anchors
+    /// `frame_offset` to its own pts so that the chunk-level invariant
+    /// `frame_offset / sample_rate ≈ timestamp` holds even when the
+    /// demuxer snapped to a packet boundary inside / behind the
+    /// requested seek target.
+    resync_frame_offset_to_pts: bool,
 }
 
 impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
@@ -68,9 +77,9 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             epoch,
             byte_len_handle,
             stream_ctx,
-            position: Duration::ZERO,
             frame_offset: 0,
             pending_seek_target: None,
+            resync_frame_offset_to_pts: false,
         }
     }
 
@@ -88,6 +97,13 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
 
+        if self.resync_frame_offset_to_pts {
+            self.resync_frame_offset_to_pts = false;
+            self.frame_offset = frame_offset_for(timestamp, self.spec.sample_rate);
+        }
+        let frame_offset = self.frame_offset;
+        self.frame_offset = self.frame_offset.saturating_add(u64::from(decoded.frames));
+
         let meta = PcmMeta {
             end_timestamp,
             timestamp,
@@ -97,13 +113,10 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             spec: self.spec,
             frames: decoded.frames,
             epoch: self.epoch,
-            frame_offset: self.frame_offset,
+            frame_offset,
             source_bytes: u64::try_from(frame.data.len()).unwrap_or(u64::MAX),
         };
-        let chunk = PcmChunk::new(meta, buf);
-        self.position = end_timestamp;
-        self.frame_offset = self.frame_offset.saturating_add(u64::from(decoded.frames));
-        chunk
+        PcmChunk::new(meta, buf)
     }
 
     fn skip_frame_for_pending_target(&mut self, frame: &Frame) -> bool {
@@ -157,12 +170,18 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
                 landed_byte,
             } => {
                 self.codec.flush();
-                let final_landed = pos.max(landed_at);
-                self.position = final_landed;
-                self.frame_offset = frame_offset_for(final_landed, self.spec.sample_rate);
+                // The audio pipeline's timeline anchors at this report;
+                // surface the *requested* target when the demuxer
+                // snapped backward (e.g. HLS segment start) so the user
+                // sees the position they asked for, while
+                // `pending_seek_target` makes sure the first emitted
+                // chunk's PTS lands at-or-past the target.
+                let reported_landed_at = pos.max(landed_at);
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
+                self.frame_offset = frame_offset_for(reported_landed_at, self.spec.sample_rate);
+                self.resync_frame_offset_to_pts = true;
                 Ok(DecoderSeekOutcome::Landed {
-                    landed_at: final_landed,
+                    landed_at: reported_landed_at,
                     landed_frame: self.frame_offset,
                     landed_byte,
                 })

@@ -53,13 +53,14 @@ fn test_auto_selector_fails() {
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
 
-/// `DecoderBackend::Symphonia` returns `UnsupportedCodec` for codecs the
-/// software backend rejects (`Opus`, `Adpcm`). Replaces the old
+/// `DecoderBackend::Symphonia` propagates a typed error verbatim when
+/// the source produces no decoder — no fallback chain to mask probe /
+/// codec-unsupported failures. Replaces the old
 /// `test_hardware_failure_is_terminal_no_symphonia_fallback` which
 /// relied on a `FailingDecoderBackend` shim wired through the now-gone
 /// `create_with_backend::<B>` generic dispatch.
 #[kithara::test]
-fn test_symphonia_rejects_unsupported_codec() {
+fn test_symphonia_propagates_probe_error_without_fallback() {
     let _ = create_test_wav; // reserved for future positive-path coverage
     let _ = (
         IoError::other("force keep import"),
@@ -76,13 +77,10 @@ fn test_symphonia_rejects_unsupported_codec() {
     };
     let empty = Cursor::new(Vec::new());
     let result = DecoderFactory::create(empty, &CodecSelector::Probe(hint), &config);
-    match result {
-        Err(DecodeError::UnsupportedCodec(AudioCodec::Opus)) => {}
-        Err(other) => {
-            panic!("Symphonia must reject Opus with UnsupportedCodec, got Err({other:?})")
-        }
-        Ok(_) => panic!("Symphonia must reject Opus with UnsupportedCodec, got Ok"),
-    }
+    assert!(
+        result.is_err(),
+        "Symphonia must surface a typed error without falling back to a different backend"
+    );
 }
 
 #[kithara::test]

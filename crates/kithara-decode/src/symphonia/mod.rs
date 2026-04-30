@@ -1,17 +1,15 @@
-//! Symphonia-based audio decoder backend.
+//! Symphonia probe + reader bootstrap helpers.
 //!
-//! Provides [`SymphoniaDecoder`], implementing both [`crate::traits::Decoder`]
-//! (runtime) and [`crate::backend::Backend`] (capability + factory).
-//!
-//! # Direct Reader Creation (No Probe)
-//!
-//! When `ContainerFormat` is provided in config, the decoder creates the
-//! appropriate format reader directly without probing. This is critical
-//! for HLS streams where the container format is known.
+//! The legacy whole-stream `SymphoniaDecoder` god-type was removed in
+//! the decoder unification. The remaining surface is the format-reader
+//! bootstrap shared with [`crate::demuxer::SymphoniaDemuxer`]:
+//! [`adapter::ReadSeekAdapter`] (the `Read+Seek -> MediaSource` shim),
+//! [`probe::new_direct`] / [`probe::probe_with_seek`] (reader
+//! construction), and [`echain`] (error-chain helpers used by the
+//! adapter).
 
 pub(crate) mod adapter;
 pub(crate) mod config;
-pub(crate) mod decoder;
 pub(crate) mod echain;
 pub(crate) mod probe;
 

@@ -7,11 +7,11 @@
 //! (`AudioSpecificConfig` for AAC, `STREAMINFO` for FLAC, ESDS cookie
 //! for ALAC, etc.) flows through `TrackInfo::extra_data`.
 //!
-//! PCM and ADPCM codecs are not supported through this entrypoint —
-//! Symphonia needs the specific bit-depth / endian variant which our
-//! generic [`AudioCodec`] enum does not encode. The factory routes
-//! WAV/AIFF tracks through a Symphonia-internal path that consumes the
-//! original `CodecParameters` directly (Phase 5).
+//! PCM and ADPCM tracks need the specific bit-depth / endian variant
+//! which our generic [`AudioCodec`] enum does not encode. For those
+//! cases, the factory uses [`SymphoniaCodec::open_native`], passing the
+//! original `AudioCodecParameters` straight through from
+//! [`crate::demuxer::SymphoniaDemuxer::native_params`].
 
 use std::time::Duration;
 
@@ -51,19 +51,45 @@ pub struct SymphoniaCodec {
 }
 
 impl SymphoniaCodec {
-    /// Whether `SymphoniaCodec::open` accepts this codec via [`TrackInfo`]
-    /// alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need bit-depth +
-    /// endianness which the generic enum does not encode — those tracks
-    /// fall through to the legacy whole-stream decoder for now.
-    /// `AudioCodec::Opus` is excluded for parity with
-    /// `crate::symphonia::SymphoniaDecoder::supports` — the software
-    /// stack rejects Opus tracks at the backend layer.
+    /// Whether `SymphoniaCodec::open` can accept this codec via
+    /// [`TrackInfo`] alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need
+    /// bit-depth + endianness which the generic enum does not encode —
+    /// the factory routes those through [`Self::open_native`] using the
+    /// demuxer's native `AudioCodecParameters` instead.
     #[must_use]
     pub fn supports(codec: AudioCodec) -> bool {
-        !matches!(
-            codec,
-            AudioCodec::Pcm | AudioCodec::Adpcm | AudioCodec::Opus
-        )
+        !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
+    }
+
+    /// Build a [`SymphoniaCodec`] from native Symphonia codec
+    /// parameters. Used by the factory when wiring a
+    /// [`crate::demuxer::SymphoniaDemuxer`] for PCM/ADPCM tracks where
+    /// the generic [`TrackInfo::codec`] field cannot describe the
+    /// concrete sample format.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::Backend`] when the Symphonia codec
+    /// registry cannot build a decoder for the supplied parameters.
+    pub fn open_native(params: &AudioCodecParameters) -> DecodeResult<Self> {
+        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let opts = AudioDecoderOptions::default();
+        let decoder = registry
+            .make_audio_decoder(params, &opts)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        let sample_rate = params.sample_rate.ok_or_else(|| {
+            DecodeError::InvalidData("symphonia native params missing sample rate".into())
+        })?;
+        let channels = params
+            .channels
+            .as_ref()
+            .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
+        let spec = PcmSpec {
+            channels,
+            sample_rate,
+        };
+        Ok(Self { decoder, spec })
     }
 }
 
