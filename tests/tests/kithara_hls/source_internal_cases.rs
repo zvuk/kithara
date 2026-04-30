@@ -9,7 +9,7 @@ use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_hls::internal::{
-    AbrMode, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData, SegmentLoader,
+    AbrMode, HlsConfig, HlsCoord, HlsSource, PlaylistState, SegmentData, SegmentLoader,
     SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap, VariantState,
     VariantStream, build_source, commit_dummy_resource_from_data, make_test_segment_loader,
     make_test_source as make_internal_test_source,
@@ -1780,7 +1780,7 @@ async fn test_wait_range_without_size_map_does_not_enqueue_request() {
         "no request should be enqueued without size map"
     );
     match result {
-        Err(StreamError::Source(HlsError::Timeout(msg))) => {
+        Err(StreamError::Source(kithara_stream::SourceError::Timeout(msg))) => {
             assert!(msg.contains("budget exceeded"), "unexpected: {msg}");
         }
         other => panic!("expected Timeout, got: {other:?}"),
@@ -2136,7 +2136,7 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
 
         // Budget check returns Err(Timeout) because range is never ready.
         match result {
-            Err(StreamError::Source(HlsError::Timeout(_))) => {
+            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_))) => {
                 // Expected: budget exceeded.
             }
             other => {

@@ -28,8 +28,6 @@ impl TimelineSource {
 }
 
 impl Source for TimelineSource {
-    type Error = io::Error;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -38,12 +36,12 @@ impl Source for TimelineSource {
         &mut self,
         _range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let Ok(start) = usize::try_from(offset) else {
             return Ok(ReadOutcome::Eof);
         };
@@ -78,13 +76,12 @@ struct TimelineStream;
 impl StreamType for TimelineStream {
     type Config = TimelineConfig;
     type Source = TimelineSource;
-    type Error = io::Error;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
         config
             .source
-            .ok_or_else(|| IoError::other("missing source"))
+            .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("missing source")))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {

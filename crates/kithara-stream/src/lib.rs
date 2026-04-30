@@ -34,7 +34,7 @@ pub mod mock;
 
 pub use context::{NullStreamContext, StreamContext};
 pub use demand::DemandSlot;
-pub use error::{StreamError, StreamResult};
+pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use media_rfc6381::audio_codec_supports_fmp4_packaging;

@@ -119,6 +119,7 @@ impl StdError for VariantChangeError {}
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
+    error::SourceError,
     source::{PendingReason, ReadOutcome, Source},
 };
 
@@ -135,13 +136,10 @@ pub trait StreamType: MaybeSend + 'static {
     /// Source implementing `Source`.
     type Source: Source;
 
-    /// Error type for stream creation.
-    type Error: StdError + Send + Sync + 'static;
-
     /// Create the source from configuration.
     ///
     /// May also start background tasks (downloader) internally.
-    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, Self::Error>>;
+    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, SourceError>>;
 
     /// Event bus type carried by the stream config.
     ///
@@ -182,7 +180,7 @@ impl<T: StreamType> Stream<T> {
     /// # Errors
     ///
     /// Returns an error if the underlying stream source cannot be created.
-    pub async fn new(config: T::Config) -> Result<Self, T::Error> {
+    pub async fn new(config: T::Config) -> Result<Self, SourceError> {
         let source = T::create(config).await?;
         // Yield so background tasks (Downloader loop) spawned during
         // create() get a chance to start on current-thread runtimes.
@@ -524,8 +522,6 @@ mod tests {
     }
 
     impl Source for ScriptSource {
-        type Error = io::Error;
-
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
         }
@@ -534,15 +530,11 @@ mod tests {
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome, Self::Error> {
+        ) -> crate::StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
 
-        fn read_at(
-            &mut self,
-            offset: u64,
-            buf: &mut [u8],
-        ) -> crate::StreamResult<ReadOutcome, Self::Error> {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
                 ScriptRead::Eof => Ok(ReadOutcome::Eof),
@@ -572,7 +564,7 @@ mod tests {
         fn seek_time_anchor(
             &mut self,
             _position: Duration,
-        ) -> crate::StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
             Ok(self.anchor)
         }
     }
@@ -581,12 +573,11 @@ mod tests {
 
     impl StreamType for DummyType {
         type Config = ();
-        type Error = io::Error;
         type Events = ();
         type Source = ScriptSource;
 
-        async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
-            Err(IoError::other("not used in unit tests"))
+        async fn create(_config: Self::Config) -> Result<Self::Source, SourceError> {
+            Err(SourceError::other(IoError::other("not used in unit tests")))
         }
     }
 
@@ -594,12 +585,11 @@ mod tests {
 
     impl StreamType for SeekDuringWaitType {
         type Config = ();
-        type Error = io::Error;
         type Events = ();
         type Source = SeekDuringWaitSource;
 
-        async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
-            Err(IoError::other("not used in unit tests"))
+        async fn create(_config: Self::Config) -> Result<Self::Source, SourceError> {
+            Err(SourceError::other(IoError::other("not used in unit tests")))
         }
     }
 
@@ -609,8 +599,6 @@ mod tests {
     }
 
     impl Source for SeekDuringWaitSource {
-        type Error = io::Error;
-
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
         }
@@ -619,16 +607,12 @@ mod tests {
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome, Self::Error> {
+        ) -> crate::StreamResult<WaitOutcome> {
             let _ = self.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
 
-        fn read_at(
-            &mut self,
-            _offset: u64,
-            _buf: &mut [u8],
-        ) -> crate::StreamResult<ReadOutcome, Self::Error> {
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
             self.read_calls += 1;
             Ok(bytes(4))
         }

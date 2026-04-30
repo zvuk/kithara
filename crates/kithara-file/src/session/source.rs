@@ -21,7 +21,7 @@ use super::{
     download::{run_full_download, run_range_watcher},
     inner::{FileInner, FileInnerParams, FilePhase, FileStreamState},
 };
-use crate::{coord::FileCoord, error::SourceError};
+use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 
 /// File source: sync Read+Seek access backed by async downloads via
 /// [`PeerHandle`].
@@ -110,8 +110,6 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
-    type Error = SourceError;
-
     fn demand_range(&self, range: Range<u64>) {
         if self.inner.res.contains_range(range.clone()) {
             return;
@@ -163,12 +161,12 @@ impl kithara_stream::Source for FileSource {
         &mut self,
         offset: u64,
         buf: &mut [u8],
-    ) -> kithara_stream::StreamResult<ReadOutcome, SourceError> {
+    ) -> kithara_stream::StreamResult<ReadOutcome> {
         let n = self
             .inner
             .res
             .read_at(offset, buf)
-            .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
+            .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))?;
 
         let Some(count) = NonZeroUsize::new(n) else {
             return Ok(ReadOutcome::Eof);
@@ -201,7 +199,7 @@ impl kithara_stream::Source for FileSource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
+    ) -> kithara_stream::StreamResult<WaitOutcome> {
         // The file backend's `Resource::wait_range` blocks on its own
         // condvar / cancel signals; the source-level `timeout` is a hint
         // that does not gate the inner wait. Both `Some` and `None`
@@ -232,6 +230,6 @@ impl kithara_stream::Source for FileSource {
         self.inner
             .res
             .wait_range(range)
-            .map_err(|e| StreamError::Source(SourceError::Storage(e)))
+            .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
     }
 }

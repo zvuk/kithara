@@ -77,8 +77,6 @@ impl MockSource {
 }
 
 impl Source for MockSource {
-    type Error = io::Error;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -87,12 +85,12 @@ impl Source for MockSource {
         &mut self,
         _range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(ReadOutcome::Eof);
         };
@@ -123,11 +121,12 @@ struct MockStream;
 impl StreamType for MockStream {
     type Config = MockStreamConfig;
     type Source = MockSource;
-    type Error = io::Error;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
+        config
+            .source
+            .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
     }
 
     fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {

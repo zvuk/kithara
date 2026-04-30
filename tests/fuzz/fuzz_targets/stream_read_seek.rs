@@ -2,7 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    io::{self, Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
 };
@@ -105,8 +105,6 @@ struct ScriptSource {
 }
 
 impl Source for ScriptSource {
-    type Error = io::Error;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -115,11 +113,11 @@ impl Source for ScriptSource {
         &mut self,
         _range: Range<u64>,
         _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Eof);
         match outcome {
             ReadOutcome::Bytes(count) => {
@@ -149,11 +147,10 @@ struct DummyType;
 
 impl StreamType for DummyType {
     type Config = ScriptSource;
-    type Error = io::Error;
     type Events = ();
     type Source = ScriptSource;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
         Ok(config)
     }
 

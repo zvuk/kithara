@@ -2,14 +2,14 @@
 //!
 //! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
 
-use std::{io, io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourcePhase, Stream, StreamResult,
-    StreamType, Timeline,
+    AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourceError, SourcePhase, Stream,
+    StreamResult, StreamType, Timeline,
 };
 
 use crate::{
@@ -58,8 +58,6 @@ impl<S: signal::SignalFn> SignalSource<S> {
 pub struct SignalSourceError;
 
 impl<S: signal::SignalFn> Source for SignalSource<S> {
-    type Error = SignalSourceError;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -68,7 +66,7 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
         &mut self,
         range: Range<u64>,
         _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         if self.is_past_eof(range.start) {
             Ok(WaitOutcome::Eof)
         } else {
@@ -76,7 +74,7 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if buf.is_empty() || self.is_past_eof(offset) {
             return Ok(ReadOutcome::Eof);
         }
@@ -138,10 +136,11 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 impl<S: signal::SignalFn> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
     type Source = SignalSource<S>;
-    type Error = io::Error;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
 
     type Events = ();

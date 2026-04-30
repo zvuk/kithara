@@ -35,7 +35,6 @@ use super::{
     types::{ReadSegment, SeekLayout},
 };
 use crate::{
-    HlsError,
     config::HlsConfig,
     coord::SegmentRequest,
     parsing::{VariantId, VariantStream},
@@ -688,7 +687,10 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
         .expect("clear-pending helper thread must complete");
 
     assert!(
-        matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
+        matches!(
+            result,
+            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_)))
+        ),
         "without a downloader the wait should still end by timeout"
     );
 
@@ -716,7 +718,10 @@ fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
     let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
-        matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
+        matches!(
+            result,
+            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_)))
+        ),
         "without a downloader the wait should still end by timeout"
     );
 

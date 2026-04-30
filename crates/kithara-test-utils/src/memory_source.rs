@@ -1,12 +1,12 @@
 //! In-memory Source implementation for testing.
 
-use std::{io, io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    ReadOutcome, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -47,8 +47,6 @@ impl MemorySource {
 }
 
 impl Source for MemorySource {
-    type Error = MemorySourceError;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -57,7 +55,7 @@ impl Source for MemorySource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
@@ -66,7 +64,7 @@ impl Source for MemorySource {
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let offset = offset as usize;
         if offset >= self.data.len() {
             return Ok(ReadOutcome::Eof);
@@ -108,11 +106,12 @@ pub struct MemStream;
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
     type Source = MemorySource;
-    type Error = io::Error;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
 }
 
@@ -127,11 +126,12 @@ pub struct UnknownLenStream;
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
     type Source = MemorySource;
-    type Error = io::Error;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
 }
 

@@ -9,7 +9,7 @@ use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
 use kithara_events::EventBus;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    StreamType, Timeline,
+    SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
 };
 use tokio_util::sync::CancellationToken;
@@ -26,11 +26,10 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
-    type Error = SourceError;
     type Events = EventBus;
     type Source = FileSource;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+    async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
         let cancel = config.cancel.clone().unwrap_or_default();
         let src = config.src.clone();
 
@@ -40,6 +39,7 @@ impl StreamType for File {
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel),
         })
         .await
+        .map_err(StreamSourceError::from)
     }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {

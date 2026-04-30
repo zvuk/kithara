@@ -134,16 +134,10 @@ impl SourceSeekAnchor {
 /// (e.g., progress tracking, segment index updates).
 #[cfg_attr(
     any(test, feature = "test-utils"),
-    unimock(
-        api = SourceMock,
-        type Error = std::io::Error;
-    )
+    unimock(api = SourceMock)
 )]
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
-    /// Error type.
-    type Error: StdError + Send + Sync + 'static;
-
     /// Get shared playback timeline.
     ///
     /// Timeline is the single source of truth for playback state across all
@@ -170,7 +164,7 @@ pub trait Source: Send + 'static {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error>;
+    ) -> StreamResult<WaitOutcome>;
 
     /// Read data at offset into buffer.
     ///
@@ -183,7 +177,7 @@ pub trait Source: Send + 'static {
     /// # Errors
     ///
     /// Returns an error if the read fails or the source is in an invalid state.
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error>;
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
 
     /// Point-in-time snapshot of the source phase for the given range.
     ///
@@ -308,10 +302,7 @@ pub trait Source: Send + 'static {
     /// # Errors
     ///
     /// Returns an error when the source cannot resolve the anchor.
-    fn seek_time_anchor(
-        &mut self,
-        _position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         Ok(None)
     }
 
@@ -381,7 +372,6 @@ mod tests {
             timeline: Timeline,
         }
         impl Source for ReadySource {
-            type Error = std::io::Error;
             fn timeline(&self) -> Timeline {
                 self.timeline.clone()
             }
@@ -389,14 +379,10 @@ mod tests {
                 &mut self,
                 _range: Range<u64>,
                 _timeout: Option<Duration>,
-            ) -> StreamResult<WaitOutcome, Self::Error> {
+            ) -> StreamResult<WaitOutcome> {
                 Ok(WaitOutcome::Ready)
             }
-            fn read_at(
-                &mut self,
-                _offset: u64,
-                _buf: &mut [u8],
-            ) -> StreamResult<ReadOutcome, Self::Error> {
+            fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
                 Ok(ReadOutcome::Eof)
             }
             fn phase_at(&self, _range: Range<u64>) -> SourcePhase {

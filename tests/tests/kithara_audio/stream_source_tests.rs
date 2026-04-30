@@ -84,8 +84,6 @@ impl TestSource {
 }
 
 impl Source for TestSource {
-    type Error = io::Error;
-
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
@@ -94,7 +92,7 @@ impl Source for TestSource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         if self.timeline.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
@@ -108,7 +106,7 @@ impl Source for TestSource {
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         use std::num::NonZeroUsize;
 
         use kithara_stream::PendingReason;
@@ -179,13 +177,12 @@ impl Source for TestSource {
         self.state.lock_sync().format_change_range.clone()
     }
 
-    fn seek_time_anchor(
-        &mut self,
-        _position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         let state = self.state.lock_sync();
         if let Some(error) = &state.seek_anchor_error {
-            return Err(StreamError::Source(IoError::other(error.clone())));
+            return Err(StreamError::Source(kithara_stream::SourceError::other(
+                IoError::other(error.clone()),
+            )));
         }
         let anchor = state.seek_anchor;
         let set_position = state.seek_anchor_sets_position;
@@ -240,11 +237,12 @@ struct TestStream;
 impl StreamType for TestStream {
     type Config = TestConfig;
     type Source = TestSource;
-    type Error = io::Error;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
+        config
+            .source
+            .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
     }
 
     fn build_stream_context(

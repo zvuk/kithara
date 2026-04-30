@@ -11,7 +11,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
 use kithara_stream::{
-    StreamContext, StreamType, Timeline,
+    SourceError, StreamContext, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
 };
 
@@ -19,7 +19,6 @@ use crate::{
     HlsStreamContext,
     config::HlsConfig,
     coord::HlsCoord,
-    error::HlsError,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
     parsing::{EncryptionMethod, variant_info_from_master},
     peer::HlsPeer,
@@ -55,14 +54,13 @@ fn make_invalidation_callback(
 impl StreamType for Hls {
     type Config = HlsConfig;
     type Source = HlsSource;
-    type Error = HlsError;
     type Events = EventBus;
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
     }
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let cancel = config.cancel.clone().unwrap_or_default();
 

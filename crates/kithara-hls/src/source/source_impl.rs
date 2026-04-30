@@ -49,8 +49,6 @@ fn record_wait_range_epoch_advance(
 }
 
 impl Source for HlsSource {
-    type Error = HlsError;
-
     fn timeline(&self) -> Timeline {
         self.coord.timeline()
     }
@@ -60,7 +58,7 @@ impl Source for HlsSource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome, HlsError> {
+    ) -> StreamResult<WaitOutcome> {
         let mut wait_seek_epoch: Option<u64> = None;
         let started_at = Instant::now();
 
@@ -68,12 +66,15 @@ impl Source for HlsSource {
             if let Some(budget) = timeout
                 && started_at.elapsed() > budget
             {
-                return Err(StreamError::Source(HlsError::Timeout(format!(
-                    "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={budget:?}",
-                    range.start,
-                    range.end,
-                    started_at.elapsed(),
-                ))));
+                return Err(StreamError::Source(
+                    HlsError::Timeout(format!(
+                        "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={budget:?}",
+                        range.start,
+                        range.end,
+                        started_at.elapsed(),
+                    ))
+                    .into(),
+                ));
             }
 
             // Phase 1: check state under segments lock.
@@ -143,7 +144,7 @@ impl Source for HlsSource {
                 return if stopped && past_eof {
                     Ok(WaitOutcome::Eof)
                 } else {
-                    Err(StreamError::Source(HlsError::Cancelled))
+                    Err(StreamError::Source(HlsError::Cancelled.into()))
                 };
             }
             if seeking {
@@ -241,7 +242,7 @@ impl Source for HlsSource {
         SourcePhase::Waiting
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, HlsError> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let read_epoch = self.coord.timeline().seek_epoch();
         let (seg, effective_total) = {
             let segments = self.segments.lock_sync();
@@ -307,7 +308,7 @@ impl Source for HlsSource {
 
         let Some(bytes) = self
             .read_from_entry(&seg, offset, buf)
-            .map_err(StreamError::Source)?
+            .map_err(|e| StreamError::Source(e.into()))?
         else {
             // Resource evicted. Push an on-demand request so the downloader
             // re-fetches this segment even when it's at the tail (Idle state).
@@ -487,13 +488,10 @@ impl Source for HlsSource {
         self.coord.condvar.notify_all();
     }
 
-    fn seek_time_anchor(
-        &mut self,
-        position: Duration,
-    ) -> StreamResult<Option<SourceSeekAnchor>, HlsError> {
+    fn seek_time_anchor(&mut self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         let anchor = self
             .resolve_seek_anchor(position)
-            .map_err(StreamError::Source)?;
+            .map_err(|e| StreamError::Source(e.into()))?;
         let layout = self.classify_seek(&anchor);
         self.apply_seek_plan(&anchor, &layout);
         Ok(Some(anchor))
