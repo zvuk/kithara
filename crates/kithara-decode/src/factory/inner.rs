@@ -350,7 +350,50 @@ fn create_android(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
+    #[cfg(feature = "symphonia")]
+    if should_use_segment_aware(codec, container, config)
+        && let Some(layout) = config.segment_layout.clone()
+    {
+        if crate::codec::AndroidCodec::supports(codec) {
+            return create_fmp4_segment_android(source, codec, layout, config);
+        }
+        return create_fmp4_segment_symphonia(source, codec, layout, config);
+    }
     dispatch::<crate::android::AndroidDecoder>(source, codec, container, config, "Android")
+}
+
+#[cfg(all(feature = "android", feature = "symphonia", target_os = "android"))]
+fn create_fmp4_segment_android(
+    source: BoxedSource,
+    codec: AudioCodec,
+    layout: Arc<dyn SegmentLayout>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        FrameCodec, UniversalDecoder,
+        codec::AndroidCodec,
+        demuxer::{Demuxer, Fmp4SegmentDemuxer},
+    };
+
+    tracing::debug!(
+        ?codec,
+        "fmp4_segment: dispatching to segment-aware Android HW codec path"
+    );
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
+    let codec = AndroidCodec::open(demuxer.track_info())?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+    let decoder = UniversalDecoder::new(
+        demuxer,
+        codec,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.stream_ctx.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(feature = "symphonia")]

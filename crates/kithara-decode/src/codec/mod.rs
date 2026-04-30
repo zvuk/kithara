@@ -6,12 +6,16 @@
 //! phases; this module currently only owns the contract so other
 //! crates can reference it.
 
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 mod contract;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 
+#[cfg(all(feature = "android", target_os = "android"))]
+pub(crate) use android::AndroidCodec;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 pub(crate) use apple::AppleCodec;
 pub use contract::{DecodedFrame, FrameCodec};

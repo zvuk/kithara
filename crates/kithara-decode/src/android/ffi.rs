@@ -22,6 +22,15 @@ pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
 /// format returned by `AMediaExtractor_getSampleFormat` (API 28+).
 /// Carries the byte offset of the current sample in the source file.
 pub(crate) const KEY_SAMPLE_FILE_OFFSET: &CStr = c"sample-file-offset";
+/// Codec-specific data payload (`csd-0`) — `AudioSpecificConfig` for AAC,
+/// `STREAMINFO` for FLAC. Required when configuring the codec without
+/// an `AMediaExtractor`-supplied format.
+pub(crate) const KEY_CSD_0: &CStr = c"csd-0";
+
+/// Android MediaCodec MIME type for AAC (raw frames or fMP4-stripped).
+pub(crate) const MIME_AAC: &CStr = c"audio/mp4a-latm";
+/// Android MediaCodec MIME type for FLAC.
+pub(crate) const MIME_FLAC: &CStr = c"audio/flac";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -181,7 +190,19 @@ unsafe extern "C" {
         render: bool,
     ) -> MediaStatus;
 
+    pub(crate) fn AMediaFormat_new() -> *mut AMediaFormat;
     pub(crate) fn AMediaFormat_delete(format: *mut AMediaFormat);
+    pub(crate) fn AMediaFormat_setString(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        value: *const c_char,
+    );
+    pub(crate) fn AMediaFormat_setBuffer(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        data: *const c_void,
+        size: usize,
+    );
     pub(crate) fn AMediaFormat_getString(
         format: *mut AMediaFormat,
         name: *const c_char,

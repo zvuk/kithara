@@ -9,14 +9,14 @@
 //! (capability + factory). The `Backend` impl is in `backend.rs` for
 //! file-level cohesion.
 
-mod aformat;
+pub(crate) mod aformat;
 mod backend;
-mod codec;
+pub(crate) mod codec;
 mod config;
 mod decoder;
-mod error;
+pub(crate) mod error;
 mod extractor;
-mod ffi;
+pub(crate) mod ffi;
 mod format;
 mod jni;
 mod source;
