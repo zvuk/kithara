@@ -20,6 +20,7 @@
 //! ```
 
 mod backend;
+mod codec;
 mod demuxer;
 mod error;
 mod factory;
@@ -45,6 +46,7 @@ mod apple;
 
 // Error types
 // New unified architecture (Demuxer + FrameCodec).
+pub use codec::{DecodedFrame, FrameCodec};
 pub use demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo};
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
