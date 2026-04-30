@@ -1,8 +1,7 @@
 use std::{ops::Range, sync::Arc};
 
 use kithara_platform::{Mutex, time::Duration};
-use kithara_storage::WaitOutcome;
-use kithara_stream::{ReadOutcome, SegmentDescriptor, Source, SourcePhase, StreamResult, Timeline};
+use kithara_stream::{SegmentDescriptor, SegmentLayout};
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
@@ -20,19 +19,16 @@ use crate::{
 pub(crate) struct HlsSegmentView {
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) segments: Arc<Mutex<StreamIndex>>,
-    pub(crate) timeline: Timeline,
 }
 
 impl HlsSegmentView {
     pub(crate) fn new(
         playlist_state: Arc<PlaylistState>,
         segments: Arc<Mutex<StreamIndex>>,
-        timeline: Timeline,
     ) -> Arc<Self> {
         Arc::new(Self {
             playlist_state,
             segments,
-            timeline,
         })
     }
 
@@ -151,32 +147,7 @@ impl HlsSegmentView {
     }
 }
 
-impl Source for HlsSegmentView {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    fn wait_range(
-        &mut self,
-        _range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        // Segment-only view — no live I/O.
-        Ok(WaitOutcome::Eof)
-    }
-
-    fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        Ok(ReadOutcome::Eof)
-    }
-
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Eof
-    }
-
-    fn len(&self) -> Option<u64> {
-        None
-    }
-
+impl SegmentLayout for HlsSegmentView {
     fn init_segment_range(&self) -> Option<Range<u64>> {
         Self::init_segment_range(self)
     }
@@ -191,6 +162,11 @@ impl Source for HlsSegmentView {
 
     fn segment_count(&self) -> Option<u32> {
         Self::segment_count(self)
+    }
+
+    fn len(&self) -> Option<u64> {
+        let variant = self.current_variant();
+        self.playlist_state.total_variant_size(variant)
     }
 }
 
@@ -248,7 +224,7 @@ mod tests {
 
         let stream_index = StreamIndex::new(1, num_segments);
         let segments = Arc::new(Mutex::new(stream_index));
-        HlsSegmentView::new(playlist_state, segments, Timeline::new())
+        HlsSegmentView::new(playlist_state, segments)
     }
 
     #[kithara::test]

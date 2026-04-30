@@ -545,24 +545,8 @@ impl Source for HlsSource {
         Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        self.segmented_view.init_segment_range()
-    }
-
-    fn segment_at_time(&self, t: Duration) -> Option<kithara_stream::SegmentDescriptor> {
-        self.segmented_view.segment_at_time(t)
-    }
-
-    fn segment_after_byte(&self, byte_offset: u64) -> Option<kithara_stream::SegmentDescriptor> {
-        self.segmented_view.segment_after_byte(byte_offset)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        self.segmented_view.segment_count()
-    }
-
-    fn as_segment_source(&self) -> Option<Arc<dyn Source>> {
-        Some(Arc::clone(&self.segmented_view) as Arc<dyn Source>)
+    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
+        Some(Arc::clone(&self.segmented_view) as Arc<dyn kithara_stream::SegmentLayout>)
     }
 }
 

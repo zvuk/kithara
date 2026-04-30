@@ -5,13 +5,13 @@
 //! HLS segment is fetched independently through a [`crate::backend::BoxedSource`]
 //! cursor, demuxed in memory via [`crate::fmp4_segment::demux`], and frames are
 //! emitted one at a time. Segment layout (init range, decode-time → segment
-//! mapping) comes from a sidecar [`Source`] handle — the same one HLS
-//! exposes for layout queries — so the demuxer never re-parses MOOF
-//! chains or walks the playlist.
+//! mapping) comes from a [`SegmentLayout`] handle — the same one HLS /
+//! file fmp4 expose for layout queries — so the demuxer never re-parses
+//! MOOF chains or walks the playlist.
 
 use std::{sync::Arc, time::Duration};
 
-use kithara_stream::Source;
+use kithara_stream::SegmentLayout;
 
 use crate::{
     backend::BoxedSource,
@@ -38,7 +38,7 @@ pub struct Fmp4SegmentDemuxer {
     init: Fmp4InitInfo,
     track_info: TrackInfo,
     source: BoxedSource,
-    segments: Arc<dyn Source>,
+    segments: Arc<dyn SegmentLayout>,
     next_byte: u64,
     cursor: Option<SegmentCursor>,
     duration: Option<Duration>,
@@ -48,9 +48,10 @@ impl Fmp4SegmentDemuxer {
     /// Build a demuxer by fetching + parsing the init segment.
     ///
     /// `source` is the byte-level Read/Seek cursor; `segments` is the
-    /// segment-aware sidecar (typically obtained from
-    /// [`Source::as_segment_source`]) — the demuxer queries it for
-    /// `init_segment_range` / `segment_at_time` / `segment_after_byte`.
+    /// segment-layout handle (typically obtained from
+    /// [`kithara_stream::Source::as_segment_layout`]) — the demuxer
+    /// queries it for `init_segment_range` / `segment_at_time` /
+    /// `segment_after_byte`.
     ///
     /// # Errors
     ///
@@ -60,7 +61,7 @@ impl Fmp4SegmentDemuxer {
     /// Returns [`DecodeError::Interrupted`] when the source defers the
     /// init read; the caller should retry after the underlying source
     /// becomes ready.
-    pub fn open(mut source: BoxedSource, segments: Arc<dyn Source>) -> DecodeResult<Self> {
+    pub fn open(mut source: BoxedSource, segments: Arc<dyn SegmentLayout>) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range().ok_or_else(|| {
             DecodeError::InvalidData("HLS init segment range not announced".into())
         })?;
@@ -213,7 +214,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
     }
 }
 
-fn compute_duration(segments: &Arc<dyn Source>) -> Option<Duration> {
+fn compute_duration(segments: &Arc<dyn SegmentLayout>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
     Some(last.decode_time.saturating_add(last.duration))
 }

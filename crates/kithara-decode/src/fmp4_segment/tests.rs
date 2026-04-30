@@ -11,8 +11,7 @@ use std::{
 
 use kithara_bufpool::pcm_pool;
 use kithara_platform::time::Duration;
-use kithara_storage::WaitOutcome;
-use kithara_stream::{ReadOutcome, SegmentDescriptor, Source, SourcePhase, StreamResult, Timeline};
+use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -55,34 +54,9 @@ impl Seek for InstrumentedSource {
 struct FakeSegmented {
     init_range: Range<u64>,
     segments: Arc<Vec<SegmentDescriptor>>,
-    timeline: Timeline,
 }
 
-impl Source for FakeSegmented {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    fn wait_range(
-        &mut self,
-        _range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        Ok(WaitOutcome::Eof)
-    }
-
-    fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        Ok(ReadOutcome::Eof)
-    }
-
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Eof
-    }
-
-    fn len(&self) -> Option<u64> {
-        None
-    }
-
+impl SegmentLayout for FakeSegmented {
     fn init_segment_range(&self) -> Option<Range<u64>> {
         Some(self.init_range.clone())
     }
@@ -108,6 +82,10 @@ impl Source for FakeSegmented {
 
     fn segment_count(&self) -> Option<u32> {
         u32::try_from(self.segments.len()).ok()
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.segments.last().map(|s| s.byte_range.end)
     }
 }
 
@@ -153,7 +131,6 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
         FakeSegmented {
             init_range: 0..init_len,
             segments: Arc::new(descs),
-            timeline: Timeline::new(),
         },
     )
 }
@@ -172,8 +149,8 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
     });
-    let segmented_arc: Arc<dyn Source> = Arc::new(segmented);
-    let demuxer = Fmp4SegmentDemuxer::open(source, segmented_arc).expect("build demuxer");
+    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("build demuxer");
     let codec = SymphoniaCodec::open(demuxer.track_info()).expect("open codec");
     let decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
     (decoder, reads, record)

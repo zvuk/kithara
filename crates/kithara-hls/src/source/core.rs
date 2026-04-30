@@ -422,11 +422,7 @@ pub(crate) fn build_pair(
         committed_segment,
     };
 
-    let segmented_view = HlsSegmentView::new(
-        Arc::clone(&playlist_state),
-        Arc::clone(&segments),
-        coord.timeline(),
-    );
+    let segmented_view = HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
 
     let source = HlsSource {
         coord,

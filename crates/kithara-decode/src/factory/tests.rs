@@ -34,7 +34,7 @@ fn test_decoder_config_custom() {
         gapless: false,
         hint: Some("mp3".to_string()),
         stream_ctx: None,
-        segmented_source: None,
+        segment_layout: None,
         epoch: 0,
         pcm_pool: None,
         byte_pool: None,

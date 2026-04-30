@@ -366,44 +366,51 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
-    /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
-    /// current layout variant. Returns `None` until the init segment is
-    /// announced or for non-segmented sources.
+    /// Optional shared segment-layout handle for segment-aware decoders.
     ///
-    /// Used by segment-aware decoders (fMP4 segment demuxer) to map
-    /// time/byte targets to single-segment byte ranges, bypassing the
-    /// whole-stream container parser.
-    fn init_segment_range(&self) -> Option<Range<u64>> {
+    /// Segment-aware decoders (fMP4 segment demuxer) call this once at
+    /// open to grab a lock-free, Arc-shareable view over the segment
+    /// table — independent of the byte cursor passed to the decoder
+    /// through `Read + Seek`. Default `None` for non-segmented sources.
+    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
         None
     }
+}
+
+/// Segment-table view exposed by segmented sources (HLS, fragmented
+/// file-mp4).
+///
+/// Carries the segment metadata that segment-aware decoders need to
+/// route reads — `init_segment_range` (ftyp+moov / `EXT-X-MAP`),
+/// `segment_at_time`, `segment_after_byte`, `segment_count`, and total
+/// `len`. Has no I/O surface: the byte cursor is the decoder's
+/// `Read + Seek` handle, queried independently. Sources that aren't
+/// segment-aware return `None` from [`Source::as_segment_layout`].
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "len() returns Option<u64> for total bytes — emptiness has no meaningful definition for a segmented source"
+)]
+pub trait SegmentLayout: Send + Sync + 'static {
+    /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
+    /// current layout variant. Returns `None` until the init segment is
+    /// announced.
+    fn init_segment_range(&self) -> Option<Range<u64>>;
 
     /// Locate the segment whose `[decode_time, decode_time + duration)`
     /// covers `t`. Resolves against the source's *current layout
     /// variant* — same variant `init_segment_range` describes.
-    fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
-        None
-    }
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
 
     /// Next segment whose byte range starts at or after `byte_offset`.
     /// Used for sequential play after the current segment is consumed.
-    fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
-        None
-    }
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor>;
 
     /// Total number of segments in the current layout variant.
-    fn segment_count(&self) -> Option<u32> {
-        None
-    }
+    fn segment_count(&self) -> Option<u32>;
 
-    /// Optional shared handle exposing per-segment metadata (HLS).
-    ///
-    /// Returned `Arc<dyn Source>` only needs to honour the segment
-    /// methods — its I/O methods can stub to `Eof`. Used by segment-aware
-    /// decoders that read raw segment bytes through `BoxedSource` and
-    /// query segment boundaries through this handle.
-    fn as_segment_source(&self) -> Option<Arc<dyn Source>> {
-        None
-    }
+    /// Total byte length across all segments. Used to compute total
+    /// duration when the source can't provide a direct value.
+    fn len(&self) -> Option<u64>;
 }
 
 #[cfg(test)]

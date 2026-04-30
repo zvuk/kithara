@@ -222,28 +222,10 @@ impl kithara_stream::Source for FileSource {
         self.coord.timeline()
     }
 
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        self.ensure_segment_index()
-            .map(FileSegmentIndex::init_range)
-    }
-
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.ensure_segment_index()?.segment_at_time(t)
-    }
-
-    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
-        self.ensure_segment_index()?.segment_after_byte(byte_offset)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.ensure_segment_index()?.segment_count())
-    }
-
-    fn as_segment_source(&self) -> Option<Arc<dyn kithara_stream::Source>> {
+    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
         self.ensure_segment_index()?;
-        Some(Arc::new(FileSegmentView {
+        Some(Arc::new(FileSegmentLayout {
             inner: Arc::clone(&self.inner),
-            timeline: self.coord.timeline(),
         }))
     }
 
@@ -287,53 +269,22 @@ impl kithara_stream::Source for FileSource {
     }
 }
 
-/// Sidecar `Source` view that exposes the file's fragmented-mp4
-/// segment layout without surfacing any I/O.
+/// Segment-layout handle for a fully cached fragmented-mp4 file.
 ///
-/// Mirrors `kithara-hls::source::HlsSegmentView` — the byte-level
-/// methods are stubbed (the HLS demuxer reads through the original
-/// `BoxedSource`, not through this view), so seek/play paths never
-/// confuse the sidecar with the live cursor.
-struct FileSegmentView {
+/// Holds a clone of `FileInner` so the layout survives independently of
+/// the original `FileSource` cursor; segment queries hit the lazy
+/// `OnceLock<FileSegmentIndex>` populated on first call.
+struct FileSegmentLayout {
     inner: Arc<FileInner>,
-    timeline: Timeline,
 }
 
-impl FileSegmentView {
+impl FileSegmentLayout {
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
         self.inner.segment_index.get()
     }
 }
 
-impl kithara_stream::Source for FileSegmentView {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    fn wait_range(
-        &mut self,
-        _range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> kithara_stream::StreamResult<WaitOutcome> {
-        Ok(WaitOutcome::Eof)
-    }
-
-    fn read_at(
-        &mut self,
-        _offset: u64,
-        _buf: &mut [u8],
-    ) -> kithara_stream::StreamResult<ReadOutcome> {
-        Ok(ReadOutcome::Eof)
-    }
-
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Eof
-    }
-
-    fn len(&self) -> Option<u64> {
-        None
-    }
-
+impl kithara_stream::SegmentLayout for FileSegmentLayout {
     fn init_segment_range(&self) -> Option<Range<u64>> {
         self.segment_index().map(FileSegmentIndex::init_range)
     }
@@ -348,5 +299,9 @@ impl kithara_stream::Source for FileSegmentView {
 
     fn segment_count(&self) -> Option<u32> {
         Some(self.segment_index()?.segment_count())
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.inner.res.len()
     }
 }

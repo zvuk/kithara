@@ -10,7 +10,9 @@ use std::{
 
 use derivative::Derivative;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SharedHooks, Source, StreamContext};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks, StreamContext,
+};
 
 use super::probe::{
     CodecSelector, ProbeHint, container_from_extension, probe_codec, resolve_codec_container,
@@ -97,12 +99,12 @@ pub struct DecoderConfig {
     pub pcm_pool: Option<PcmPool>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
-    /// Optional segment-aware view over the underlying source. When
+    /// Optional segment-layout handle over the underlying source. When
     /// present, fMP4 AAC / FLAC streams dispatch through the
-    /// segment-by-segment demuxer (`fmp4_segment::Fmp4SegmentDecoder`)
-    /// instead of the whole-stream container parser, side-stepping
-    /// prefix walks during forward seek.
-    pub segmented_source: Option<Arc<dyn Source>>,
+    /// segment-by-segment demuxer (`Fmp4SegmentDemuxer`) instead of the
+    /// whole-stream container parser, side-stepping prefix walks during
+    /// forward seek.
+    pub segment_layout: Option<Arc<dyn SegmentLayout>>,
     /// Enable gapless playback.
     #[derivative(Default(value = "true"))]
     pub gapless: bool,
@@ -292,9 +294,9 @@ fn create_apple(
 ) -> DecodeResult<Box<dyn Decoder>> {
     #[cfg(feature = "symphonia")]
     if should_use_segment_aware(codec, container, config)
-        && let Some(segmented) = config.segmented_source.clone()
+        && let Some(layout) = config.segment_layout.clone()
     {
-        return create_fmp4_segment_symphonia(source, codec, segmented, config);
+        return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
     dispatch::<crate::apple::AppleDecoder>(source, codec, container, config, "Apple")
 }
@@ -317,9 +319,9 @@ fn create_symphonia(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     if should_use_segment_aware(codec, container, config)
-        && let Some(segmented) = config.segmented_source.clone()
+        && let Some(layout) = config.segment_layout.clone()
     {
-        return create_fmp4_segment_symphonia(source, codec, segmented, config);
+        return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
     dispatch::<crate::symphonia::SymphoniaDecoder>(source, codec, container, config, "Symphonia")
 }
@@ -336,14 +338,14 @@ fn should_use_segment_aware(
 ) -> bool {
     matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
         && matches!(container, Some(ContainerFormat::Fmp4))
-        && config.segmented_source.is_some()
+        && config.segment_layout.is_some()
 }
 
 #[cfg(feature = "symphonia")]
 fn create_fmp4_segment_symphonia(
     source: BoxedSource,
     codec: AudioCodec,
-    segmented: Arc<dyn Source>,
+    layout: Arc<dyn SegmentLayout>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
@@ -357,7 +359,7 @@ fn create_fmp4_segment_symphonia(
     );
     match codec {
         AudioCodec::AacLc | AudioCodec::Flac => {
-            let demuxer = Fmp4SegmentDemuxer::open(source, segmented)?;
+            let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
             let codec = SymphoniaCodec::open(demuxer.track_info())?;
             let pool = config
                 .pcm_pool
