@@ -7,5 +7,9 @@
 //! crates can reference it.
 
 mod contract;
+#[cfg(feature = "symphonia")]
+mod symphonia;
 
 pub use contract::{DecodedFrame, FrameCodec};
+#[cfg(feature = "symphonia")]
+pub use symphonia::SymphoniaCodec;

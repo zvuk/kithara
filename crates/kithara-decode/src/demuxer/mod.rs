@@ -18,7 +18,11 @@
 //! `UniversalDecoder<D, C>` can name them without import cycles.
 
 mod contract;
+#[cfg(feature = "symphonia")]
+mod symphonia;
 mod types;
 
 pub use contract::Demuxer;
+#[cfg(feature = "symphonia")]
+pub use symphonia::SymphoniaDemuxer;
 pub use types::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo};

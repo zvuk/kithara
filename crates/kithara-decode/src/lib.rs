@@ -47,7 +47,11 @@ mod apple;
 
 // Error types
 // New unified architecture (Demuxer + FrameCodec + UniversalDecoder).
+#[cfg(feature = "symphonia")]
+pub use codec::SymphoniaCodec;
 pub use codec::{DecodedFrame, FrameCodec};
+#[cfg(feature = "symphonia")]
+pub use demuxer::SymphoniaDemuxer;
 pub use demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo};
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
