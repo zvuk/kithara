@@ -20,6 +20,7 @@
 //! ```
 
 mod backend;
+mod demuxer;
 mod error;
 mod factory;
 mod fmp4_segment;
@@ -43,6 +44,8 @@ mod android;
 mod apple;
 
 // Error types
+// New unified architecture (Demuxer + FrameCodec).
+pub use demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo};
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
