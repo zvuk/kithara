@@ -73,6 +73,8 @@ pub fn make_test_source_with_backend(
     coord: Arc<HlsCoord>,
     backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
+    let segmented_view =
+        crate::source::HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
     HlsSource {
         coord,
         backend,
@@ -83,6 +85,7 @@ pub fn make_test_source_with_backend(
         _hls_peer: None,
         _peer_handle: None,
         reader_segment: Arc::new(AtomicUsize::new(0)),
+        segmented_view,
     }
 }
 

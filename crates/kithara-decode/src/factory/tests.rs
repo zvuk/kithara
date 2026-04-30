@@ -1,7 +1,6 @@
-use std::{
-    io::{Cursor, Error as IoError},
-    sync::{Arc, atomic::AtomicU64},
-};
+use std::io::{Cursor, Error as IoError};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_test_utils::{create_test_wav, kithara};
@@ -35,6 +34,7 @@ fn test_decoder_config_custom() {
         gapless: false,
         hint: Some("mp3".to_string()),
         stream_ctx: None,
+        segmented_source: None,
         epoch: 0,
         pcm_pool: None,
         byte_pool: None,

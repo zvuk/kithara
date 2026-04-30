@@ -68,6 +68,10 @@ impl<T: StreamType> SharedStream<T> {
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
             pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::SharedHooks>;
+            /// Pull a clone of the optional segment-aware metadata view
+            /// from the inner source. Used by the decoder factory to
+            /// activate the segment-by-segment fMP4 path on HLS.
+            pub(crate) fn as_segmented(&self) -> Option<kithara_stream::SharedSegmentedSource>;
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
             /// Overall source readiness at current position.

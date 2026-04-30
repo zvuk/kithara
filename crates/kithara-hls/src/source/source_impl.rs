@@ -546,6 +546,10 @@ impl Source for HlsSource {
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
+
+    fn as_segmented(&self) -> Option<kithara_stream::SharedSegmentedSource> {
+        Some(Arc::clone(&self.segmented_view) as kithara_stream::SharedSegmentedSource)
+    }
 }
 
 impl HlsSource {

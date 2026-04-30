@@ -14,7 +14,7 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{Timeline, error::StreamResult, media::MediaInfo};
+use crate::{Timeline, error::StreamResult, media::MediaInfo, segmented::SharedSegmentedSource};
 
 /// Phase of a source's wait/read lifecycle.
 ///
@@ -336,6 +336,20 @@ pub trait Source: Send + 'static {
     /// rebuilds the wrapper and the new hook needs a clean state
     /// cursor.
     fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks> {
+        None
+    }
+
+    /// Optional sidecar handle exposing per-segment metadata (HLS).
+    ///
+    /// Segment-aware decoders (fMP4 segment demuxer) use this to map
+    /// time/byte targets to single-segment byte ranges, bypassing the
+    /// whole-stream container parser. Non-segmented sources keep the
+    /// default `None`.
+    ///
+    /// Implementations should return a cheap `Arc::clone` — typically
+    /// pointing at an internal view that aggregates the source's
+    /// `Arc`-shared playlist / byte-map / coord state.
+    fn as_segmented(&self) -> Option<SharedSegmentedSource> {
         None
     }
 }

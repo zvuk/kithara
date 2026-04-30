@@ -4085,6 +4085,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ndk-context",
+ "re_mp4",
  "symphonia 0.6.0-alpha.1",
  "symphonia-core 0.6.0-alpha.1",
  "symphonia-format-isomp4",

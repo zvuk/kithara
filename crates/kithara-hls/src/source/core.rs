@@ -19,6 +19,7 @@ use crate::{
     peer::HlsPeer,
     playlist::{PlaylistAccess, PlaylistState},
     scheduler::{DownloadCursor, HlsScheduler},
+    source::HlsSegmentView,
     stream_index::StreamIndex,
 };
 
@@ -48,6 +49,12 @@ pub struct HlsSource {
     /// cursor after each successful read so `HlsPeer::progress` can report
     /// `reader_playback_time` to the ABR controller.
     pub(crate) reader_segment: Arc<AtomicUsize>,
+    /// Segment-aware metadata view passed into segment-by-segment
+    /// decoders via `Source::as_segmented`. Aggregates `Arc` clones of
+    /// `coord`, `playlist_state`, and `segments` so the decoder can query
+    /// segment byte ranges and decode-time mappings without holding a
+    /// reference back to `HlsSource`.
+    pub(crate) segmented_view: Arc<HlsSegmentView>,
 }
 
 impl Drop for HlsSource {
@@ -415,6 +422,8 @@ pub(crate) fn build_pair(
         committed_segment,
     };
 
+    let segmented_view = HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
+
     let source = HlsSource {
         coord,
         backend,
@@ -425,6 +434,7 @@ pub(crate) fn build_pair(
         _hls_peer: None,
         _peer_handle: None,
         reader_segment,
+        segmented_view,
     };
 
     (downloader, source)

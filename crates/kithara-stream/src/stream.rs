@@ -237,6 +237,8 @@ impl<T: StreamType> Stream<T> {
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
             pub fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks>;
+            /// Optional segment-aware metadata view (HLS only).
+            pub fn as_segmented(&self) -> Option<crate::SharedSegmentedSource>;
         }
     }
 

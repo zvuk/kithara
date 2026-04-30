@@ -196,7 +196,6 @@ struct PostSeekObservation {
 // the target moof so format_reader's first read lands on the target,
 // avoiding the chain walk entirely. Tracked separately from the
 // scheduler-side WIP this test was originally written to pin.
-#[ignore = "blocked on synthetic prefixed-source adapter for fmp4-without-sidx (Phase 3.5)"]
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

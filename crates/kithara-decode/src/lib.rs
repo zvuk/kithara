@@ -22,6 +22,7 @@
 mod backend;
 mod error;
 mod factory;
+mod fmp4_segment;
 mod hooks;
 mod pcm;
 #[cfg(feature = "symphonia")]

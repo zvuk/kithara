@@ -268,6 +268,17 @@ pub(crate) trait PlaylistAccess: Send + Sync {
         variant: VariantIndex,
         target: Duration,
     ) -> Option<(SegmentIndex, Duration, Duration)>;
+
+    /// Cumulative `[start, end)` decode-time range for a specific
+    /// segment within a variant.
+    ///
+    /// `start` is the sum of preceding segments' `EXTINF`,
+    /// `end = start + this segment's EXTINF`.
+    fn segment_decode_range(
+        &self,
+        variant: VariantIndex,
+        index: SegmentIndex,
+    ) -> Option<(Duration, Duration)>;
 }
 
 impl PlaylistAccess for PlaylistState {
@@ -354,6 +365,31 @@ impl PlaylistAccess for PlaylistState {
         // With 0-based model (offsets[0] = 0), pos == 0 can't happen for valid
         // offsets, but guard against it anyway.
         if pos == 0 { None } else { Some(pos - 1) }
+    }
+
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "segment list borrows read guard"
+    )]
+    fn segment_decode_range(
+        &self,
+        variant: VariantIndex,
+        index: SegmentIndex,
+    ) -> Option<(Duration, Duration)> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        if index >= state.segments.len() {
+            return None;
+        }
+        let mut elapsed = Duration::ZERO;
+        for (i, segment) in state.segments.iter().enumerate() {
+            let end = elapsed.saturating_add(segment.duration);
+            if i == index {
+                return Some((elapsed, end));
+            }
+            elapsed = end;
+        }
+        None
     }
 
     #[expect(
@@ -673,6 +709,20 @@ mod tests {
     fn test_track_duration_uses_longest_variant() {
         let state = PlaylistState::new(vec![make_variant(0, 4), make_variant(1, 3)]);
         assert_eq!(state.track_duration(), Some(Duration::from_secs(16)));
+    }
+
+    #[kithara::test(wasm)]
+    #[case::first(0, Some((Duration::from_secs(0), Duration::from_secs(4))))]
+    #[case::second(1, Some((Duration::from_secs(4), Duration::from_secs(8))))]
+    #[case::third(2, Some((Duration::from_secs(8), Duration::from_secs(12))))]
+    #[case::last(3, Some((Duration::from_secs(12), Duration::from_secs(16))))]
+    #[case::out_of_range(4, None)]
+    fn test_segment_decode_range(
+        #[case] index: usize,
+        #[case] expected: Option<(Duration, Duration)>,
+    ) {
+        let state = PlaylistState::new(vec![make_variant(0, 4)]);
+        assert_eq!(state.segment_decode_range(0, index), expected);
     }
 
     // Test 8: from_parsed builder
