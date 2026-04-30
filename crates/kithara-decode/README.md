@@ -55,6 +55,52 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 - Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
 - If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
 
+## Gapless playback
+
+`DecoderConfig::gapless` is enabled by default. Decoders report engine-level trim
+metadata through `DecoderTrackInfo::gapless: Option<GaplessInfo>`, where
+`leading_frames` and `trailing_frames` are PCM frame counts.
+
+The contract has one owner for actual trimming:
+
+- `Some(GaplessInfo)` means the backend decoded the untrimmed PCM region and the
+  `kithara-audio` pipeline must apply `GaplessTrimmer` before effects.
+- `None` means no engine trim should run. This covers files with no gapless
+  metadata and backend paths that already applied gapless trim internally.
+- `GaplessTrimmer::notify_seek()` drops only the leading trim state; tail trim is
+  still applied at EOF for the current track.
+
+When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can select
+heuristic behaviour via `GaplessMode`:
+
+- `GaplessMode::CodecPriming` — `GaplessTrimmer::codec_priming(frames, sample_rate)`
+  is built from a static codec table (`codec_priming_frames`). AAC LC
+  is 2112, HE-AAC 3072, MP3 LAME-default 1105, Opus 312, and lossless
+  codecs are 0. Predictable and zero-latency.
+- `GaplessMode::SilenceTrim(SilenceTrimParams)` — `GaplessTrimmer::silence_trim`
+  walks the leading buffer until the first sample above a configurable
+  dB threshold and trims everything before it. Optionally trims the
+  trailing silence at EOF too.
+
+See also `GaplessMode::Disabled` and `GaplessMode::MediaOnly` on `AudioConfig`.
+
+Both fallbacks apply a short raised-cosine fade-in (~3 ms) at the trim
+boundary. The metadata-driven path does not — the boundary lands on a
+sample-accurate count.
+
+`GaplessTrimmer::notify_seek()` drops both the leading-trim state and
+any pending fade-in; tail trim continues to be applied at EOF.
+
+Current metadata sources:
+
+- AAC in MP4/M4A/fMP4: MP4 probe reads `edts/elst` first, then falls back to
+  `iTunSMPB`.
+- MP3, FLAC, Vorbis, and Opus through Symphonia rely on the backend's own
+  gapless behavior and therefore expose `None` for engine trim.
+- Apple AudioToolbox captures `AudioConverterPrimeInfo` when available.
+- Android MediaCodec reads `encoder-delay`/`encoder-padding` from `MediaFormat`
+  and falls back to the MP4 probe for AAC MP4 containers.
+
 ## Feature Flags
 
 <table>

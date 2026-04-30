@@ -108,7 +108,9 @@ pub mod prelude {
     pub use kithara_abr::{AbrMode, AbrOptions};
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
     // Decode
-    pub use kithara_decode::{DecodeError, DecodeResult, PcmMeta, PcmSpec, TrackMetadata};
+    pub use kithara_decode::{
+        DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
+    };
     // Events
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;

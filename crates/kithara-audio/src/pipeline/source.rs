@@ -13,7 +13,10 @@ use std::{
 };
 
 use delegate::delegate;
-use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+use kithara_decode::{
+    DecodeError, DecodeResult, GaplessMode, InnerDecoder, PcmChunk, PcmSpec, duration_for_frames,
+    frames_for_duration,
+};
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline};
@@ -22,6 +25,7 @@ use tracing::{debug, trace, warn};
 use crate::{
     pipeline::{
         fetch::Fetch,
+        gapless::GaplessStage,
         track_fsm::{
             ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState,
             ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag,
@@ -195,12 +199,17 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     /// Cached timeline for lock-free flushing checks.
     pub(crate) timeline: Timeline,
+    /// Per-track gapless stage.
+    ///
+    /// Created once with the initial decoder and preserved across ABR
+    /// variant switches — see `recreate_decoder` for why we do not
+    /// rebuild it.
+    gapless: GaplessStage,
+    /// [`GaplessMode`] from `AudioConfig` (frozen for the track lifetime).
+    gapless_mode: GaplessMode,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Nanoseconds per second for frame/duration conversion.
-    const NANOS_PER_SEC: u128 = 1_000_000_000;
-
     /// Decode progress logging interval in chunks.
     const DECODE_PROGRESS_LOG_INTERVAL: u64 = 100;
 
@@ -213,9 +222,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         decoder_factory: DecoderFactory<T>,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,
+        gapless_mode: GaplessMode,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let timeline = shared_stream.timeline();
+        let gapless =
+            GaplessStage::from_decoder(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
             base_offset: 0,
             decoder,
@@ -237,6 +249,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             effects,
             timeline,
+            gapless,
+            gapless_mode,
         }
     }
 
@@ -442,6 +456,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         {
             let new_duration = new_decoder.duration();
             let variant = new_info.variant_index;
+            // Intentionally do NOT rebuild `self.gapless` here. ABR
+            // variant switches happen *inside* one track — the
+            // gapless contract (metadata leading/trailing, codec
+            // priming, or silence-trim search) was resolved when the
+            // first decoder was created and must not run again
+            // mid-track, otherwise we'd retrim audible content
+            // around the switch boundary.
             // Atomic session update — only on success
             self.session = DecoderSession {
                 base_offset,
@@ -556,6 +577,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
+        self.gapless.notify_seek();
         self.emit_seek_lifecycle(
             SeekLifecycleStage::SeekApplied,
             epoch,
@@ -890,33 +912,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
-        if spec.sample_rate == 0 {
-            return Duration::ZERO;
-        }
-        let nanos = (frames as u128)
-            .saturating_mul(Self::NANOS_PER_SEC)
-            .saturating_div(u128::from(spec.sample_rate));
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "clamped to u64::MAX before cast"
-        )]
-        {
-            Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
-        }
-    }
-
-    fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
-        if spec.sample_rate == 0 {
-            return 0;
-        }
-        let frames = duration
-            .as_nanos()
-            .saturating_mul(u128::from(spec.sample_rate))
-            .saturating_div(Self::NANOS_PER_SEC);
-        frames.min(usize::MAX as u128) as usize
-    }
-
     fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> Option<PcmChunk> {
         let Some(resume) = self.resume_state().copied() else {
             return Some(chunk);
@@ -944,13 +939,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             return None;
         }
 
-        let mut drop_frames = Self::frames_for_duration(spec, remaining);
+        let mut drop_frames = frames_for_duration(spec.sample_rate, remaining);
         if drop_frames == 0 {
             drop_frames = 1;
         }
 
         if drop_frames >= chunk_frames {
-            let dropped = Self::duration_for_frames(spec, chunk_frames);
+            let dropped = duration_for_frames(spec.sample_rate, chunk_frames as u64);
             let next_remaining = remaining.saturating_sub(dropped);
             if let Some(state) = self.resume_state_mut() {
                 state.skip = (!next_remaining.is_zero()).then_some(next_remaining);
@@ -967,11 +962,20 @@ impl<T: StreamType> StreamAudioSource<T> {
         chunk.meta.timestamp = chunk
             .meta
             .timestamp
-            .saturating_add(Self::duration_for_frames(spec, drop_frames));
+            .saturating_add(duration_for_frames(spec.sample_rate, drop_frames as u64));
         if let Some(state) = self.resume_state_mut() {
             state.skip = None;
         }
         Some(chunk)
+    }
+
+    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.gapless.next() {
+            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
+                return Some(processed);
+            }
+        }
+        None
     }
 }
 
@@ -1084,6 +1088,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return Err(DecodeError::Interrupted);
             }
 
+            if let Some(ready) = self.next_gapless_output() {
+                return Ok(Some(ready));
+            }
+
             match self.decoder_next_chunk_safe() {
                 Ok(Some(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -1109,27 +1117,36 @@ impl<T: StreamType> StreamAudioSource<T> {
                         );
                     }
 
-                    match apply_effects(&mut self.effects, chunk) {
-                        Some(processed) => return Ok(Some(processed)),
-                        None => continue,
-                    }
+                    self.gapless.push(chunk);
+                    continue;
                 }
-                Ok(None) => match self.handle_decode_eof() {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
-                Err(e) if e.is_variant_change() => match self.handle_variant_change(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
+                Ok(None) => {
+                    self.gapless.flush();
+                    if let Some(ready) = self.next_gapless_output() {
+                        return Ok(Some(ready));
+                    }
+
+                    return match self.handle_decode_eof() {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
+                Err(e) if e.is_variant_change() => {
+                    return match self.handle_variant_change(e) {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
                 Err(e) if e.is_interrupted() => {
                     trace!("decode interrupted by seek, retrying");
                     continue;
                 }
-                Err(e) => match Self::handle_decode_error(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
+                Err(e) => {
+                    return match Self::handle_decode_error(e) {
+                        DecodeAction::Yield => Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => result,
+                    };
+                }
             }
         }
     }
@@ -1234,7 +1251,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Decode one chunk using the decode loop.
     fn decode_one_step(&mut self) -> DecodeStep {
-        let decoder_duration = self.session.decoder.duration();
+        // Visible duration mirrors the post-trim coordinate space used by
+        // the consumer; see `visible_duration` for rationale.
+        let decoder_duration = crate::pipeline::gapless::visible_duration(
+            self.session.decoder.as_ref(),
+            self.gapless_mode,
+        );
         let timeline_duration = self.timeline.total_duration();
         if decoder_duration > timeline_duration {
             self.timeline.set_total_duration(decoder_duration);
@@ -1720,6 +1742,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 },
             }));
             reset_effects(&mut self.effects);
+            self.gapless.notify_seek();
             return TrackStep::StateChanged;
         }
 

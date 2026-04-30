@@ -2,21 +2,26 @@
 
 use std::{ptr::NonNull, time::Duration};
 
-use kithara_stream::AudioCodec;
+use kithara_stream::{AudioCodec, ContainerFormat};
 use tracing::debug;
 
 use super::{
     error::AndroidBackendError,
-    ffi::{self, KEY_CHANNEL_COUNT, KEY_DURATION_US, KEY_MIME, KEY_SAMPLE_RATE, MEDIA_STATUS_OK},
+    ffi::{
+        self, KEY_CHANNEL_COUNT, KEY_DURATION_US, KEY_ENCODER_DELAY, KEY_ENCODER_PADDING, KEY_MIME,
+        KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
+    },
     format::track_mime_matches_codec,
     media_format::OwnedFormat,
     source::OwnedMediaDataSource,
 };
+use crate::GaplessInfo;
 
 pub(crate) struct SelectedTrack {
     pub(crate) index: usize,
     pub(crate) mime: String,
     pub(crate) duration: Option<Duration>,
+    pub(crate) gapless: Option<GaplessInfo>,
 }
 
 pub(crate) struct ExtractorBootstrap {
@@ -119,6 +124,8 @@ impl Drop for OwnedExtractor {
 pub(crate) fn bootstrap_extractor(
     media_source: OwnedMediaDataSource,
     codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    gapless_enabled: bool,
 ) -> Result<ExtractorBootstrap, (OwnedMediaDataSource, AndroidBackendError)> {
     let raw = match NonNull::new(unsafe { ffi::AMediaExtractor_new() }) {
         Some(raw) => raw,
@@ -146,8 +153,19 @@ pub(crate) fn bootstrap_extractor(
         ));
     }
 
-    let selected_track = match select_track(&extractor, codec) {
+    let mut selected_track = match select_track(&extractor, codec) {
         Ok(selected_track) => selected_track,
+        Err(error) => return Err((media_source, error)),
+    };
+    selected_track.gapless = match resolve_gapless_info(
+        &media_source,
+        &extractor,
+        &selected_track,
+        codec,
+        container,
+        gapless_enabled,
+    ) {
+        Ok(gapless) => gapless,
         Err(error) => return Err((media_source, error)),
     };
     let status = unsafe { ffi::AMediaExtractor_selectTrack(extractor.raw(), selected_track.index) };
@@ -165,6 +183,7 @@ pub(crate) fn bootstrap_extractor(
         track_index = selected_track.index,
         mime = %selected_track.mime,
         duration = ?selected_track.duration,
+        gapless = ?selected_track.gapless,
         "Android extractor selected audio track"
     );
 
@@ -209,6 +228,7 @@ fn select_track(
             index,
             mime,
             duration,
+            gapless: None,
         });
     }
 
@@ -216,6 +236,103 @@ fn select_track(
         "extractor-select-track",
         format!("no audio track matching codec {codec:?}"),
     ))
+}
+
+fn resolve_gapless_info(
+    media_source: &OwnedMediaDataSource,
+    extractor: &OwnedExtractor,
+    selected_track: &SelectedTrack,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    gapless_enabled: bool,
+) -> Result<Option<GaplessInfo>, AndroidBackendError> {
+    if !gapless_enabled || !codec_supports_gapless(codec) {
+        return Ok(None);
+    }
+
+    if ffi::current_api_level().is_some_and(|level| level >= 30)
+        && let Some(info) = gapless_from_media_format(extractor, selected_track.index)?
+    {
+        debug!(
+            target: "kithara::gapless",
+            source = "android_media_format",
+            track_index = selected_track.index,
+            leading_frames = info.leading_frames,
+            trailing_frames = info.trailing_frames,
+            "captured gapless metadata from Android MediaFormat"
+        );
+        return Ok(Some(info));
+    }
+
+    if should_probe_mp4_gapless(codec, container) {
+        let gapless = media_source.probe_mp4_gapless()?;
+        if let Some(info) = gapless {
+            debug!(
+                target: "kithara::gapless",
+                source = "android_mp4_probe",
+                track_index = selected_track.index,
+                leading_frames = info.leading_frames,
+                trailing_frames = info.trailing_frames,
+                "captured gapless metadata from MP4 probe for Android"
+            );
+        }
+        return Ok(gapless);
+    }
+
+    Ok(None)
+}
+
+fn gapless_from_media_format(
+    extractor: &OwnedExtractor,
+    track_index: usize,
+) -> Result<Option<GaplessInfo>, AndroidBackendError> {
+    let format = extractor.track_format(track_index)?;
+    let leading_frames = format
+        .get_i32(KEY_ENCODER_DELAY)
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| {
+            AndroidBackendError::operation(
+                "extractor-gapless-media-format",
+                format!("track={track_index} encoder-delay out of range"),
+            )
+        })?
+        .unwrap_or(0);
+    let trailing_frames = format
+        .get_i32(KEY_ENCODER_PADDING)
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| {
+            AndroidBackendError::operation(
+                "extractor-gapless-media-format",
+                format!("track={track_index} encoder-padding out of range"),
+            )
+        })?
+        .unwrap_or(0);
+
+    if leading_frames == 0 && trailing_frames == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(GaplessInfo {
+        leading_frames,
+        trailing_frames,
+    }))
+}
+
+fn codec_supports_gapless(codec: AudioCodec) -> bool {
+    matches!(
+        codec,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+    )
+}
+
+fn should_probe_mp4_gapless(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+    codec_supports_gapless(codec)
+        && matches!(
+            container,
+            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+        )
 }
 
 #[cfg(test)]
@@ -230,10 +347,33 @@ mod tests {
             index: 2,
             mime: "audio/flac".to_string(),
             duration: Some(Duration::from_secs(12)),
+            gapless: None,
         };
 
         assert_eq!(track.index, 2);
         assert_eq!(track.mime, "audio/flac");
         assert_eq!(track.duration, Some(Duration::from_secs(12)));
+        assert_eq!(track.gapless, None);
+    }
+
+    #[kithara::test]
+    fn mp4_gapless_probe_is_limited_to_aac_mp4_containers() {
+        assert!(should_probe_mp4_gapless(
+            AudioCodec::AacLc,
+            Some(ContainerFormat::Fmp4)
+        ));
+        assert!(should_probe_mp4_gapless(
+            AudioCodec::AacHe,
+            Some(ContainerFormat::Mp4)
+        ));
+        assert!(!should_probe_mp4_gapless(
+            AudioCodec::Mp3,
+            Some(ContainerFormat::Fmp4)
+        ));
+        assert!(!should_probe_mp4_gapless(
+            AudioCodec::AacLc,
+            Some(ContainerFormat::Adts)
+        ));
+        assert!(!should_probe_mp4_gapless(AudioCodec::AacLc, None));
     }
 }

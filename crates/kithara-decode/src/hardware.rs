@@ -1,3 +1,8 @@
+#[cfg(any(
+    test,
+    all(feature = "android", target_os = "android"),
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
 use std::io::{Seek, SeekFrom};
 
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -263,6 +268,7 @@ impl HardwareBackend for AppleBackend {
         let apple_config = AppleConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,
+            gapless: config.gapless,
             pcm_pool: config.pcm_pool.clone(),
         };
 
@@ -297,6 +303,7 @@ impl HardwareBackend for AndroidBackend {
         let android_config = AndroidConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,
+            gapless: config.gapless,
             pcm_pool: config.pcm_pool.clone(),
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,

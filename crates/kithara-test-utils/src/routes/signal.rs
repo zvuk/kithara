@@ -5,6 +5,7 @@
 //! - `GET /signal/sawtooth/{spec_with_ext}` — ascending saw-tooth.
 //! - `GET /signal/sawtooth-desc/{spec_with_ext}` — descending saw-tooth.
 //! - `GET /signal/sine/{spec_with_ext}` — sine wave.
+//! - `GET /signal/sweep/{spec_with_ext}` — phase-continuous chirp.
 //! - `GET /signal/silence/{spec_with_ext}` — digital silence (all zeros).
 //!
 //! `spec_with_ext` is a single path segment in the form
@@ -21,15 +22,19 @@
 //!   "sample_rate": 44100,
 //!   "channels": 2,
 //!   "seconds": 1.0,
-//!   "freq": 440.0
+//!   "start_freq": 100.0,
+//!   "end_freq": 8000.0,
+//!   "sweep_mode": "linear"
 //! }
 //! ```
 //!
 //! - `ext`: `wav | mp3 | flac | aac | m4a`; can be passed in the path suffix or in JSON
 //! - length: exactly one of `seconds`, `frames`, `file_bytes`, or `infinite`
 //! - `freq` is required for `/signal/sine/...` and rejected for sawtooth and silence routes
+//! - `start_freq` and `end_freq` are required for `/signal/sweep/...`
+//! - `sweep_mode` is optional for `/signal/sweep/...`; supported values: `linear`, `log`
 
-use std::{convert::Infallible, sync::Arc};
+use std::{convert::Infallible, mem::size_of, sync::Arc};
 
 use axum::{
     Router,
@@ -62,6 +67,7 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
             get(sawtooth_descending),
         )
         .route("/signal/sine/{spec_with_ext}", get(sine))
+        .route("/signal/sweep/{spec_with_ext}", get(sweep))
         .route("/signal/silence/{spec_with_ext}", get(silence))
 }
 
@@ -84,6 +90,13 @@ async fn sine(
     Path(spec_with_ext): Path<String>,
 ) -> Response {
     handle_signal(&state, SignalKind::Sine, &spec_with_ext)
+}
+
+async fn sweep(
+    State(state): State<Arc<TestServerState>>,
+    Path(spec_with_ext): Path<String>,
+) -> Response {
+    handle_signal(&state, SignalKind::Sweep, &spec_with_ext)
 }
 
 async fn silence(
@@ -167,6 +180,7 @@ fn build_wav_response(spec: &ResolvedSignalSpec) -> Response {
             },
             |freq_hz| build_wav_response_for_signal(signal::SineWave(freq_hz), spec),
         ),
+        SignalKind::Sweep => build_wav_response_for_signal(build_sweep_signal(spec), spec),
         SignalKind::Silence => build_wav_response_for_signal(signal::Silence, spec),
     }
 }
@@ -210,8 +224,20 @@ fn build_encoded_response(format: SignalFormat, spec: &ResolvedSignalSpec) -> Re
             },
             |freq_hz| build_encoded_response_for_signal(signal::SineWave(freq_hz), spec, format),
         ),
+        SignalKind::Sweep => {
+            build_encoded_response_for_signal(build_sweep_signal(spec), spec, format)
+        }
         SignalKind::Silence => build_encoded_response_for_signal(signal::Silence, spec, format),
     }
+}
+
+fn build_sweep_signal(spec: &ResolvedSignalSpec) -> signal::Sweep {
+    let sweep = spec.sweep.expect("validator guarantees sweep params");
+    let total_frames = spec
+        .length
+        .total_frames()
+        .expect("validator forbids infinite for sweep");
+    signal::Sweep::new(sweep.start_hz, sweep.end_hz, total_frames, sweep.mode)
 }
 
 fn build_encoded_response_for_signal<S: signal::SignalFn + Sync>(
@@ -341,6 +367,9 @@ mod tests {
         let saw = encode(r#"{"seconds":1,"sample_rate":44100,"channels":2}"#);
         let sine = encode(r#"{"seconds":1,"sample_rate":44100,"channels":2,"freq":440}"#);
         let saw_json_ext = encode(r#"{"ext":"wav","seconds":1,"sample_rate":44100,"channels":2}"#);
+        let sweep = encode(
+            r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":8000,"sweep_mode":"linear"}"#,
+        );
         let silence = encode(r#"{"seconds":1,"sample_rate":44100,"channels":2}"#);
         let valid_cases = [
             (
@@ -354,6 +383,7 @@ mod tests {
                 b"RIFF".as_slice(),
             ),
             (format!("/signal/sine/{sine}.wav"), 0, b"RIFF".as_slice()),
+            (format!("/signal/sweep/{sweep}.wav"), 0, b"RIFF".as_slice()),
             (
                 format!("/signal/sawtooth/{saw_json_ext}"),
                 -32768,
@@ -382,6 +412,10 @@ mod tests {
             (format!("/signal/sawtooth/{saw}.flac"), "audio/flac"),
             (format!("/signal/sawtooth/{saw}.aac"), "audio/aac"),
             (format!("/signal/sawtooth/{saw}.m4a"), "audio/mp4"),
+            (format!("/signal/sweep/{sweep}.mp3"), "audio/mpeg"),
+            (format!("/signal/sweep/{sweep}.flac"), "audio/flac"),
+            (format!("/signal/sweep/{sweep}.aac"), "audio/aac"),
+            (format!("/signal/sweep/{sweep}.m4a"), "audio/mp4"),
         ];
 
         for (path, content_type) in encoded_cases {
@@ -412,6 +446,18 @@ mod tests {
         assert_eq!(
             unsupported_infinite.text().await.unwrap(),
             "invalid signal spec field `infinite`: is currently only supported for `wav`"
+        );
+
+        let invalid_sweep = reqwest::get(server.url(&format!(
+            "/signal/sweep/{}.wav",
+            encode(r#"{"seconds":1,"sample_rate":44100,"channels":2,"end_freq":8000}"#)
+        )))
+        .await
+        .unwrap();
+        assert_eq!(invalid_sweep.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            invalid_sweep.text().await.unwrap(),
+            "invalid signal spec field `start_freq`: is required for `sweep`"
         );
     }
 }

@@ -12,11 +12,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kithara_audio::internal::source::*;
+use kithara_audio::{AudioEffect, internal::source::*};
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
-    DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
-    mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
+    DecodeError, DecodeResult, DecoderTrackInfo, GaplessInfo, GaplessMode, InnerDecoder, PcmChunk,
+    PcmMeta, PcmSpec, SilenceTrimParams,
+    mock::{
+        infinite_inner_decoder_loose, scripted_inner_decoder_loose,
+        scripted_inner_decoder_with_track_info_loose,
+    },
 };
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
@@ -259,6 +263,55 @@ fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk {
     )
 }
 
+fn make_indexed_chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
+    let channels = usize::from(spec.channels.max(1));
+    let samples = frames.saturating_mul(channels);
+    let first_sample = usize::try_from(frame_offset).expect("test offset fits in usize");
+    let pcm = (first_sample..first_sample.saturating_add(samples))
+        .map(|sample| sample as f32)
+        .collect::<Vec<_>>();
+    PcmChunk::new(
+        PcmMeta {
+            spec,
+            frame_offset,
+            ..Default::default()
+        },
+        pcm_pool().attach(pcm),
+    )
+}
+
+fn make_prefixed_chunk(
+    spec: PcmSpec,
+    frame_offset: u64,
+    silence_frames: usize,
+    content_frames: usize,
+) -> PcmChunk {
+    let channels = usize::from(spec.channels.max(1));
+    let mut pcm = vec![0.0; silence_frames.saturating_mul(channels)];
+    let start = usize::try_from(frame_offset)
+        .expect("test offset fits in usize")
+        .saturating_add(silence_frames);
+    let content_samples = content_frames.saturating_mul(channels);
+    pcm.extend((start..start.saturating_add(content_samples)).map(|sample| sample as f32));
+    PcmChunk::new(
+        PcmMeta {
+            spec,
+            frame_offset,
+            ..Default::default()
+        },
+        pcm_pool().attach(pcm),
+    )
+}
+
+fn gapless_track_info(leading_frames: u64, trailing_frames: u64) -> DecoderTrackInfo {
+    let mut info = DecoderTrackInfo::default();
+    let mut gapless = GaplessInfo::default();
+    gapless.leading_frames = leading_frames;
+    gapless.trailing_frames = trailing_frames;
+    info.gapless = Some(gapless);
+    info
+}
+
 fn test_stream_from_source(source: TestSource) -> Stream<TestStream> {
     let config = TestConfig {
         source: Some(source),
@@ -308,10 +361,39 @@ fn make_source(
     new_stream_audio_source(shared, decoder, factory, media_info, epoch, vec![])
 }
 
+fn silence_trim_mode() -> GaplessMode {
+    // Tests use a low min_trim_frames so 32-frame silent prefixes
+    // trigger a trim — production defaults are 256.
+    GaplessMode::SilenceTrim(SilenceTrimParams {
+        threshold_db: 60.0,
+        min_trim_frames: 16,
+        scan_window_frames: 4096,
+        trim_trailing: false,
+    })
+}
+
+fn make_source_with_gapless(
+    shared: SharedStream<TestStream>,
+    decoder: Box<dyn InnerDecoder>,
+    factory: DecoderFactory<TestStream>,
+    media_info: Option<MediaInfo>,
+    mode: GaplessMode,
+) -> StreamAudioSource<TestStream> {
+    let epoch = Arc::new(AtomicU64::new(0));
+    new_stream_audio_source_with_gapless(shared, decoder, factory, media_info, epoch, mode, vec![])
+}
+
 fn v0_spec() -> PcmSpec {
     PcmSpec {
         channels: 2,
         sample_rate: 44100,
+    }
+}
+
+fn mono_spec() -> PcmSpec {
+    PcmSpec {
+        channels: 1,
+        sample_rate: 48_000,
     }
 }
 
@@ -345,6 +427,368 @@ fn aac_variant_info(variant_index: u32) -> MediaInfo {
 }
 
 // Tests
+
+struct RecordingEffect {
+    inputs: Arc<Mutex<Vec<Vec<f32>>>>,
+}
+
+impl AudioEffect for RecordingEffect {
+    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        self.inputs.lock_sync().push(chunk.samples().to_vec());
+        Some(chunk)
+    }
+
+    fn flush(&mut self) -> Option<PcmChunk> {
+        None
+    }
+
+    fn reset(&mut self) {}
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn gapless_trims_decoder_output_before_effects_on_eof() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let chunks = vec![make_indexed_chunk(spec, 0, 6)];
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        chunks,
+        vec![],
+        None,
+        gapless_track_info(1, 2),
+    );
+    let effect_inputs = Arc::new(Mutex::new(Vec::new()));
+    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(RecordingEffect {
+        inputs: Arc::clone(&effect_inputs),
+    })];
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        epoch,
+        effects,
+    );
+
+    let fetch = fetch_next(&mut source);
+
+    assert!(!fetch.is_eof);
+    assert_eq!(fetch.data.meta.frame_offset, 1);
+    assert_eq!(fetch.data.samples(), &[1.0, 2.0, 3.0]);
+    assert_eq!(effect_inputs.lock_sync().as_slice(), &[vec![1.0, 2.0, 3.0]]);
+
+    let eof = fetch_next(&mut source);
+    assert!(eof.is_eof);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn disabled_gapless_ignores_decoder_metadata_before_effects() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let chunks = vec![make_indexed_chunk(spec, 0, 6)];
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        chunks,
+        vec![],
+        None,
+        gapless_track_info(1, 2),
+    );
+    let effect_inputs = Arc::new(Mutex::new(Vec::new()));
+    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(RecordingEffect {
+        inputs: Arc::clone(&effect_inputs),
+    })];
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source_with_gapless(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        epoch,
+        GaplessMode::Disabled,
+        effects,
+    );
+
+    let fetch = fetch_next(&mut source);
+
+    assert!(!fetch.is_eof);
+    assert_eq!(fetch.data.meta.frame_offset, 0);
+    assert_eq!(fetch.data.samples(), &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+    assert_eq!(
+        effect_inputs.lock_sync().as_slice(),
+        &[vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+    );
+
+    let eof = fetch_next(&mut source);
+    assert!(eof.is_eof);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn silence_trim_gapless_trims_decoder_output_before_effects_on_eof() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let chunks = vec![make_prefixed_chunk(spec, 0, 32, 32)];
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        chunks,
+        vec![],
+        None,
+        DecoderTrackInfo::default(),
+    );
+    let effect_inputs = Arc::new(Mutex::new(Vec::new()));
+    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(RecordingEffect {
+        inputs: Arc::clone(&effect_inputs),
+    })];
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source_with_gapless(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        epoch,
+        silence_trim_mode(),
+        effects,
+    );
+
+    let fetch = fetch_next(&mut source);
+
+    assert!(!fetch.is_eof);
+    // Silence prefix dropped: 32 silent + 32 content → 32 surviving.
+    assert_eq!(fetch.data.meta.frame_offset, 32);
+    assert_eq!(fetch.data.samples().len(), 32);
+    // Fade-in shapes the surviving prefix: first sample is well below
+    // its raw value (32.0) and the curve is monotonically increasing.
+    let samples = fetch.data.samples();
+    assert!(samples[0] < 32.0, "first faded sample {}", samples[0]);
+    for window in samples.windows(2) {
+        assert!(
+            window[1] >= window[0] - 1e-5,
+            "fade-in monotonic: {window:?}"
+        );
+    }
+    // Effect chain saw the trimmed + faded data.
+    let effect_capture = effect_inputs.lock_sync();
+    assert_eq!(effect_capture.len(), 1);
+    assert_eq!(effect_capture[0].len(), 32);
+    drop(effect_capture);
+
+    let eof = fetch_next(&mut source);
+    assert!(eof.is_eof);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_before_first_decode_resets_gapless_leading_trim() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let chunks = vec![make_indexed_chunk(spec, 10, 4)];
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        chunks,
+        vec![],
+        None,
+        gapless_track_info(2, 0),
+    );
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_secs(5));
+    apply_pending_seek(&mut source);
+    let fetch = fetch_next(&mut source);
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(fetch.epoch, seek_epoch);
+    assert!(!fetch.is_eof);
+    assert_eq!(fetch.data.meta.frame_offset, 10);
+    assert_eq!(fetch.data.samples(), &[10.0, 11.0, 12.0, 13.0]);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn seek_before_first_decode_disables_heuristic_leading_trim() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let chunks = vec![make_prefixed_chunk(spec, 10, 32, 32)];
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        chunks,
+        vec![],
+        None,
+        DecoderTrackInfo::default(),
+    );
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source_with_gapless(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        silence_trim_mode(),
+        vec![],
+    );
+
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_secs(5));
+    apply_pending_seek(&mut source);
+    let fetch = fetch_next(&mut source);
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(fetch.epoch, seek_epoch);
+    assert!(!fetch.is_eof);
+    // After seek the heuristic is disarmed: silence at the seek
+    // landing is treated as real content and forwarded as-is.
+    assert_eq!(fetch.data.meta.frame_offset, 10);
+    assert_eq!(fetch.data.samples()[0], 0.0);
+    assert_eq!(fetch.data.samples()[31], 0.0);
+    assert_eq!(fetch.data.samples()[32], 42.0);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn format_change_preserves_track_gapless_stage() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = mono_spec();
+    let v0_chunks = vec![make_indexed_chunk(spec, 0, 2)];
+    let (v0_decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        v0_chunks,
+        vec![],
+        None,
+        gapless_track_info(1, 0),
+    );
+
+    let v3_chunks = vec![make_indexed_chunk(spec, 10, 3)];
+    let (v3_decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        v3_chunks,
+        vec![],
+        None,
+        gapless_track_info(1, 0),
+    );
+    let factory = make_factory(vec![v3_decoder]);
+    let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
+
+    let first = fetch_next(&mut source);
+    assert!(!first.is_eof);
+    assert_eq!(first.data.meta.frame_offset, 1);
+    assert_eq!(first.data.samples(), &[1.0]);
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(v3_info());
+        s.segment_range = Some(1000..2000);
+        s.format_change_range = Some(1000..2000);
+    }
+
+    let recreated = fetch_next(&mut source);
+
+    assert!(!recreated.is_eof);
+    assert_eq!(recreated.data.meta.frame_offset, 10);
+    assert_eq!(recreated.data.samples(), &[10.0, 11.0, 12.0]);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn format_change_does_not_re_run_silence_trim() {
+    // ABR variant switches happen mid-track; the gapless stage is
+    // resolved once with the initial decoder and must not run again
+    // on switch (otherwise we'd trim real content around variant
+    // boundaries).
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = mono_spec();
+    let v0_chunks = vec![make_prefixed_chunk(spec, 0, 32, 32)];
+    let (v0_decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        v0_chunks,
+        vec![],
+        None,
+        DecoderTrackInfo::default(),
+    );
+
+    let v3_chunks = vec![make_prefixed_chunk(spec, 10, 32, 32)];
+    let (v3_decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        v3_chunks,
+        vec![],
+        None,
+        DecoderTrackInfo::default(),
+    );
+    let factory = make_factory(vec![v3_decoder]);
+    let mut source = make_source_with_gapless(
+        shared,
+        v0_decoder,
+        factory,
+        Some(v0_info()),
+        silence_trim_mode(),
+    );
+
+    // First track's silence prefix dropped, fade-in applied.
+    let first = fetch_next(&mut source);
+    assert!(!first.is_eof);
+    assert_eq!(first.data.meta.frame_offset, 32);
+
+    {
+        let mut s = state.lock_sync();
+        s.media_info = Some(v3_info());
+        s.segment_range = Some(1000..2000);
+        s.format_change_range = Some(1000..2000);
+    }
+
+    // After the variant switch the silence-trim heuristic is NOT
+    // re-armed: the v3 chunk's leading silence is forwarded as-is
+    // (frame_offset == 10, samples include the pre-content zeros).
+    let recreated = fetch_next(&mut source);
+    assert!(!recreated.is_eof);
+    assert_eq!(recreated.data.meta.frame_offset, 10);
+    // First sample is the original 0.0 — heuristic is not running
+    // and there's no new fade-in.
+    assert_eq!(recreated.data.samples()[0], 0.0);
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+fn codec_priming_used_when_metadata_absent_in_source() {
+    // Build a chunk with enough leading frames to exceed the AAC LC
+    // priming (2112 frames) so we can observe trimming end-to-end.
+    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
+    let spec = mono_spec();
+    let frames_total = 2_300_usize;
+    let pcm: Vec<f32> = (0..frames_total).map(|_| 1.0).collect();
+    let chunk = PcmChunk::new(
+        PcmMeta {
+            spec,
+            frame_offset: 0,
+            ..Default::default()
+        },
+        pcm_pool().attach(pcm),
+    );
+    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+        spec,
+        vec![chunk],
+        vec![],
+        None,
+        DecoderTrackInfo::default(),
+    );
+    let epoch = Arc::new(AtomicU64::new(0));
+    // AAC LC media info → codec_priming_frames = 2112.
+    let mut source = new_stream_audio_source_with_gapless(
+        shared,
+        decoder,
+        make_factory(vec![]),
+        Some(v0_info()),
+        epoch,
+        GaplessMode::CodecPriming,
+        vec![],
+    );
+
+    let fetch = fetch_next(&mut source);
+    assert!(!fetch.is_eof);
+    assert_eq!(fetch.data.meta.frame_offset, 2112);
+    assert_eq!(fetch.data.samples().len(), frames_total - 2112);
+    // Anti-click: first sample faded down from raw 1.0.
+    assert!(fetch.data.samples()[0] < 0.5);
+}
 
 /// Test that ABR switch uses `format_change_segment_range()` to find init data.
 ///

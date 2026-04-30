@@ -7,13 +7,17 @@ use base64::{
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::{consts::Consts, signal_pcm::SignalLength};
+use crate::{
+    consts::Consts,
+    signal_pcm::{SignalLength, SweepMode},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignalKind {
     Sawtooth,
     SawtoothDescending,
     Sine,
+    Sweep,
     Silence,
 }
 
@@ -25,10 +29,11 @@ impl TryFrom<&str> for SignalKind {
             "sawtooth" => Ok(Self::Sawtooth),
             "sawtooth-desc" => Ok(Self::SawtoothDescending),
             "sine" => Ok(Self::Sine),
+            "sweep" => Ok(Self::Sweep),
             "silence" => Ok(Self::Silence),
             _ => Err(SignalRequestError::InvalidField {
                 field: "signal_kind",
-                message: "must be one of `sawtooth`, `sawtooth-desc`, `sine`, or `silence`",
+                message: "must be one of `sawtooth`, `sawtooth-desc`, `sine`, `sweep`, or `silence`",
             }),
         }
     }
@@ -83,6 +88,14 @@ pub(crate) struct ResolvedSignalSpec {
     pub(crate) channels: u16,
     pub(crate) length: SignalLength,
     pub(crate) sine_freq_hz: Option<f64>,
+    pub(crate) sweep: Option<ResolvedSweep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ResolvedSweep {
+    pub(crate) start_hz: f64,
+    pub(crate) end_hz: f64,
+    pub(crate) mode: SweepMode,
 }
 
 #[derive(Debug, Error)]
@@ -125,6 +138,12 @@ struct SignalSpecPayload {
     infinite: Option<bool>,
     #[serde(default)]
     freq: Option<f64>,
+    #[serde(default)]
+    start_freq: Option<f64>,
+    #[serde(default)]
+    end_freq: Option<f64>,
+    #[serde(default)]
+    sweep_mode: Option<String>,
 }
 
 pub(crate) fn parse_signal_request(
@@ -217,9 +236,16 @@ fn normalize_signal_spec(
         });
     }
 
-    let length = normalize_length(payload, format)?;
+    let length = normalize_length(kind, payload, format)?;
 
-    let sine_freq_hz = match kind {
+    if payload.freq.is_some() && (payload.start_freq.is_some() || payload.end_freq.is_some()) {
+        return Err(SignalRequestError::InvalidField {
+            field: "freq",
+            message: "cannot be combined with `start_freq` or `end_freq`",
+        });
+    }
+
+    let (sine_freq_hz, sweep) = match kind {
         SignalKind::Sine => {
             let Some(freq) = payload.freq else {
                 return Err(SignalRequestError::InvalidField {
@@ -235,7 +261,17 @@ fn normalize_signal_spec(
                 });
             }
 
-            Some(freq)
+            if payload.start_freq.is_some()
+                || payload.end_freq.is_some()
+                || payload.sweep_mode.is_some()
+            {
+                return Err(SignalRequestError::InvalidField {
+                    field: "start_freq",
+                    message: "is only allowed for the `sweep` route",
+                });
+            }
+
+            (Some(freq), None)
         }
         SignalKind::Sawtooth | SignalKind::SawtoothDescending | SignalKind::Silence => {
             if payload.freq.is_some() {
@@ -245,7 +281,79 @@ fn normalize_signal_spec(
                 });
             }
 
-            None
+            if payload.start_freq.is_some()
+                || payload.end_freq.is_some()
+                || payload.sweep_mode.is_some()
+            {
+                return Err(SignalRequestError::InvalidField {
+                    field: "start_freq",
+                    message: "is only allowed for the `sweep` route",
+                });
+            }
+
+            (None, None)
+        }
+        SignalKind::Sweep => {
+            if payload.freq.is_some() {
+                return Err(SignalRequestError::InvalidField {
+                    field: "freq",
+                    message: "is not allowed for the `sweep` route",
+                });
+            }
+
+            let Some(start_hz) = payload.start_freq else {
+                return Err(SignalRequestError::InvalidField {
+                    field: "start_freq",
+                    message: "is required for `sweep`",
+                });
+            };
+            let Some(end_hz) = payload.end_freq else {
+                return Err(SignalRequestError::InvalidField {
+                    field: "end_freq",
+                    message: "is required for `sweep`",
+                });
+            };
+
+            if !start_hz.is_finite() || start_hz <= 0.0 {
+                return Err(SignalRequestError::InvalidField {
+                    field: "start_freq",
+                    message: "must be finite and > 0",
+                });
+            }
+
+            if !end_hz.is_finite() || end_hz <= 0.0 {
+                return Err(SignalRequestError::InvalidField {
+                    field: "end_freq",
+                    message: "must be finite and > 0",
+                });
+            }
+
+            let mode = match payload.sweep_mode.as_deref().unwrap_or("linear") {
+                "linear" => SweepMode::Linear,
+                "log" => SweepMode::Log,
+                _ => {
+                    return Err(SignalRequestError::InvalidField {
+                        field: "sweep_mode",
+                        message: "must be `linear` or `log`",
+                    });
+                }
+            };
+
+            if matches!(mode, SweepMode::Log) && start_hz == end_hz {
+                return Err(SignalRequestError::InvalidField {
+                    field: "sweep_mode",
+                    message: "`log` mode requires different `start_freq` and `end_freq`",
+                });
+            }
+
+            (
+                None,
+                Some(ResolvedSweep {
+                    start_hz,
+                    end_hz,
+                    mode,
+                }),
+            )
         }
     };
 
@@ -255,10 +363,12 @@ fn normalize_signal_spec(
         channels: payload.channels,
         length,
         sine_freq_hz,
+        sweep,
     })
 }
 
 fn normalize_length(
+    kind: SignalKind,
     payload: &SignalSpecPayload,
     format: SignalFormat,
 ) -> Result<SignalLength, SignalRequestError> {
@@ -307,6 +417,13 @@ fn normalize_length(
     }
 
     if let Some(total_file_bytes) = payload.file_bytes {
+        if matches!(kind, SignalKind::Sweep) {
+            return Err(SignalRequestError::InvalidField {
+                field: "file_bytes",
+                message: "is not supported for `sweep`; use `seconds` or `frames`",
+            });
+        }
+
         if format != SignalFormat::Wav {
             return Err(SignalRequestError::InvalidField {
                 field: "file_bytes",
@@ -336,6 +453,13 @@ fn normalize_length(
             return Err(SignalRequestError::InvalidField {
                 field: "infinite",
                 message: "must be `true` when provided",
+            });
+        }
+
+        if matches!(kind, SignalKind::Sweep) {
+            return Err(SignalRequestError::InvalidField {
+                field: "infinite",
+                message: "is not supported for `sweep`; use `seconds` or `frames`",
             });
         }
 
@@ -415,6 +539,13 @@ mod tests {
                 Some(440.0),
             ),
             (
+                SignalKind::Sweep,
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":1000}"#,
+                "wav",
+                SignalLength::from_frames(44_100),
+                None,
+            ),
+            (
                 SignalKind::Silence,
                 r#"{"seconds":1,"sample_rate":44100,"channels":2}"#,
                 "wav",
@@ -443,5 +574,79 @@ mod tests {
             assert_eq!(request.spec.length, expected_length);
             assert_eq!(request.spec.sine_freq_hz, expected_freq);
         }
+    }
+
+    #[test]
+    fn parses_valid_sweep_modes() {
+        for (mode, expected_mode) in [("linear", SweepMode::Linear), ("log", SweepMode::Log)] {
+            let spec = format!(
+                r#"{{"frames":4096,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":1000,"sweep_mode":"{mode}"}}"#
+            );
+            let request =
+                parse_signal_request(SignalKind::Sweep, &format!("{}.wav", encode(&spec)))
+                    .expect("valid sweep request");
+            let sweep = request.spec.sweep.expect("normalized sweep");
+
+            assert_eq!(sweep.mode, expected_mode);
+            assert_eq!(sweep.start_hz, 100.0);
+            assert_eq!(sweep.end_hz, 1000.0);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_sweep_payloads() {
+        let cases = [
+            (
+                r#"{"infinite":true,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":1000}"#,
+                "invalid signal spec field `infinite`: is not supported for `sweep`; use `seconds` or `frames`",
+            ),
+            (
+                r#"{"file_bytes":4096,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":1000}"#,
+                "invalid signal spec field `file_bytes`: is not supported for `sweep`; use `seconds` or `frames`",
+            ),
+            (
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"end_freq":1000}"#,
+                "invalid signal spec field `start_freq`: is required for `sweep`",
+            ),
+            (
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100}"#,
+                "invalid signal spec field `end_freq`: is required for `sweep`",
+            ),
+            (
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":1000,"sweep_mode":"nope"}"#,
+                "invalid signal spec field `sweep_mode`: must be `linear` or `log`",
+            ),
+            (
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100,"end_freq":100,"sweep_mode":"log"}"#,
+                "invalid signal spec field `sweep_mode`: `log` mode requires different `start_freq` and `end_freq`",
+            ),
+            (
+                r#"{"seconds":1,"sample_rate":44100,"channels":2,"freq":440,"start_freq":100,"end_freq":1000}"#,
+                "invalid signal spec field `freq`: cannot be combined with `start_freq` or `end_freq`",
+            ),
+        ];
+
+        for (json, expected) in cases {
+            let error = parse_signal_request(SignalKind::Sweep, &format!("{}.wav", encode(json)))
+                .expect_err("invalid sweep spec");
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn rejects_sweep_fields_on_non_sweep_routes() {
+        let error = parse_signal_request(
+            SignalKind::Sawtooth,
+            &format!(
+                "{}.wav",
+                encode(r#"{"seconds":1,"sample_rate":44100,"channels":2,"start_freq":100}"#)
+            ),
+        )
+        .expect_err("non-sweep route must reject sweep-only fields");
+
+        assert_eq!(
+            error.to_string(),
+            "invalid signal spec field `start_freq`: is only allowed for the `sweep` route"
+        );
     }
 }

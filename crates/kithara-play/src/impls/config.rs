@@ -14,7 +14,7 @@ use kithara_abr::{AbrController, AbrOptions, ThroughputEstimator};
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::DecodeError;
+use kithara_decode::{DecodeError, GaplessMode};
 use kithara_events::EventBus;
 #[cfg(feature = "file")]
 use kithara_file::{FileConfig, FileSrc};
@@ -122,6 +122,8 @@ pub struct ResourceConfig {
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[cfg(feature = "hls")]
     pub hls_base_url: Option<Url>,
+    /// How leading/trailing PCM is trimmed after decode.
+    pub gapless_mode: GaplessMode,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
     /// Encryption key handling configuration.
@@ -239,6 +241,7 @@ impl ResourceConfig {
             headers: None,
             #[cfg(feature = "hls")]
             hls_base_url: None,
+            gapless_mode: GaplessMode::default(),
             host_sample_rate: None,
             #[cfg(feature = "hls")]
             keys: KeyOptions::default(),
@@ -347,6 +350,7 @@ impl ResourceConfig {
         if let Some(sr) = self.host_sample_rate {
             config = config.with_host_sample_rate(sr);
         }
+        config = config.with_gapless_mode(self.gapless_mode);
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
         if let Some(rate) = self.playback_rate {
@@ -428,6 +432,7 @@ impl ResourceConfig {
         if let Some(sr) = self.host_sample_rate {
             config = config.with_host_sample_rate(sr);
         }
+        config = config.with_gapless_mode(self.gapless_mode);
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
         if let Some(rate) = self.playback_rate {
@@ -561,6 +566,37 @@ mod tests {
         let config = ResourceConfig::new("https://example.com/live.m3u8").unwrap();
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
         assert!((config.preferred_peak_bitrate_for_expensive_networks - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    fn config_gapless_mode_defaults_to_media_only() {
+        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+
+        assert_eq!(config.gapless_mode, GaplessMode::MediaOnly);
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test]
+    fn config_gapless_mode_propagates_to_file_config() {
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_gapless_mode(GaplessMode::CodecPriming);
+
+        let audio_config = config.into_file_config();
+
+        assert_eq!(audio_config.gapless_mode, GaplessMode::CodecPriming);
+    }
+
+    #[cfg(feature = "hls")]
+    #[kithara::test]
+    fn config_gapless_mode_propagates_to_hls_config() {
+        let config = ResourceConfig::new("https://example.com/live.m3u8")
+            .unwrap()
+            .with_gapless_mode(GaplessMode::Disabled);
+
+        let audio_config = config.into_hls_config().unwrap();
+
+        assert_eq!(audio_config.gapless_mode, GaplessMode::Disabled);
     }
 
     #[cfg(feature = "hls")]

@@ -52,10 +52,10 @@ type LoaderPair = (
 );
 
 fn make_test_loader_pair(
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
-    let handle = test_peer_handle(&cancel);
+    let handle = test_peer_handle(cancel);
     let cache = crate::loading::PlaylistCache::new(backend.clone(), handle.clone());
     let loader = Arc::new(crate::loading::SegmentLoader::new(
         handle,
@@ -66,7 +66,7 @@ fn make_test_loader_pair(
     (backend, loader)
 }
 
-fn test_fetch_manager(cancel: CancellationToken) -> LoaderPair {
+fn test_fetch_manager(cancel: &CancellationToken) -> LoaderPair {
     let noop_drm: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -80,7 +80,7 @@ fn test_fetch_manager(cancel: CancellationToken) -> LoaderPair {
     make_test_loader_pair(cancel, backend)
 }
 
-fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> LoaderPair {
+fn test_disk_fetch_manager(cancel: &CancellationToken, root_dir: &Path) -> LoaderPair {
     let noop_drm: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -144,7 +144,7 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         .collect();
     let playlist_state = Arc::new(PlaylistState::new(variants));
     let parsed = parsed_variants(num_variants);
-    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let (backend, _loader) = test_fetch_manager(&cancel);
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -187,7 +187,7 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         },
     );
     let parsed = parsed_variants(1);
-    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let (backend, _loader) = test_fetch_manager(&cancel);
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -739,7 +739,7 @@ fn demand_range_queues_request_for_unloaded_offset() {
         },
     );
     let parsed = parsed_variants(1);
-    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let (backend, _loader) = test_fetch_manager(&cancel);
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -791,7 +791,7 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     let variant = make_variant_state_with_segments(0, NUM_SEGS);
     let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
     let parsed = parsed_variants(1);
-    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let (backend, _loader) = test_fetch_manager(&cancel);
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -1015,7 +1015,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         },
     );
     let parsed = parsed_variants(1);
-    let (backend, _loader) = test_fetch_manager(cancel.clone());
+    let (backend, _loader) = test_fetch_manager(&cancel);
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -1102,7 +1102,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         0, NUM_SEGS,
     )]));
     let parsed = parsed_variants(1);
-    let (backend, _loader) = test_disk_fetch_manager(cancel.clone(), dir.path());
+    let (backend, _loader) = test_disk_fetch_manager(&cancel, dir.path());
     let track = test_peer_handle(&cancel);
     let config = HlsConfig {
         cancel: Some(cancel),
@@ -1309,7 +1309,7 @@ fn queue_segment_request_resolves_offset_to_segment() {
     assert_eq!(req.segment_index, 0);
 }
 
-/// RED test #2 (integration: live_ephemeral_revisit_sequence_regression_drm_sw)
+/// RED test #2 (integration: `live_ephemeral_revisit_sequence_regression_drm_sw`)
 ///
 /// After DRM padding removal shrinks a variant's `size_map.total`, the
 /// decoder can land at a `byte_position` that is >= the new total. Both
@@ -1359,7 +1359,7 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     );
 }
 
-/// Regression test (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
+/// Regression test (integration: `live_ephemeral_revisit_sequence_regression_drm_hw`)
 ///
 /// When the scheduler re-acquires a DRM resource (via `acquire_resource_with_ctx`)
 /// for a previously-committed segment — e.g. after LRU eviction pressure —
@@ -1430,7 +1430,7 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     );
 }
 
-/// RED test (integration: live_stress_real_stream_seek_read_cache_drm_mmap)
+/// RED test (integration: `live_stress_real_stream_seek_read_cache_drm_mmap`)
 ///
 /// Symptom: under DRM + non-ephemeral mmap, the random-seek phase
 /// (`RANDOM_PHASE_BUDGET_SECS = 5`, target ≥ `MIN_RANDOM_SEEKS = 50`)
@@ -1440,14 +1440,14 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
 /// 37 cached segments exist on disk. Each `poll_next` pass re-emits one
 /// `HlsEvent::SegmentComplete { cached: true, .. }` per *already-cached*
 /// segment — there is no dedup of segments that have already been
-/// announced, so the bus is flooded with N × poll_next events and the
+/// announced, so the bus is flooded with N × `poll_next` events and the
 /// listener task burns wall-clock time draining duplicates.
 ///
 /// Contract under test: cached segments must be announced as
 /// `SegmentComplete { cached: true }` *once* across repeated
 /// `apply_cached_segment_progress` calls when the underlying
 /// `populate_cached_segments_if_needed` finds nothing new. Otherwise
-/// every poll_next on a steady state pays an O(N) event-publish cost,
+/// every `poll_next` on a steady state pays an O(N) event-publish cost,
 /// starving the test's 5-second seek budget under contention.
 ///
 /// Construction stays unit-scope: a non-ephemeral disk-backed

@@ -17,7 +17,11 @@ use crate::{
 /// # Errors
 /// Returns an error if tracing initialization fails.
 pub fn init_tracing() -> Result<(), FrontendError> {
-    let filter = EnvFilter::default().add_directive(LevelFilter::INFO.into());
+    // Honour `RUST_LOG` when set; default to INFO otherwise. Without
+    // this, debug/trace directives passed via the env var are silently
+    // dropped, which makes diagnosing playback / queue issues painful.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::default().add_directive(LevelFilter::INFO.into()));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_line_number(false)

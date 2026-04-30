@@ -3,6 +3,7 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiPlayerEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -40,6 +41,29 @@ class KitharaPlayerTest {
     }
 
     @Test
+    fun initAcceptsGaplessModeConfig() {
+        val player = KitharaPlayer(
+            KitharaPlayer.Config(gaplessMode = GaplessMode.CodecPriming),
+        )
+
+        assertEquals(PlayerStatus.Unknown, player.status)
+    }
+
+    @Test
+    fun crossfadeDurationRoundTrips() {
+        val player = KitharaPlayer()
+
+        player.crossfadeDuration = 2.5f
+        assertEquals(2.5f, player.crossfadeDuration, 0.0f)
+
+        player.crossfadeDuration = 0f
+        assertEquals(0f, player.crossfadeDuration, 0.0f)
+
+        player.crossfadeDuration = -1f
+        assertEquals(0f, player.crossfadeDuration, 0.0f)
+    }
+
+    @Test
     fun itemsStartsEmpty() {
         val player = KitharaPlayer()
 
@@ -51,6 +75,21 @@ class KitharaPlayerTest {
         val player = KitharaPlayer()
 
         player.removeAllItems()
+
+        assertTrue(player.items.isEmpty())
+    }
+
+    @Test
+    fun queueItemRemovedEventUpdatesItemsSnapshot() {
+        val player = KitharaPlayer()
+        val item = KitharaPlayerItem("https://example.com/audio.mp3")
+
+        player.insert(item)
+        assertEquals(listOf(item.id), player.items.map(KitharaPlayerItem::id))
+
+        val handleEvent = KitharaPlayer::class.java.getDeclaredMethod("handleEvent", FfiPlayerEvent::class.java)
+        handleEvent.isAccessible = true
+        handleEvent.invoke(player, FfiPlayerEvent.QueueItemRemoved(item.id))
 
         assertTrue(player.items.isEmpty())
     }

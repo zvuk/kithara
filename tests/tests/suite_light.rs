@@ -9,6 +9,9 @@ mod common;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "common/gapless.rs"]
+mod gapless_common;
 
 mod browser_runner_smoke;
 mod env_guard;

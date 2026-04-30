@@ -34,7 +34,7 @@ use crate::{
     DecodeResult,
     hardware::{BoxedSource, RecoverableHardwareError, recoverable_hardware_error},
     traits::{Aac, CodecType, Flac, InnerDecoder, Mp3},
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    types::{DecoderTrackInfo, PcmChunk, PcmSpec, TrackMetadata},
 };
 
 struct AndroidInner {
@@ -45,6 +45,7 @@ struct AndroidInner {
     spec: PcmSpec,
     duration: Option<Duration>,
     metadata: TrackMetadata,
+    track_info: DecoderTrackInfo,
     byte_len_handle: Arc<AtomicU64>,
     pool: PcmPool,
     stream_ctx: Option<Arc<dyn StreamContext>>,
@@ -116,11 +117,15 @@ impl<C: CodecType> Android<C> {
             }
         };
 
-        let extractor_bootstrap = match bootstrap_extractor(media_source, C::CODEC) {
-            Ok(bootstrap) => bootstrap,
-            Err((media_source, error)) => {
-                return Err(recover_media_source_failure(media_source, error));
-            }
+        let extractor_bootstrap =
+            match bootstrap_extractor(media_source, C::CODEC, config.container, config.gapless) {
+                Ok(bootstrap) => bootstrap,
+                Err((media_source, error)) => {
+                    return Err(recover_media_source_failure(media_source, error));
+                }
+            };
+        let track_info = DecoderTrackInfo {
+            gapless: extractor_bootstrap.selected_track.gapless,
         };
 
         // Bootstrap is staged so each step can hand ownership back to the
@@ -142,6 +147,7 @@ impl<C: CodecType> Android<C> {
                 spec: codec_bootstrap.spec,
                 duration: extractor_bootstrap.selected_track.duration,
                 metadata: TrackMetadata::default(),
+                track_info,
                 byte_len_handle,
                 pool,
                 stream_ctx: config.stream_ctx,
@@ -443,6 +449,10 @@ impl<C: CodecType> InnerDecoder for Android<C> {
 
     fn metadata(&self) -> TrackMetadata {
         self.inner.metadata.clone()
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.inner.track_info.clone()
     }
 }
 

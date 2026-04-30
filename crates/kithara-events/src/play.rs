@@ -4,7 +4,7 @@
 //!
 //! Moved from `kithara-play` so that all event types live in one crate.
 
-use std::{cmp, hash, ops};
+use std::{cmp, hash, ops, sync::Arc};
 
 use derivative::Derivative;
 use kithara_platform::time::Duration;
@@ -299,7 +299,23 @@ pub enum PlayerEvent {
     PrerollCompleted {
         success: bool,
     },
-    ItemDidPlayToEnd,
+    /// A track reached natural end-of-stream. `src` is the underlying
+    /// audio source identifier of the track that ended — necessary so
+    /// consumers can distinguish a genuine final-track EOF from a stale
+    /// outgoing-track EOF that fires after a crossfade has already
+    /// promoted the next track. `item_id` is the optional caller-side
+    /// item identifier (FFI bindings tag tracks with stable UUIDs;
+    /// internal callers may leave it `None`).
+    ItemDidPlayToEnd {
+        src: Arc<str>,
+        item_id: Option<Arc<str>>,
+    },
+    /// Leading track entered the prefetch window — arm the next slot.
+    PrefetchRequested,
+    /// Leading track entered the crossfade window — commit the armed slot.
+    /// Suppressed when `crossfade_duration == 0` (audio thread handles
+    /// handover at EOF).
+    HandoverRequested,
 }
 
 #[derive(Clone, Debug)]

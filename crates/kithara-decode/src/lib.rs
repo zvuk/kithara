@@ -21,6 +21,9 @@
 
 mod error;
 mod factory;
+mod gapless;
+mod mp4;
+mod pcm_time;
 mod symphonia;
 mod traits;
 mod types;
@@ -43,7 +46,12 @@ mod hardware;
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderConfig, DecoderFactory};
+pub use gapless::{
+    GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
+    codec_priming_frames, probe_mp4_gapless,
+};
+pub use pcm_time::{duration_for_frames, frames_for_duration};
 // Public traits
 pub use traits::InnerDecoder;
 // Core types
-pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

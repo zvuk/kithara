@@ -65,6 +65,25 @@ impl TestServerHelper {
         self.signal_url(SignalKind::Sine { freq_hz }, spec)
     }
 
+    /// Build a URL for `/signal/sweep/...`.
+    #[must_use]
+    pub async fn sweep(
+        &self,
+        spec: &SignalSpec,
+        start_hz: f64,
+        end_hz: f64,
+        mode: crate::signal_url::SweepMode,
+    ) -> Url {
+        self.signal_url(
+            SignalKind::Sweep {
+                start_hz,
+                end_hz,
+                mode,
+            },
+            spec,
+        )
+    }
+
     /// Build a URL for `/signal/silence/...`.
     #[must_use]
     pub async fn silence(&self, spec: &SignalSpec) -> Url {
@@ -118,13 +137,19 @@ async fn health() -> &'static str {
 }
 
 /// Start the server as a standalone process (used by the `test_server` binary).
+///
+/// Binds on `0.0.0.0` by default so the server is reachable from other devices
+/// on the LAN (phones, emulators, etc.). Override the bind address with the
+/// `TEST_SERVER_HOST` env var (e.g. `TEST_SERVER_HOST=127.0.0.1` to restrict to
+/// localhost) and the port with `TEST_SERVER_PORT`.
 pub async fn run_test_server() {
+    let host = env::var("TEST_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = env::var("TEST_SERVER_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3444);
     let state = TestServerState::new();
-    let mut server = TestHttpServer::bind(&format!("127.0.0.1:{port}"), router(state)).await;
+    let mut server = TestHttpServer::bind(&format!("{host}:{port}"), router(state)).await;
     println!("test server listening on {}", server.base_url());
     server.completion().await;
 }

@@ -10,7 +10,7 @@ use std::{
 
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::PcmSpec;
+use kithara_decode::{GaplessMode, PcmSpec};
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
@@ -37,6 +37,8 @@ pub struct AudioConfig<T: StreamType> {
     pub host_sample_rate: Option<NonZeroU32>,
     /// Media info hint for format detection
     pub media_info: Option<kithara_stream::MediaInfo>,
+    /// How leading/trailing PCM is trimmed after the decode.
+    pub gapless_mode: GaplessMode,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
     /// Shared atomic for dynamic playback rate (1.0 = normal speed).
@@ -89,6 +91,7 @@ impl<T: StreamType> AudioConfig<T> {
             hint: None,
             host_sample_rate: None,
             media_info: None,
+            gapless_mode: GaplessMode::default(),
             pcm_buffer_chunks: Self::DEFAULT_PCM_BUFFER_CHUNKS,
             pcm_pool: None,
             playback_rate: None,

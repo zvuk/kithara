@@ -7,12 +7,21 @@
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "common/gapless.rs"]
+mod gapless_common;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara_audio {
     mod alloc_free_hotpath;
+    mod gapless_crossfade;
 }
 
 mod kithara_decode {
     mod fixture_integration;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod gapless_encoding_parity;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod gapless_parity;
     mod hls_abr_variant_switch;
     mod stress_timeline;
 

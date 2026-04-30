@@ -36,9 +36,6 @@ impl ItemEventBridge {
         duration_seconds: Option<f64>,
         cancel: CancellationToken,
     ) -> Self {
-        observer.on_event(FfiItemEvent::StatusChanged {
-            status: FfiItemStatus::ReadyToPlay,
-        });
         if let Some(duration) = duration_seconds {
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
