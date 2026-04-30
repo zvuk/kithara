@@ -1711,62 +1711,6 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_wait_range_requeues_request_after_seek_epoch_change() {
-    let cancel = CancellationToken::new();
-    let ps = playlist_state_with_size_maps();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_state.set_variant_for_test(0);
-    let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
-    shared.timeline.complete_seek(first_epoch);
-
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
-
-    let first_deadline = Instant::now() + Duration::from_millis(300);
-    let first_request = loop {
-        if let Some(request) = shared.segment_requests.pop() {
-            break request;
-        }
-        assert!(
-            Instant::now() <= first_deadline,
-            "expected initial on-demand request"
-        );
-        sleep(Duration::from_millis(10)).await;
-    };
-    assert_eq!(first_request.seek_epoch, first_epoch);
-
-    let second_epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
-    shared.timeline.complete_seek(second_epoch);
-    shared.condvar.notify_all();
-
-    let second_deadline = Instant::now() + Duration::from_millis(700);
-    let second_request = loop {
-        if let Some(request) = shared.segment_requests.pop()
-            && request.seek_epoch == second_epoch
-        {
-            break request;
-        }
-        assert!(
-            Instant::now() <= second_deadline,
-            "expected re-queued on-demand request for updated seek epoch"
-        );
-        sleep(Duration::from_millis(10)).await;
-    };
-
-    assert_eq!(second_request.variant, 0);
-    assert_eq!(second_request.segment_index, 1);
-    assert_eq!(second_request.seek_epoch, second_epoch);
-
-    cancel.cancel();
-    shared.condvar.notify_all();
-    let result = timeout(Duration::from_millis(400), handle)
-        .await
-        .expect("wait_range task should complete")
-        .expect("wait_range task should not panic");
-    assert!(result.is_err(), "wait_range should stop after cancellation");
-}
-
-#[kithara::test(tokio, browser)]
 async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();

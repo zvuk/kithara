@@ -25,7 +25,7 @@ use kithara_stream::{
 fn nz_bytes(n: usize) -> ReadOutcome {
     ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
 }
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, probe_capture};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -1612,5 +1612,94 @@ fn cross_variant_seek_same_codec_requires_reset() {
          byte spaces are per-variant, Preserve would leave layout=0 \
          while the anchor offset lives in variant 2's space, hanging \
          wait_range forever; got {layout:?}"
+    );
+}
+
+#[kithara::test]
+#[serial_test::serial]
+fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
+    // Pins the HLS seek-skip root cause: while a stale `wait_range`
+    // sits in its condvar wait under epoch=N, audio FSM bumps the
+    // timeline to epoch=N+1 (initiate_seek) and the decoder clears
+    // FLUSHING (complete_seek) before it has actually applied the
+    // seek — so SEEK_PENDING is still true. The next iteration sees
+    // epoch != wait_seek_epoch with SEEK_PENDING=true and must NOT
+    // fall through into Phase 3, which would re-enqueue the stale
+    // range_start under the new epoch and feed the scheduler a stream
+    // of legitimate-looking prefix demands.
+    //
+    // The test pins the contract on three independent levels:
+    //   1. Return value of `wait_range` is `Interrupted`.
+    //   2. Probe `wait_range_epoch_advance` fires with prev_epoch=0,
+    //      seek_epoch=new_epoch — proving the early-return branch ran.
+    //   3. Probe `queue_resolved_segment_request` does NOT fire with
+    //      seek_epoch=new_epoch — proving Phase 3 demand-push under
+    //      the new epoch never executed.
+    const SEG_SIZE: u64 = 100;
+    const NUM_SEGS: usize = 4;
+    const WAKE_DELAY_MS: u64 = 30;
+    const TIMEOUT_MS: u64 = 200;
+    const SEEK_TARGET_MS: u64 = 8_000;
+    let recorder = probe_capture::install();
+    let mut source = build_source_with_size_map(&[SEG_SIZE; NUM_SEGS]);
+    source.coord.stopped.store(false, Ordering::Release);
+
+    let coord = Arc::clone(&source.coord);
+    let join = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(WAKE_DELAY_MS));
+        // Bump seek_epoch (FLUSHING + SEEK_PENDING).
+        let new_epoch = coord
+            .timeline()
+            .initiate_seek(Duration::from_millis(SEEK_TARGET_MS));
+        // Mimic the decoder: clear FLUSHING, but leave SEEK_PENDING
+        // set (decoder has not yet repositioned).
+        coord.timeline().complete_seek(new_epoch);
+        coord.condvar.notify_all();
+        new_epoch
+    });
+
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
+    let new_epoch = join.join().expect("seek-bump helper thread must complete");
+
+    assert_eq!(
+        new_epoch, 1,
+        "test sanity: initiate_seek must produce a single epoch bump"
+    );
+    assert!(
+        matches!(result, Ok(WaitOutcome::Interrupted)),
+        "wait_range must abort with Interrupted as soon as it observes \
+         seek_epoch advance, regardless of is_seek_pending — observed: \
+         {result:?}"
+    );
+
+    // Probe assertion #1: epoch-advance branch executed with the
+    // expected (prev_epoch=0, seek_epoch=1) pair.
+    let advances = recorder.events_with_probe("record_wait_range_epoch_advance");
+    let matched_advance = advances
+        .iter()
+        .find(|e| e.u64("prev_epoch") == Some(0) && e.u64("seek_epoch") == Some(new_epoch));
+    assert!(
+        matched_advance.is_some(),
+        "expected wait_range_epoch_advance probe with prev_epoch=0, \
+         seek_epoch={new_epoch} — captured: {advances:?}"
+    );
+
+    // Probe assertion #2: no demand was enqueued under the NEW epoch.
+    // Phase 3 of `wait_range` runs `queue_resolved_segment_request` —
+    // the bug let it execute after the epoch advanced. Under the fix
+    // the loop returns Interrupted before Phase 3 ever runs, so no
+    // probe with seek_epoch=new_epoch must appear.
+    let resolved = recorder.events_with_probe("queue_resolved_segment_request");
+    let stale_under_new_epoch: Vec<_> = resolved
+        .iter()
+        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .collect();
+    assert!(
+        stale_under_new_epoch.is_empty(),
+        "wait_range must not call queue_resolved_segment_request \
+         under the new seek_epoch — that path is exactly what feeds \
+         the scheduler the prefix-segment fetches the user sees as \
+         a multi-second freeze on long-distance HLS seek; \
+         stale events: {stale_under_new_epoch:?}"
     );
 }

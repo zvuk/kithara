@@ -61,10 +61,11 @@ usdt = { workspace = true, optional = true }
 aes = { workspace = true }
 cbc = { workspace = true }
 kithara-abr = { workspace = true, features = ["internal"] }
-kithara-hls = { path = ".", default-features = false, features = ["internal"] }
+kithara-hls = { path = ".", default-features = false, features = ["internal", "usdt-probes"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 kithara-test-utils = { workspace = true }
+serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 unimock = { workspace = true }
 

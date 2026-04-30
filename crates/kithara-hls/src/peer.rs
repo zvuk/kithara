@@ -360,12 +360,41 @@ enum DemandResult {
 fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     let sched = &mut state.scheduler;
 
-    // Flushing gate: don't consume demands while the timeline is flushing.
-    // `poll_next`'s downstream flushing gate would return `Poll::Pending`
-    // right after, so draining the slot here would lose the demand — the
-    // scheduler never emits a FetchCmd for it and the seek deadlocks.
-    if sched.coord.timeline().is_flushing() {
-        return DemandResult::None;
+    // Flushing gate, refined.
+    //
+    // The original gate skipped *all* demand consumption while
+    // `is_flushing` so a same-epoch demand consumed during the flush
+    // would not be lost (the downstream flushing branch in `poll_next`
+    // returns `Poll::Pending` and the consumed slot would have nowhere
+    // to go). But unconditionally skipping freezes the scheduler for
+    // the entire duration of `apply_seek_from_timeline`'s anchor
+    // resolution — typically several segment-delay ticks under a
+    // slow CDN or contention. During that window `next_valid_demand_
+    // request` does not fire, `seek_epoch_reset` is delayed, and the
+    // decoder retries `read_at` in a tight loop hammering the source
+    // with stale-offset demands that pile up as the only option once
+    // the gate finally lifts.
+    //
+    // Refined contract: a *new-epoch* demand carries `req.seek_epoch
+    // != active_seek_epoch` and represents the user's seek itself —
+    // the gate that this demand drives (`seek_epoch_reset`, cursor
+    // reposition, FetchCmd cancellation) is precisely what unfreezes
+    // the pipeline. Letting it through during flushing turns
+    // `dispatch_seek_demand` into the no-op-but-bookkeeping
+    // `ResetAndPend` branch, which triggers the waker without
+    // emitting a FetchCmd. A *same-epoch* demand carries an offset
+    // from the pre-seek decoder state — exactly the stale demand
+    // that consumed under the gate would be re-acked under the new
+    // epoch and walk the prefix. Keep that one held until the flush
+    // clears.
+    let is_flushing = sched.coord.timeline().is_flushing();
+    if is_flushing {
+        match sched.coord.peek_segment_request() {
+            Some(req) if req.seek_epoch == sched.active_seek_epoch => {
+                return DemandResult::None;
+            }
+            _ => {}
+        }
     }
 
     // Snapshot `active_seek_epoch` BEFORE consuming the demand — the
@@ -570,17 +599,45 @@ fn apply_variant_readiness(
     // FetchCmd" hot loop we avoid in `process_demand`. The prior fetch
     // will commit and notify the reader; resetting the cursor here just
     // races a second writer on the same cached `AssetResource`.
+    //
+    // For HLS+fMP4 streams without `sidx`, Symphonia's `format_reader`
+    // walks the moof fragment chain on `seek` — issuing `read_at` for
+    // every prefix moof, which arrives here as a demand for `seg < cursor`.
+    // We must rewind the cursor so `build_batch` emits the FetchCmd; the
+    // decoder cannot complete the seek otherwise.
     if let Some(ds) = demand_segment
         && sched.current_segment_index() > ds
         && !sched.in_flight_segments.contains(&(variant, ds))
     {
+        let prev_cursor = sched.current_segment_index();
+        let seek_epoch = sched.coord.timeline().seek_epoch();
+        let floor = sched.gap_scan_start_segment();
         debug!(
             demand = ds,
-            cursor = sched.current_segment_index(),
+            cursor = prev_cursor,
+            floor,
             "poll_next: demand cursor protection, resetting"
         );
+        record_demand_cursor_protection_rewind(seek_epoch, ds, prev_cursor, variant);
         sched.reset_cursor(ds);
     }
+}
+
+/// Probe site: scheduler's `apply_variant_readiness` is about to
+/// rewind `current_segment_index` from `prev_cursor` back to
+/// `demand_segment` because a demand request behind the cursor was
+/// observed. This is the path the HLS seek-skip bug walks: a stale
+/// demand under the new `seek_epoch` triggers cursor rewind, which
+/// makes `build_batch` emit `FetchCmd` for prefix segments under the
+/// new epoch.
+#[kithara::probe(seek_epoch, demand_segment, prev_cursor, variant)]
+fn record_demand_cursor_protection_rewind(
+    seek_epoch: u64,
+    demand_segment: usize,
+    prev_cursor: usize,
+    variant: usize,
+) {
+    let _ = (seek_epoch, demand_segment, prev_cursor, variant);
 }
 
 fn build_batch(
@@ -1133,20 +1190,32 @@ mod tests {
         );
     }
 
-    /// RED test #5 (integration: `live_stress_real_stream_seek_read_cache_drm_ephemeral`)
+    /// Pins the refined `process_demand` flushing-gate contract.
     ///
-    /// `process_demand` calls `next_valid_demand_request` (which `take()`s
-    /// the demand slot) BEFORE the flushing gate runs. If the timeline is
-    /// flushing (new seek just started), `poll_next` returns `Poll::Pending`
-    /// after the demand was already drained — so no `FetchCmd` is emitted
-    /// and the reader never gets data: deadlock.
+    /// History: the original gate skipped *all* demand consumption while
+    /// `is_flushing()` was set, so that a same-epoch demand drained
+    /// during a flush would not be lost (the downstream flushing branch
+    /// in `poll_next` returns `Pending`, and a consumed-but-undispatched
+    /// demand would deadlock). That gate also kept the scheduler from
+    /// reacting to *new-epoch* demands — the seek itself — until audio
+    /// finally cleared the flushing flag, several segment-delays later.
+    /// Decoder reads piled up stale-offset demands meanwhile, and on
+    /// gate release the scheduler walked the prefix under the new epoch
+    /// (the HLS seek-skip bug, asserted by integration test
+    /// `hls_seek_near_end_skips_prefix`).
     ///
-    /// Invariant under test: a demand submitted while `is_flushing()` is
-    /// true must NOT be silently consumed by `process_demand`.
+    /// Refined contract: a *new-epoch* demand is the seek itself; it
+    /// must be consumed under flushing so `dispatch_seek_demand` runs
+    /// `seek_epoch_reset` (cancelling the old epoch's in-flight fetches
+    /// and repositioning the cursor to the seek target). Doing so does
+    /// NOT deadlock: the consumed demand returns `ResetAndPend`, which
+    /// emits no FetchCmd this poll, but on the next poll `build_batch`
+    /// walks forward from the cursor (now at the target). A *same-epoch*
+    /// demand under flushing is still held — it carries the pre-seek
+    /// decoder offset.
     #[kithara::test]
-    fn red_test_seek_read_cache_demand_not_lost_under_flushing_gate() {
+    fn process_demand_consumes_new_epoch_demand_even_while_flushing() {
         let mut state = make_hls_state();
-        // Simulate audio.seek(): bump epoch, set flushing=true.
         let new_epoch = state
             .scheduler
             .coord
@@ -1154,35 +1223,96 @@ mod tests {
             .initiate_seek(Duration::from_secs(2));
         assert!(
             state.scheduler.coord.timeline().is_flushing(),
-            "precondition: flushing must be set"
+            "precondition: initiate_seek must set FLUSHING"
         );
 
-        // Enqueue a demand with the new epoch (post-seek).
+        const TARGET_SEG: usize = 1;
         state
             .scheduler
             .coord
             .enqueue_segment_request(SegmentRequest {
-                segment_index: 1,
+                segment_index: TARGET_SEG,
                 variant: 0,
                 seek_epoch: new_epoch,
             });
 
-        // Call process_demand — this is what poll_next does first, BEFORE
-        // the flushing gate. Today it consumes the demand via take().
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let outcome = process_demand(&mut state, &mut cx);
+
+        assert!(
+            matches!(outcome, DemandResult::ResetAndPend),
+            "new-epoch demand under flushing must dispatch into a \
+             ResetAndPend (cursor reposition + waker bump, no FetchCmd \
+             this poll) — got {outcome:?}"
+        );
+        assert_eq!(
+            state.scheduler.current_segment_index(),
+            TARGET_SEG,
+            "seek_epoch_reset must reposition the cursor onto the \
+             seek target — otherwise build_batch on the next poll \
+             will walk from the pre-seek position and emit prefix \
+             FetchCmds under the new epoch"
+        );
+        assert_eq!(
+            state.scheduler.active_seek_epoch, new_epoch,
+            "seek_epoch_reset must update active_seek_epoch so a \
+             follow-up same-epoch demand goes through the same-epoch \
+             dispatch path"
+        );
+    }
+
+    /// Same-epoch demand under flushing must be held — it carries
+    /// stale offset from before the seek (the bug-class the original
+    /// flushing gate intended to silence, still in force).
+    #[kithara::test]
+    fn process_demand_holds_same_epoch_demand_while_flushing() {
+        let mut state = make_hls_state();
+        let new_epoch = state
+            .scheduler
+            .coord
+            .timeline()
+            .initiate_seek(Duration::from_secs(2));
+        // First, dispatch a new-epoch demand to advance
+        // active_seek_epoch to the new value.
+        state
+            .scheduler
+            .coord
+            .enqueue_segment_request(SegmentRequest {
+                segment_index: 5,
+                variant: 0,
+                seek_epoch: new_epoch,
+            });
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let _ = process_demand(&mut state, &mut cx);
-
-        // The demand must NOT have been drained: poll_next's flushing gate
-        // will now return Pending without producing a FetchCmd, so the
-        // demand must survive for the next poll cycle — otherwise the
-        // reader's seek deadlocks (no one will fetch the target segment).
-        let still_pending = state.scheduler.coord.peek_segment_request();
+        assert_eq!(state.scheduler.active_seek_epoch, new_epoch);
         assert!(
-            still_pending.is_some(),
-            "demand was drained while is_flushing()==true; poll_next's \
-             flushing gate will now return Pending without issuing a \
-             FetchCmd, so the fetch is never scheduled — the seek deadlocks"
+            state.scheduler.coord.timeline().is_flushing(),
+            "audio has not yet called complete_seek"
+        );
+
+        // Now a follow-up same-epoch demand carrying a pre-seek
+        // offset (e.g. the decoder still on its old read path).
+        state
+            .scheduler
+            .coord
+            .enqueue_segment_request(SegmentRequest {
+                segment_index: 0,
+                variant: 0,
+                seek_epoch: new_epoch,
+            });
+
+        let outcome = process_demand(&mut state, &mut cx);
+        assert!(
+            matches!(outcome, DemandResult::None),
+            "same-epoch demand under flushing must NOT be consumed — \
+             it carries the pre-seek decoder offset; got {outcome:?}"
+        );
+        assert!(
+            state.scheduler.coord.peek_segment_request().is_some(),
+            "stale same-epoch demand must remain in the slot for the \
+             next poll cycle, after audio clears flushing"
         );
     }
 

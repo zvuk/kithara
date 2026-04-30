@@ -4287,6 +4287,7 @@ dependencies = [
  "kithara-workspace-hack",
  "rangemap",
  "re_mp4",
+ "serial_test",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",

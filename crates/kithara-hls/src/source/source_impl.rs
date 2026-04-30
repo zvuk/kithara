@@ -9,6 +9,7 @@ use kithara_platform::{
     thread::yield_now,
     time::{Duration, Instant},
 };
+use kithara_probes::kithara;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     MediaInfo, PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
@@ -30,6 +31,21 @@ fn wait_range_hang_timeout(timeout: Option<Duration>) -> Duration {
     timeout.map_or(WAIT_RANGE_HANG_TIMEOUT_FLOOR, |t| {
         t.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
     })
+}
+
+/// Probe site fired the moment `wait_range` notices that the timeline's
+/// `seek_epoch` advanced past the epoch it captured on entry. Lets
+/// tests pin the bug fix from Phase 3: under the bug the same probe
+/// would NOT precede a return-Interrupted, instead the loop fell into
+/// Phase 3 demand push under the new epoch.
+#[kithara::probe(prev_epoch, seek_epoch, is_seek_pending, range_start)]
+fn record_wait_range_epoch_advance(
+    prev_epoch: u64,
+    seek_epoch: u64,
+    is_seek_pending: bool,
+    range_start: u64,
+) {
+    let _ = (prev_epoch, seek_epoch, is_seek_pending, range_start);
 }
 
 impl Source for HlsSource {
@@ -72,10 +88,21 @@ impl Source for HlsSource {
                 seek_epoch = self.coord.timeline().seek_epoch();
                 match wait_seek_epoch {
                     Some(epoch) if epoch != seek_epoch => {
-                        wait_seek_epoch = Some(seek_epoch);
-                        if !self.coord.timeline().is_seek_pending() {
-                            return Ok(WaitOutcome::Interrupted);
-                        }
+                        // A `wait_range` initiated under a prior epoch
+                        // is semantically void once the timeline has
+                        // advanced — the caller (decoder) will issue a
+                        // fresh `wait_range` at its post-seek offset.
+                        // Falling through here re-enqueues the stale
+                        // `range.start` under the new epoch and feeds
+                        // the scheduler a stream of legitimate-looking
+                        // prefix demands (the HLS seek-skip bug). The
+                        // gate must NOT depend on `is_seek_pending` —
+                        // that flag stays set until the decoder
+                        // recreates, but the I/O contract only cares
+                        // about the epoch identity.
+                        let pending = self.coord.timeline().is_seek_pending();
+                        record_wait_range_epoch_advance(epoch, seek_epoch, pending, range.start);
+                        return Ok(WaitOutcome::Interrupted);
                     }
                     None => wait_seek_epoch = Some(seek_epoch),
                     _ => {}
