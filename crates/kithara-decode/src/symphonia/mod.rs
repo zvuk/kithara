@@ -10,7 +10,6 @@
 //! for HLS streams where the container format is known.
 
 pub(crate) mod adapter;
-mod backend;
 pub(crate) mod config;
 pub(crate) mod decoder;
 pub(crate) mod echain;
@@ -18,5 +17,3 @@ pub(crate) mod probe;
 
 #[cfg(test)]
 mod tests;
-
-pub(crate) use self::decoder::SymphoniaDecoder;

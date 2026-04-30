@@ -1,15 +1,12 @@
-//! Decoder-backend protocol shared by all backends.
+//! Compat shim: only `BoxedSource` survives.
 //!
-//! Each backend module owns one decoder type that implements both
-//! [`crate::traits::Decoder`] (runtime) and [`Backend`] (capability +
-//! factory): [`crate::apple::AppleDecoder`],
-//! [`crate::android::AndroidDecoder`],
-//! [`crate::symphonia::SymphoniaDecoder`]. The factory dispatches on
-//! [`crate::DecoderBackend`] at call time.
+//! The legacy `Backend` trait and per-backend `dispatch::<B: Backend>`
+//! were removed in the decoder unification. `Demuxer` + `FrameCodec`
+//! are the new public protocol; the factory composes them directly
+//! without a per-backend capability trait. `BoxedSource` is kept as
+//! the boxed `DecoderInput` alias because it is the public type that
+//! flows from the factory entry points into demuxer constructors.
 
-mod protocol;
+mod source_alias;
 
-#[cfg(test)]
-mod tests;
-
-pub(crate) use protocol::{Backend, BoxedSource};
+pub(crate) use source_alias::BoxedSource;

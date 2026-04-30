@@ -1,27 +1,16 @@
-//! Android `MediaCodec` decoder backend.
+//! Android `MediaCodec` FFI surface, reused by [`crate::codec::AndroidCodec`].
 //!
-//! The whole `android` module is gated by
-//! `#[cfg(all(feature = "android", target_os = "android"))]` in `lib.rs`,
-//! so no internal `cfg` attributes are needed here.
-//!
-//! `AndroidDecoder` (in `decoder.rs`) implements both
-//! [`crate::traits::Decoder`] (runtime) and [`crate::backend::Backend`]
-//! (capability + factory). The `Backend` impl is in `backend.rs` for
-//! file-level cohesion.
+//! The legacy god-type `AndroidDecoder` (which combined `AMediaExtractor`
+//! container parsing and `AMediaCodec` codec decoding) was removed in
+//! favour of the unified path: `Fmp4SegmentDemuxer` drives container
+//! parsing, `AndroidCodec` drives codec decoding via `AMediaCodec`. The
+//! HW-accelerated path is preserved for AAC / FLAC fMP4; non-fmp4 file
+//! decoding falls through to the Symphonia software path.
 
 pub(crate) mod aformat;
-mod backend;
 pub(crate) mod codec;
-mod config;
-mod decoder;
 pub(crate) mod error;
-mod extractor;
 pub(crate) mod ffi;
-mod format;
 mod jni;
-mod source;
 
-pub(crate) use config::AndroidConfig;
-pub(crate) use decoder::AndroidDecoder;
-pub(crate) use format::{can_seek_container, default_container_for_codec, supports_codec};
 pub(crate) use jni::ensure_current_thread_attached;

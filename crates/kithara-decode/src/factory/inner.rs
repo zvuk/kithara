@@ -19,7 +19,7 @@ use super::probe::{
 };
 use crate::{
     Decoder,
-    backend::{Backend, BoxedSource},
+    backend::BoxedSource,
     error::{DecodeError, DecodeResult},
     hooks::HookedDecoder,
 };
@@ -266,25 +266,6 @@ impl DecoderFactory {
     }
 }
 
-fn dispatch<B: Backend>(
-    source: BoxedSource,
-    codec: AudioCodec,
-    container: Option<ContainerFormat>,
-    config: &DecoderConfig,
-    backend_name: &'static str,
-) -> DecodeResult<Box<dyn Decoder>> {
-    if !B::supports(codec, container) {
-        tracing::warn!(
-            backend = backend_name,
-            ?codec,
-            ?container,
-            "backend does not support codec/container — no fallback"
-        );
-        return Err(DecodeError::UnsupportedCodec(codec));
-    }
-    Ok(Box::new(B::try_create(source, config, codec, container)?))
-}
-
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn create_apple(
     source: BoxedSource,
@@ -296,13 +277,21 @@ fn create_apple(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        // Apple HW codec when supported, Symphonia fallback otherwise.
         if crate::codec::AppleCodec::supports(codec) {
             return create_fmp4_segment_apple(source, codec, layout, config);
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    dispatch::<crate::apple::AppleDecoder>(source, codec, container, config, "Apple")
+    // Apple HW only owns the segment-aware fMP4 path. Anything else
+    // (file MP3, raw FLAC, WAV, etc.) falls through to the Symphonia
+    // path — the same software stack that owns non-Apple platforms.
+    #[cfg(feature = "symphonia")]
+    return create_symphonia(source, codec, container, config);
+    #[cfg(not(feature = "symphonia"))]
+    {
+        let _ = (source, codec, container, config);
+        Err(DecodeError::UnsupportedCodec(codec))
+    }
 }
 
 #[cfg(all(
@@ -359,7 +348,11 @@ fn create_android(
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    dispatch::<crate::android::AndroidDecoder>(source, codec, container, config, "Android")
+    // Android HW only owns the segment-aware fMP4 path. Everything else
+    // falls through to the Symphonia path. (`feature = "android"`
+    // implies `feature = "symphonia"` in the workspace lock; we don't
+    // build an Android target without Symphonia.)
+    create_symphonia(source, codec, container, config)
 }
 
 #[cfg(all(feature = "android", feature = "symphonia", target_os = "android"))]
@@ -411,10 +404,37 @@ fn create_symphonia(
     if crate::SymphoniaCodec::supports(codec) {
         return create_file_symphonia_universal(source, codec, container, config);
     }
-    // PCM / ADPCM still need bit-depth + endianness from the original
-    // CodecParameters that our generic AudioCodec enum does not encode —
+    // PCM / ADPCM / Opus still need bit-depth + endianness or workspace-
+    // level workarounds the generic `AudioCodec` enum does not encode —
     // those tracks fall through to the legacy whole-stream decoder.
-    dispatch::<crate::symphonia::SymphoniaDecoder>(source, codec, container, config, "Symphonia")
+    create_legacy_symphonia(source, codec, container, config)
+}
+
+#[cfg(feature = "symphonia")]
+fn create_legacy_symphonia(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::symphonia::{config::SymphoniaConfig, decoder::SymphoniaDecoder};
+
+    if matches!(codec, AudioCodec::Opus | AudioCodec::Adpcm) {
+        return Err(DecodeError::UnsupportedCodec(codec));
+    }
+
+    let symphonia_config = SymphoniaConfig {
+        container,
+        verify: false,
+        gapless: config.gapless,
+        byte_len_handle: config.byte_len_handle.clone(),
+        hint: config.hint.clone(),
+        stream_ctx: config.stream_ctx.clone(),
+        epoch: config.epoch,
+        pcm_pool: config.pcm_pool.clone(),
+    };
+    tracing::debug!(?codec, ?container, "create_legacy_symphonia (PCM path)");
+    Ok(Box::new(SymphoniaDecoder::new(source, &symphonia_config)?))
 }
 
 #[cfg(feature = "symphonia")]
