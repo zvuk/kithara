@@ -31,6 +31,7 @@ mod pcm;
 mod symphonia;
 mod traits;
 mod types;
+mod universal;
 
 #[cfg(feature = "internal")]
 pub mod internal;
@@ -45,7 +46,7 @@ mod android;
 mod apple;
 
 // Error types
-// New unified architecture (Demuxer + FrameCodec).
+// New unified architecture (Demuxer + FrameCodec + UniversalDecoder).
 pub use codec::{DecodedFrame, FrameCodec};
 pub use demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo};
 pub use error::{DecodeError, DecodeResult};
@@ -59,3 +60,4 @@ pub use traits::{
 };
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+pub use universal::UniversalDecoder;
