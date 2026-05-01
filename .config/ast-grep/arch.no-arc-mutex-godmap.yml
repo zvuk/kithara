@@ -1,0 +1,62 @@
+id: arch.no-arc-mutex-godmap
+message: |
+  `Arc<Mutex<HashMap<…>>>` / `Arc<RwLock<HashMap<…>>>` — god-state с
+  map/dict под shared lock. Почти всегда антипаттерн: владелец
+  размазан, hot-path читателей и писателей дерётся за один lock,
+  расширение состояния через add-key вместо явного контракта.
+
+  Альтернативы:
+    - actor / single-owner task + channel'ом для write-команд;
+    - `dashmap` (per-shard lock) если действительно concurrent KV;
+    - `Arc<Vec<…>>` snapshot + `ArcSwap` если read-mostly;
+    - убрать map целиком — часто god-map это симптом, не структура.
+
+  Если это легитимный кейс — обсудите в README owner-крейта почему.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern:
+        context: "type _T = Arc<Mutex<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<Mutex<BTreeMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<RwLock<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<RwLock<BTreeMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::Mutex<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::Mutex<BTreeMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::RwLock<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::RwLock<BTreeMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::Mutex<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::Mutex<BTreeMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::RwLock<HashMap<$K, $V>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::RwLock<BTreeMap<$K, $V>>>;"
+        selector: generic_type

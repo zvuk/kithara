@@ -1,0 +1,61 @@
+id: arch.no-arc-mutex-collection
+message: |
+  `Arc<Mutex<Vec<…>>>` / `Arc<RwLock<VecDeque<…>>>` — shared collection
+  под lock'ом. Обычно симптом: один компонент читает, другой пишет,
+  владельца нет, и это зашито в типе вместо явного контракта.
+
+  Альтернативы:
+    - one owner + `tokio::sync::mpsc` / `crossbeam::channel` для push;
+    - `ArcSwap<Arc<Vec<…>>>` если read-mostly snapshot;
+    - убрать collection (часто Vec используется как мини-channel).
+
+  Если коллекция действительно shared mutable state — задокументируйте
+  владельца и lifecycle в README соответствующего крейта.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern:
+        context: "type _T = Arc<Mutex<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<Mutex<VecDeque<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<RwLock<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<RwLock<VecDeque<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::Mutex<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::Mutex<VecDeque<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::RwLock<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::RwLock<VecDeque<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::Mutex<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::Mutex<VecDeque<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::RwLock<Vec<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::RwLock<VecDeque<$E>>>;"
+        selector: generic_type

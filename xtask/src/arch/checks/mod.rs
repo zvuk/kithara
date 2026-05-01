@@ -11,6 +11,7 @@ use cargo_metadata::Metadata;
 use super::config::ArchConfig;
 use crate::common::{scope::Scope, violation::Violation};
 
+pub(crate) mod arc_clone_hotspots;
 pub(crate) mod canonical_types;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
@@ -44,6 +45,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(direction::Direction),
         Box::new(canonical_types::CanonicalTypes),
+        Box::new(arc_clone_hotspots::ArcCloneHotspots),
         Box::new(duplicate_error_enums::DuplicateErrorEnums),
         Box::new(stray_rs_files::StrayRsFiles),
         Box::new(file_size::FileSize),

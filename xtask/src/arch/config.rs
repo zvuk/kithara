@@ -75,6 +75,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) shared_state: SharedStateThreshold,
     #[serde(default)]
+    pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
@@ -172,6 +174,18 @@ impl Default for SharedStateThreshold {
             deny: 5,
             patterns: default_shared_state_patterns(),
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArcCloneHotspotsThreshold {
+    pub(crate) warn: usize,
+}
+
+impl Default for ArcCloneHotspotsThreshold {
+    fn default() -> Self {
+        Self { warn: 3 }
     }
 }
 

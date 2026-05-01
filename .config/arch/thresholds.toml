@@ -16,6 +16,16 @@ warn_fns_per_type = 25.0
 deny_fns_per_type = 40.0
 min_fns_to_evaluate = 20
 
+[arc_clone_hotspots]
+# Functions with this many `Arc::clone(...)` / `Rc::clone(...)` calls are
+# flagged. Catches god-orchestrators that distribute ownership of shared
+# state through clones; complementary to `shared_state` which counts
+# *declarations* of `Arc<Mutex/RwLock>` per file. Detection counts only the
+# explicit `Arc::clone(&x)` / `Rc::clone(&x)` form (the `clippy::clone_on_ref_ptr`
+# blessed shape) — method-call `x.clone()` is not counted because the AST
+# cannot tell whether the receiver is `Arc<T>` or a value type.
+warn = 3
+
 [shared_state]
 warn = 3
 deny = 5
