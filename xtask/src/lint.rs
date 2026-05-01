@@ -28,6 +28,14 @@ pub(crate) struct LintArgs {
     /// Repeatable. Forwarded to arch+style+idioms.
     #[arg(long = "path", value_name = "PATH", global = true)]
     pub paths: Vec<PathBuf>,
+    /// When no subcommand is given, apply each namespace's autofix where
+    /// available (currently style only). Forwarded as `--fix` to style.
+    #[arg(long, global = true)]
+    pub fix: bool,
+    /// Skip the dirty-tree gate that protects `--fix` from mixing with
+    /// uncommitted user edits.
+    #[arg(long = "allow-dirty", global = true)]
+    pub allow_dirty: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -45,11 +53,11 @@ pub(crate) fn run(args: &LintArgs) -> Result<()> {
         Some(LintCommand::Arch(a)) => arch::run(a),
         Some(LintCommand::Style(a)) => style::run(a),
         Some(LintCommand::Idioms(a)) => idioms::run(a),
-        None => run_all(&args.crates, &args.paths),
+        None => run_all(&args.crates, &args.paths, args.fix, args.allow_dirty),
     }
 }
 
-fn run_all(crates: &[String], paths: &[PathBuf]) -> Result<()> {
+fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -> Result<()> {
     let mut failures: Vec<&'static str> = Vec::new();
     // Mirror the clap `default_value` for `config_dir`; `Default::default()`
     // on `PathBuf` yields "" which silently bypasses config loading.
@@ -63,6 +71,8 @@ fn run_all(crates: &[String], paths: &[PathBuf]) -> Result<()> {
         config_dir: ".config/style".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
+        fix,
+        allow_dirty,
         ..style::StyleArgs::default()
     };
     let idioms_args = idioms::IdiomsArgs {

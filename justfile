@@ -203,14 +203,18 @@ audit *ARGS:
 # the per-tool recipes (`just clippy-fix`, `just typos --fix`,
 # `just ast-grep --fix`) when you want the dirty-tree safety net.
 #
-# Pipeline order (fmt → clippy → typos → ast-grep → re-audit) matters:
-# clippy --fix can remove imports that typos would otherwise complain
-# about, and ast-grep fixes are textual so they go last.
+# Pipeline order matters: clippy --fix may remove imports that typos
+# would otherwise complain about, ast-grep fixes are textual so they
+# go after AST-aware passes, and our own style fixes (struct/trait
+# item order) come last because they reorder blocks of source bytes.
+# A final `just fmt` cleans up whitespace artefacts left by reordering.
 audit-fix:
     just fmt
     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
     cargo xtask typos --fix --allow-dirty
     cargo xtask ast-grep --fix --allow-dirty
+    cargo xtask lint --fix --allow-dirty
+    just fmt
     just audit
 
 # --- internal: xtask self-tests ---

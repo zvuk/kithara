@@ -7,14 +7,15 @@
 //! Structs carrying any exempt outer attribute (default: `#[repr(...)]`) are
 //! skipped — their layout is part of the contract and must not be reordered.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
-use syn::{Field, Fields, Item, Type, Visibility};
+use syn::{Field, Fields, Item, Type, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::{
     common::{
+        fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
         parse::parse_file,
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
@@ -46,6 +47,186 @@ impl Check for StructFieldOrder {
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
     }
+
+    fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
+        let cfg = &ctx.config.thresholds.struct_field_order;
+        let mut outcome = FixOutcome::default();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&src) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let mut rw = SourceRewriter::new(&src);
+            fix_items(cfg, &rel, &src, &file.items, &mut rw, &mut outcome.skipped);
+            if !rw.is_empty() {
+                let new_src = rw.finish()?;
+                std::fs::write(&path, new_src)?;
+                outcome.writes += 1;
+            }
+        }
+        Ok(outcome)
+    }
+}
+
+fn fix_items<'src>(
+    cfg: &StructFieldOrderConfig,
+    rel: &str,
+    src: &'src str,
+    items: &[Item],
+    rw: &mut SourceRewriter<'src>,
+    skipped: &mut Vec<String>,
+) {
+    for item in items {
+        match item {
+            Item::Struct(s) => {
+                if has_exempt_attr(&s.attrs, &cfg.exempt_attrs) {
+                    continue;
+                }
+                if let Fields::Named(named) = &s.fields {
+                    let collected: Vec<&Field> = named.named.iter().collect();
+                    if let Err(reason) = fix_field_block(
+                        cfg,
+                        src,
+                        named.brace_token.span.open().byte_range().end
+                            ..named.brace_token.span.close().byte_range().start,
+                        &collected,
+                        rw,
+                    ) {
+                        skipped.push(format!(
+                            "{rel}:{}: struct `{}`: {reason}",
+                            s.ident.span().start().line,
+                            s.ident
+                        ));
+                    }
+                }
+            }
+            Item::Union(u) => {
+                if has_exempt_attr(&u.attrs, &cfg.exempt_attrs) {
+                    continue;
+                }
+                let collected: Vec<&Field> = u.fields.named.iter().collect();
+                if let Err(reason) = fix_field_block(
+                    cfg,
+                    src,
+                    u.fields.brace_token.span.open().byte_range().end
+                        ..u.fields.brace_token.span.close().byte_range().start,
+                    &collected,
+                    rw,
+                ) {
+                    skipped.push(format!(
+                        "{rel}:{}: union `{}`: {reason}",
+                        u.ident.span().start().line,
+                        u.ident
+                    ));
+                }
+            }
+            Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    fix_items(cfg, rel, src, inner, rw, skipped);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn fix_field_block<'src>(
+    cfg: &StructFieldOrderConfig,
+    src: &'src str,
+    scope_bytes: Range<usize>,
+    fields: &[&Field],
+    rw: &mut SourceRewriter<'src>,
+) -> Result<(), String> {
+    if fields.len() < 2 {
+        return Ok(());
+    }
+
+    // If any pair of adjacent fields carries different #[cfg(...)] gates,
+    // reordering can change semantics under different feature configs.
+    // Skip the whole block.
+    if has_heterogeneous_cfg(fields) {
+        return Err("fields have heterogeneous `#[cfg(...)]` attributes".to_string());
+    }
+
+    let order = build_visibility_order(&cfg.visibility_order);
+    let actual: Vec<FieldKey> = fields
+        .iter()
+        .enumerate()
+        .map(|(idx, f)| FieldKey {
+            idx,
+            vis_bucket: vis_bucket(&order, &f.vis),
+            type_key: type_sort_key(&f.ty),
+            name: f
+                .ident
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        })
+        .collect();
+    let mut expected = actual.clone();
+    expected.sort_by(cmp_field_key);
+    if actual
+        .iter()
+        .map(|k| k.idx)
+        .eq(expected.iter().map(|k| k.idx))
+    {
+        return Ok(());
+    }
+
+    let item_spans: Vec<Range<usize>> = fields.iter().map(|f| f.span().byte_range()).collect();
+    let blocks = match expand_blocks(src, scope_bytes, &item_spans) {
+        Ok(b) => b,
+        Err(ExpansionError::FloatingComment { line, snippet }) => {
+            return Err(format!("floating comment at line {line}: `{snippet}`"));
+        }
+        Err(other) => return Err(format!("engine error: {other:?}")),
+    };
+
+    // Same trailing-comma rule as struct_init_order: refuse if the last
+    // field has none, since the swap would stitch items together.
+    let last = blocks.last().expect("non-empty");
+    if !src[last.item_bytes.end..last.bytes.end].contains(',') {
+        return Err("last field has no trailing comma".to_string());
+    }
+
+    let texts: Vec<String> = blocks
+        .iter()
+        .map(|b| src[b.bytes.clone()].to_string())
+        .collect();
+    for (slot_idx, expected_key) in expected.iter().enumerate() {
+        let source_idx = expected_key.idx;
+        if source_idx == slot_idx {
+            continue;
+        }
+        rw.replace(blocks[slot_idx].bytes.clone(), texts[source_idx].clone());
+    }
+    Ok(())
+}
+
+/// Returns true if any field carries a `#[cfg(...)]` attribute and its
+/// neighbour does not, OR any two fields carry different `#[cfg]` text.
+/// Conservative: any cfg presence among the fields trips the check.
+fn has_heterogeneous_cfg(fields: &[&Field]) -> bool {
+    let cfgs: Vec<String> = fields.iter().map(|f| cfg_signature(&f.attrs)).collect();
+    cfgs.iter().any(|c| !c.is_empty()) && cfgs.windows(2).any(|w| w[0] != w[1])
+}
+
+fn cfg_signature(attrs: &[syn::Attribute]) -> String {
+    let mut sigs: Vec<String> = attrs
+        .iter()
+        .filter(|a| a.path().is_ident("cfg"))
+        .map(|a| match &a.meta {
+            syn::Meta::List(list) => list.tokens.to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    sigs.sort();
+    sigs.join("|")
 }
 
 fn scan_items(
@@ -244,5 +425,179 @@ fn type_sort_key(ty: &Type) -> String {
         Type::Macro(_) => "macro".to_string(),
         Type::Verbatim(_) => "?".to_string(),
         _ => "_".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod fix_tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn default_cfg() -> StructFieldOrderConfig {
+        StructFieldOrderConfig {
+            visibility_order: vec![
+                "pub".to_string(),
+                "pub(crate)".to_string(),
+                "pub(super)".to_string(),
+                "pub(in)".to_string(),
+                "private".to_string(),
+            ],
+            exempt_attrs: vec!["repr".to_string()],
+        }
+    }
+
+    fn run_fix(src: &str) -> (String, Vec<String>) {
+        let cfg = default_cfg();
+        let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
+        let mut rw = SourceRewriter::new(src);
+        let mut skipped = Vec::new();
+        fix_items(&cfg, "fixture.rs", src, &file.items, &mut rw, &mut skipped);
+        let out = if rw.is_empty() {
+            src.to_string()
+        } else {
+            rw.finish().expect("rewriter finish")
+        };
+        (out, skipped)
+    }
+
+    fn comment_multiset(src: &str) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                *counts.entry(t.trim_end().to_string()).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn pub_before_private() {
+        let src = "\
+struct S {
+    private_field: u32,
+    pub public_field: u32,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        let pub_pos = out.find("pub public_field").unwrap();
+        let priv_pos = out.find("private_field").unwrap();
+        assert!(pub_pos < priv_pos, "pub must precede private:\n{out}");
+    }
+
+    #[test]
+    fn already_ordered_is_no_op() {
+        let src = "\
+struct S {
+    pub a: u32,
+    private: u32,
+}
+";
+        let (out, _) = run_fix(src);
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn repr_struct_is_skipped() {
+        let src = "\
+#[repr(C)]
+struct Layout {
+    z: u32,
+    a: u32,
+}
+";
+        let (out, _) = run_fix(src);
+        assert_eq!(out, src, "repr layout must not change");
+    }
+
+    #[test]
+    fn doc_comments_travel_with_field() {
+        let src = "\
+struct S {
+    /// docs for z
+    z: u32,
+    /// docs for a
+    a: u32,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(comment_multiset(src), comment_multiset(&out));
+        let a_doc = out.find("/// docs for a").unwrap();
+        let a_field = out.find("a: u32,").unwrap();
+        let z_doc = out.find("/// docs for z").unwrap();
+        let z_field = out.find("z: u32,").unwrap();
+        assert!(
+            a_doc < a_field && a_field < z_doc && z_doc < z_field,
+            "docs must precede their fields:\n{out}"
+        );
+    }
+
+    #[test]
+    fn heterogeneous_cfg_is_skipped() {
+        let src = "\
+struct S {
+    z: u32,
+    #[cfg(feature = \"x\")]
+    a: u32,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert_eq!(out, src);
+        assert!(
+            skipped.iter().any(|s| s.contains("cfg")),
+            "skipped: {skipped:?}"
+        );
+    }
+
+    #[test]
+    fn missing_trailing_comma_is_skipped() {
+        let src = "\
+struct S {
+    z: u32,
+    a: u32
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert_eq!(out, src);
+        assert!(
+            skipped.iter().any(|s| s.contains("trailing comma")),
+            "skipped: {skipped:?}"
+        );
+    }
+
+    #[test]
+    fn idempotent_run() {
+        let src = "\
+struct S {
+    z: u32,
+    a: u32,
+    pub p: u32,
+}
+";
+        let (after_first, _) = run_fix(src);
+        let (after_second, _) = run_fix(&after_first);
+        assert_eq!(after_first, after_second, "I2: idempotency violated");
+    }
+
+    #[test]
+    fn floating_comment_skipped() {
+        let src = "\
+struct S {
+    z: u32,
+
+    // floating
+
+    a: u32,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert_eq!(out, src, "must not modify");
+        assert!(
+            skipped.iter().any(|s| s.contains("floating")),
+            "skipped: {skipped:?}"
+        );
     }
 }

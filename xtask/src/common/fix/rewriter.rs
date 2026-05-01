@@ -5,11 +5,6 @@
 //! disjoint regions (e.g. swapping struct-field block ranges) and need a
 //! single string back.
 
-#![allow(
-    dead_code,
-    reason = "engine lands ahead of its consumer; Phase 2 style-fix checks will call SourceRewriter (see common/fix/README.md)"
-)]
-
 use std::{fmt, ops::Range};
 
 #[derive(Debug, Eq, PartialEq)]

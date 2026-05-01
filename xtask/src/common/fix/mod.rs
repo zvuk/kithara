@@ -9,29 +9,25 @@
 //! `BlockExtractor` to derive byte ranges and `SourceRewriter` to apply
 //! non-overlapping edits.
 
-#![allow(
-    dead_code,
-    unused_imports,
-    reason = "engine lands ahead of its consumer; Phase 2 style-fix checks will adopt FixOutcome and the re-exports (see common/fix/README.md)"
-)]
-
 pub(crate) mod block;
 pub(crate) mod rewriter;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use block::{BlockRange, ExpansionError, expand_blocks};
-pub(crate) use rewriter::{RewriteError, SourceRewriter};
+pub(crate) use block::{ExpansionError, expand_blocks};
+pub(crate) use rewriter::SourceRewriter;
 
-/// Outcome of running a single check's `fix()` against the workspace.
+/// Outcome of running a single check's `fix()` across the workspace.
 ///
-/// `Patched` means at least one file was modified. `Skipped` means the fix
-/// bailed for a documented reason (floating comment, macro/cfg adjacency,
-/// proc-macro attribute) and the violation remains in the report.
-#[derive(Debug)]
-pub(crate) enum FixOutcome {
-    NoOp,
-    Patched { writes: usize },
-    Skipped { reasons: Vec<String> },
+/// `writes` is the number of files modified. `skipped` lists every scope
+/// the fix refused to touch with a human-readable reason — typically a
+/// floating comment that would be torn from its item by reordering, a
+/// macro-bound item with unreliable spans, or `#[cfg]` adjacency that
+/// could change semantics. A single fix run can both patch some files
+/// and skip others; both pieces of information are surfaced.
+#[derive(Debug, Default)]
+pub(crate) struct FixOutcome {
+    pub(crate) writes: usize,
+    pub(crate) skipped: Vec<String>,
 }

@@ -6,11 +6,6 @@
 //! boundaries, and when a scope is rejected for autofix — lives in the
 //! `README.md` next to this module.
 
-#![allow(
-    dead_code,
-    reason = "engine lands ahead of its consumer; Phase 2 style-fix checks will call expand_blocks (see common/fix/README.md)"
-)]
-
 use std::ops::Range;
 
 /// Byte ranges describing one item plus its attached trivia.

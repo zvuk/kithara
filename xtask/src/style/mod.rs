@@ -18,7 +18,7 @@ use clap::Args;
 mod checks;
 mod config;
 
-use checks::{Context, registry};
+use checks::{Check, Context, registry};
 use config::StyleConfig;
 
 use crate::common::{
@@ -42,6 +42,15 @@ pub(crate) struct StyleArgs {
     /// Re-write baseline.toml from current observations (does not fail on regressions).
     #[arg(long = "update-baseline")]
     pub update_baseline: bool,
+    /// Apply each check's autofix in place. Refuses to run on a dirty
+    /// working tree unless `--allow-dirty`. After fixes, re-runs the
+    /// checks so the printed report reflects what remains.
+    #[arg(long)]
+    pub fix: bool,
+    /// Skip the dirty-tree gate that protects `--fix` from mixing with
+    /// uncommitted user edits.
+    #[arg(long = "allow-dirty")]
+    pub allow_dirty: bool,
     /// Override config directory (default `.config/style`).
     #[arg(long, default_value = ".config/style")]
     pub config_dir: PathBuf,
@@ -81,6 +90,10 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
         }
         Some(args.check.iter().map(String::as_str).collect())
     };
+
+    if args.fix {
+        run_fix(&registry, &filter, &ctx, args.allow_dirty)?;
+    }
 
     let mut report = Report::default();
     let mut ran: Vec<&'static str> = Vec::new();
@@ -193,6 +206,37 @@ fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
         new = diff.new_violations.len(),
         n = ran.len(),
     );
+}
+
+fn run_fix(
+    registry: &[Box<dyn Check>],
+    filter: &Option<HashSet<&str>>,
+    ctx: &Context<'_>,
+    allow_dirty: bool,
+) -> Result<()> {
+    crate::util::ensure_clean_tree(allow_dirty, "xtask lint style")?;
+    let mut total_writes = 0_usize;
+    let mut all_skipped: Vec<String> = Vec::new();
+    for check in registry {
+        if let Some(filter) = filter
+            && !filter.contains(check.id())
+        {
+            continue;
+        }
+        let outcome = check.fix(ctx)?;
+        if outcome.writes > 0 {
+            println!("style/{}: patched {} file(s)", check.id(), outcome.writes);
+            total_writes += outcome.writes;
+        }
+        for r in outcome.skipped {
+            all_skipped.push(format!("style/{}: {}", check.id(), r));
+        }
+    }
+    println!("style fix: wrote {total_writes} file(s)");
+    for s in &all_skipped {
+        println!("  skipped — {s}");
+    }
+    Ok(())
 }
 
 fn validate(args: &StyleArgs) -> Result<()> {
