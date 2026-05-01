@@ -30,6 +30,7 @@ const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct QueueConfig {
     /// Max concurrent `Loader` in-flight loads. Default: 3.
     #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]

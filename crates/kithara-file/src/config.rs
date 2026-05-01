@@ -36,6 +36,7 @@ impl From<PathBuf> for FileSrc {
 #[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct FileConfig {
     /// File source (remote URL or local path).
     #[derivative(Default(

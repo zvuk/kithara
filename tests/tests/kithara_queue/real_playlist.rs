@@ -84,10 +84,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
             // guarantees exactly one initialization per process.
             test_statics::INIT_OFFLINE.call_once(init_offline_backend);
 
-            let net = NetOptions {
-                insecure: true,
-                ..NetOptions::default()
-            };
+            let net = NetOptions::default().with_insecure(true);
             let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
             let flush_hub = FlushHub::new(
                 tokio_util::sync::CancellationToken::new(),

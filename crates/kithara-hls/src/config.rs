@@ -20,6 +20,7 @@ use url::Url;
 #[derive(Clone, Default, Derivative, Setters)]
 #[derivative(Debug)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct KeyOptions {
     /// Domain-scoped processor registry. Key URLs whose host matches
     /// a rule get that rule's processor + headers + query params;

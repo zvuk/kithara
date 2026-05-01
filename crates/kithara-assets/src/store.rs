@@ -45,6 +45,7 @@ pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 /// This provides a user-friendly API that hides internal details like `asset_root`.
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct StoreOptions {
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,

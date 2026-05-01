@@ -1,6 +1,7 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
 use derivative::Derivative;
+use derive_setters::Setters;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -73,6 +74,7 @@ impl RangeSpec {
 
 #[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
+#[non_exhaustive]
 pub struct RetryPolicy {
     #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
@@ -104,8 +106,10 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Derivative)]
+#[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct NetOptions {
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as

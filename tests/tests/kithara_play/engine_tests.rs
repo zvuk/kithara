@@ -139,10 +139,7 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
 
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig {
-        sample_rate: 48000,
-        ..Default::default()
-    };
+    let config = EngineConfig::default().with_sample_rate(48000);
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }

@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct DownloaderConfig {
     /// Settings for the shared ABR controller owned by the Downloader.
     pub abr_settings: AbrSettings,

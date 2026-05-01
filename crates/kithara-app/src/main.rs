@@ -85,10 +85,8 @@ fn main() -> AppResult {
     // ambient-runtime aware, so every track created through
     // `sources::build_source` reuses it. TLS posture goes through
     // `NetOptions` on the Downloader; `ResourceConfig` has no `net`.
-    let net = NetOptions {
-        insecure: args.insecure,
-        ..NetOptions::default()
-    };
+    let mut net = NetOptions::default();
+    net.insecure = args.insecure;
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
     // One FlushHub for the whole app — every track's `AssetStore`
     // shares this hub. Worker is opt-in: see

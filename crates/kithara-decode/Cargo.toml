@@ -14,6 +14,7 @@ workspace = true
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
 derivative = { workspace = true }
+derive_setters = { workspace = true }
 re_mp4 = { workspace = true }
 symphonia = { workspace = true, optional = true }
 thiserror = { workspace = true }

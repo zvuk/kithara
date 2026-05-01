@@ -3937,6 +3937,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "derivative",
+ "derive_setters",
  "kithara-abr",
  "kithara-events",
  "kithara-platform",
@@ -4077,6 +4078,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "derivative",
+ "derive_setters",
  "hotpath",
  "jni 0.22.4",
  "kithara-bufpool",
@@ -4372,6 +4374,7 @@ dependencies = [
  "axum",
  "bytes",
  "derivative",
+ "derive_setters",
  "futures",
  "gloo-timers",
  "hotpath",

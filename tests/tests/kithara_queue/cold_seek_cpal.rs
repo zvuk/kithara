@@ -111,10 +111,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let net = NetOptions {
-        insecure: true,
-        ..NetOptions::default()
-    };
+    let net = NetOptions::default().with_insecure(true);
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
 
     // Real cpal backend, default `PlayerImpl` — matches the GUI demo

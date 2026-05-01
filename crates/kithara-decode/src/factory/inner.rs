@@ -9,6 +9,7 @@ use std::{
 };
 
 use derivative::Derivative;
+use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks, StreamContext,
@@ -78,8 +79,10 @@ impl std::fmt::Display for DecoderBackend {
 /// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
 /// inside library components — that fragments the heap into many small
 /// per-component pools and defeats recycling.
-#[derive(Clone, Derivative)]
+#[derive(Clone, Derivative, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct DecoderConfig {
     /// Which decoder backend to use. See [`DecoderBackend`].
     pub backend: DecoderBackend,

@@ -11,13 +11,11 @@ use kithara_events::{AbrProgressSnapshot, AbrVariant, VariantDuration};
 use kithara_platform::time::Duration;
 
 fn settings() -> AbrSettings {
-    AbrSettings {
-        warmup_min_bytes: 0,
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        min_throughput_record_ms: 0,
-        ..AbrSettings::default()
-    }
+    AbrSettings::default()
+        .with_warmup_min_bytes(0)
+        .with_min_switch_interval(Duration::ZERO)
+        .with_min_buffer_for_up_switch(Duration::ZERO)
+        .with_min_throughput_record_ms(0)
 }
 
 fn variants_4() -> Vec<AbrVariant> {

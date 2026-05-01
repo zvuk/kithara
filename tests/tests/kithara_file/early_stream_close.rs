@@ -190,11 +190,11 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let dl = Downloader::new(
         DownloaderConfig::default()
-            .with_net(kithara_net::NetOptions {
-                inactivity_timeout: Duration::from_secs(1),
-                total_timeout: Some(Duration::from_secs(1)),
-                ..Default::default()
-            })
+            .with_net(
+                kithara_net::NetOptions::default()
+                    .with_inactivity_timeout(Duration::from_secs(1))
+                    .with_total_timeout(Duration::from_secs(1)),
+            )
             .with_cancel(cancel_token.clone()),
     );
 

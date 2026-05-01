@@ -129,10 +129,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 }
 
 fn fresh_downloader() -> Downloader {
-    let net = NetOptions {
-        insecure: true,
-        ..NetOptions::default()
-    };
+    let net = NetOptions::default().with_insecure(true);
     Downloader::new(DownloaderConfig::default().with_net(net))
 }
 

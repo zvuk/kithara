@@ -36,10 +36,7 @@ enum Backend {
 impl Backend {
     fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
-        let config = DecoderConfig {
-            backend: self.to_choice(),
-            ..Default::default()
-        };
+        let config = DecoderConfig::default().with_backend(self.to_choice());
         DecoderFactory::create_from_media_info(source, info, &config)
             .unwrap_or_else(|e| panic!("{self:?} decoder should create: {e}"))
     }

@@ -143,11 +143,9 @@ mod hls_timeline {
         let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig {
-            stream_ctx: Some(stream_ctx),
-            hint: Some("wav".to_string()),
-            ..Default::default()
-        };
+        let decoder_config = DecoderConfig::default()
+            .with_stream_ctx(stream_ctx)
+            .with_hint("wav".to_string());
 
         // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
         let result = tokio::task::spawn_blocking(move || {

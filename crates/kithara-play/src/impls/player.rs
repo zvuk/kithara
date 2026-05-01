@@ -42,6 +42,7 @@ const MIN_PLAYBACK_RATE: f32 = 0.01;
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct PlayerConfig {
     /// Default ABR mode seeded onto new HLS resources. Per-sample
     /// decisions run inside the shared `AbrController` owned by the

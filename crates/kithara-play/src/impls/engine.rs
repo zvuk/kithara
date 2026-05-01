@@ -43,6 +43,7 @@ use crate::{
 #[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct EngineConfig {
     /// PCM buffer pool for audio-thread scratch buffers.
     ///

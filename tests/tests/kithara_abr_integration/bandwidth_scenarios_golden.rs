@@ -25,12 +25,10 @@ fn variants() -> Vec<AbrVariant> {
 }
 
 fn fast_settings() -> AbrSettings {
-    AbrSettings {
-        warmup_min_bytes: 0,
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    }
+    AbrSettings::default()
+        .with_warmup_min_bytes(0)
+        .with_min_switch_interval(Duration::ZERO)
+        .with_min_buffer_for_up_switch(Duration::ZERO)
 }
 
 fn run_profile(profile: &[u64]) -> usize {

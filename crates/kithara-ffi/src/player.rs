@@ -82,17 +82,12 @@ impl AudioPlayer {
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
-        let player_config = PlayerConfig {
-            eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
-            ..PlayerConfig::default()
-        };
+        let player_config = PlayerConfig::default()
+            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
         #[cfg(feature = "dev")]
-        let net = NetOptions {
-            insecure: true,
-            ..NetOptions::default()
-        };
+        let net = NetOptions::default().with_insecure(true);
         #[cfg(not(feature = "dev"))]
         let net = NetOptions::default();
         let downloader = Downloader::new(

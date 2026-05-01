@@ -8,6 +8,7 @@ use std::{
 };
 
 use derivative::Derivative;
+use derive_setters::Setters;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     Mutex, RwLock,
@@ -34,8 +35,10 @@ impl AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, Derivative, PartialEq)]
+#[derive(Clone, Debug, Derivative, PartialEq, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[derivative(Default(value = "Duration::from_secs(1)"))]

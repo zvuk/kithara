@@ -1407,11 +1407,9 @@ async fn live_remote_resource_decodes_with_duration(
     temp_dir: TestTempDir,
 ) {
     let store = store_options(&temp_dir, true);
-    let net = NetOptions {
-        inactivity_timeout: Duration::from_secs(25),
-        total_timeout: Some(Duration::from_secs(25)),
-        ..NetOptions::default()
-    };
+    let net = NetOptions::default()
+        .with_inactivity_timeout(Duration::from_secs(25))
+        .with_total_timeout(Duration::from_secs(25));
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
     let mut config = ResourceConfig::new(url)
         .expect("valid URL")
