@@ -13,11 +13,11 @@ use std::{
     time::Duration,
 };
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamContext};
 
 use crate::{
-    codec::{DecodedFrame, FrameCodec},
+    codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame},
     error::DecodeResult,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
@@ -119,14 +119,10 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         }
     }
 
-    fn build_chunk(&mut self, decoded: &DecodedFrame, frame: &Frame) -> PcmChunk {
-        let mut buf = self.pool.get();
-        let _ = buf.ensure_len(decoded.samples.len());
-        buf[..decoded.samples.len()].copy_from_slice(&decoded.samples);
-
+    fn build_chunk(&mut self, buf: PcmBuf, frames: u32, frame: &Frame) -> PcmChunk {
         let timestamp = frame.pts;
         let chunk_secs = if self.spec.sample_rate > 0 {
-            f64::from(decoded.frames) / f64::from(self.spec.sample_rate)
+            f64::from(frames) / f64::from(self.spec.sample_rate)
         } else {
             0.0
         };
@@ -138,7 +134,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             self.frame_offset = frame_offset_for(timestamp, self.spec.sample_rate);
         }
         let frame_offset = self.frame_offset;
-        self.frame_offset = self.frame_offset.saturating_add(u64::from(decoded.frames));
+        self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
 
         let meta = PcmMeta {
             end_timestamp,
@@ -147,7 +143,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             source_byte_offset: None,
             variant_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.variant_index()),
             spec: self.spec,
-            frames: decoded.frames,
+            frames,
             epoch: self.epoch,
             frame_offset,
             source_bytes: u64::try_from(frame.data.len()).unwrap_or(u64::MAX),
@@ -174,11 +170,12 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
                     if self.skip_frame_for_pending_target(&frame) {
                         continue;
                     }
-                    let decoded = self.codec.decode_frame(&frame.data, frame.pts)?;
-                    if decoded.frames == 0 {
+                    let mut buf = self.pool.get();
+                    let frames = self.codec.decode_frame(&frame.data, frame.pts, &mut buf)?;
+                    if frames == 0 {
                         continue;
                     }
-                    let chunk = self.build_chunk(&decoded, &frame);
+                    let chunk = self.build_chunk(buf, frames, &frame);
                     return Ok(DecoderChunkOutcome::Chunk(chunk));
                 }
                 DemuxOutcome::Pending(reason) => {
@@ -388,7 +385,6 @@ mod hook_tests {
 
     use super::*;
     use crate::{
-        codec::DecodedFrame,
         demuxer::{DemuxOutcome, DemuxSeekOutcome, TrackInfo},
         traits::Decoder,
     };
@@ -458,11 +454,20 @@ mod hook_tests {
         fn open(_track: &TrackInfo) -> DecodeResult<Self> {
             unreachable!("stub codec is hand-built")
         }
-        fn decode_frame(&mut self, _bytes: &[u8], _pts: Duration) -> DecodeResult<DecodedFrame> {
-            Ok(DecodedFrame {
-                samples: vec![0.0; self.spec.channels as usize],
-                frames: 1,
-            })
+        fn decode_frame(
+            &mut self,
+            _bytes: &[u8],
+            _pts: Duration,
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            let samples = self.spec.channels as usize;
+            out.ensure_len(samples)
+                .map_err(|e| crate::error::DecodeError::Backend(Box::new(e)))?;
+            for slot in out.iter_mut() {
+                *slot = 0.0;
+            }
+            out.truncate(samples);
+            Ok(1)
         }
         fn flush(&mut self) {}
         fn spec(&self) -> PcmSpec {
@@ -561,5 +566,97 @@ mod hook_tests {
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(Duration::from_secs(15)).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec!["past_eof"]);
+    }
+}
+
+#[cfg(test)]
+mod pool_budget_tests {
+    //! Pool-budget regression tests for the zero-alloc codec path.
+    //!
+    //! Construct a `PcmPool` with a small fixed buffer count, pre-warm it
+    //! with the chunk size we expect, run N decode iterations through a
+    //! stub `FrameCodec`, and assert that `alloc_misses` stays at the
+    //! pre-warm count — i.e. no extra allocations beyond the warm-up.
+    //! The contract: once warm, the hot path recycles buffers; codecs must
+    //! never spawn fresh `Vec<f32>` allocations per frame.
+    //!
+    //! Backend-specific equivalents (Apple/Android FFI cookie code paths)
+    //! live next to those codecs.
+
+    use std::time::Duration;
+
+    use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_test_utils::kithara;
+
+    use crate::{codec::FrameCodec, demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
+
+    /// Stub codec that always writes `frames_per_call * channels` samples.
+    /// Mimics a generic FrameCodec contract without depending on any
+    /// specific backend.
+    struct ConstFrameCodec {
+        spec: PcmSpec,
+        frames_per_call: u32,
+    }
+
+    impl FrameCodec for ConstFrameCodec {
+        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
+            unreachable!("hand-built")
+        }
+        fn decode_frame(
+            &mut self,
+            _bytes: &[u8],
+            _pts: Duration,
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            let samples = self.frames_per_call as usize * self.spec.channels as usize;
+            out.ensure_len(samples)
+                .map_err(|e| crate::error::DecodeError::Backend(Box::new(e)))?;
+            for slot in out.iter_mut() {
+                *slot = 0.0;
+            }
+            out.truncate(samples);
+            Ok(self.frames_per_call)
+        }
+        fn flush(&mut self) {}
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    #[kithara::test]
+    fn codec_warm_pool_does_not_grow_alloc_misses() {
+        // 32 max buffers split across 8 shards = 4 per shard. Single-test
+        // thread routes to one shard, so warm-up size of 4 fits.
+        let pool = PcmPool::new(32, 8192);
+        // Pre-warm: pull 4 buffers, grow each to the per-call sample budget,
+        // then drop them so they recycle into the pool with right capacity.
+        for _ in 0..4 {
+            let mut buf = pool.get();
+            buf.ensure_len(2048).unwrap();
+        }
+        let warmup_misses = pool.stats().alloc_misses;
+
+        let mut codec = ConstFrameCodec {
+            spec: PcmSpec {
+                channels: 2,
+                sample_rate: 44_100,
+            },
+            frames_per_call: 1024,
+        };
+        for _ in 0..200 {
+            let mut buf = pool.get();
+            let frames = codec
+                .decode_frame(&[], Duration::ZERO, &mut buf)
+                .expect("decode_frame");
+            assert_eq!(frames, 1024);
+            // buf drops, returning to pool.
+        }
+
+        assert_eq!(
+            pool.stats().alloc_misses,
+            warmup_misses,
+            "no further alloc misses expected after warm-up; \
+             codec must not allocate fresh buffers per call"
+        );
     }
 }

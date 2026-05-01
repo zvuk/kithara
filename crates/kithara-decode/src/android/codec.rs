@@ -15,6 +15,7 @@
 
 use std::{ffi::c_void, ptr::NonNull, time::Duration};
 
+use kithara_bufpool::PcmBuf;
 use kithara_stream::AudioCodec;
 
 use super::{
@@ -28,7 +29,7 @@ use super::{
     media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec},
 };
 use crate::{
-    codec::{DecodedFrame, FrameCodec},
+    codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     types::PcmSpec,
@@ -81,9 +82,15 @@ impl FrameCodec for AndroidCodec {
         })
     }
 
-    fn decode_frame(&mut self, frame_data: &[u8], pts: Duration) -> DecodeResult<DecodedFrame> {
+    fn decode_frame(
+        &mut self,
+        frame_data: &[u8],
+        pts: Duration,
+        out: &mut PcmBuf,
+    ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
-            return Ok(empty_frame());
+            out.clear();
+            return Ok(0);
         }
 
         match self
@@ -103,7 +110,8 @@ impl FrameCodec for AndroidCodec {
             None => {
                 // Codec backpressure — caller will retry the frame on the
                 // next pump. UniversalDecoder loops on zero-frame returns.
-                return Ok(empty_frame());
+                out.clear();
+                return Ok(0);
             }
         }
 
@@ -112,13 +120,13 @@ impl FrameCodec for AndroidCodec {
             .dequeue_output_buffer(Consts::OUTPUT_DEQUEUE_TIMEOUT_US)
             .map_err(AndroidBackendError::into_decode_error)?
         {
-            DequeueOutput::Output(out) => {
-                let bytes = out.data();
-                let samples = match self.pcm_encoding {
-                    AndroidPcmEncoding::Pcm16 => decode_pcm16(bytes),
-                    AndroidPcmEncoding::Float => decode_pcm_float(bytes),
+            DequeueOutput::Output(buffer) => {
+                let bytes = buffer.data();
+                match self.pcm_encoding {
+                    AndroidPcmEncoding::Pcm16 => decode_pcm16_into(bytes, out)?,
+                    AndroidPcmEncoding::Float => decode_pcm_float_into(bytes, out)?,
                 };
-                let index = out.index;
+                let index = buffer.index;
                 self.codec
                     .release_output_buffer(index)
                     .map_err(AndroidBackendError::into_decode_error)?;
@@ -126,16 +134,20 @@ impl FrameCodec for AndroidCodec {
                 let frames = if channels == 0 {
                     0
                 } else {
-                    u32::try_from(samples.len() / channels).unwrap_or(u32::MAX)
+                    u32::try_from(out.len() / channels).unwrap_or(u32::MAX)
                 };
-                Ok(DecodedFrame { samples, frames })
+                Ok(frames)
             }
             DequeueOutput::OutputFormatChanged(new_format) => {
                 self.spec = new_format.spec;
                 self.pcm_encoding = new_format.pcm_encoding;
-                Ok(empty_frame())
+                out.clear();
+                Ok(0)
             }
-            DequeueOutput::TryAgainLater => Ok(empty_frame()),
+            DequeueOutput::TryAgainLater => {
+                out.clear();
+                Ok(0)
+            }
         }
     }
 
@@ -225,26 +237,25 @@ fn read_output_format(
     ))
 }
 
-fn decode_pcm16(bytes: &[u8]) -> Vec<f32> {
-    let mut samples = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
+fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+    let count = bytes.len() / 2;
+    out.ensure_len(count)
+        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(2)) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-        samples.push(f32::from(s) / Consts::PCM16_SCALE);
+        *dst = f32::from(s) / Consts::PCM16_SCALE;
     }
-    samples
+    out.truncate(count);
+    Ok(())
 }
 
-fn decode_pcm_float(bytes: &[u8]) -> Vec<f32> {
-    let mut samples = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+fn decode_pcm_float_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+    let count = bytes.len() / 4;
+    out.ensure_len(count)
+        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
+        *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
-    samples
-}
-
-const fn empty_frame() -> DecodedFrame {
-    DecodedFrame {
-        samples: Vec::new(),
-        frames: 0,
-    }
+    out.truncate(count);
+    Ok(())
 }

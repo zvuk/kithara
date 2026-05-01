@@ -15,6 +15,7 @@
 
 use std::time::Duration;
 
+use kithara_bufpool::PcmBuf;
 use kithara_stream::AudioCodec;
 use symphonia::core::{
     audio::Channels,
@@ -36,7 +37,7 @@ use symphonia::core::{
 };
 
 use crate::{
-    codec::{DecodedFrame, FrameCodec},
+    codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     types::PcmSpec,
@@ -121,7 +122,12 @@ impl FrameCodec for SymphoniaCodec {
         Ok(Self { decoder, spec })
     }
 
-    fn decode_frame(&mut self, frame_data: &[u8], pts: Duration) -> DecodeResult<DecodedFrame> {
+    fn decode_frame(
+        &mut self,
+        frame_data: &[u8],
+        pts: Duration,
+        out: &mut PcmBuf,
+    ) -> DecodeResult<u32> {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet = Packet::new(
@@ -135,33 +141,28 @@ impl FrameCodec for SymphoniaCodec {
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(err)) => {
                 tracing::debug!(error = %err, "SymphoniaCodec: skipping undecodable frame");
-                return Ok(DecodedFrame {
-                    samples: Vec::new(),
-                    frames: 0,
-                });
+                out.clear();
+                return Ok(0);
             }
             Err(SymphoniaError::ResetRequired) => {
                 self.decoder.reset();
-                return Ok(DecodedFrame {
-                    samples: Vec::new(),
-                    frames: 0,
-                });
+                out.clear();
+                return Ok(0);
             }
             Err(e) => return Err(DecodeError::Backend(Box::new(e))),
         };
 
         let num_samples = decoded.samples_interleaved();
         if num_samples == 0 {
-            return Ok(DecodedFrame {
-                samples: Vec::new(),
-                frames: 0,
-            });
+            out.clear();
+            return Ok(0);
         }
 
-        let mut samples = vec![0.0f32; num_samples];
-        decoded.copy_to_slice_interleaved(&mut samples[..]);
-        let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
-        Ok(DecodedFrame { samples, frames })
+        out.ensure_len(num_samples)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
+        out.truncate(num_samples);
+        Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }
 
     fn flush(&mut self) {

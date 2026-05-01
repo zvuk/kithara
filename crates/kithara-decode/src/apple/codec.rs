@@ -14,6 +14,7 @@
 
 use std::{ffi::c_void, ptr, time::Duration};
 
+use kithara_bufpool::PcmBuf;
 use kithara_stream::AudioCodec;
 
 use super::{
@@ -26,7 +27,7 @@ use super::{
     },
 };
 use crate::{
-    codec::{DecodedFrame, FrameCodec},
+    codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     types::PcmSpec,
@@ -37,9 +38,10 @@ pub(crate) struct AppleCodec {
     converter: AudioConverterRef,
     input_state: Box<ConverterInputState>,
     spec: PcmSpec,
-    /// Output buffer reused across `decode_frame` calls — sized to one
-    /// codec packet worth of f32 frames at construction.
-    pcm_buffer: Vec<f32>,
+    /// `AudioConverter`'s expected output packets-per-callback. Used to
+    /// pre-grow the caller's `out` buffer before invoking the FFI so the
+    /// converter writes directly into pool memory — no internal scratch
+    /// buffer needed.
     frames_per_packet: u32,
 }
 
@@ -123,26 +125,24 @@ impl FrameCodec for AppleCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
-        // Sized for one full input packet at f32 stereo+ — grown lazily
-        // by `ensure_pcm_capacity` if a packet ever exceeds it.
-        let initial_frames = frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET);
-        let pcm_buffer = vec![0.0f32; initial_frames as usize * track.channels as usize];
 
         Ok(Self {
             converter,
             input_state: Box::new(ConverterInputState::new()),
             spec,
-            pcm_buffer,
             frames_per_packet,
         })
     }
 
-    fn decode_frame(&mut self, frame_data: &[u8], _pts: Duration) -> DecodeResult<DecodedFrame> {
+    fn decode_frame(
+        &mut self,
+        frame_data: &[u8],
+        _pts: Duration,
+        out: &mut PcmBuf,
+    ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
-            return Ok(DecodedFrame {
-                samples: Vec::new(),
-                frames: 0,
-            });
+            out.clear();
+            return Ok(0);
         }
 
         let desc = AudioStreamPacketDescription {
@@ -158,7 +158,9 @@ impl FrameCodec for AppleCodec {
 
         let channels = self.spec.channels as usize;
         let target_frames = self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET);
-        self.ensure_pcm_capacity(target_frames, channels);
+        let needed_samples = target_frames as usize * channels;
+        out.ensure_len(needed_samples)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
         let mut output_packets = target_frames;
         #[expect(
@@ -169,9 +171,8 @@ impl FrameCodec for AppleCodec {
             mNumberBuffers: 1,
             mBuffers: [AudioBuffer {
                 mNumberChannels: u32::from(self.spec.channels),
-                mDataByteSize: (self.pcm_buffer.len() * Consts::BYTES_PER_F32_SAMPLE as usize)
-                    as u32,
-                mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
+                mDataByteSize: (out.len() * Consts::BYTES_PER_F32_SAMPLE as usize) as u32,
+                mData: out.as_mut_ptr() as *mut c_void,
             }],
         };
 
@@ -179,7 +180,7 @@ impl FrameCodec for AppleCodec {
 
         // SAFETY: `self.converter` is live; `input_ptr` points at a live
         // `ConverterInputState` owned by `self`; `buffer_list` is a
-        // valid output buffer pointing into `self.pcm_buffer`.
+        // valid output buffer pointing into `out` for the FFI's lifetime.
         let status = unsafe {
             AudioConverterFillComplexBuffer(
                 self.converter,
@@ -206,19 +207,10 @@ impl FrameCodec for AppleCodec {
             ))));
         }
 
-        let frames = output_packets as usize;
-        let samples_len = frames * channels;
-        let mut samples = Vec::with_capacity(samples_len);
-        samples.extend_from_slice(&self.pcm_buffer[..samples_len]);
-
-        Ok(DecodedFrame {
-            samples,
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "output frame count fits in u32 for one packet"
-            )]
-            frames: frames as u32,
-        })
+        let frames = output_packets;
+        let samples_len = frames as usize * channels;
+        out.truncate(samples_len);
+        Ok(frames)
     }
 
     fn flush(&mut self) {
@@ -229,15 +221,6 @@ impl FrameCodec for AppleCodec {
 
     fn spec(&self) -> PcmSpec {
         self.spec
-    }
-}
-
-impl AppleCodec {
-    fn ensure_pcm_capacity(&mut self, target_frames: u32, channels: usize) {
-        let needed = target_frames as usize * channels;
-        if self.pcm_buffer.len() < needed {
-            self.pcm_buffer.resize(needed, 0.0);
-        }
     }
 }
 
