@@ -178,6 +178,11 @@ mod tests {
     #[test]
     fn inverted_range_is_rejected() {
         let mut r = SourceRewriter::new("abc");
+        // Inverted range literal is the whole point of this test.
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "exercising the validation path"
+        )]
         r.replace(2..1, "x");
         assert!(matches!(
             r.finish().unwrap_err(),

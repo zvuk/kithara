@@ -286,7 +286,7 @@ mod tests {
     use super::*;
 
     /// Find byte ranges of substrings using `<<` and `>>` markers in the
-    /// fixture string. Returns (cleaned_src, item_spans). Scope bytes cover
+    /// fixture string. Returns (`cleaned_src`, `item_spans`). Scope bytes cover
     /// the entire cleaned source so leading and trailing trivia outside the
     /// items can be exercised end-to-end.
     fn parse_markers(input: &str) -> (String, Vec<Range<usize>>) {
@@ -431,7 +431,8 @@ mod tests {
     #[test]
     fn item_span_outside_src_is_error() {
         // 0..100 cannot exist in a 5-byte source.
-        let err = expand_blocks("hello", 0..5, &[0..100]).unwrap_err();
+        let span = 0..100;
+        let err = expand_blocks("hello", 0..5, std::slice::from_ref(&span)).unwrap_err();
         assert!(matches!(err, ExpansionError::SpanOutOfRange { .. }));
     }
 

@@ -115,7 +115,7 @@ fn garbage_pins_bin_is_treated_as_empty() {
 fn garbage_lru_bin_is_treated_as_empty() {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root| {
-        fs::write(lru_bin(root), &[0xff; 64]).unwrap();
+        fs::write(lru_bin(root), [0xff; 64]).unwrap();
     });
 
     let store = AssetStoreBuilder::new()

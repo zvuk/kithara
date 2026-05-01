@@ -173,9 +173,9 @@ mod tests {
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
             LoaderFixture {
+                loader,
                 tracks,
                 bus,
-                loader,
             }
         }
     }

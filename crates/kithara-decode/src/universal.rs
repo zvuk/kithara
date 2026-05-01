@@ -638,7 +638,7 @@ mod pool_budget_tests {
     use crate::{codec::FrameCodec, demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
 
     /// Stub codec that always writes `frames_per_call * channels` samples.
-    /// Mimics a generic FrameCodec contract without depending on any
+    /// Mimics a generic `FrameCodec` contract without depending on any
     /// specific backend.
     struct ConstFrameCodec {
         spec: PcmSpec,

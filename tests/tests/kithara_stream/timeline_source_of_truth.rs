@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    io::{self, Error as IoError, Read, Seek, SeekFrom},
+    io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
     sync::Arc,

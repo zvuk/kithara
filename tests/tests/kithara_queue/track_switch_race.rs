@@ -276,7 +276,7 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
         let mut current_history: Vec<Option<TrackId>> = Vec::new();
         while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
             let cur = queue.current().map(|e| e.id);
-            if cur != current_history.last().copied().flatten().and_then(Some) {
+            if cur != current_history.last().copied().flatten() {
                 current_history.push(cur);
             }
             if cur == Some(slow_id) {
@@ -287,7 +287,7 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
                 ));
                 break;
             }
-            if cur.is_none() && current_history.iter().any(|c| *c == Some(fast_id)) {
+            if cur.is_none() && current_history.contains(&Some(fast_id)) {
                 // fast → None reached naturally, queue ended; skip remaining poll.
                 break;
             }

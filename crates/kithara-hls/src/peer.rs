@@ -1209,7 +1209,7 @@ mod tests {
     /// `seek_epoch_reset` (cancelling the old epoch's in-flight fetches
     /// and repositioning the cursor to the seek target). Doing so does
     /// NOT deadlock: the consumed demand returns `ResetAndPend`, which
-    /// emits no FetchCmd this poll, but on the next poll `build_batch`
+    /// emits no `FetchCmd` this poll, but on the next poll `build_batch`
     /// walks forward from the cursor (now at the target). A *same-epoch*
     /// demand under flushing is still held — it carries the pre-seek
     /// decoder offset.

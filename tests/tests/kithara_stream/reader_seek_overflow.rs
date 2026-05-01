@@ -33,7 +33,7 @@
 //!     len=1890485 `current_pos=595033` `seek_from=Current(9223372036854115238)`")
 
 use std::{
-    io::{self, Error as IoError, Read, Seek, SeekFrom},
+    io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
     sync::Arc,
