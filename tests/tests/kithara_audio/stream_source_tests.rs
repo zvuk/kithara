@@ -1382,7 +1382,7 @@ fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
         seek_spec,
         vec![make_chunk(seek_spec, 100); 3],
         vec![
-            Err(DecodeError::SeekError("direct seek failed".to_string())),
+            Err(DecodeError::SeekFailed("direct seek failed".to_string())),
             Ok(DecoderSeekOutcome::Landed {
                 landed_at: Duration::ZERO,
                 landed_frame: 0,
@@ -1492,7 +1492,9 @@ fn failed_seek_without_pending_format_change_fails_track_without_decoder_recreat
     let (v3_decoder, _) = scripted_decoder_loose(
         v3_spec(),
         v3_chunks,
-        vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
+        vec![Err(DecodeError::SeekFailed(
+            "unexpected end of file".into(),
+        ))],
         None,
     );
 
@@ -1704,7 +1706,9 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
     let (v0_decoder, _) = scripted_decoder_loose(
         v0_spec(),
         v0_chunks,
-        vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
+        vec![Err(DecodeError::SeekFailed(
+            "unexpected end of file".into(),
+        ))],
         None,
     );
 

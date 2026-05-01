@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, atomic::AtomicU32},
-    time::Duration,
-};
+use std::sync::{Arc, atomic::AtomicU32};
 
 use assert_no_alloc::*;
 use kithara_bufpool::{PcmPool, SharedPool};
@@ -38,15 +35,7 @@ fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
             channels,
             sample_rate: 44100,
         },
-        timestamp: Duration::ZERO,
-        end_timestamp: Duration::ZERO,
-        segment_index: None,
-        variant_index: None,
-        epoch: 0,
-        frame_offset: 0,
-        frames: 0,
-        source_bytes: 0,
-        source_byte_offset: None,
+        ..Default::default()
     };
     PcmChunk::new(meta, pcm)
 }

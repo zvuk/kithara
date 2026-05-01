@@ -10,6 +10,7 @@ use thiserror::Error;
 /// This error type is backend-agnostic, wrapping decoder-specific errors
 /// in the `Backend` variant.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DecodeError {
     #[error("IO error: {0}")]
     Io(io::Error),
@@ -25,10 +26,6 @@ pub enum DecodeError {
 
     #[error("Seek failed: {0}")]
     SeekFailed(String),
-
-    /// Alias for `SeekFailed` (backward compatibility).
-    #[error("Seek error: {0}")]
-    SeekError(String),
 
     /// The seek target is invalid for this stream — past EOF, beyond the
     /// indexed sample range, or otherwise out of the addressable space.
@@ -167,7 +164,6 @@ mod tests {
     #[kithara::test]
     #[case::invalid_data(DecodeError::InvalidData("bad frame".into()), "Invalid data: bad frame")]
     #[case::seek_failed(DecodeError::SeekFailed("timestamp out of range".into()), "Seek failed: timestamp out of range")]
-    #[case::seek_error(DecodeError::SeekError("invalid position".into()), "Seek error: invalid position")]
     #[case::probe_failed(DecodeError::ProbeFailed, "Probe failed: could not detect codec")]
     #[case::unsupported_codec(
         DecodeError::UnsupportedCodec(AudioCodec::AacLc),

@@ -4,6 +4,11 @@ use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, pcm_pool};
 
 /// Audio track metadata extracted from Symphonia tags.
+///
+/// Intentionally without `#[non_exhaustive]` — this is a stable POD of
+/// optional tag fields, constructed via direct struct literal in
+/// downstream test/processor code; future additions go through
+/// `Default::default()` spread.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
     /// Album name.
@@ -17,6 +22,12 @@ pub struct TrackMetadata {
 }
 
 /// PCM specification - core audio format information
+///
+/// Intentionally without `#[non_exhaustive]`: this is a stable POD pair
+/// (`channels`, `sample_rate`) at the heart of every audio API in the
+/// workspace, constructed via direct struct literal at >100 call sites.
+/// Adding fields would force a workspace-wide migration regardless of
+/// non-exhaustiveness, so the marker buys nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmSpec {
     pub channels: u16,
@@ -46,6 +57,11 @@ impl From<&PcmMeta> for kithara_stream::ChunkPosition {
 ///
 /// Combines audio format specification with position on the logical timeline.
 /// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.
+///
+/// Intentionally without `#[non_exhaustive]`: external crates construct
+/// it via `PcmMeta { spec, ..Default::default() }` for fixtures; the
+/// pattern survives field additions, and `non_exhaustive` would block
+/// the struct-literal idiom altogether.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmMeta {
     /// Wall-clock position **after** this chunk's frames have played
