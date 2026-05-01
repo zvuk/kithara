@@ -1,0 +1,35 @@
+id: perf.prefer-byte-pool
+message: |
+  Allocating a `Vec<u8>` directly in a hot-path crate. Audio I/O and
+  decode loops must reuse buffers via the `BytePool` that was passed
+  in from the top of the app (config field or constructor argument),
+  not by calling the global `byte_pool()` accessor:
+
+      let mut buf = self.byte_pool.get_with(|b| b.resize(n, 0));
+
+  `BytePool::get` returns a `PooledOwned<32, Vec<u8>>` that recycles
+  to the pool on drop, so steady-state playback does not allocate.
+  Direct `vec![0u8; ...]` / `Vec::<u8>::with_capacity(...)` is only
+  acceptable for one-shot initialisation outside the realtime path.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+  - crates/kithara-file/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "vec![0u8; $N]"
+    - pattern: "vec![0_u8; $N]"
+    - pattern: "vec![0; $N]"
+    - pattern: "Vec::<u8>::with_capacity($N)"
+    - pattern: "Vec::<u8>::new()"

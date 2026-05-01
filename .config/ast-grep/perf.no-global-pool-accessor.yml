@@ -1,0 +1,40 @@
+id: perf.no-global-pool-accessor
+message: |
+  Calling the global `byte_pool()` / `pcm_pool()` accessor from a
+  library crate. Pools are an injected dependency: the top of the
+  application builds one `BytePool` and one `PcmPool` and passes
+  them down through config structs or constructor arguments.
+  Library code must read the pool from `self`/`cfg`, not reach into
+  the global singleton.
+
+      // ❌  let buf = byte_pool().get_with(...);
+      // ✅  let buf = self.byte_pool.get_with(...);
+      // ✅  let buf = cfg.pcm_pool.get_with(...);
+
+  The global accessors stay available for the very top layer (main /
+  FFI entrypoint / test fixtures) where building the singleton is
+  the right thing to do.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+  - crates/kithara-file/src/**/*.rs
+  - crates/kithara-assets/src/**/*.rs
+  - crates/kithara-play/src/**/*.rs
+  - crates/kithara-queue/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "byte_pool()"
+    - pattern: "pcm_pool()"
+    - pattern: "kithara_bufpool::byte_pool()"
+    - pattern: "kithara_bufpool::pcm_pool()"

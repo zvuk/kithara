@@ -38,13 +38,14 @@ deny:
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
 
-# AST-grep policy scan. Default: blocking rules (CI-deny).
-# Pass `advisory` for the warning-level full set.
-# Filter list and ast-grep invocation live in `cargo xtask ast-grep`.
+# AST-grep policy scan. Discovers every rule in `.config/ast-grep/`
+# and lets each rule's `severity:` field decide whether a hit blocks
+# (`error`) or just reports (`warning`/`info`/`hint`).
+# Pass `--strict` to promote every warning to an error.
 #   just ast-grep
-#   just ast-grep advisory
-ast-grep MODE="blocking":
-    cargo xtask ast-grep --mode={{MODE}}
+#   just ast-grep --strict
+ast-grep *ARGS:
+    cargo xtask ast-grep {{ARGS}}
 
 # Workspace linters: arch, style, idioms.
 #   just lint                       # all three
@@ -151,12 +152,6 @@ test-selenium *ARGS:
 # Convenience: workspace tests + doc-tests in one run.
 test-all: test test-doc
 
-# --- ast-grep policy ---
-
-[private]
-ast-grep-blocking:
-    @just ast-grep
-
 # Run all linters scoped to a crate / path / workspace. With
 # `--autofix`, run each tool's autofix first (where available), then
 # re-validate.
@@ -229,7 +224,7 @@ audit *ARGS:
     fail=0
     section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
     section "clippy";       cargo clippy $CLIPPY_FLAGS -- -D warnings || fail=1
-    section "ast-grep";     cargo xtask ast-grep --mode=blocking $AST_GREP_PATHS || fail=1
+    section "ast-grep";     cargo xtask ast-grep $AST_GREP_PATHS || fail=1
     section "xtask lint";   cargo xtask lint $XTASK_FLAGS || fail=1
     section "typos";        cargo xtask typos $TYPOS_PATHS || fail=1
     section "similarity";   cargo xtask similarity --profile audit $SIMILARITY_PATHS || fail=1
@@ -279,7 +274,7 @@ quality-report-ci:
 # --- lint composites ---
 
 # Fast lint chain: fmt-check + clippy + ast-grep + arch.
-lint-fast: fmt-check clippy ast-grep-blocking
+lint-fast: fmt-check clippy ast-grep
     cargo xtask lint arch
 
 # Full lint: fast chain plus xtask self-tests and the quality scans.

@@ -1,6 +1,6 @@
 id: style.no-separator-comments-rs
 message: Separator comments are not allowed; use plain // section headers.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/*.rs

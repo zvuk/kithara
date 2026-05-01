@@ -1,6 +1,6 @@
 id: rust.no-thin-sync-wrapper
 message: Thin sync wrappers with a single call (with or without surrounding log macros) are discouraged.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/src/**/*.rs

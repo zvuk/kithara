@@ -1,38 +1,26 @@
-//! `cargo xtask ast-grep` — thin wrapper around the `ast-grep` CLI that
-//! bakes in the blocking/advisory filter list.
+//! `cargo xtask ast-grep` — thin wrapper around the `ast-grep` CLI.
 //!
-//! Single source of truth for which ast-grep rules are blocking on
-//! pre-commit (`just lint-fast`) vs warning-only (`just ast-grep advisory`).
-//! Used by both `just ast-grep` and `just audit` so the filter list
-//! lives in one place.
+//! Discovers every rule under `.config/ast-grep/` and lets each rule's
+//! own `severity:` field decide whether a hit blocks (`error`) or just
+//! reports (`warning`/`info`/`hint`). No per-id filter list lives in
+//! Rust — adding a new rule file is enough.
+//!
+//! Pass `--strict` to promote every warning to an error (used by
+//! exhaustive sweeps, not by the default audit).
 
 use std::process::Command;
 
 use anyhow::{Result, bail};
-use clap::{Args, ValueEnum};
+use clap::Args;
 
 use crate::util::ensure_clean_tree;
 
-const BLOCKING_FILTER: &str = concat!(
-    "^(",
-    "rust.no-lint-suppression",
-    "|rust.no-crate-lint-allow",
-    "|style.no-items-in-lib-or-mod-rs",
-    "|rust.no-thin-async-wrapper",
-    "|style.no-separator-comments-toml",
-    "|style.no-noop-in-impl",
-    "|style.no-duplicate-impl",
-    "|style.no-masked-unused-arg",
-    "|style.multiple-private-module-consts",
-    "|style.no-impl-only-consts",
-    "|rust.no-error-string-match",
-    ")$",
-);
-
 #[derive(Debug, Args)]
 pub(crate) struct AstGrepArgs {
-    #[arg(long, value_enum, default_value_t = Mode::Blocking)]
-    pub mode: Mode,
+    /// Promote every warning to an error (passes `--warning` to ast-grep).
+    /// Use for exhaustive sweeps when warning-level rules should also fail.
+    #[arg(long)]
+    pub strict: bool,
     /// Apply rule fixes by passing `--update-all` to ast-grep. Only rules
     /// that declare a `fix:` block in `.config/ast-grep/*.yml` actually
     /// rewrite anything; rules without one stay reporting-only.
@@ -47,14 +35,6 @@ pub(crate) struct AstGrepArgs {
     pub paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub(crate) enum Mode {
-    /// CI-deny rule subset (default). Used by `just lint-fast` and `just audit`.
-    Blocking,
-    /// Full warning-level set. Used by `just ast-grep advisory`.
-    Advisory,
-}
-
 pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "ast-grep")?;
@@ -65,13 +45,8 @@ pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
         .arg("sgconfig.yml")
         .arg("--report-style")
         .arg("short");
-    match args.mode {
-        Mode::Blocking => {
-            cmd.arg("--filter").arg(BLOCKING_FILTER);
-        }
-        Mode::Advisory => {
-            cmd.arg("--warning");
-        }
+    if args.strict {
+        cmd.arg("--warning");
     }
     if args.fix {
         cmd.arg("--update-all");
