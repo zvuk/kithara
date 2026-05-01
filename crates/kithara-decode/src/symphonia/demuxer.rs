@@ -39,7 +39,7 @@ use crate::{
 };
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
-pub struct SymphoniaDemuxer {
+pub(crate) struct SymphoniaDemuxer {
     format_reader: Box<dyn FormatReader>,
     track_id: u32,
     track_info: TrackInfo,
@@ -69,7 +69,7 @@ impl SymphoniaDemuxer {
     ///
     /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
     /// and missing-track errors ([`DecodeError::ProbeFailed`]).
-    pub fn open_file<R>(
+    pub(crate) fn open_file<R>(
         source: R,
         hint: Option<String>,
         container: Option<ContainerFormat>,
@@ -105,7 +105,7 @@ impl SymphoniaDemuxer {
     /// Returns a [`crate::DecodeError`] when the reader exposes no
     /// audio track or the audio track's codec parameters are missing
     /// fields the demuxer needs (sample rate, channel count).
-    pub fn from_reader(
+    pub(crate) fn from_reader(
         format_reader: Box<dyn FormatReader>,
         byte_pos_handle: Option<Arc<AtomicU64>>,
     ) -> DecodeResult<Self> {
@@ -139,7 +139,7 @@ impl SymphoniaDemuxer {
     ///
     /// [`SymphoniaCodec`]: crate::codec::SymphoniaCodec
     #[must_use]
-    pub fn native_params(&self) -> &AudioCodecParameters {
+    pub(crate) fn native_params(&self) -> &AudioCodecParameters {
         &self.native_params
     }
 
@@ -249,13 +249,11 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         .map(|d| d.to_vec())
         .unwrap_or_default();
     let duration = calculate_track_duration(track);
-    let timescale = track.time_base.map_or(sample_rate, |tb| tb.denom.get());
 
     Ok(TrackInfo {
         codec,
         sample_rate,
         channels,
-        timescale,
         extra_data,
         duration,
     })

@@ -45,7 +45,7 @@ use crate::{
 const TRACK_ID: u32 = 0;
 
 /// Frame codec backed by a symphonia codec registry decoder.
-pub struct SymphoniaCodec {
+pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
     spec: PcmSpec,
 }
@@ -57,13 +57,13 @@ impl SymphoniaCodec {
     /// the factory routes those through [`Self::open_native`] using the
     /// demuxer's native `AudioCodecParameters` instead.
     #[must_use]
-    pub fn supports(codec: AudioCodec) -> bool {
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
 
     /// Build a [`SymphoniaCodec`] from native Symphonia codec
     /// parameters. Used by the factory when wiring a
-    /// [`crate::demuxer::SymphoniaDemuxer`] for PCM/ADPCM tracks where
+    /// [`crate::symphonia::SymphoniaDemuxer`] for PCM/ADPCM tracks where
     /// the generic [`TrackInfo::codec`] field cannot describe the
     /// concrete sample format.
     ///
@@ -71,7 +71,7 @@ impl SymphoniaCodec {
     ///
     /// Returns [`DecodeError::Backend`] when the Symphonia codec
     /// registry cannot build a decoder for the supplied parameters.
-    pub fn open_native(params: &AudioCodecParameters) -> DecodeResult<Self> {
+    pub(crate) fn open_native(params: &AudioCodecParameters) -> DecodeResult<Self> {
         let registry: &CodecRegistry = symphonia::default::get_codecs();
         let opts = AudioDecoderOptions::default();
         let decoder = registry

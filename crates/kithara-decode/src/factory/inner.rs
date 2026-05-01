@@ -277,7 +277,7 @@ fn create_apple(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        if crate::codec::AppleCodec::supports(codec) {
+        if crate::apple::AppleCodec::supports(codec) {
             return create_fmp4_segment_apple(source, codec, layout, config);
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
@@ -306,9 +306,8 @@ fn create_fmp4_segment_apple(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        FrameCodec, UniversalDecoder,
-        codec::AppleCodec,
-        demuxer::{Demuxer, Fmp4SegmentDemuxer},
+        apple::AppleCodec, codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer,
+        universal::UniversalDecoder,
     };
 
     tracing::debug!(
@@ -343,7 +342,7 @@ fn create_android(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        if crate::codec::AndroidCodec::supports(codec) {
+        if crate::android::AndroidCodec::supports(codec) {
             return create_fmp4_segment_android(source, codec, layout, config);
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
@@ -363,9 +362,8 @@ fn create_fmp4_segment_android(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        FrameCodec, UniversalDecoder,
-        codec::AndroidCodec,
-        demuxer::{Demuxer, Fmp4SegmentDemuxer},
+        android::AndroidCodec, codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer,
+        universal::UniversalDecoder,
     };
 
     tracing::debug!(
@@ -411,7 +409,12 @@ fn create_file_symphonia_universal(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::{FrameCodec, SymphoniaCodec, SymphoniaDemuxer, UniversalDecoder, demuxer::Demuxer};
+    use crate::{
+        codec::FrameCodec,
+        demuxer::Demuxer,
+        symphonia::{SymphoniaCodec, SymphoniaDemuxer},
+        universal::UniversalDecoder,
+    };
 
     tracing::debug!(
         ?codec,
@@ -471,8 +474,8 @@ fn create_fmp4_segment_symphonia(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        FrameCodec, SymphoniaCodec, UniversalDecoder,
-        demuxer::{Demuxer, Fmp4SegmentDemuxer},
+        codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer, symphonia::SymphoniaCodec,
+        universal::UniversalDecoder,
     };
 
     tracing::debug!(

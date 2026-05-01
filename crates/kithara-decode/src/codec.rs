@@ -8,18 +8,18 @@ use crate::{demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
 ///
 /// Interleaved PCM samples; frame count = `samples.len() / channels`.
 #[derive(Debug)]
-pub struct DecodedFrame {
+pub(crate) struct DecodedFrame {
     pub samples: Vec<f32>,
     pub frames: u32,
 }
 
-/// Frame-level codec contract paired with a [`super::super::Demuxer`] in
+/// Frame-level codec contract paired with a [`crate::demuxer::Demuxer`] in
 /// `UniversalDecoder<D, C>`.
 ///
 /// Implementations consume one demuxed frame at a time and produce
 /// interleaved f32 PCM. They never see container bytes — container
 /// parsing is the demuxer's job.
-pub trait FrameCodec: Send + 'static {
+pub(crate) trait FrameCodec: Send + 'static {
     /// Construct a codec from track-level metadata produced by the
     /// demuxer (`extra_data` carries codec-specific config such as AAC
     /// `AudioSpecificConfig` or FLAC `STREAMINFO`).

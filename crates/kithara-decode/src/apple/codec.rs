@@ -6,7 +6,7 @@
 //! `AudioFile`, no fragmented-mp4 reader, no per-codec container glue.
 //!
 //! Initial scope: AAC-LC and FLAC, the two codecs that flow through
-//! [`crate::Fmp4SegmentDemuxer`] today. ALAC / MP3 require codec-specific
+//! [`crate::fmp4::Fmp4SegmentDemuxer`] today. ALAC / MP3 require codec-specific
 //! ASBD + magic-cookie parameters that aren't carried by `TrackInfo` yet
 //! and will land alongside the file-Symphonia migration.
 
@@ -16,17 +16,17 @@ use std::{ffi::c_void, ptr, time::Duration};
 
 use kithara_stream::AudioCodec;
 
-use super::contract::{DecodedFrame, FrameCodec};
-use crate::{
-    apple::{
-        consts::{Consts, os_status_to_string},
-        converter::{ConverterInputState, converter_input_callback},
-        ffi::{
-            AudioBuffer, AudioBufferList, AudioConverterDispose, AudioConverterFillComplexBuffer,
-            AudioConverterNew, AudioConverterRef, AudioConverterReset, AudioConverterSetProperty,
-            AudioStreamBasicDescription, AudioStreamPacketDescription, UInt32,
-        },
+use super::{
+    consts::{Consts, os_status_to_string},
+    converter::{ConverterInputState, converter_input_callback},
+    ffi::{
+        AudioBuffer, AudioBufferList, AudioConverterDispose, AudioConverterFillComplexBuffer,
+        AudioConverterNew, AudioConverterRef, AudioConverterReset, AudioConverterSetProperty,
+        AudioStreamBasicDescription, AudioStreamPacketDescription, UInt32,
     },
+};
+use crate::{
+    codec::{DecodedFrame, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     types::PcmSpec,

@@ -3,7 +3,7 @@
 //! Bypasses Symphonia's whole-stream `IsoMp4Reader` to avoid the prefix
 //! walk that broke HLS seeks (see `kithara-decode` crate README §2). Each
 //! HLS segment is fetched independently through a [`crate::backend::BoxedSource`]
-//! cursor, demuxed in memory via [`crate::fmp4_segment::demux`], and frames are
+//! cursor, demuxed in memory via [`super::parsing`], and frames are
 //! emitted one at a time. Segment layout (init range, decode-time → segment
 //! mapping) comes from a [`SegmentLayout`] handle — the same one HLS /
 //! file fmp4 expose for layout queries — so the demuxer never re-parses
@@ -13,14 +13,14 @@ use std::{sync::Arc, time::Duration};
 
 use kithara_stream::SegmentLayout;
 
+use super::{
+    parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
+    source_io::{FillStatus, SegmentReadState, fill_segment_buffer},
+};
 use crate::{
     backend::BoxedSource,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::{DecodeError, DecodeResult},
-    fmp4_segment::{
-        demux::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
-        source_io::{FillStatus, SegmentReadState, fill_segment_buffer},
-    },
 };
 
 struct SegmentCursor {
@@ -34,7 +34,7 @@ struct DecodedFrames {
 }
 
 /// fMP4 segment-aware demuxer.
-pub struct Fmp4SegmentDemuxer {
+pub(crate) struct Fmp4SegmentDemuxer {
     init: Fmp4InitInfo,
     track_info: TrackInfo,
     source: BoxedSource,
@@ -61,7 +61,10 @@ impl Fmp4SegmentDemuxer {
     /// Returns [`DecodeError::Interrupted`] when the source defers the
     /// init read; the caller should retry after the underlying source
     /// becomes ready.
-    pub fn open(mut source: BoxedSource, segments: Arc<dyn SegmentLayout>) -> DecodeResult<Self> {
+    pub(crate) fn open(
+        mut source: BoxedSource,
+        segments: Arc<dyn SegmentLayout>,
+    ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range().ok_or_else(|| {
             DecodeError::InvalidData("HLS init segment range not announced".into())
         })?;
@@ -208,7 +211,6 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
-        timescale: init.timescale,
         extra_data,
         duration,
     }

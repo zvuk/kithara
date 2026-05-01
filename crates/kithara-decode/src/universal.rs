@@ -27,7 +27,7 @@ use crate::{
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
-pub struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
+pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     codec: C,
     spec: PcmSpec,
@@ -58,7 +58,7 @@ pub struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
 
 impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
     /// Build a decoder from a `(demuxer, codec)` pair.
-    pub fn new(
+    pub(crate) fn new(
         demuxer: D,
         codec: C,
         pool: PcmPool,
@@ -209,4 +209,114 @@ fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
     let subsec_frames = u64::from(at.subsec_nanos()) * u64::from(sample_rate) / 1_000_000_000;
     secs.saturating_mul(u64::from(sample_rate))
         .saturating_add(subsec_frames)
+}
+
+#[cfg(all(test, feature = "symphonia"))]
+mod smoke_tests {
+    //! White-box smoke tests for `UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>`
+    //! on a real MP3 fixture. Validates that the unified composition path emits
+    //! non-empty `PcmChunk` values and round-trips a seek to start. Migrated from
+    //! `tests/universal_smoke.rs` after the public types were demoted to
+    //! `pub(crate)`.
+
+    use std::io::Cursor;
+
+    use kithara_bufpool::pcm_pool;
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+    use symphonia::core::{
+        formats::{FormatOptions, probe::Hint},
+        io::{MediaSourceStream, MediaSourceStreamOptions},
+        meta::MetadataOptions,
+    };
+
+    use super::*;
+    use crate::{
+        codec::FrameCodec,
+        symphonia::{SymphoniaCodec, SymphoniaDemuxer},
+        traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
+    };
+
+    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/test.mp3"
+    ));
+
+    fn build_mp3_demuxer() -> SymphoniaDemuxer {
+        let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
+        let format_reader = symphonia::default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .expect("MP3 probe should succeed");
+        SymphoniaDemuxer::from_reader(format_reader, None).expect("MP3 demuxer should build")
+    }
+
+    #[kithara::test]
+    fn mp3_track_info_carries_codec_and_rate() {
+        let demuxer = build_mp3_demuxer();
+        let info = demuxer.track_info();
+        assert_eq!(info.codec, AudioCodec::Mp3);
+        assert!(info.sample_rate > 0, "sample rate must be populated");
+        assert!(info.channels > 0, "channels must be populated");
+    }
+
+    #[kithara::test]
+    fn mp3_universal_decoder_emits_non_empty_chunks() {
+        let demuxer = build_mp3_demuxer();
+        let track_info = demuxer.track_info().clone();
+        let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
+        let mut decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
+
+        let mut got_chunk = false;
+        for _ in 0..16 {
+            match decoder.next_chunk().expect("next_chunk should not error") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert!(chunk.frames() > 0, "Chunk frames must be > 0");
+                    assert!(chunk.spec().sample_rate > 0);
+                    assert!(chunk.spec().channels > 0);
+                    got_chunk = true;
+                    break;
+                }
+                DecoderChunkOutcome::Pending(_) => continue,
+                DecoderChunkOutcome::Eof => panic!("MP3 fixture must not EOF in 16 packets"),
+            }
+        }
+        assert!(got_chunk, "UniversalDecoder must emit at least one chunk");
+    }
+
+    #[kithara::test]
+    fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks() {
+        let demuxer = build_mp3_demuxer();
+        let track_info = demuxer.track_info().clone();
+        let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
+        let mut decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
+
+        for _ in 0..4 {
+            let _ = decoder
+                .next_chunk()
+                .expect("priming chunks should not error");
+        }
+
+        let outcome = decoder
+            .seek(Duration::ZERO)
+            .expect("seek to start must not error");
+        match outcome {
+            DecoderSeekOutcome::Landed { landed_at, .. } => {
+                assert!(
+                    landed_at < Duration::from_millis(50),
+                    "seek to ZERO should land near 0, got {landed_at:?}"
+                );
+            }
+            DecoderSeekOutcome::PastEof { .. } => {
+                panic!("seek(0) on a real MP3 must not be PastEof")
+            }
+        }
+    }
 }

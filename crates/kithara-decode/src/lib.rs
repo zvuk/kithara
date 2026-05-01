@@ -24,7 +24,7 @@ mod codec;
 mod demuxer;
 mod error;
 mod factory;
-mod fmp4_segment;
+mod fmp4;
 mod hooks;
 mod pcm;
 #[cfg(feature = "symphonia")]
@@ -45,14 +45,6 @@ mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-// Error types
-// New unified architecture (Demuxer + FrameCodec + UniversalDecoder).
-#[cfg(feature = "symphonia")]
-pub use codec::SymphoniaCodec;
-pub use codec::{DecodedFrame, FrameCodec};
-#[cfg(feature = "symphonia")]
-pub use demuxer::SymphoniaDemuxer;
-pub use demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Fmp4SegmentDemuxer, Frame, TrackInfo};
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
@@ -64,4 +56,3 @@ pub use traits::{
 };
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
-pub use universal::UniversalDecoder;

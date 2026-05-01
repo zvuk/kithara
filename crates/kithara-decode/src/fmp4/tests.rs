@@ -15,10 +15,13 @@ use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
-    FrameCodec, SymphoniaCodec, UniversalDecoder,
     backend::BoxedSource,
-    demuxer::{Demuxer, Fmp4SegmentDemuxer},
+    codec::FrameCodec,
+    demuxer::Demuxer,
+    fmp4::Fmp4SegmentDemuxer,
+    symphonia::SymphoniaCodec,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
+    universal::UniversalDecoder,
 };
 
 /// Fixed-layout in-memory test source built from init+segment fixtures.
